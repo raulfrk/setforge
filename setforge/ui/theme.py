@@ -156,8 +156,8 @@ def pt_style(theme: Mapping[Role, Color] = THEME) -> dict[str, str]:
     """A prompt_toolkit ``Style`` mapping keyed ``class:<role>`` → truecolor hex.
 
     prompt_toolkit resolves its own 256/mono downgrade from the terminal, so the
-    pt adapter always hands it the truecolor hex (never the rich ``color(N)`` /
-    raw SGR forms — adapter formats are never crossed).
+    pt adapter always hands it the truecolor hex (never the raw SGR form —
+    adapter formats are never crossed).
     """
     return {f"class:{role.value}": color.truecolor for role, color in theme.items()}
 
