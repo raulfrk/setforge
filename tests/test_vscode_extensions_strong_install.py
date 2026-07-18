@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from setforge.errors import ExtensionInstallFailed
+from setforge.errors import ExtensionInstallFailed, ResolveError
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType, ResolvedPin
 from setforge.vscode_extensions import install_one
 
@@ -167,8 +167,11 @@ def test_pinned_install_cleans_up_temp_on_code_failure(
 def test_pinned_install_download_failure_cleans_up_and_wraps(
     fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # download_vsix's guarded fetch surfaces every failure as ResolveError
+    # (fetch_bytes wraps URL/timeout/OS/EOF errors); the install path catches
+    # exactly that type and rewraps it as ExtensionInstallFailed.
     def boom(*_a: Any, **_k: Any) -> bytes:
-        raise RuntimeError("network down")
+        raise ResolveError("network down")
 
     monkeypatch.setattr("setforge.provision.resolve.extension.download_vsix", boom)
 
