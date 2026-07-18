@@ -676,7 +676,6 @@ def reconcile(
         result = driver.reconcile(
             PluginProvisioner(),
             items,
-            policy=ReconcilePolicy.ADDITIVE,
             report_only=True,
         )
         to_install = [i.display for i in result.delta.installed]
@@ -702,7 +701,6 @@ def reconcile(
     result = driver.reconcile(
         PluginProvisioner(checkouts=checkouts),
         items,
-        policy=ReconcilePolicy.ADDITIVE,
         report_only=False,
     )
     to_install = [i.display for i in result.delta.installed]

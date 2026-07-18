@@ -18,7 +18,6 @@ not.
 
 from collections.abc import Sequence
 
-from setforge.config import ReconcilePolicy
 from setforge.errors import ProvisionItemFailed
 from setforge.provision.protocol import (
     Outcome,
@@ -47,19 +46,18 @@ def reconcile(
     provisioner: Provisioner,
     items: Sequence[ProvisionItem],
     *,
-    policy: ReconcilePolicy,
     report_only: bool = False,
 ) -> ReconcileResult:
     """Reconcile ``items`` against reality through ``provisioner``.
 
-    Probes (read-only), plans (pure), then — unless ``policy`` is REPORT or
-    ``report_only`` is set — applies each planned item, containing any
-    per-item failure as one outcome of the raised ``kind`` (SOFT or HARD).
-    Returns the delta plus the recorded outcomes.
+    Probes (read-only), plans (pure), then — unless ``report_only`` is set —
+    applies each planned item, containing any per-item failure as one outcome
+    of the raised ``kind`` (SOFT or HARD). Returns the delta plus the recorded
+    outcomes.
     """
     installed = provisioner.probe()
     delta = provisioner.plan(items, installed)
-    if policy is ReconcilePolicy.REPORT or report_only:
+    if report_only:
         return ReconcileResult(delta=delta, outcomes=(), reported=True)
     outcomes: list[ProvisionOutcome] = []
     for item in _items_to_apply(delta, items):

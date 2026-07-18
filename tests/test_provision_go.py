@@ -273,25 +273,23 @@ def test_uninstall_tolerates_no_receipt(fake_go) -> None:
 
 
 def test_reconcile_idempotent_second_run_empty(fake_go) -> None:
-    from setforge.config import ReconcilePolicy
     from setforge.provision.driver import reconcile
 
     prov, _cli, _store, _gobin = fake_go()
     items = [_item("github.com/o/tool", version="1")]
-    first = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    first = reconcile(prov, items)
     assert [o.outcome for o in first.outcomes] == [Outcome.OK]
-    second = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    second = reconcile(prov, items)
     assert second.delta.is_empty()
     assert second.outcomes == ()
 
 
 def test_reconcile_report_only_writes_nothing(fake_go) -> None:
-    from setforge.config import ReconcilePolicy
     from setforge.provision.driver import reconcile
 
     prov, cli, store, _gobin = fake_go()
     items = [_item("github.com/o/tool", version="1")]
-    result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE, report_only=True)
+    result = reconcile(prov, items, report_only=True)
     assert result.reported is True
     assert result.delta.installed == (items[0].identity,)
     assert _install_calls(cli) == []
@@ -299,7 +297,6 @@ def test_reconcile_report_only_writes_nothing(fake_go) -> None:
 
 
 def test_reconcile_partial_failure_isolated(fake_go) -> None:
-    from setforge.config import ReconcilePolicy
     from setforge.provision.driver import reconcile
 
     prov, _cli, store, _gobin = fake_go(
@@ -307,7 +304,7 @@ def test_reconcile_partial_failure_isolated(fake_go) -> None:
     )
     good = _item("github.com/o/good")
     bad = _item("github.com/o/bad")
-    result = reconcile(prov, [good, bad], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [good, bad])
     outcomes = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert outcomes["github.com/o/good"] is Outcome.OK
     assert outcomes["github.com/o/bad"] is Outcome.SOFT

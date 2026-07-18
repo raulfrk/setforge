@@ -236,27 +236,25 @@ def test_uninstall_noop_when_uv_missing(fake_uv) -> None:
 
 
 def test_reconcile_installs_and_is_idempotent(fake_uv) -> None:
-    from setforge.config import ReconcilePolicy
 
     cli = fake_uv(installed=set())
     prov = prov_python.PythonProvisioner()
     items = [_item("ruff"), _item("pre-commit")]
-    first = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    first = reconcile(prov, items)
     assert {o.outcome for o in first.outcomes} == {Outcome.OK}
     assert cli.installed == {"ruff", "pre-commit"}
     calls_before = len(_install_calls(cli))
-    second = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    second = reconcile(prov, items)
     assert second.delta.is_empty()
     assert len(_install_calls(cli)) == calls_before
 
 
 def test_reconcile_report_only_writes_nothing(fake_uv) -> None:
-    from setforge.config import ReconcilePolicy
 
     cli = fake_uv(installed=set())
     prov = prov_python.PythonProvisioner()
     items = [_item("ruff")]
-    result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE, report_only=True)
+    result = reconcile(prov, items, report_only=True)
     assert result.reported is True
     assert result.delta.installed == (Identity(key="ruff", display="ruff"),)
     assert _install_calls(cli) == []
@@ -264,12 +262,11 @@ def test_reconcile_report_only_writes_nothing(fake_uv) -> None:
 
 
 def test_reconcile_partial_failure_is_isolated(fake_uv) -> None:
-    from setforge.config import ReconcilePolicy
 
     cli = fake_uv(installed=set(), install_errors={"bad": "boom"})
     prov = prov_python.PythonProvisioner()
     items = [_item("good"), _item("bad")]
-    result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, items)
     by_name = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_name["good"] is Outcome.OK
     assert by_name["bad"] is Outcome.SOFT

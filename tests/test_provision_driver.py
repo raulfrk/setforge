@@ -7,7 +7,6 @@ contained (others still applied), and exit_code is a terminal any(HARD).
 
 from collections.abc import Sequence
 
-from setforge.config import ReconcilePolicy
 from setforge.errors import ProvisionItemFailed
 from setforge.provision.driver import exit_code, reconcile
 from setforge.provision.protocol import (
@@ -76,7 +75,7 @@ def test_report_policy_gates_before_apply() -> None:
     ids = (Identity(key="a", display="a"),)
     prov = _FakeProvisioner(to_install=ids)
     items = [_item("a")]
-    result = reconcile(prov, items, policy=ReconcilePolicy.REPORT)
+    result = reconcile(prov, items, report_only=True)
     assert result.reported is True
     assert prov.apply_calls == []
     assert result.outcomes == ()
@@ -85,9 +84,7 @@ def test_report_policy_gates_before_apply() -> None:
 def test_report_only_flag_gates_before_apply() -> None:
     ids = (Identity(key="a", display="a"),)
     prov = _FakeProvisioner(to_install=ids)
-    result = reconcile(
-        prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE, report_only=True
-    )
+    result = reconcile(prov, [_item("a")], report_only=True)
     assert result.reported is True
     assert prov.apply_calls == []
 
@@ -100,7 +97,7 @@ def test_hard_failure_contained_others_applied() -> None:
         raises={"b": Outcome.HARD},
     )
     items = [_item("a"), _item("b"), _item("c")]
-    result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, items)
     assert prov.apply_calls == ["a", "b", "c"]
     by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_key["b"] is Outcome.HARD
@@ -111,7 +108,7 @@ def test_hard_failure_contained_others_applied() -> None:
 
 def test_empty_delta_zero_applies_exit_zero() -> None:
     prov = _FakeProvisioner(to_install=())
-    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [_item("a")])
     assert prov.apply_calls == []
     assert result.delta.is_empty()
     assert exit_code(result) == 0
@@ -121,7 +118,7 @@ def test_soft_only_exit_zero() -> None:
     # SOFT is a RETURNED outcome (a warn), not a raise — only HARD gates exit.
     ids = (Identity(key="a", display="a"),)
     prov = _FakeProvisioner(to_install=ids, outcomes={"a": Outcome.SOFT})
-    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [_item("a")])
     assert exit_code(result) == 0
 
 
@@ -130,7 +127,7 @@ def test_raised_soft_recorded_soft_exit_zero() -> None:
     # honor exc.kind and record SOFT (not force HARD), so exit stays 0.
     ids = (Identity(key="a", display="a"),)
     prov = _FakeProvisioner(to_install=ids, raises={"a": Outcome.SOFT})
-    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [_item("a")])
     by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_key["a"] is Outcome.SOFT
     assert exit_code(result) == 0
@@ -141,7 +138,7 @@ def test_raised_hard_still_gates_exit() -> None:
     # the exc.kind change).
     ids = (Identity(key="a", display="a"),)
     prov = _FakeProvisioner(to_install=ids, raises={"a": Outcome.HARD})
-    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [_item("a")])
     by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_key["a"] is Outcome.HARD
     assert exit_code(result) == 1
@@ -152,7 +149,7 @@ def test_mixed_soft_and_hard_exit_one() -> None:
     prov = _FakeProvisioner(
         to_install=ids, outcomes={"a": Outcome.SOFT}, raises={"b": Outcome.HARD}
     )
-    result = reconcile(prov, [_item("a"), _item("b")], policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(prov, [_item("a"), _item("b")])
     assert exit_code(result) == 1
 
 
@@ -179,5 +176,5 @@ def test_report_performs_zero_writes_before_gate() -> None:
 
     ids = (Identity(key="a", display="a"),)
     prov = _Exploding(to_install=ids)
-    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.REPORT)
+    result = reconcile(prov, [_item("a")], report_only=True)
     assert result.reported is True

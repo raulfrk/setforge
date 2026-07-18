@@ -20,7 +20,6 @@ from setforge.config import (
     Package,
     PluginPackage,
     PythonPackage,
-    ReconcilePolicy,
     ResolvedProfile,
 )
 from setforge.lockfile import LockFile
@@ -105,7 +104,6 @@ def run_provisioning(
             reconcile(
                 provisioner,
                 group,
-                policy=ReconcilePolicy.ADDITIVE,
                 report_only=report_only,
             )
         )

@@ -264,7 +264,6 @@ def test_unknown_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_has_hard_failure_detects_hard() -> None:
-    from setforge.config import ReconcilePolicy
     from setforge.provision.driver import reconcile
 
     class _P(_StubProvisioner):
@@ -274,7 +273,7 @@ def test_has_hard_failure_detects_hard() -> None:
         ProvisionItem(type="stubprov", identity=Identity(key="a", display="a")),
         ProvisionItem(type="stubprov", identity=Identity(key="b", display="b")),
     ]
-    result = reconcile(_P(), items, policy=ReconcilePolicy.ADDITIVE)
+    result = reconcile(_P(), items)
     assert has_hard_failure([result]) is True
 
 
@@ -439,7 +438,6 @@ def test_install_hard_failure_gates_exit_one(
     # gate: patch reconcile_packages to reconcile the crate under the stub.
     _StubProvisioner.hard = {"ripgrep"}
     import setforge.cli._provision_helpers as ph
-    from setforge.config import ReconcilePolicy
     from setforge.provision.driver import reconcile
 
     def _fake_reconcile_packages(
@@ -453,7 +451,7 @@ def test_install_hard_failure_gates_exit_one(
                 type="stubprov", identity=Identity(key="ripgrep", display="ripgrep")
             )
         ]
-        return [reconcile(_StubProvisioner(), items, policy=ReconcilePolicy.ADDITIVE)]
+        return [reconcile(_StubProvisioner(), items)]
 
     monkeypatch.setattr(ph, "reconcile_packages", _fake_reconcile_packages)
     import setforge.cli.install as install_mod

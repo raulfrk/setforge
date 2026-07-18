@@ -188,7 +188,6 @@ def reconcile(
     result = driver.reconcile(
         ExtensionProvisioner(pins=pins),
         items,
-        policy=ReconcilePolicy.ADDITIVE,
         report_only=report_only,
     )
     to_install = sorted(i.display for i in result.delta.installed)
