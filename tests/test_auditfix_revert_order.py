@@ -100,9 +100,7 @@ def test_dry_run_pass_raises_on_retargeted_overlay_symlink(
     # Zero mutation: the link is still present and still points where the
     # user pointed it — the dry-run pass never unlinked.
     assert dst.is_symlink()
-    import os
-
-    assert os.readlink(dst) == str(other)
+    assert str(dst.readlink()) == str(other)
 
 
 def test_dry_run_pass_clean_for_expected_symlink(

@@ -487,7 +487,7 @@ def _restore_modes(recorded: dict[Path, int]) -> None:
     """
     for path, mode in recorded.items():
         try:
-            os.chmod(path, mode)
+            path.chmod(mode)
         except FileNotFoundError:
             continue
 
@@ -560,7 +560,9 @@ def _check_symlink_revertable(dst: Path, expected_target: str) -> None:
     no raise (the real unlink pass handles those idempotently).
     """
     if dst.is_symlink():
-        actual = os.readlink(dst)
+        # str() keeps ``actual`` a plain string so the != compare against the
+        # string expected_target and the {actual!r} repr stay verbatim.
+        actual = str(dst.readlink())
         if actual != expected_target:
             raise SetforgeError(
                 f"refusing to unlink {dst}: symlink target changed since "

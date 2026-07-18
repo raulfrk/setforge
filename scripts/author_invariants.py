@@ -143,7 +143,7 @@ def draft(component: str, inv: str, dest_root: Path = REPO_ROOT) -> Path:
         method=_method_name(inv),
     )
     # exist_ok=False semantics: 'x' mode raises FileExistsError on clobber.
-    with open(out, "x", encoding="utf-8") as fh:
+    with out.open("x", encoding="utf-8") as fh:
         fh.write(content)
     return out
 

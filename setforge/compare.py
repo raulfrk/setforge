@@ -955,7 +955,9 @@ def _compare_symlinked(
             ),
             True,
         )
-    actual = os.readlink(dst)
+    # str() keeps ``actual`` a plain string so the != compare against the
+    # string ``expected`` (tracked_file.symlink) and the {actual!r} repr stay verbatim.
+    actual = str(dst.readlink())
     if actual != expected:
         entry = FileCompare(
             name=name,

@@ -145,7 +145,7 @@ def draft(key: str, pytype: str, dest_root: Path = REPO_ROOT) -> Path:
         classname=_classname(key),
         config_model="Config",
     )
-    with open(out, "x", encoding="utf-8") as fh:
+    with out.open("x", encoding="utf-8") as fh:
         fh.write(content)
     return out
 

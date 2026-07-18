@@ -14,7 +14,6 @@ depend on the stdlib and can be used for tracked-content sweeps
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -78,7 +77,7 @@ def atomic_replace(src_tmp: Path, dst: Path) -> None:
     temp), and this helper has never fsynced — adding durability here
     would silently change migration behavior.
     """
-    os.replace(src_tmp, dst)
+    src_tmp.replace(dst)
 
 
 def iter_tracked_text_files(repo_root: Path) -> Iterator[Path]:

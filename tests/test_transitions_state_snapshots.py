@@ -345,34 +345,35 @@ def test_load_raises_when_manifest_missing_but_dir_exists() -> None:
 def test_payload_files_are_fsynced(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every staged snapshot payload fsyncs its own fd before the rename
     (same durability bar as the other staged payload files)."""
-    import builtins
     import contextlib
 
     import setforge.transitions as transitions_mod
 
     events: list[str] = []
     open_fds: dict[int, str] = {}
-    real_open = builtins.open
+    # Durable writers open via Path.open() and swap via Path.rename() (pathlib),
+    # so the spies wrap the pathlib methods rather than builtins.open/os.rename.
+    real_open = Path.open
     real_fsync = os.fsync
-    real_rename = os.rename
+    real_rename = Path.rename
 
-    def recording_open(file: object, *args: object, **kwargs: object) -> object:
-        fh = real_open(file, *args, **kwargs)  # type: ignore[call-overload]
+    def recording_open(self: Path, *args: object, **kwargs: object) -> object:
+        fh = real_open(self, *args, **kwargs)  # type: ignore[call-overload]
         with contextlib.suppress(OSError):
-            open_fds[fh.fileno()] = Path(str(file)).name
+            open_fds[fh.fileno()] = self.name
         return fh
 
     def recording_fsync(fd: int) -> None:
         events.append(f"fsync:{open_fds.get(fd, '?')}")
         real_fsync(fd)
 
-    def recording_rename(src: object, dst: object) -> None:
+    def recording_rename(self: Path, target: object) -> Path:
         events.append("rename")
-        real_rename(src, dst)  # type: ignore[arg-type]
+        return real_rename(self, target)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(builtins, "open", recording_open)
+    monkeypatch.setattr(Path, "open", recording_open)
     monkeypatch.setattr(transitions_mod.os, "fsync", recording_fsync)
-    monkeypatch.setattr(transitions_mod.os, "rename", recording_rename)
+    monkeypatch.setattr(Path, "rename", recording_rename)
 
     _write(_entries())
 

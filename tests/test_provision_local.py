@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import os
 import stat
 import tarfile
 from pathlib import Path
@@ -336,4 +335,4 @@ def test_install_path_confinement_end_to_end(tmp_path: Path) -> None:
             extract=False,
         )
     assert not (tmp_path / "escape").exists()
-    assert os.listdir(install_dir) == []
+    assert list(install_dir.iterdir()) == []

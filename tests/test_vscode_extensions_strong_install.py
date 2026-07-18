@@ -3,7 +3,6 @@ mismatch. Download + ``code`` subprocess both mocked."""
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import io
 import subprocess
@@ -130,12 +129,12 @@ def test_pinned_install_cleans_up_temp_on_verify_failure(
     fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_download(monkeypatch, _VSIX)
-    before = set(glob.glob(str(Path(tempfile.gettempdir()) / "setforge-ext-*.vsix")))
+    before = set(Path(tempfile.gettempdir()).glob("setforge-ext-*.vsix"))
 
     with pytest.raises(ExtensionInstallFailed):
         install_one("esbenp.prettier-vscode", pin=_pin("1.2.3", "0" * 64))
 
-    after = set(glob.glob(str(Path(tempfile.gettempdir()) / "setforge-ext-*.vsix")))
+    after = set(Path(tempfile.gettempdir()).glob("setforge-ext-*.vsix"))
     assert after == before
 
 

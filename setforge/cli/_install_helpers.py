@@ -20,7 +20,6 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -1047,7 +1046,9 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
     unlink) that the caller should see.
     """
     if dst.is_symlink():
-        actual = os.readlink(dst)
+        # str() keeps ``actual`` a plain string so the != compare against the
+        # string expected_target and the {actual!r} repr stay verbatim.
+        actual = str(dst.readlink())
         if actual != expected_target:
             raise SetforgeError(
                 f"refusing to unlink {dst}: symlink target changed since "

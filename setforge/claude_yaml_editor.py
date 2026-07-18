@@ -86,7 +86,7 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
             yaml.dump(doc, fh)
             fh.flush()
             os.fchmod(fh.fileno(), original_mode)
-        os.replace(tmp_path, config_path)
+        tmp_path.replace(config_path)
     finally:
         with contextlib.suppress(OSError):
             tmp_path.unlink(missing_ok=True)

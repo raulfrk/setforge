@@ -186,11 +186,13 @@ def _copy_one(src: Path, dst: Path) -> None:
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
-        target = os.readlink(src)
+        # readlink() returns a Path; symlink_to writes it back verbatim.
+        target = src.readlink()
         # Idempotent: defensively unlink in case a retry hit the same target.
         if dst.exists() or dst.is_symlink():
             dst.unlink()
-        os.symlink(target, dst)
+        # symlink_to flips arg order: dst.symlink_to(target) == os.symlink(target, dst).
+        dst.symlink_to(target)
         return
     if not src.is_file():
         raise SetforgeError(
@@ -264,7 +266,7 @@ def _finalize(
     snapshot is fully on disk.
     """
     _write_meta(partial_dir, meta)
-    os.replace(partial_dir, final_dir)
+    partial_dir.replace(final_dir)
     prune_snapshots(keep)
 
 
@@ -392,7 +394,9 @@ def _restore_one(src: Path, dst: Path) -> None:
         # fresh inode.
         dst.unlink()
     if src.is_symlink():
-        os.symlink(os.readlink(src), dst)
+        # symlink_to flips arg order: dst.symlink_to(target) == os.symlink(target, dst).
+        # readlink() returns a Path that symlink_to writes back verbatim.
+        dst.symlink_to(src.readlink())
         return
     shutil.copy2(src, dst, follow_symlinks=False)
     src_mode = src.stat().st_mode

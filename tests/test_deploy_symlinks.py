@@ -25,7 +25,6 @@ The corresponding revert helper
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -53,7 +52,7 @@ def test_deploy_symlink_creates_both(tmp_path: Path) -> None:
     result = deploy.deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
-    assert os.readlink(dst) == str(target)
+    assert str(dst.readlink()) == str(target)
     assert target.is_file()
     assert target.read_text() == "payload\n"
     assert result.dst == dst
@@ -76,7 +75,7 @@ def test_deploy_symlink_preserves_raw_string_in_readlink(tmp_path: Path) -> None
 
     deploy.deploy_symlinked_file(src, dst, tf)
 
-    assert os.readlink(dst) == raw_target
+    assert str(dst.readlink()) == raw_target
 
 
 def test_deploy_symlink_refuses_regular_file_at_dst(tmp_path: Path) -> None:
@@ -104,13 +103,13 @@ def test_deploy_symlink_replaces_pre_existing_link(tmp_path: Path) -> None:
     old_target.write_text("old\n")
     new_target = tmp_path / "new-target"
     dst = tmp_path / "link"
-    os.symlink(str(old_target), dst)
+    dst.symlink_to(str(old_target))
     tf = _make(src, dst, symlink=str(new_target))
 
     deploy.deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
-    assert os.readlink(dst) == str(new_target)
+    assert str(dst.readlink()) == str(new_target)
     assert new_target.read_text() == "new-payload\n"
 
 
@@ -137,7 +136,7 @@ def test_deploy_symlink_noop_on_equal_target(tmp_path: Path) -> None:
     second = deploy.deploy_symlinked_file(src, dst, tf)
     assert second.action is deploy.DeployAction.NOOP
     assert dst.is_symlink()
-    assert os.readlink(dst) == raw_target
+    assert str(dst.readlink()) == raw_target
 
 
 def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
@@ -164,7 +163,7 @@ def test_revert_refuses_changed_symlink(tmp_path: Path) -> None:
     """
     dst = tmp_path / "link"
     user_retarget = "/tmp/user-retarget"
-    os.symlink(user_retarget, dst)
+    dst.symlink_to(user_retarget)
 
     expected = "/tmp/setforge-original-target"
     with pytest.raises(SetforgeError) as exc_info:
@@ -181,7 +180,7 @@ def test_revert_unlinks_matching_symlink(tmp_path: Path) -> None:
     """``revert_symlink_deployment`` unlinks the link when target matches."""
     dst = tmp_path / "link"
     expected = "/tmp/setforge-target"
-    os.symlink(expected, dst)
+    dst.symlink_to(expected)
     assert dst.is_symlink()
 
     removed = revert_symlink_deployment(dst, expected)

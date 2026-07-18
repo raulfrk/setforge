@@ -97,9 +97,14 @@ def test_no_path_chmod_in_module_source() -> None:
 
 
 def test_atomic_write_bytes_source_orders_fchmod_before_replace() -> None:
-    """``os.fchmod`` appears strictly before ``os.replace`` in the source of
+    """``os.fchmod`` appears strictly before the atomic swap in the source of
     :func:`atomic_write_bytes` — the AST-level proxy for the runtime
-    guarantee that perms land on the temp inode before the swap."""
+    guarantee that perms land on the temp inode before the swap.
+
+    The swap is spelled ``<tmp>.replace(<dst>)`` (pathlib) rather than
+    ``os.replace``; both lower to the same ``os.replace`` syscall, so the
+    guard matches ``.replace(`` to stay refactor-tolerant on the call form.
+    """
     tree = ast.parse(Path(atomicio.__file__).read_text(encoding="utf-8"))
     fn = next(
         n
@@ -107,16 +112,16 @@ def test_atomic_write_bytes_source_orders_fchmod_before_replace() -> None:
         if isinstance(n, ast.FunctionDef) and n.name == "atomic_write_bytes"
     )
     # Unparse the body WITHOUT the docstring — the prose may legitimately
-    # mention os.replace before os.fchmod; the guard is about code order.
+    # mention the swap before os.fchmod; the guard is about code order.
     body = fn.body
     if isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
         body = body[1:]
     src = "\n".join(ast.unparse(stmt) for stmt in body)
     fchmod_idx = src.find("os.fchmod")
-    replace_idx = src.find("os.replace")
+    replace_idx = src.find(".replace(")
     assert 0 <= fchmod_idx < replace_idx, (
-        "os.fchmod must come before os.replace in atomic_write_bytes source "
-        f"(fchmod_idx={fchmod_idx}, replace_idx={replace_idx})"
+        "os.fchmod must come before the .replace() swap in atomic_write_bytes "
+        f"source (fchmod_idx={fchmod_idx}, replace_idx={replace_idx})"
     )
 
 

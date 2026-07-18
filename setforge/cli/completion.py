@@ -276,7 +276,7 @@ def _atomic_write_rc_file(rc_path: Path, content: str) -> None:
         # original BEFORE the replace so the swapped-in file inherits the
         # user's chmod choices (e.g. 0600 on a private rc file).
         shutil.copystat(rc_path, tmp)
-        os.replace(tmp, rc_path)
+        tmp.replace(rc_path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

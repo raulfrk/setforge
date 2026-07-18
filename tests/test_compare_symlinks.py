@@ -26,7 +26,6 @@ Plus two pass-through cases:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from setforge.compare import (
@@ -65,7 +64,7 @@ def test_broken_symlink_is_not_missing(tmp_path: Path) -> None:
     src.write_text("hello\n")
     target = tmp_path / "missing-target"  # never created
     dst = tmp_path / "link"
-    os.symlink(str(target), dst)
+    dst.symlink_to(str(target))
     assert dst.is_symlink()
     assert not dst.exists()  # CPython: broken link -> exists() False.
 
@@ -94,7 +93,7 @@ def test_broken_symlink_with_correct_target_is_unchanged(tmp_path: Path) -> None
     src.write_text("x\n")
     declared_target = tmp_path / "ghost"  # never created
     dst = tmp_path / "link"
-    os.symlink(str(declared_target), dst)
+    dst.symlink_to(str(declared_target))
     tf = _make(src, dst, symlink=str(declared_target))
 
     entry, _ = _compare_one("foo", src, dst, tf)
@@ -138,7 +137,7 @@ def test_symlink_target_drift_is_drifted(tmp_path: Path) -> None:
     declared = "~/expected-target"
     actual = "~/other-target"
     dst = tmp_path / "link"
-    os.symlink(actual, dst)
+    dst.symlink_to(actual)
     tf = _make(src, dst, symlink=declared)
 
     entry, was_drifted = _compare_one("foo", src, dst, tf)
@@ -157,7 +156,7 @@ def test_correct_symlink_is_unchanged(tmp_path: Path) -> None:
     target.write_text("payload\n")  # equal to src — no content drift.
     dst = tmp_path / "link"
     declared = str(target)
-    os.symlink(declared, dst)
+    dst.symlink_to(declared)
     tf = _make(src, dst, symlink=declared)
 
     entry, was_drifted = _compare_one("foo", src, dst, tf)
@@ -184,7 +183,7 @@ def test_correct_symlink_with_target_content_drift_is_drifted(
     target.write_text("user-edited-payload\n")  # diverges from tracked src.
     dst = tmp_path / "link"
     declared = str(target)
-    os.symlink(declared, dst)
+    dst.symlink_to(declared)
     tf = _make(src, dst, symlink=declared)
 
     entry, was_drifted = _compare_one("foo", src, dst, tf)
@@ -204,7 +203,7 @@ def test_symlink_dispatch_runs_before_not_exists_branch(tmp_path: Path) -> None:
     src.write_text("x\n")
     target = tmp_path / "ghost"
     dst = tmp_path / "link"
-    os.symlink(str(target), dst)
+    dst.symlink_to(str(target))
     tf = _make(src, dst, symlink=str(target))
     # dst.exists() is False because target is missing — proves the
     # dispatch order matters.

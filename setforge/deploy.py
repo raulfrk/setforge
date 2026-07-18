@@ -10,7 +10,6 @@ and the reconcile layer overrides the resolved content before the write.
 
 import contextlib
 import logging
-import os
 import stat
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -237,7 +236,7 @@ def _write_resolved_content(
         # install fixes perms instead of reporting "unchanged".
         prior_mode: int | None = stat.S_IMODE(real_dst.stat().st_mode)
         if mode is not None and prior_mode != mode:
-            os.chmod(real_dst, mode)
+            real_dst.chmod(mode)
             return DeployResult(
                 dst=real_dst,
                 action=DeployAction.UPDATED,
@@ -468,14 +467,17 @@ def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
     symlink, :attr:`DeployAction.NOOP` when the prior symlink already
     pointed at ``raw_target``, otherwise :attr:`DeployAction.UPDATED`.
     """
-    if dst.is_symlink() and os.readlink(dst) == raw_target:
+    # readlink() returns a Path; str() restores the verbatim link string so the
+    # NOOP fast-path compares like-for-like against the raw_target string.
+    if dst.is_symlink() and str(dst.readlink()) == raw_target:
         return DeployAction.NOOP
     dst_was_link = dst.is_symlink()
     tmp_link = dst.parent / f".{dst.name}.setforge-symlink-tmp"
     with contextlib.suppress(FileNotFoundError):
         tmp_link.unlink()
-    os.symlink(raw_target, tmp_link)
-    os.replace(tmp_link, dst)
+    # symlink_to flips arg order: link.symlink_to(target) == os.symlink(target, link).
+    tmp_link.symlink_to(raw_target)
+    tmp_link.replace(dst)
     return DeployAction.UPDATED if dst_was_link else DeployAction.CREATED
 
 

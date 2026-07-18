@@ -180,9 +180,9 @@ def draft(name: str, dest_root: Path = REPO_ROOT) -> tuple[Path, Path]:
     # 'x' mode raises FileExistsError on clobber. Write the module first; if the
     # test write fails, the module is the only artifact left (re-running is a
     # clean FileExistsError, never a silent partial overwrite).
-    with open(module_path, "x", encoding="utf-8") as fh:
+    with module_path.open("x", encoding="utf-8") as fh:
         fh.write(module_src)
-    with open(test_path, "x", encoding="utf-8") as fh:
+    with test_path.open("x", encoding="utf-8") as fh:
         fh.write(test_src)
     return module_path, test_path
 

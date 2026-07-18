@@ -117,10 +117,10 @@ class Ledger:
     def _append(self, row: dict[str, str]) -> None:
         line = json.dumps(row, separators=(",", ":")) + "\n"
         lock = self.path.with_suffix(self.path.suffix + ".lock")
-        with open(lock, "w") as lf:
+        with lock.open("w") as lf:
             fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
             try:
-                with open(self.path, "a", encoding="utf-8") as f:
+                with self.path.open("a", encoding="utf-8") as f:
                     f.write(line)
                     f.flush()
             finally:
@@ -168,7 +168,7 @@ class Ledger:
         # append-only design's intent is "never lose a good row", not "trust
         # every byte".
         rows: list[dict[str, str]] = []
-        with open(self.path, encoding="utf-8") as f:
+        with self.path.open(encoding="utf-8") as f:
             for ln in f:
                 ln = ln.strip()
                 if not ln:

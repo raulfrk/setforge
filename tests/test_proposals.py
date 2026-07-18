@@ -136,7 +136,7 @@ def test_ledger_tolerates_malformed_lines(tmp_path: Path) -> None:
     path = tmp_path / "ledger.jsonl"
     led = Ledger(path)
     led.record_seen(_p())
-    with open(path, "a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8") as f:
         f.write("{not json\n")  # torn / hand-edited garbage
         f.write('{"shape": "wrong"}\n')  # valid JSON, missing key/event
     led.record_seen(_p())

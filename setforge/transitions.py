@@ -308,7 +308,7 @@ def _write_text_durable(path: Path, text: str) -> None:
     data fsync (e.g. ``ENOSPC``) propagates — a swallowed data-fsync
     error would report durable when it isn't.
     """
-    with open(path, "w", encoding="utf-8") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
@@ -320,7 +320,7 @@ def _write_bytes_durable(path: Path, data: bytes) -> None:
     Used for the staged ``state_snapshots/<n>.payload`` files, which carry
     verbatim store bytes and must not pass through a text encode/decode.
     """
-    with open(path, "wb") as fh:
+    with path.open("wb") as fh:
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
@@ -1428,7 +1428,7 @@ def write_transition(
     _stage_state_snapshots(pending, state_snapshots)
 
     atomicio.fsync_dir(pending)
-    os.rename(pending, target)
+    pending.rename(target)
     atomicio.fsync_dir(root)
 
     touched = _touched_paths(file_pre, file_post)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -699,7 +698,7 @@ def _collision_update(source: MarketplaceSource, cache_dir: Path) -> Marketplace
         # Reached only after a successful clone, so a failed clone leaves
         # ``cache_dir`` intact — the offline-fallback guarantee.
         shutil.rmtree(cache_dir)
-        os.replace(staging, cache_dir)
+        staging.replace(cache_dir)
     finally:
         # Discard any leftover uniquely-named staging dir — clone failure,
         # KeyboardInterrupt, or a swap that never completed. On success

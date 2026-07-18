@@ -207,7 +207,7 @@ def test_atomic_write_yaml_preserves_dest_mode(tmp_path: Path) -> None:
     the 0600 mkstemp default."""
     target = tmp_path / "out.yaml"
     target.write_text("stale: x\n", encoding="utf-8")
-    os.chmod(target, 0o644)
+    target.chmod(0o644)
     atomic_write_yaml(target, yaml_rt().load("fresh: y\n"))
     assert stat.S_IMODE(target.stat().st_mode) == 0o644
 

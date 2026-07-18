@@ -92,7 +92,7 @@ def atomic_write_bytes(
             with contextlib.suppress(FileNotFoundError):
                 backup_path.unlink()
             shutil.copy2(path, backup_path)
-        os.replace(tmp_path, path)
+        tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise

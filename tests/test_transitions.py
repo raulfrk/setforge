@@ -1,6 +1,5 @@
 """Tests for the transitions module."""
 
-import builtins
 import contextlib
 import json
 import os
@@ -1460,17 +1459,20 @@ def _full_payload_inputs(
 def _make_recording_open(
     open_fds: dict[int, str],
 ) -> Callable[..., TextIO]:
-    """Return a ``builtins.open`` wrapper that records fd -> file basename.
+    """Return a ``Path.open`` wrapper that records fd -> file basename.
 
-    Lets a recorded ``os.fsync`` be attributed to a specific payload file
-    by mapping the fd back to the name it was opened under.
+    The durable writers open via ``Path.open`` (pathlib), so the spy wraps
+    ``Path.open`` — patched onto the class in the test — rather than
+    ``builtins.open``. Lets a recorded ``os.fsync`` be attributed to a
+    specific payload file by mapping the fd back to the name it was opened
+    under (``self`` is the Path being opened).
     """
-    real_open = builtins.open
+    real_open = Path.open
 
-    def recording_open(file: str | Path, *args: object, **kwargs: object) -> TextIO:
-        fh = real_open(file, *args, **kwargs)  # type: ignore[call-overload]
+    def recording_open(self: Path, *args: object, **kwargs: object) -> TextIO:
+        fh = real_open(self, *args, **kwargs)  # type: ignore[call-overload]
         with contextlib.suppress(OSError):
-            open_fds[fh.fileno()] = Path(str(file)).name
+            open_fds[fh.fileno()] = self.name
         return fh
 
     return recording_open
@@ -1489,12 +1491,12 @@ def test_write_transition_durable_sequence(
 
     events: list[tuple[str, str]] = []
     real_fsync = os.fsync
-    real_rename = os.rename
+    real_rename = Path.rename
     open_fds: dict[int, str] = {}
 
-    def recording_rename(src: object, dst: object) -> None:
-        events.append(("rename", str(dst)))
-        real_rename(src, dst)  # type: ignore[arg-type]
+    def recording_rename(self: Path, target: object) -> Path:
+        events.append(("rename", str(target)))
+        return real_rename(self, target)  # type: ignore[arg-type]
 
     def recording_fsync(fd: int) -> None:
         events.append(("file_fsync", open_fds.get(fd, "?")))
@@ -1503,13 +1505,14 @@ def test_write_transition_durable_sequence(
     def recording_fsync_dir(directory: Path) -> None:
         events.append(("dir_fsync", str(directory)))
 
-    monkeypatch.setattr(transitions_mod.os, "rename", recording_rename)
+    # The swap is now ``pending.rename(target)`` (pathlib); patch Path.rename.
+    monkeypatch.setattr(Path, "rename", recording_rename)
     monkeypatch.setattr(transitions_mod.os, "fsync", recording_fsync)
     monkeypatch.setattr(transitions_mod.atomicio, "fsync_dir", recording_fsync_dir)
 
-    # _write_text_durable opens via builtins open(); wrap to capture the
+    # _write_text_durable opens via Path.open(); wrap it to capture the
     # fd -> name mapping so file_fsync events carry the file name.
-    monkeypatch.setattr(builtins, "open", _make_recording_open(open_fds))
+    monkeypatch.setattr(Path, "open", _make_recording_open(open_fds))
 
     pre, post, delta = _full_payload_inputs(tmp_path)
     out = write_transition(_make_meta(), pre, post, delta)
@@ -1585,7 +1588,7 @@ def test_write_meta_fsyncs_meta_fd(
         synced_names.append(open_fds.get(fd, "?"))
         real_fsync(fd)
 
-    monkeypatch.setattr(builtins, "open", _make_recording_open(open_fds))
+    monkeypatch.setattr(Path, "open", _make_recording_open(open_fds))
     monkeypatch.setattr(transitions_mod.os, "fsync", recording_fsync)
 
     target = TransitionDir(tmp_path / "t")

@@ -14,7 +14,6 @@ of mocking them out.
 from __future__ import annotations
 
 import json
-import os
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -199,11 +198,11 @@ def test_create_snapshot_preserves_symlinks_as_symlinks(
     target = fake_home / "elsewhere" / "real.txt"
     target.parent.mkdir(parents=True)
     target.write_text("target body\n")
-    os.symlink(target, dst)
+    dst.symlink_to(target)
     meta = _create(ctx, "symlink-test")
     mirror = snap_mod.snapshots_root() / meta.snapshot_id / dst.relative_to("/")
     assert mirror.is_symlink()
-    assert os.readlink(mirror) == str(target)
+    assert str(mirror.readlink()) == str(target)
 
 
 def test_create_snapshot_skips_missing_live_files(fake_home: Path) -> None:
@@ -419,7 +418,7 @@ def test_restore_snapshot_unlinks_live_symlink_before_write(
     other = fake_home / "other.txt"
     other.write_text("symlink target body\n")
     dst.unlink()
-    os.symlink(other, dst)
+    dst.symlink_to(other)
     snap_mod.restore_snapshot("regular", pre_snapshot=False)
     # dst is now a regular file, not a symlink, and the original
     # symlink target was NOT overwritten.
