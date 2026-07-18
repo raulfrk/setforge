@@ -141,6 +141,30 @@ def test_drafts_non_string_value_raises(tmp_state: Path, bad_value: str) -> None
         store.read_drafts("p", fid)
 
 
+def test_drafts_oversized_value_raises(tmp_state: Path) -> None:
+    # A pathological/corrupt manifest whose base64 value exceeds the per-value cap
+    # must fail closed with the module's corrupt-store error (naming the limit),
+    # never attempt an unbounded decode into a MemoryError.
+    fid = file_id("f")
+    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    # encoded length just over the cap; no need to allocate the decoded bytes.
+    oversized = "A" * (store._MAX_DRAFT_VALUE_ENCODED_BYTES + 4)
+    store._drafts_path("p", fid).write_text(
+        f'{{"sha256:aa": "{oversized}"}}', encoding="utf-8"
+    )
+    with pytest.raises(ReconcileStoreError, match="exceeds"):
+        store.read_drafts("p", fid)
+
+
+def test_drafts_large_but_legitimate_value_round_trips(tmp_state: Path) -> None:
+    # A large-but-realistic draft (1 MiB, well under the cap) must round-trip
+    # cleanly — the guard rejects only the pathological, never a real drafts set.
+    fid = file_id("f")
+    data = b"x" * (1024 * 1024)
+    store.write_drafts("p", fid, {"sha256:aa": data})
+    assert store.read_drafts("p", fid)["sha256:aa"] == data
+
+
 def _drafted_row(anchor: str, draft: bytes) -> dict[str, object]:
     return {
         "cls": HunkClass.SHARED_DRAFTED.value,

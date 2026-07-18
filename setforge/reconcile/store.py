@@ -247,6 +247,20 @@ def _drafts_root() -> Path:
     return state_root() / "drafts"
 
 
+# Defensive per-value ceiling for a drafts manifest value, checked BEFORE decoding.
+# A draft value holds ONE hunk's captured content (a section of a tracked config
+# file), so a legitimate value is kilobytes; even a whole-file draft is far under
+# ``merge._MAX_BYTES`` (5 MiB, the point where content is treated as pathological).
+# 64 MiB is >12x that whole-file threshold and orders of magnitude above any real
+# single-hunk draft — no legitimate drafts set is ever rejected. Its only job is
+# corruption-robustness: a corrupt or accidentally-huge LOCAL manifest (this is not
+# network input) fails with a clean typed error instead of an unbounded allocation
+# / MemoryError. base64 inflates ~4/3, so we cap the ENCODED length (cheap, avoids
+# the decode allocation): ceil(64 MiB * 4 / 3) rounded up to a whole base64 quantum.
+_MAX_DRAFT_VALUE_DECODED_BYTES = 64 * 1024 * 1024
+_MAX_DRAFT_VALUE_ENCODED_BYTES = ((_MAX_DRAFT_VALUE_DECODED_BYTES + 2) // 3) * 4
+
+
 def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
     """Return the shareable-draft bytes for ``fid``, keyed by hunk ``anchor``.
 
@@ -278,6 +292,16 @@ def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
             if not isinstance(b64, str):
                 raise ValueError(
                     f"drafts manifest value for {anchor!r} is not a string"
+                )
+            # Guard BEFORE decoding: reject a pathological/corrupt value on its
+            # encoded length so a huge value fails cleanly here instead of via an
+            # unbounded allocation inside b64decode (corruption-robustness, not a
+            # remote-DoS — the manifest is a local 0o600 state file).
+            if len(b64) > _MAX_DRAFT_VALUE_ENCODED_BYTES:
+                raise ValueError(
+                    f"drafts manifest value for {anchor!r} exceeds the "
+                    f"{_MAX_DRAFT_VALUE_DECODED_BYTES}-byte per-draft limit "
+                    f"(encoded {len(b64)} > {_MAX_DRAFT_VALUE_ENCODED_BYTES})"
                 )
             result[str(anchor)] = base64.b64decode(b64, validate=True)
         return result
