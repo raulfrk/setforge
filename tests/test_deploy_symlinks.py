@@ -140,7 +140,12 @@ def test_deploy_symlink_noop_on_equal_target(tmp_path: Path) -> None:
 
 
 def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
-    """The staging tmp file at ``.<name>.setforge-symlink-tmp`` is removed."""
+    """No staging tmp entry survives the deploy.
+
+    The staging link uses a UNIQUE ``mkstemp`` name (not a fixed one), so
+    assert on the deploy result + final link and that no ``.setforge-symlink-tmp``
+    sibling lingers, rather than probing a hard-coded transient name.
+    """
     src = tmp_path / "src"
     src.write_text("x\n")
     target = tmp_path / "target"
@@ -149,9 +154,39 @@ def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
 
     deploy.deploy_symlinked_file(src, dst, tf)
 
-    tmp_link = dst.parent / f".{dst.name}.setforge-symlink-tmp"
-    assert not tmp_link.exists()
-    assert not tmp_link.is_symlink()
+    assert dst.is_symlink()
+    assert str(dst.readlink()) == str(target)
+    leftovers = list(dst.parent.glob("*.setforge-symlink-tmp"))
+    assert leftovers == []
+
+
+def test_deploy_symlink_survives_stale_tmp_collision(tmp_path: Path) -> None:
+    """A stale entry occupying the staging path cannot wedge the deploy.
+
+    A crashed run can leave a directory (or foreign file) at the would-be
+    fixed staging name. With a fixed staging name, ``unlink`` raises an
+    un-suppressed ``IsADirectoryError`` (or ``symlink_to`` raises
+    ``FileExistsError``), wedging the swap. The unique ``mkstemp`` staging
+    name sidesteps any such collision, so the deploy completes.
+    """
+    src = tmp_path / "src"
+    src.write_text("payload\n")
+    target = tmp_path / "target"
+    dst = tmp_path / "link"
+    tf = _make(src, dst, symlink=str(target))
+
+    # Stale DIRECTORY squatting the old fixed staging name.
+    stale = dst.parent / f".{dst.name}.setforge-symlink-tmp"
+    stale.mkdir()
+
+    result = deploy.deploy_symlinked_file(src, dst, tf)
+
+    assert result.action is deploy.DeployAction.CREATED
+    assert dst.is_symlink()
+    assert str(dst.readlink()) == str(target)
+    assert target.read_text() == "payload\n"
+    # The stale collision is left untouched (not our entry to clean up).
+    assert stale.is_dir()
 
 
 def test_revert_refuses_changed_symlink(tmp_path: Path) -> None:
