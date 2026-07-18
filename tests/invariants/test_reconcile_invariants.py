@@ -181,7 +181,8 @@ def scoped_out_invariants() -> dict[str, str]:
             "tracked must equal the reconstruct of exactly the promoted set — "
             "asserted in tests/reconcile/test_hunks.py::"
             "test_fidelity_raises_when_local_bytes_leak_into_tracked and raised "
-            "in setforge/reconcile/structured_units.py (assert_stage_fidelity, "
+            "in setforge/reconcile/structured_units.py "
+            "(assert_stage_fidelity_structured, "
             'the "INV-8: tracked content is not exactly the shared key-unit set" '
             "message)"
         ),
