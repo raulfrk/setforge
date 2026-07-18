@@ -139,9 +139,7 @@ def capture(
     apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
     try:
-        results = _run_capture(
-            cfg, profile, repo_root, config, auto_enum, command="capture"
-        )
+        results = _run_capture(cfg, profile, repo_root, config, auto_enum)
     except KeyboardInterrupt:
         # Plain ``capture`` takes no snapshot (only ``sync`` records a
         # transition + restorable snapshots), and ``capture_profile`` has
@@ -219,9 +217,7 @@ def sync(
         state_pre = _capture_sync_store_snapshots(ctx)
 
         try:
-            results = _run_capture(
-                cfg, profile, repo_root, config, auto_enum, command="sync"
-            )
+            results = _run_capture(cfg, profile, repo_root, config, auto_enum)
             _render_capture_results(results)
 
             _capture_extensions(config, profile)
@@ -433,17 +429,13 @@ def _run_capture(
     repo_root: Path,
     config: Path,
     auto_enum: capture_mod.CaptureAuto | None,
-    *,
-    command: str,
 ) -> list[capture_mod.CaptureResult]:
     """Run ``capture_profile``.
 
     ``KeyboardInterrupt`` is NOT swallowed here: ``capture_profile``
     performs no internal snapshot/restore, so the caller owns the Ctrl-C
     contract — ``sync`` restores from the pre-capture snapshot it took and
-    ``capture`` reports the partial-write truth. ``command`` is retained
-    for call-site parity but no longer drives a (false) "restored from
-    snapshot" message.
+    ``capture`` reports the partial-write truth.
 
     No host-local overlay is loaded: host-local content is now a LOCAL unit
     in the reconcile store, and ``capture_profile``'s per-hunk staged path
