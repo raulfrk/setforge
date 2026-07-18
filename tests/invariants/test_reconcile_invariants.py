@@ -162,10 +162,36 @@ def test_inv1_catches_a_seeded_violation(driven_machine) -> None:
 
 def scoped_out_invariants() -> dict[str, str]:
     return {
-        "INV-6": "merge engine's own fail-closed _verify; test_merge_properties.py",
-        "INV-7": "provisioner shells out (claude/code/gitleaks) — not hermetic here",
-        "INV-8": "needs the share/keep staging verb, not driven by this machine",
-        "INV-9": "pure bundle-model DAG property, not a reconcile-verb step",
+        "INV-6": (
+            "merge engine's own fail-closed _verify; asserted in "
+            "tests/reconcile/test_merge_properties.py::"
+            "test_two_sided_independent_edits_positional (generative edits-only "
+            "vs positional-overlap case the multiset _verify cannot see)"
+        ),
+        "INV-7": (
+            "provisioner shells out (claude/code/gitleaks) — not hermetic here; "
+            "asserted end-to-end in tests/test_provision_reference.py "
+            "(test_hard_failure_gates_exit_others_applied → nonzero exit, "
+            "test_soft_only_exits_zero → exit 0, "
+            "test_report_policy_performs_no_installs → zero writes, "
+            "test_second_run_is_idempotent_noop → empty delta)"
+        ),
+        "INV-8": (
+            "needs the share/keep staging verb, not driven by this machine; "
+            "tracked must equal the reconstruct of exactly the promoted set — "
+            "asserted in tests/reconcile/test_hunks.py::"
+            "test_fidelity_raises_when_local_bytes_leak_into_tracked and raised "
+            "in setforge/reconcile/structured_units.py (assert_stage_fidelity, "
+            'the "INV-8: tracked content is not exactly the shared key-unit set" '
+            "message)"
+        ),
+        "INV-9": (
+            "pure bundle-model DAG property, not a reconcile-verb step; "
+            "asserted in tests/test_provision_bundle.py "
+            "(test_self_edge_rejected, test_back_edge_cycle_rejected, "
+            "test_diamond_is_not_a_cycle, test_dangling_depends_on_rejected, "
+            "test_topo_order_honors_depends_on over the depends_on DAG)"
+        ),
     }
 
 
