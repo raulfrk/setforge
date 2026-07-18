@@ -1,9 +1,9 @@
-"""Tests for yaml_merge.overlay / extract_keys / delete_keys."""
+"""Tests for yaml_merge.overlay / delete_keys."""
 
 import pytest
 
 from setforge.errors import MergeTypeMismatch
-from setforge.yaml_merge import delete_keys, extract_keys, overlay
+from setforge.yaml_merge import delete_keys, overlay
 
 
 def test_dotted_path_overlay() -> None:
@@ -69,16 +69,6 @@ def test_overlay_does_not_mutate_inputs() -> None:
     assert src == {"a": {"b": 1}}
     assert live == {"a": {"b": 2}}
     assert merged is not src
-
-
-def test_extract_keys_returns_present_paths() -> None:
-    doc = {"a": {"b": 42}, "c": [1, 2, 3]}
-    assert extract_keys(doc, ["a.b", "c[]"]) == {"a.b": 42, "c[]": [1, 2, 3]}
-
-
-def test_extract_keys_skips_missing() -> None:
-    doc = {"a": {"b": 1}}
-    assert extract_keys(doc, ["a.b", "missing.path"]) == {"a.b": 1}
 
 
 def test_delete_keys_removes_present_paths() -> None:

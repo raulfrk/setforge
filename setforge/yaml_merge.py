@@ -250,21 +250,6 @@ def _deep_merge_dicts(
                 src_dict[key] = copy.deepcopy(live_value)
 
 
-def extract_keys(doc: Any, key_paths: list[str]) -> dict[str, Any]:
-    """Return a flat ``{path: value}`` dict of values at each path in ``doc``.
-
-    Missing paths are silently skipped.
-    """
-    result: dict[str, Any] = {}
-    for path in key_paths:
-        tokens = _parse_path(path)
-        value = _navigate(doc, tokens)
-        if value is _MISSING:
-            continue
-        result[path] = value
-    return result
-
-
 _MISSING = object()
 
 
