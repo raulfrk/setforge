@@ -36,15 +36,30 @@ def test_install_helpers_module_imports() -> None:
     assert callable(_install_helpers._write_install_transition)
 
 
-def test_check_unexpected_drift_no_entries_is_noop() -> None:
-    """Empty :class:`CompareReport` → short-circuit, no side effect, no Exit.
+def test_check_unexpected_drift_no_entries_is_noop(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty :class:`CompareReport` → short-circuit that returns ``None`` and
+    emits NOTHING.
 
-    The helper returns ``None`` unconditionally; the assertion is that the
-    no-drift call doesn't raise / Exit. ``ProfileContext`` is unreachable
-    on this short-circuit path so the test passes ``None`` deliberately —
-    the cast keeps mypy honest about the deliberate violation that the
-    short-circuit contract permits.
+    The short-circuit's only observable side effect on the reject path is
+    the ``typer.secho`` error write that precedes ``raise typer.Exit(1)``.
+    This pins the no-drift contract on both axes: it must not raise / Exit,
+    AND it must not emit anything. ``typer.secho`` is monkeypatched to a
+    sentinel that fails the test if it fires (catches a mutation that moves
+    the error write above the guard), and ``capsys`` asserts stdout/stderr
+    stay empty (catches any other stray write). ``ProfileContext`` is
+    unreachable on this short-circuit path so the test passes ``None``
+    deliberately — the cast keeps mypy honest about the deliberate
+    violation that the short-circuit contract permits.
     """
+
+    def _fail_on_secho(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("_check_unexpected_drift wrote output on the no-drift path")
+
+    monkeypatch.setattr(_install_helpers.typer, "secho", _fail_on_secho)
+
     empty = CompareReport(entries=[], has_unexpected_drift=False)
     _install_helpers._check_unexpected_drift(
         empty,
@@ -52,6 +67,10 @@ def test_check_unexpected_drift_no_entries_is_noop() -> None:
         auto_accept_tracked=False,
         auto_accept_live=False,
     )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
