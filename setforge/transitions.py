@@ -159,8 +159,9 @@ class TransitionMeta:
         None  # config-repo HEAD at install time; None pre-source-sha
     )
     # all None pre-bump. List/bool/str all use the None sentinel
-    # (NOT default_factory=list) so the omit-when-None invariant holds for every
-    # field and slots=True doesn't allocate a per-instance default container.
+    # (NOT default_factory=list) so slots=True doesn't allocate a per-instance
+    # default container. See TransitionMeta docstring for the omit-when-None
+    # round-trip rationale.
     end_timestamp: str | None = None
     command_line: list[str] | None = None
     preserve_user_keys_applied: bool | None = None
@@ -235,9 +236,9 @@ def make_meta(
 
     The three trailing kwargs (``end_timestamp``, ``command_line``,
     ``preserve_user_keys_applied``) are a later schema bump.
-    All default to ``None`` so pre-bump callers compile unchanged;
-    each field is omitted from ``meta.json`` when ``None`` so old
-    records still round-trip byte-identically.
+    All default to ``None`` so pre-bump callers compile unchanged. See
+    the TransitionMeta docstring for the omit-when-None round-trip
+    rationale.
     """
     source_sha = _git_head(source_dir) if source_dir is not None else None
     return TransitionMeta(
@@ -284,9 +285,10 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
             host=str(payload["host"]),
             version=str(payload["version"]),
             source_sha=payload.get("source_sha"),
-            # optional, all None pre-bump. .get() (NOT
-            # payload[<field>]) so dozens of existing transition records
-            # written before the bump still load cleanly.
+            # optional, all None pre-bump. .get() (NOT payload[<field>]) so
+            # dozens of existing transition records written before the bump
+            # still load cleanly. See TransitionMeta docstring for the
+            # omit-when-None round-trip rationale.
             end_timestamp=payload.get("end_timestamp"),
             command_line=payload.get("command_line"),
             preserve_user_keys_applied=payload.get("preserve_user_keys_applied"),
