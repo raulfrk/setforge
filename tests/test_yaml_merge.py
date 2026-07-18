@@ -3,7 +3,13 @@
 import pytest
 
 from setforge.errors import MergeTypeMismatch
-from setforge.yaml_merge import overlay
+from setforge.yaml_merge import (
+    NodeShape,
+    PathTokenKind,
+    _parse_path,
+    _shape,
+    overlay,
+)
 
 
 def test_dotted_path_overlay() -> None:
@@ -159,3 +165,100 @@ def test_overlay_shallow_path_unchanged_when_deep_list_used() -> None:
     merged_with_empty = overlay(src, live, ["a.b"], deep_key_paths=[])
     assert merged_kwargless == merged_with_empty
     assert merged_kwargless == {"a": {"b": 99, "c": 2}}
+
+
+# ---------------------------------------------------------------------------
+# StrEnum dispatch + byte-identical error-message guards
+# ---------------------------------------------------------------------------
+
+
+def test_node_shape_values_are_the_literal_strings() -> None:
+    """The enum ``.value`` strings must equal the historical literals verbatim
+    so interpolation into error messages stays byte-identical."""
+    assert (NodeShape.DICT, NodeShape.LIST, NodeShape.SCALAR) == (
+        "dict",
+        "list",
+        "scalar",
+    )
+    # f-string / str() render to the bare value, not "NodeShape.DICT".
+    assert f"{NodeShape.DICT}" == "dict"
+    assert str(NodeShape.SCALAR) == "scalar"
+
+
+def test_path_token_kind_values_are_the_literal_strings() -> None:
+    assert (
+        PathTokenKind.KEY,
+        PathTokenKind.KEY_EACH,
+        PathTokenKind.KEY_WHOLE,
+    ) == ("key", "key_each", "key_whole")
+
+
+def test_shape_returns_node_shape_members() -> None:
+    assert _shape({}) is NodeShape.DICT
+    assert _shape([]) is NodeShape.LIST
+    assert _shape("s") is NodeShape.SCALAR
+    assert _shape(3) is NodeShape.SCALAR
+
+
+def test_parse_path_dispatches_each_path_token_kind() -> None:
+    """Every PathTokenKind is producible and correctly tagged by _parse_path."""
+    assert _parse_path("a.b") == [
+        (PathTokenKind.KEY, "a"),
+        (PathTokenKind.KEY, "b"),
+    ]
+    assert _parse_path("a.b[*]") == [
+        (PathTokenKind.KEY, "a"),
+        (PathTokenKind.KEY_EACH, "b"),
+    ]
+    assert _parse_path("a.b[]") == [
+        (PathTokenKind.KEY, "a"),
+        (PathTokenKind.KEY_WHOLE, "b"),
+    ]
+
+
+def test_leaf_type_mismatch_message_byte_identical() -> None:
+    """_check_leaf_type site (dict-vs-scalar shape clash)."""
+    src = {"a": {"nested": "value"}}
+    live = {"a": "scalar"}
+    with pytest.raises(MergeTypeMismatch) as exc:
+        overlay(src, live, ["a"])
+    assert str(exc.value) == "type mismatch at 'a': src is dict, live is scalar"
+
+
+def test_list_branch_mismatch_message_byte_identical() -> None:
+    """_apply_overlay list branch (src non-list, live list, [] suffix)."""
+    src = {"a": "x"}
+    live = {"a": [1, 2]}
+    with pytest.raises(MergeTypeMismatch) as exc:
+        overlay(src, live, ["a[]"])
+    assert str(exc.value) == "type mismatch at 'a[]': src is scalar, live is list"
+
+
+def test_descend_non_mapping_message_byte_identical() -> None:
+    """_apply_overlay non-mapping-descend site."""
+    src = {"a": 5}
+    live = {"a": {"b": 1}}
+    with pytest.raises(MergeTypeMismatch) as exc:
+        overlay(src, live, ["a.b"])
+    assert str(exc.value) == "cannot descend into non-mapping at 'a.b'"
+
+
+def test_deep_terminal_mismatch_message_byte_identical() -> None:
+    """_apply_deep_overlay terminal shape-mismatch site."""
+    src = {"a": 5}
+    live = {"a": {"b": 1}}
+    with pytest.raises(MergeTypeMismatch) as exc:
+        overlay(src, live, [], deep_key_paths=["a"])
+    assert (
+        str(exc.value)
+        == "deep-merge at 'a' requires dict on both sides; got src=scalar, live=dict"
+    )
+
+
+def test_deep_nested_mismatch_message_byte_identical() -> None:
+    """_deep_merge_dicts nested shape-mismatch site."""
+    src = {"a": {"b": 5}}
+    live = {"a": {"b": {"c": 1}}}
+    with pytest.raises(MergeTypeMismatch) as exc:
+        overlay(src, live, [], deep_key_paths=["a"])
+    assert str(exc.value) == "type mismatch at 'a.b': src is scalar, live is dict"

@@ -12,6 +12,7 @@ Path syntax (locked in the rewrite plan):
 import copy
 import re
 from collections.abc import Mapping, MutableMapping
+from enum import StrEnum
 from typing import Any
 
 from setforge.errors import MergeTypeMismatch
@@ -19,16 +20,42 @@ from setforge.errors import MergeTypeMismatch
 _TOKEN_RE = re.compile(r"^(?P<key>[^.\[\]]+)(?P<suffix>\[\*\]|\[\])?$")
 
 
-def _parse_path(path: str) -> list[tuple[str, str]]:
+class NodeShape(StrEnum):
+    """The three structural shapes a YAML node can take.
+
+    Members are :class:`str`, so f-string interpolation and ``str()`` yield the
+    bare ``.value`` (``"dict"``/``"list"``/``"scalar"``) used in user-facing
+    :class:`~setforge.errors.MergeTypeMismatch` message text.
+    """
+
+    DICT = "dict"
+    LIST = "list"
+    SCALAR = "scalar"
+
+
+class PathTokenKind(StrEnum):
+    """The kind of a parsed path token.
+
+    :attr:`KEY` is a plain dict key, :attr:`KEY_EACH` a final ``[*]`` (per-element
+    overlay), :attr:`KEY_WHOLE` a final ``[]`` (whole-list replace).
+    """
+
+    KEY = "key"
+    KEY_EACH = "key_each"
+    KEY_WHOLE = "key_whole"
+
+
+def _parse_path(path: str) -> list[tuple[PathTokenKind, str]]:
     """Return a list of ``(kind, key)`` tuples.
 
-    ``kind`` is ``"key"`` for a plain dict key, ``"key_each"`` for a final
-    ``[*]`` segment, or ``"key_whole"`` for a final ``[]`` segment.
+    ``kind`` is :attr:`PathTokenKind.KEY` for a plain dict key,
+    :attr:`PathTokenKind.KEY_EACH` for a final ``[*]`` segment, or
+    :attr:`PathTokenKind.KEY_WHOLE` for a final ``[]`` segment.
     """
     parts = path.split(".")
     if not parts or any(not p for p in parts):
         raise ValueError(f"invalid path: {path!r}")
-    tokens: list[tuple[str, str]] = []
+    tokens: list[tuple[PathTokenKind, str]] = []
     last = len(parts) - 1
     for i, part in enumerate(parts):
         match = _TOKEN_RE.match(part)
@@ -37,24 +64,24 @@ def _parse_path(path: str) -> list[tuple[str, str]]:
         key = match.group("key")
         suffix = match.group("suffix")
         if suffix is None:
-            tokens.append(("key", key))
+            tokens.append((PathTokenKind.KEY, key))
         elif i != last:
             raise ValueError(
                 f"list suffix {suffix!r} only allowed at end of path: {path!r}"
             )
         elif suffix == "[*]":
-            tokens.append(("key_each", key))
+            tokens.append((PathTokenKind.KEY_EACH, key))
         else:
-            tokens.append(("key_whole", key))
+            tokens.append((PathTokenKind.KEY_WHOLE, key))
     return tokens
 
 
-def _shape(value: Any) -> str:
+def _shape(value: Any) -> NodeShape:
     if isinstance(value, Mapping):
-        return "dict"
+        return NodeShape.DICT
     if isinstance(value, list):
-        return "list"
-    return "scalar"
+        return NodeShape.LIST
+    return NodeShape.SCALAR
 
 
 def _check_leaf_type(src_val: Any, live_val: Any, path: str) -> None:
@@ -102,7 +129,7 @@ def overlay(
 def _apply_overlay(
     src_node: Any,
     live_node: Any,
-    tokens: list[tuple[str, str]],
+    tokens: list[tuple[PathTokenKind, str]],
     path: str,
 ) -> None:
     kind, key = tokens[0]
@@ -115,7 +142,7 @@ def _apply_overlay(
     if not isinstance(src_node, MutableMapping):
         raise MergeTypeMismatch(f"cannot descend into non-mapping at {path!r}")
 
-    if kind == "key":
+    if kind == PathTokenKind.KEY:
         _overlay_scalar(src_node, key, live_value, rest, path)
         return
 
@@ -130,10 +157,10 @@ def _apply_overlay(
             f"type mismatch at {path!r}: src is {_shape(src_node[key])}, live is list"
         )
 
-    if kind == "key_whole":
+    if kind == PathTokenKind.KEY_WHOLE:
         _overlay_list_whole(src_node[key], live_value)
         return
-    if kind == "key_each":
+    if kind == PathTokenKind.KEY_EACH:
         _overlay_list_each(src_node[key], live_value)
 
 
@@ -141,7 +168,7 @@ def _overlay_scalar(
     src_node: MutableMapping,
     key: str,
     live_value: Any,
-    rest: list[tuple[str, str]],
+    rest: list[tuple[PathTokenKind, str]],
     path: str,
 ) -> None:
     """Handle a plain ``key`` token at the head of the remaining path.
@@ -177,7 +204,7 @@ def _overlay_list_each(src_list: list[Any], live_value: list[Any]) -> None:
 def _apply_deep_overlay(
     src_node: Any,
     live_node: Any,
-    tokens: list[tuple[str, str]],
+    tokens: list[tuple[PathTokenKind, str]],
     path: str,
 ) -> None:
     """Like :func:`_apply_overlay` but at the terminal, deep-merge dicts
@@ -186,7 +213,7 @@ def _apply_deep_overlay(
     """
     kind, key = tokens[0]
     rest = tokens[1:]
-    if kind != "key":
+    if kind != PathTokenKind.KEY:
         # Validator on TrackedFile.preserve_user_keys_deep already rejects
         # [*] / [] suffixes — defensive only.
         raise ValueError(f"deep overlay does not support {path!r}")
@@ -253,13 +280,13 @@ def _deep_merge_dicts(
 _MISSING = object()
 
 
-def _navigate(node: Any, tokens: list[tuple[str, str]]) -> Any:
+def _navigate(node: Any, tokens: list[tuple[PathTokenKind, str]]) -> Any:
     if not tokens:
         return node
     kind, key = tokens[0]
     rest = tokens[1:]
     if not isinstance(node, Mapping) or key not in node:
         return _MISSING
-    if kind == "key":
+    if kind == PathTokenKind.KEY:
         return _navigate(node[key], rest)
     return node[key]

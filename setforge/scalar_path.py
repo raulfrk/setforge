@@ -50,7 +50,7 @@ from setforge.jsonc import (
     _walk_jsonobject_path,
 )
 from setforge.scalar_merge import ABSENT, ScalarOutcome, ScalarResolution
-from setforge.yaml_merge import _MISSING, _navigate, _parse_path
+from setforge.yaml_merge import _MISSING, PathTokenKind, _navigate, _parse_path
 
 _LIST_SUFFIX_KINDS: frozenset[str] = frozenset({"key_each", "key_whole"})
 
@@ -60,7 +60,7 @@ _LIST_SUFFIX_KINDS: frozenset[str] = frozenset({"key_each", "key_whole"})
 # ---------------------------------------------------------------------------
 
 
-def _yaml_key_tokens(path: str) -> list[tuple[str, str]]:
+def _yaml_key_tokens(path: str) -> list[tuple[PathTokenKind, str]]:
     """Parse ``path`` into ``(kind, key)`` tokens, rejecting list suffixes.
 
     Reuses :func:`setforge.yaml_merge._parse_path` (which already forbids a
