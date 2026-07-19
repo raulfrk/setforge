@@ -475,8 +475,9 @@ def strip_host_local_sections(
     host-local section names declared in local.yaml — only those pairs
     are removed; any host-local marker pair the user authored directly
     in tracked (carried through to live) passes through unchanged.
-    Shared marker pairs always pass through. ``allow_legacy`` mirrors
-    the strip/extract default — capture reads live-side text that may
+    Shared marker pairs always pass through. ``allow_legacy`` defaults to
+    ``True`` (lenient) — unlike the strict :func:`extract_sections` default
+    (``False``) — because capture reads live-side text that may still
     contain pre-hash markers.
 
     No-op when ``names`` is empty.
