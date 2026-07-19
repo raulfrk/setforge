@@ -6,7 +6,7 @@
 //   → Recheck fix-touched cells → structured report.
 // The GATE (full suites) + TAG (v1.0.0-rcN) run in the ORCHESTRATOR after this
 // returns — a workflow can't block on the 42-min docker e2e or a human notify.
-// args: { rc: "rc1"|"rc2"|"rc3", root?: string }
+// args: { rc: "rc1"|"rc2"|"rc3", root: string (required) }
 
 export const meta = {
   name: 'release-audit-pass',
@@ -19,8 +19,10 @@ export const meta = {
   ],
 }
 
-const RC = (args && args.rc) || 'rc1'
-const ROOT = (args && args.root) || '.' // worktree abs path — ALL agents cd here
+const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
+const RC = A.rc || 'rc1'
+if (!A.root) throw new Error('args.root is required — refusing to default to "." (an args-delivery failure would audit and FIX the wrong tree)')
+const ROOT = A.root // worktree abs path — ALL agents cd here
 const CD = `First: \`cd ${ROOT}\` (work ONLY in this tree). `
 
 // --- decomposition -----------------------------------------------------------
