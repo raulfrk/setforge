@@ -82,3 +82,21 @@ def test_receipt_backed_idempotency(tmp_path: Path) -> None:
     second = reconcile(fresh, items)
     assert second.delta.is_empty() is True
     assert second.outcomes == ()
+
+
+def test_uninstall_removes_from_in_memory_set() -> None:
+    prov = InMemoryProvisioner()
+    item = _item("a")
+    prov.apply_one(item)
+    assert item.identity in prov.probe()
+    prov.uninstall_one(item.identity)
+    assert prov.probe() == set()
+
+
+def test_uninstall_removes_receipt_in_marker_mode(tmp_path: Path) -> None:
+    prov = InMemoryProvisioner(receipts=ReceiptStore(tmp_path))
+    item = _item("a")
+    prov.apply_one(item)
+    assert item.identity in prov.probe()
+    prov.uninstall_one(item.identity)
+    assert prov.probe() == set()
