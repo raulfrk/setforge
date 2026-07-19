@@ -119,7 +119,10 @@ def _render_env_section(probe: EnvProbe, *, console: Console) -> None:
 
 
 def _render_binary_row(probe: BinaryProbe, *, console: Console) -> None:
-    """Render one binary's status line(s) — ✓ on resolve, ⚠ + impact + fix on absent."""
+    """Render one binary's status line(s).
+
+    ✓ on resolve, ✗ REQUIRED on missing, ⚠ + impact + fix on optional missing.
+    """
     if probe.resolved_path is not None:
         console.print(f"  [green]✓[/green] {probe.name} binary on PATH")
         return
