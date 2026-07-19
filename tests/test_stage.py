@@ -249,6 +249,66 @@ def test_apply_adopt_rewrites_live_to_draft(
     store.verify(profile, fid)  # manifest still matches
 
 
+def test_apply_writes_live_under_profile_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Adopt live write must land INSIDE the profile lock that guards the
+    index record — one lock spanning write+record, mirroring install/sync/revert.
+
+    Without the hoist the write happens before the lock is acquired, so a
+    concurrent install/sync could land between the live write and the recorded
+    classification. Records the lock enter/exit and the live write into one event
+    log and asserts ``enter < write < exit``.
+    """
+    import contextlib
+    from collections.abc import Iterator
+
+    from setforge.cli import stage as stage_mod
+    from setforge.cli.stage import Decision, _apply
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_stages(cfg, resolved, repo, profile)
+
+    events: list[str] = []
+    real_lock = stage_mod.profile_lock
+    real_write = stage_mod.atomicio.atomic_write_bytes
+
+    @contextlib.contextmanager
+    def recording_lock(prof: str, timeout: float | None = None) -> Iterator[None]:
+        events.append("enter")
+        with real_lock(prof, timeout=timeout):
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+    def recording_write(path: Path, *args: object, **kwargs: object) -> None:
+        # The store also writes index/base via atomicio; record only the live dst.
+        if path == stage.dst:
+            events.append("write")
+        real_write(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(stage_mod, "profile_lock", recording_lock)
+    monkeypatch.setattr(stage_mod.atomicio, "atomic_write_bytes", recording_write)
+
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    _apply(profile, stage, result)
+
+    assert events.count("write") == 1, f"expected one live write; got {events}"
+    assert events.index("enter") < events.index("write") < events.index("exit"), (
+        f"live write must be inside the profile lock; observed order: {events}"
+    )
+
+
 def test_counts_tallies_by_class() -> None:
     from setforge.reconcile.hunks import extract_hunks
 

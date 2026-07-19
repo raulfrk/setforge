@@ -270,12 +270,15 @@ def walk_structured(
 def _apply_structured(
     profile: str, stage: StructuredFileStage, result: StructuredWalkResult
 ) -> None:
-    """Persist a structured walk's classifications + drafts.
+    """Persist a structured walk's classifications + drafts under ONE profile lock.
 
     Adopt-locally (rewriting host live to a structured draft) is a follow-up; this
-    persists classifications against the unchanged live bytes.
+    persists classifications against the unchanged live bytes. The lock spans the
+    whole record here (and, once adopt-locally lands, its live write too) —
+    mirroring :func:`_apply` so a concurrent install/sync cannot interleave.
     """
-    _persist_structured(profile, stage, result, stage.live)
+    with profile_lock(profile):
+        _persist_structured(profile, stage, result, stage.live)
 
 
 def _persist_structured(
@@ -284,13 +287,14 @@ def _persist_structured(
     result: StructuredWalkResult,
     final_live: bytes,
 ) -> None:
-    """Record the structured walk's key-unit classifications + drafts under the lock.
+    """Record the structured walk's key-unit classifications + drafts.
 
     The structured analog of :func:`_persist`: same lost-update RMW (re-read +
-    re-extract under the lock, overlay ONLY the paths the host explicitly decided),
-    keyed by dotted ``path`` instead of line ``anchor``, using the structured
-    extract/classify/serialize. base is UNCHANGED (sync/install own it); the drafts
-    manifest is reconciled to exactly the surviving SHARED_DRAFTED set.
+    re-extract with the caller's lock held, overlay ONLY the paths the host
+    explicitly decided), keyed by dotted ``path`` instead of line ``anchor``, using
+    the structured extract/classify/serialize. base is UNCHANGED (sync/install own
+    it); the drafts manifest is reconciled to exactly the surviving SHARED_DRAFTED
+    set.
     """
     collect_cls = {u.path: u.cls for u in stage.units}
     walk_by_path = {u.path: u for u in result.units}
@@ -299,36 +303,35 @@ def _persist_structured(
         for path, unit in walk_by_path.items()
         if collect_cls.get(path) != unit.cls or path in result.drafts
     }
-    with profile_lock(profile):
-        entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
-        stored = entry.hunks if entry is not None else []
-        current = su_mod.classify_structured(
-            su_mod.extract_structured_units(stage.base, final_live, stage.fmt), stored
+    entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
+    stored = entry.hunks if entry is not None else []
+    current = su_mod.classify_structured(
+        su_mod.extract_structured_units(stage.base, final_live, stage.fmt), stored
+    )
+    merged = [
+        replace(
+            u,
+            cls=walk_by_path[u.path].cls,
+            draft_hash=walk_by_path[u.path].draft_hash,
         )
-        merged = [
-            replace(
-                u,
-                cls=walk_by_path[u.path].cls,
-                draft_hash=walk_by_path[u.path].draft_hash,
-            )
-            if u.path in decided
-            else u
-            for u in current
-        ]
-        pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
-        drafts = {
-            u.path: pool[u.path]
-            for u in merged
-            if u.cls is HunkClass.SHARED_DRAFTED and u.path in pool
-        }
-        reconcile_store.record(
-            profile,
-            stage.fid,
-            base=stage.base,
-            local=final_live,
-            hunks=su_mod.serialize_structured(merged),
-            drafts=drafts,
-        )
+        if u.path in decided
+        else u
+        for u in current
+    ]
+    pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
+    drafts = {
+        u.path: pool[u.path]
+        for u in merged
+        if u.cls is HunkClass.SHARED_DRAFTED and u.path in pool
+    }
+    reconcile_store.record(
+        profile,
+        stage.fid,
+        base=stage.base,
+        local=final_live,
+        hunks=su_mod.serialize_structured(merged),
+        drafts=drafts,
+    )
 
 
 def counts(hunks: list[Hunk]) -> Counter[HunkClass]:
@@ -560,29 +563,39 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
 
 
 def _apply(profile: str, stage: FileStage, result: WalkResult) -> None:
-    """Apply the walk: rewrite live for any Adopt (atomic, captured mode), then
-    persist the classifications + drafts under the lock."""
+    """Apply the walk under ONE profile lock: rewrite live for any Adopt (atomic,
+    captured mode), then persist the classifications + drafts.
+
+    The live write and the index record share a single lock span — mirroring how
+    install/sync/revert hold the lock across their whole mutating region — so a
+    concurrent install/sync cannot land between the write and the record and leave
+    a live tree whose bytes no longer match the classifications persisted here.
+    """
     final_live = _adopt_live(stage, result)
-    if final_live != stage.live:
-        # stat() (follow) so a symlinked dst keeps its target's mode, not the link's.
-        mode = stat.S_IMODE(stage.dst.stat().st_mode)
-        atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
-    _persist(profile, stage, result, final_live)
+    with profile_lock(profile):
+        if final_live != stage.live:
+            # stat() (follow) so a symlinked dst keeps its target's mode, not the
+            # link's.
+            mode = stat.S_IMODE(stage.dst.stat().st_mode)
+            atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
+        _persist(profile, stage, result, final_live)
 
 
 def _persist(
     profile: str, stage: FileStage, result: WalkResult, final_live: bytes
 ) -> None:
     """Record the walk's classifications + drafts, merging with the current index
-    UNDER the lock so a concurrent ``sync`` is not clobbered (lost-update RMW).
+    so a concurrent ``sync`` is not clobbered (lost-update RMW). The caller holds
+    the profile lock across this record AND the preceding live write.
 
     The walk read + classified the index at collect time, OUTSIDE the lock; a
     naive whole-list overwrite here would drop any classification a concurrent
-    ``sync`` committed in between. Instead, re-read the index under the lock,
-    re-extract the (post-Adopt) base/live, and overlay ONLY the anchors the host
-    explicitly decided (class changed from collect time, OR a draft attached) — so
-    an anchor the host skipped keeps whatever the concurrent writer left, while the
-    host's explicit choices win. base is UNCHANGED (sync/install own it).
+    ``sync`` committed in between. Instead, re-read the index (the caller's lock
+    still held), re-extract the (post-Adopt) base/live, and overlay ONLY the anchors
+    the host explicitly decided (class changed from collect time, OR a draft
+    attached) — so an anchor the host skipped keeps whatever the concurrent writer
+    left, while the host's explicit choices win. base is UNCHANGED (sync/install
+    own it).
 
     The drafts manifest is reconciled to EXACTLY the surviving ``SHARED_DRAFTED``
     set: prior drafts are kept, this walk's are added, and any whose hunk demoted
@@ -605,36 +618,35 @@ def _persist(
         for anchor, hunk in walk_by_anchor.items()
         if collect_cls.get(anchor) != hunk.cls or anchor in result.drafts
     }
-    with profile_lock(profile):
-        entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
-        stored = entry.hunks if entry is not None else []
-        current = hunks_mod.classify(
-            hunks_mod.extract_hunks(stage.base, final_live), stored
+    entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
+    stored = entry.hunks if entry is not None else []
+    current = hunks_mod.classify(
+        hunks_mod.extract_hunks(stage.base, final_live), stored
+    )
+    merged = [
+        replace(
+            h,
+            cls=walk_by_anchor[h.anchor].cls,
+            draft_hash=walk_by_anchor[h.anchor].draft_hash,
         )
-        merged = [
-            replace(
-                h,
-                cls=walk_by_anchor[h.anchor].cls,
-                draft_hash=walk_by_anchor[h.anchor].draft_hash,
-            )
-            if h.anchor in decided
-            else h
-            for h in current
-        ]
-        pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
-        drafts = {
-            h.anchor: pool[h.anchor]
-            for h in merged
-            if h.cls is HunkClass.SHARED_DRAFTED and h.anchor in pool
-        }
-        reconcile_store.record(
-            profile,
-            stage.fid,
-            base=stage.base,
-            local=final_live,
-            hunks=hunks_mod.serialize(merged),
-            drafts=drafts,
-        )
+        if h.anchor in decided
+        else h
+        for h in current
+    ]
+    pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
+    drafts = {
+        h.anchor: pool[h.anchor]
+        for h in merged
+        if h.cls is HunkClass.SHARED_DRAFTED and h.anchor in pool
+    }
+    reconcile_store.record(
+        profile,
+        stage.fid,
+        base=stage.base,
+        local=final_live,
+        hunks=hunks_mod.serialize(merged),
+        drafts=drafts,
+    )
 
 
 @app.command(epilog=STAGE_EXAMPLES)
