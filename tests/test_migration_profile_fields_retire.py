@@ -158,6 +158,38 @@ def test_reverse_preserves_native_package_refs(tmp_path: Path) -> None:
     assert data["schema_version"] == "5.0"
 
 
+# A hand-authored 6.0 package whose body is the exact minted identity shape
+# ({type: cargo, crate: <key>}, key == crate), indistinguishable from a fold.
+_CFG_NATIVE_IDENTITY = """\
+schema_version: "6.0"
+minimum_version: "6.0"
+tracked_files: {}
+packages:
+  ripgrep:
+    type: cargo
+    crate: ripgrep
+profiles:
+  default:
+    packages: [ripgrep]
+"""
+
+
+def test_reverse_translates_native_identity_ref_losslessly(tmp_path: Path) -> None:
+    # A stateless reverse cannot tell a native identity-shaped package from a
+    # minted one, so it unfolds it into cargo_binaries. That is a values-
+    # preserving rewrite into the 5.0 spelling of the same intent (the two forms
+    # are semantically identical), not a loss — see COMPATIBILITY.md.
+    roots = _write_cfg(tmp_path, _CFG_NATIVE_IDENTITY)
+    _ProfileFieldsRetireReverse().apply(roots=roots)
+
+    data = _load(roots)
+    profile = data["profiles"]["default"]
+    assert list(profile["cargo_binaries"]) == ["ripgrep"]
+    assert "packages" not in profile
+    assert "packages" not in data
+    assert data["schema_version"] == "5.0"
+
+
 def _plain(node: Any) -> Any:
     """Recursively convert a ruamel document into plain dict/list for equality."""
     from collections.abc import Mapping, Sequence

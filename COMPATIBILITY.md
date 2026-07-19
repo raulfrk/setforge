@@ -314,10 +314,22 @@ Unlike the lossy one-way contract steps (`2.0 → 2.1`, `2.1 → 3.0`,
 translating down-migration**, not a refuse: a single `migrate --to=5.0`
 unfolds the minted `packages` entries back into `cargo_binaries` /
 `claude_plugins` / `extensions.include` and rebuilds the legacy
-`plugins_reconcile` / `extensions` shape, preserving any natively-authored
-`packages` refs in place. It honors the *both ways* rule; the round-trip
-restores schema **shape and values**, not byte identity (`ruamel` normalizes on
-the first load).
+`plugins_reconcile` / `extensions` shape. It honors the *both ways* rule; the
+round-trip restores schema **shape and values**, not byte identity (`ruamel`
+normalizes on the first load).
+
+The reverse has no round-trip context, so it recognizes a minted entry purely
+by shape: a `packages` ref is unfolded **only** when its top-level entry is the
+exact identity body the forward emits — `{type: cargo, crate: <key>}` /
+`{type: plugin, plugin: <key>}` / `{type: extension, extension: <key>}` with the
+inner value equal to the key. Any other native ref (a `python` / `go` /
+`github_release` / `local` package, or a `cargo` / `plugin` / `extension` whose
+body carries extra fields or a non-identity value) is **preserved in place** with
+its top-level entry intact. A natively-authored `6.0` package that happens to
+match the identity shape is therefore translated to the equivalent legacy field
+rather than kept as a `packages` ref — a values-preserving rewrite into the `5.0`
+spelling of the same intent (the two forms are semantically identical), not a
+loss.
 
 The forward drop is **irreversible on un-upgraded hosts**, so it is gated
 behind an operator-declared `minimum_version >= 6.0` floor — the attestation
