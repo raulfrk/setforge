@@ -403,3 +403,20 @@ def test_stub_template_still_valid_yaml() -> None:
     cfg = load_host_local_config()
     assert isinstance(cfg, HostLocalConfig)
     assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_both_blocks_malformed_binaries_error_wins() -> None:
+    """When both blocks are malformed, the binaries error surfaces first.
+
+    ``load_host_local_config`` builds ``HostLocalConfig(binaries=..., claude=...)``;
+    Python evaluates the ``binaries`` argument before ``claude``, so the
+    ``binaries:`` error short-circuits and the ``claude.install_mode`` error
+    never fires. Swapping that call order would flip which message wins — this
+    pins the current precedence so such a refactor fails loudly.
+    """
+    binaries.LOCAL_CONFIG_PATH.write_text(
+        "binaries: a-string\nclaude:\n  install_mode: garbage\n"
+    )
+    with pytest.raises(ConfigError, match=r"'binaries:'") as excinfo:
+        load_host_local_config()
+    assert "install_mode" not in str(excinfo.value)
