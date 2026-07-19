@@ -20,9 +20,6 @@ from setforge.errors import ResolveError
 
 __all__ = ["fetch_bytes"]
 
-# Ceiling on gzip-DECODED bytes. Generous relative to real marketplace-query /
-# VSIX responses yet bounded, so a decompression bomb aborts early instead of
-# exhausting RAM. Peak memory stays near this value (cap + one decode chunk).
 _MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 1024
 
 _DECODE_CHUNK = 1024 * 1024
@@ -41,9 +38,7 @@ def fetch_bytes(
 ) -> bytes:
     """Fetch ``url`` over HTTPS with an explicit timeout + hard wire cap.
 
-    ``data`` makes it a POST; ``decode_gzip`` gunzips AFTER the wire cap is
-    enforced on the pre-decode bytes. The gunzip is incremental and bounded by
-    ``max_decompressed``, so a gzip bomb cannot inflate past the cap in RAM.
+    ``data`` makes it a POST; see module docstring for the gzip-decode cap.
     """
     if not url.startswith("https://"):
         raise ResolveError(f"refusing non-HTTPS URL: {url!r}")
@@ -67,12 +62,7 @@ def fetch_bytes(
 
 
 def _gunzip_bounded(body: bytes, *, url: str, max_decompressed: int) -> bytes:
-    """Inflate gzip ``body`` incrementally, aborting past ``max_decompressed``.
-
-    Feeds the input in slices and pulls bounded output via ``decompress(...,
-    max_length)``, so peak memory is (cap + one chunk) rather than the full
-    inflated size — a gzip bomb raises before it can be materialized.
-    """
+    """Inflate incrementally so peak memory stays near the cap, not the full size."""
     decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
     out = bytearray()
     try:

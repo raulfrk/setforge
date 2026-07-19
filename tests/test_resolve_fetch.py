@@ -197,10 +197,9 @@ def test_non_gzip_body_with_decode_gzip_raises(monkeypatch: pytest.MonkeyPatch) 
 def test_gzip_bomb_over_decompressed_cap_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Compressed body sits under the wire cap but inflates past the decoded cap.
     cap = 4096
     bomb = gzip.compress(b"\x00" * (cap * 4))
-    assert len(bomb) < cap  # \0-run compresses tiny; passes the wire cap
+    assert len(bomb) < cap
     _patch_urlopen(
         monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
     )
@@ -217,10 +216,8 @@ def test_gzip_bomb_over_decompressed_cap_raises(
 def test_gzip_bomb_aborts_without_materializing_full_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The incremental loop must abort with peak memory bounded near the cap,
-    # never allocating the whole inflated bomb.
     cap = 1024 * 1024
-    original = b"\x00" * (cap * 200)  # ~200 MiB decoded; 200x the cap
+    original = b"\x00" * (cap * 200)
     bomb = gzip.compress(original)
     _patch_urlopen(
         monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
@@ -239,8 +236,6 @@ def test_gzip_bomb_aborts_without_materializing_full_output(
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    # Peak stays within a few multiples of the cap — far below the ~200 MiB
-    # a materialize-then-check implementation would have allocated.
     assert peak < cap * 5
 
 
