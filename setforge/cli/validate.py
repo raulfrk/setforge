@@ -85,11 +85,12 @@ def _check_profile(
     if resolved is None:
         return
 
-    # Check 1c: apply the local.yaml plugin / extension
-    # / marketplace overlay so its collision / unknown-remove and
-    # marketplace cross-ref errors surface at validate time too.
-    # Mirrors Check 1b — the install path runs the same applier; the
-    # validate path is a defensive offline backstop per SPEC 2 Q8.
+    # Apply the local.yaml plugin / extension / marketplace overlay so its
+    # collision / unknown-remove and marketplace cross-ref errors surface at
+    # validate time too. The install path runs the same applier; the validate
+    # path is a defensive offline backstop per SPEC 2 Q8. Gates Check 6 below:
+    # a completed overlay already runs the cross-ref invariant, so Check 6 is
+    # skipped to avoid duplicate rows (see _apply_local_overlay_check).
     cross_ref_ran = _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
 
     for tracked_file_name in resolved.tracked_files:
