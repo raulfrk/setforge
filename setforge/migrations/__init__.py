@@ -343,11 +343,13 @@ class MigrationRoots:
             other host-local state a migration touches.
         pre_chain_snapshot: the pre-chain frozen file image (every
             affected path, captured before the first step ran), set by
-            the migrate driver. A chain step that records its OWN
-            transition (``writes_own_transition``) uses this as its
-            transition's ``file_pre`` so ONE revert reaches the chain's
-            byte-exact origin, not merely the step's pre-step state.
-            ``None`` when a migration is applied outside the driver.
+            the migrate driver. A cutover step that records its own
+            durable transition inside :meth:`~Migration.apply` — an
+            optional convention the driver detects reflectively, not a
+            Protocol member — uses this as that transition's ``file_pre``
+            so ONE revert reaches the chain's byte-exact origin, not
+            merely the step's pre-step state. ``None`` when a migration
+            is applied outside the driver.
     """
 
     cfg_path: Path
@@ -678,10 +680,11 @@ def detect_current_schema(yaml_path: Path) -> str:
     resolve to :data:`_DEFAULT_SCHEMA_VERSION` (= ``"1.0"``) — the
     pre-versioning baseline every existing user is implicitly on.
 
-    A non-well-formed file raises :class:`ConfigError` naming the file
-    (the ruamel ``YAMLError`` is wrapped), so every external-input access
-    in this module routes through the same domain error — matching the
-    :func:`_require_mapping_root` guard on the next line.
+    A non-well-formed OR non-UTF-8 file raises :class:`ConfigError` naming
+    the file (the ruamel ``YAMLError`` and the decode ``UnicodeDecodeError``
+    are both wrapped), so every external-input access in this module routes
+    through the same domain error — matching the :func:`_require_mapping_root`
+    guard on the next line.
     """
     if not yaml_path.exists():
         return _DEFAULT_SCHEMA_VERSION
@@ -689,7 +692,7 @@ def detect_current_schema(yaml_path: Path) -> str:
     try:
         with yaml_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
-    except YAMLError as exc:
+    except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {yaml_path}: {exc}") from exc
     if data is None:
         return _DEFAULT_SCHEMA_VERSION

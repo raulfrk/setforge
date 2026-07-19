@@ -140,6 +140,19 @@ def test_detect_malformed_yaml_raises_config_error(tmp_path: Path) -> None:
         detect_local_yaml_schema(path)
 
 
+def test_detect_non_utf8_raises_config_error(tmp_path: Path) -> None:
+    """A non-UTF-8 local.yaml raises ConfigError, not a raw UnicodeDecodeError.
+
+    The ``.open(encoding="utf-8")`` decode raises ``UnicodeDecodeError`` BEFORE
+    ruamel sees the bytes, so wrapping only ``YAMLError`` left the raw builtin
+    to bubble — the same trust-boundary gap as its ``setforge.yaml`` sibling.
+    """
+    path = tmp_path / "local.yaml"
+    path.write_bytes(b"schema_version: \xff\xfe 2.0\n")
+    with pytest.raises(ConfigError, match=str(path)):
+        detect_local_yaml_schema(path)
+
+
 # --- Task 2: version-gated migration wrapper ---------------------------
 
 

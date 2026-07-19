@@ -892,6 +892,21 @@ def test_detect_current_schema_malformed_yaml_raises_config_error(
         detect_current_schema(cfg)
 
 
+def test_detect_current_schema_non_utf8_raises_config_error(
+    tmp_path: Path,
+) -> None:
+    """A non-UTF-8 setforge.yaml raises ConfigError, not a raw UnicodeDecodeError.
+
+    The ``.open(encoding="utf-8")`` decode raises ``UnicodeDecodeError`` BEFORE
+    ruamel sees the bytes, so the ``YAMLError`` wrap alone left the raw builtin
+    to bubble with a traceback — breaking the module's uniform trust boundary.
+    """
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_bytes(b"schema_version: \xff\xfe 2.0\n")
+    with pytest.raises(ConfigError, match=str(cfg)):
+        detect_current_schema(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Second real migration — restamp 1.1 → 1.2 (+ symmetric reverse).
 #
