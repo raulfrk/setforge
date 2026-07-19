@@ -753,9 +753,7 @@ def init(
 ) -> None:
     """Bootstrap setforge config dirs + local.yaml template + env health.
 
-    See mockup J in
-    ``~/.claude/projects/-home-raul-setforge/specs/2026-05-18-release-blocker-workflows.md``
-    for the four scenarios (fresh init / reinit / --force / --check).
+    See mockup J for the four scenarios (fresh init / reinit / --force / --check).
     """
     console = Console(stderr=True)
     console.print("=== setforge init ===")

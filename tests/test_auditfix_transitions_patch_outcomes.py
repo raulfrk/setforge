@@ -118,6 +118,37 @@ def test_compute_patch_marker_attaches_to_correct_side(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == pre
 
 
+def test_compute_patch_body_line_starting_with_dash_no_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    rel = "etc/dashy.conf"
+    pre = "alpha\n---like-a-header"
+    post = "alpha\n+++also-like-one"
+
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(post, encoding="utf-8")
+
+    patch_text = compute_patch(
+        {Path("/" + rel): pre},
+        {Path("/" + rel): post},
+    )
+
+    assert patch_text.count("\\ No newline at end of file") == 2
+
+    dry = _apply_reverse(patch_text, tmp_path, dry_run=True)
+    assert dry.returncode == 0, (
+        f"dry-run -R failed (exit {dry.returncode}):\n"
+        f"{dry.stderr or dry.stdout}\n--- patch ---\n{patch_text}"
+    )
+
+    real = _apply_reverse(patch_text, tmp_path, dry_run=False)
+    assert real.returncode == 0, (
+        f"-R apply failed (exit {real.returncode}):\n{real.stderr or real.stdout}"
+    )
+    assert target.read_text(encoding="utf-8") == pre
+
+
 def test_compute_patch_with_trailing_newline_emits_no_marker(
     tmp_path: Path,
 ) -> None:

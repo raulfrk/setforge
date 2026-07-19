@@ -99,11 +99,6 @@ _STUB_TEMPLATE: Final[str] = """\
 #   claude_clauded_md:
 #     - per-host-section-name
 #
-# Preserve user keys (deep-merge surface; per tracked file id):
-# preserve_user_keys:
-#   vscode_serv_settings:
-#     - claudeCode.allowDangerouslySkipPermissions
-#
 # Per-host tracked file overrides (rarely needed):
 # tracked_files:
 #   claude_clauded_md:
@@ -313,7 +308,7 @@ def resolve_binary(name: str) -> Path | None:
         return _validate(name, raw, layer="cli")
     if (raw := _env_overrides().get(name)) is not None:
         return _validate(name, raw, layer="env")
-    if (raw := _load_local_config().get(name)) is not None:
+    if raw := _load_local_config().get(name):
         return _validate(name, raw, layer="config")
     which = shutil.which(name)
     return Path(which) if which else None

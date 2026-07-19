@@ -29,7 +29,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 OUTPUT_SCHEMA_VERSION: int = 1
 """Cross-tool contract version for the JSON envelope.
@@ -39,22 +39,17 @@ constant on any breaking change to the ``data`` shapes.
 """
 
 
-class _JsonEnvelope(TypedDict, total=False):
+class _JsonEnvelope(TypedDict):
     """Shape of the dict serialised by :func:`wrap_json`.
 
     ``schema_version`` / ``command`` / ``data`` are always present in
     the emitted envelope; ``errors`` is included only when non-empty.
-    ``total=False`` keeps the optional ``errors`` key truthful at the
-    type level (per PEP 655 the cleaner alternative would be
-    ``Required[...]`` / ``NotRequired[...]`` per field, but the loose
-    ``total=False`` shape is enough here since the keys are only read
-    by ``json.dumps``).
     """
 
     schema_version: int
     command: str
     data: object
-    errors: list[str]
+    errors: NotRequired[list[str]]
 
 
 class OutputFormat(StrEnum):

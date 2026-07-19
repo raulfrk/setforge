@@ -1211,7 +1211,7 @@ def _render_failures(failures: list[ValidationErrorWithContext | str]) -> str:
 @app.command("validate", epilog=VALIDATE_EXAMPLES)
 def validate(
     profile: str | None = typer.Option(
-        None, "--profile", help="Validate a specific profile."
+        None, "--profile", "-p", help="Validate a specific profile."
     ),
     all_profiles: bool = typer.Option(
         False, "--all", help="Validate every profile in the YAML."

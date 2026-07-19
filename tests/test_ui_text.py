@@ -12,6 +12,13 @@ def test_del_becomes_caret_question() -> None:
     assert sanitize_controls("x\x7fy") == "x^?y"
 
 
+def test_c1_control_chars_become_caret_notation() -> None:
+    assert sanitize_controls("a\x9bb") == "a^[b"
+    assert sanitize_controls("a\x9db") == "a^]b"
+    assert sanitize_controls("\x80") == "^@"
+    assert sanitize_controls("\x9f") == "^_"
+
+
 def test_newline_passes_through() -> None:
     assert sanitize_controls("a\nb") == "a\nb"
 

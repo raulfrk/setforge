@@ -285,10 +285,10 @@ def _install_pinned(ext_id: str, pin: ResolvedPin) -> None:
     # Verify BEFORE install; a mismatch installs nothing.
     from setforge.provision.resolve.extension import _split_ext_id, download_vsix
 
-    publisher, name = _split_ext_id(ext_id)
     try:
+        publisher, name = _split_ext_id(ext_id)
         data = download_vsix(publisher, name, pin.version)
-    except ResolveError as exc:  # fetch_bytes wraps URL/timeout/OS/EOF failures
+    except ResolveError as exc:
         raise ExtensionInstallFailed(
             f"install of {ext_id!r} failed: could not download the pinned "
             f"VSIX ({pin.version}): {exc}"

@@ -182,6 +182,7 @@ def _lower_floor(data: CommentedMap, to_version: str) -> None:
 __all__ = [
     "MIGRATIONS",
     "Contract20Migration",
+    "DispositionRetireMigration",
     "ManifestEntry",
     "ManifestType",
     "MarkerRetireMigration",
@@ -189,6 +190,8 @@ __all__ = [
     "MigrationRoots",
     "ProfileFieldsRetireMigration",
     "RestampMigration",
+    "SpanSurfaceRetireMigration",
+    "SpanTypesRetireMigration",
     "VersionStampMigration",
     "current_expected_schema_version",
     "detect_current_schema",

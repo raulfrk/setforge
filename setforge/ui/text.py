@@ -20,6 +20,8 @@ def sanitize_controls(text: str) -> str:
             out.append(f"^{chr(code + 0x40)}")
         elif code == 0x7F:
             out.append("^?")
+        elif 0x80 <= code <= 0x9F:
+            out.append(f"^{chr(code - 0x40)}")
         else:
             out.append(ch)
     return "".join(out)

@@ -434,6 +434,7 @@ def pager(
     body_window = Window(
         content=FormattedTextControl(text=_body, focusable=True),
         height=Dimension(min=1),
+        wrap_lines=True,
     )
     layout = Layout(
         _clamped_frame(

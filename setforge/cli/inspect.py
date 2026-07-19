@@ -175,7 +175,7 @@ def inspect(
         header = theme.styled(
             f"inspect {dst}  ({model.summary})", theme.Role.HEADING, stream=console.file
         )
-        console.print(header, markup=False)
+        console.print(header, markup=False, highlight=False)
         console.print(Panel(to_rich(model, layout=layout), title="base | live | merge"))
         _render_index(console, index)
 
@@ -190,11 +190,13 @@ def _render_index(console: Console, index: dict[str, list[dict[str, Any]]]) -> N
                 "no conflicts — merge is clean", theme.Role.SUCCESS, stream=console.file
             ),
             markup=False,
+            highlight=False,
         )
         return
     console.print(
         theme.styled("hunk index:", theme.Role.HEADING, stream=console.file),
         markup=False,
+        highlight=False,
     )
     for row in rows:
         console.print(f"  lines {row['start']}-{row['end']}  [conflict]", markup=False)

@@ -520,10 +520,18 @@ def _annotate_no_newline(diff_lines: list[str]) -> str:
     the unified-diff format.
     """
     out: list[str] = []
+    # Tracked positionally: body content can itself start with "---"/"+++".
+    in_header = True
+    header_lines_seen = 0
     for line in diff_lines:
-        # Header lines (---/+++/@@) always carry their own newline from
-        # difflib and are not body content; pass them through untouched.
-        if line.startswith(("---", "+++", "@@")):
+        is_header = False
+        if in_header and header_lines_seen < 2 and line.startswith(("--- ", "+++ ")):
+            is_header = True
+            header_lines_seen += 1
+        elif line.startswith("@@ "):
+            is_header = True
+        if is_header:
+            in_header = False
             out.append(line)
             continue
         if line[:1] in (" ", "-", "+") and not line.endswith("\n"):

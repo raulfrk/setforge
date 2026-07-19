@@ -458,9 +458,15 @@ def config_add(
         help="Value to append (lists) or set (scalars).",
         autocompletion=lambda ctx, incomplete: _complete_value(ctx, incomplete),
     ),
-    local: bool = typer.Option(False, "--local"),
-    tracked: bool = typer.Option(False, "--tracked"),
-    profile: str | None = typer.Option(None, "--profile", "-p"),
+    local: bool = typer.Option(
+        False, "--local", help="Write ~/.config/setforge/local.yaml."
+    ),
+    tracked: bool = typer.Option(
+        False, "--tracked", help="Write the tracked setforge.yaml."
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile", "-p", help="Required for profile-scoped paths."
+    ),
     yes: bool = typer.Option(False, "--yes", help="Skip the arrow-key confirm."),
     # Interactive marketplaces.add sibling flags (non-TTY fallback per A29).
     source: str | None = typer.Option(
@@ -541,6 +547,7 @@ def _prepare_scope_yaml(scope: ConfigScope) -> Path:
 def config_remove(
     path: str = typer.Argument(
         ...,
+        help="Dotted-path (e.g. plugins.add, binaries.code).",
         autocompletion=lambda ctx, incomplete: _complete_path_dispatch(ctx, incomplete),
     ),
     value: str | None = typer.Argument(
@@ -548,10 +555,16 @@ def config_remove(
         help="List-remove value; omit for scalar-unset.",
         autocompletion=lambda ctx, incomplete: _complete_value(ctx, incomplete),
     ),
-    local: bool = typer.Option(False, "--local"),
-    tracked: bool = typer.Option(False, "--tracked"),
-    profile: str | None = typer.Option(None, "--profile", "-p"),
-    yes: bool = typer.Option(False, "--yes"),
+    local: bool = typer.Option(
+        False, "--local", help="Write ~/.config/setforge/local.yaml."
+    ),
+    tracked: bool = typer.Option(
+        False, "--tracked", help="Write the tracked setforge.yaml."
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile", "-p", help="Required for profile-scoped paths."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the arrow-key confirm."),
 ) -> None:
     """Pop-from-list OR unset-scalar at the dotted path."""
     scope = _resolve_scope(local=local, tracked=tracked)

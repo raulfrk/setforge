@@ -320,7 +320,6 @@ class FakeClaude:
         if cmd == ["plugin", "list", "--json"]:
             return subprocess.CompletedProcess(args, 0, json.dumps(self._plugins), "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "add":
-            # claude plugin marketplace add <source-url>
             # Production claude derives the marketplace name from the
             # repo's marketplace.json. For test fidelity we derive name
             # from the last path component of the source URL — matches
@@ -328,7 +327,7 @@ class FakeClaude:
             # name == the repo basename). Necessary so a later
             # ``marketplace remove <name>`` matches the entry recorded
             # here (revert flow uses the declared YAML name).
-            source_url = cmd[3]
+            source_url = cmd[4] if len(cmd) > 3 and cmd[3] == "--" else cmd[3]
             name = source_url.rsplit("/", 1)[-1]
             self._marketplaces.append({"name": name, "source": source_url})
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -397,9 +396,9 @@ class FakeClaude:
 
     def mp_add_args(self) -> list[str]:
         return [
-            c[4]
+            c[5]
             for c in self.calls
-            if len(c) > 4 and c[1:4] == ["plugin", "marketplace", "add"]
+            if len(c) > 5 and c[1:5] == ["plugin", "marketplace", "add", "--"]
         ]
 
     def installed_state(self) -> dict[str, dict]:

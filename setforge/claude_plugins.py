@@ -239,7 +239,7 @@ def marketplace_add(name: str, source: MarketplaceSource) -> None:
     else:
         source_arg = str(source.path or "")
     subprocess.run(
-        [claude, "plugin", "marketplace", "add", source_arg],
+        [claude, "plugin", "marketplace", "add", "--", source_arg],
         check=True,
         text=True,
         capture_output=True,
