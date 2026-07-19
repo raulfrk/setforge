@@ -205,6 +205,35 @@ def test_dry_run_runs_no_install_or_uninstall(fake_code) -> None:
     assert fake.uninstall_args == []
 
 
+def test_dry_run_logs_intended_actions(
+    fake_code, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The docstring promises dry_run logs intended actions; assert it does."""
+    fake_code(["existing.one", "stale.two"])
+    ext = Extensions(
+        include=["existing.one", "new.one"],
+        reconcile=ReconcilePolicy.PRUNE,
+    )
+    with caplog.at_level("INFO", logger="setforge.vscode_extensions"):
+        reconcile(ext, dry_run=True)
+    messages = "\n".join(caplog.messages)
+    assert "new.one" in messages
+    assert "stale.two" in messages
+
+
+def test_case_variant_includes_dedup_to_single_install(fake_code) -> None:
+    """Two includes differing only in case must yield one install-plan entry."""
+    fake = fake_code([])
+    ext = Extensions(
+        include=["GitHub.copilot", "github.copilot"],
+        reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(ext)
+    assert len(report.to_install) == 1
+    assert len(fake.install_args) == 1
+    assert report.to_install[0].casefold() == "github.copilot"
+
+
 def test_exclude_overrides_include(fake_code) -> None:
     fake_code([])
     ext = Extensions(

@@ -182,11 +182,19 @@ def reconcile(
     # `github.copilot` exclude would silently fail to drop an included
     # `GitHub.copilot`, defeating the documented invariant.
     exclude_keys = {e.casefold() for e in ext.exclude}
-    effective = {i for i in ext.include if i.casefold() not in exclude_keys}
+    # Dedup on the casefold key too: VSCode treats IDs case-insensitively, so
+    # `GitHub.copilot` and `github.copilot` in `include` are one extension —
+    # keep the first-seen casing as the canonical display and drop the rest,
+    # otherwise both land in the plan and `code --install-extension` runs twice.
+    effective: dict[str, str] = {}
+    for i in ext.include:
+        key = i.casefold()
+        if key not in exclude_keys:
+            effective.setdefault(key, i)
 
     items = [
-        ProvisionItem(type="extension", identity=Identity(key=e.casefold(), display=e))
-        for e in effective
+        ProvisionItem(type="extension", identity=Identity(key=key, display=display))
+        for key, display in effective.items()
     ]
     report_only = dry_run or ext.reconcile is ReconcilePolicy.REPORT
     result = driver.reconcile(
@@ -206,7 +214,7 @@ def reconcile(
     else:
         installed = list_installed()
         installed_by_key = {e.casefold(): e for e in installed}
-        effective_keys = {e.casefold() for e in effective}
+        effective_keys = set(effective)
         to_uninstall = sorted(
             display
             for key, display in installed_by_key.items()
@@ -214,6 +222,12 @@ def reconcile(
         )
 
     if ext.reconcile is ReconcilePolicy.REPORT or dry_run:
+        if dry_run:
+            LOGGER.info(
+                "reconcile (dry-run): to_install=%s to_uninstall=%s",
+                to_install,
+                to_uninstall,
+            )
         return ReconcileReport(
             policy=ext.reconcile,
             to_install=to_install,
