@@ -1,9 +1,4 @@
 // Release-candidate audit — one pass (rc1/rc2/rc3), reused verbatim per bead.
-// Redesigned 2026-07-19 (approved spec): 25 cells (7 subsystems × {deep,hygiene,docs}
-// + 4 global), tiered models, file-batched tiered verification, post-fix Recheck.
-//   Decompose → fan auditors → evidence-checked tiered verify (C/H: 2 skeptics
-//   majority-refute; M/L: 1 skeptic) → auto-fix MECHANICAL confirmed (by file)
-//   → Recheck fix-touched cells → structured report.
 // The GATE (full suites) + TAG (v1.0.0-rcN) run in the ORCHESTRATOR after this
 // returns — a workflow can't block on the 42-min docker e2e or a human notify.
 // args: { rc: "rc1"|"rc2"|"rc3", root: string (required) }
@@ -22,7 +17,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const RC = A.rc || 'rc1'
 if (!A.root) throw new Error('args.root is required — refusing to default to "." (an args-delivery failure would audit and FIX the wrong tree)')
-const ROOT = A.root // worktree abs path — ALL agents cd here
+const ROOT = A.root
 const CD = `First: \`cd ${ROOT}\` (work ONLY in this tree). `
 
 // --- decomposition -----------------------------------------------------------
@@ -36,7 +31,6 @@ const SUBSYSTEMS = [
   { key: 'migration',    paths: 'setforge/migrations/ setforge/errors.py setforge/user_section_markers.py' },
 ]
 
-// Per-lens asks.
 const LENS_ASKS = {
   correctness:  'Hunt real correctness bugs, edge cases, and error-model defects. Trace the logic; find where inputs break it.',
   security:     'Reason about exploitability: injection, path/confinement escape, unsafe deserialization, secret handling, TOCTOU, trust-boundary validation.',
@@ -48,7 +42,6 @@ const LENS_ASKS = {
   deadcode:     'Argue for LESS: dead code, unused symbols, premature abstraction, over-engineered/gold-plated constructs. Verify unused via a reference audit before claiming dead.',
 }
 
-// Three tiered cells per subsystem.
 const CELL_KINDS = [
   { kind: 'deep',    lenses: ['correctness', 'security', 'concurrency', 'invariants'], model: 'opus',                  perLens: 4, cap: 12 },
   { kind: 'hygiene', lenses: ['test-quality', 'conventions', 'deadcode'],              model: 'sonnet', effort: 'low', perLens: 4, cap: 9 },
@@ -67,11 +60,8 @@ const GLOBAL_LENSES = [
     ask: 'MIGRATION / SCHEMA-COMPAT audit vs COMPATIBILITY.md guarantees: additive-first, expand→contract, an up AND down migration per schema_version bump, lockstep upgrade. Check every registered migration is reversible and floor-gated; flag any schema bump missing a down migration or a compat guarantee.' },
 ]
 
-// Fold the 4 global asks into LENS_ASKS (keyed by GLOBAL_LENSES[i].key) so
-// cellPrompt() can build its lens list uniformly for all 25 cells.
 for (const g of GLOBAL_LENSES) LENS_ASKS[g.key] = g.ask
 
-// --- schemas -----------------------------------------------------------------
 function findingSchema(lensKeys, cap) {
   return {
     type: 'object',
@@ -131,14 +121,12 @@ function subsystemOwns(sub, file) {
   return sub.paths.split(/\s+/).filter(Boolean).some((p) => (p.endsWith('/') ? file.startsWith(p) : file === p))
 }
 
-// --- instrumentation accumulators -------------------------------------------
-const perLens = {}            // lens → raw finding count (pre-dedupe, all phases)
-const capHits = []            // cell labels whose findings hit maxItems
-const cellErrors = []         // cell labels whose agent call crashed
-const evidenceChecks = { found: 0, relocated: 0, absent: 0 } // per skeptic verdict (C/H findings counted up to twice)
-const refuteByBatchSize = {}  // batchSize → { calls, refutes, judged }
+const perLens = {}
+const capHits = []
+const cellErrors = []
+const evidenceChecks = { found: 0, relocated: 0, absent: 0 } // C/H findings counted up to twice (one per skeptic)
+const refuteByBatchSize = {}
 
-// --- shared audit-cell runner ------------------------------------------------
 function cellPrompt(c, scopeNote) {
   const lensList = c.lenses.map((l, j) => `${j + 1}. [${l}] ${LENS_ASKS[l]}`).join('\n')
   return (
@@ -186,7 +174,6 @@ function dedupe(cellResults) {
   return [...seen.values()].sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
 }
 
-// --- shared tiered verify ----------------------------------------------------
 const SKEPTIC_ANGLES = [
   { agentType: 'complexity-adversary', angle: 'Is this over-stated / already-defended / a non-issue? Refute if the code actually handles it.' },
   { agentType: 'general-purpose',      angle: 'Try hard to REFUTE: is the evidence real and reproducible? Default to refuted=true if you cannot confirm the signal.' },
@@ -234,9 +221,8 @@ async function verifyFindings(findings, phaseName) {
       .then((r) => ({ call: c, verdicts: (r && r.verdicts) || null }))
       .catch(() => ({ call: c, verdicts: null }))
   ))
-  // Tally votes per finding idx. A crashed/null call counts as a refute for
-  // every finding it covered (fail-closed).
-  const votes = new Map() // idx → { refutes, judged, checks: [] }
+  // A crashed/null call counts as a refute for every finding it covered (fail-closed).
+  const votes = new Map()
   for (const f of withIdx) votes.set(f.idx, { refutes: 0, judged: 0, checks: [] })
   for (const { call, verdicts } of callResults.filter(Boolean)) {
     const size = call.group.length
@@ -263,7 +249,6 @@ async function verifyFindings(findings, phaseName) {
   })
 }
 
-// --- Phase 1: AUDIT ----------------------------------------------------------
 phase('Audit')
 const auditCells = []
 SUBSYSTEMS.forEach((sub, i) => {
@@ -289,7 +274,6 @@ const auditResults = await runCells(auditCells, 'Audit')
 const unique = dedupe(auditResults)
 log(`${RC}: ${unique.length} unique findings after dedupe (from ${auditResults.reduce((n, r) => n + r.findings.length, 0)} raw)`)
 
-// --- Phase 2: VERIFY ---------------------------------------------------------
 phase('Verify')
 const verified = await verifyFindings(unique, 'Verify')
 const confirmed = verified.filter((f) => f.status === 'confirmed')
@@ -297,7 +281,6 @@ const split = verified.filter((f) => f.status === 'split')
 const dropped = verified.filter((f) => f.status === 'dropped')
 log(`${RC}: verify → ${confirmed.length} confirmed, ${split.length} split (→ notify user), ${dropped.length} dropped`)
 
-// --- Phase 3: FIX ------------------------------------------------------------
 phase('Fix')
 const mechanical = confirmed.filter((f) => f.fix_class === 'mechanical')
 const judgment = confirmed.filter((f) => f.fix_class === 'judgment')
@@ -314,7 +297,6 @@ const fixResults = await parallel([...byFile.entries()].map(([file, fs]) => () =
   ).then((r) => ({ file, applied: fs.length, report: r })).catch((e) => ({ file, applied: 0, error: String(e) }))
 )).then((rs) => rs.filter(Boolean))
 
-// --- Phase 4: RECHECK (post-fix re-audit of touched cells) -------------------
 phase('Recheck')
 const touched = fixResults.filter((r) => r.applied > 0).map((r) => r.file)
 let recheckConfirmed = []
