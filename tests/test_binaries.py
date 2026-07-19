@@ -204,6 +204,33 @@ def test_resolve_invalid_config_override_raises(tmp_path) -> None:
     assert excinfo.value.layer == "config"
 
 
+def test_resolve_empty_config_override_raises(tmp_path) -> None:
+    """An empty-string config override is a broken override, not absent.
+
+    It must surface as ``BinaryOverrideInvalid`` (matching the CLI layer
+    and the resolver's stated contract) rather than silently falling
+    through to ``shutil.which``.
+    """
+    binaries.LOCAL_CONFIG_PATH.write_text('binaries:\n  code: ""\n')
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries.resolve_binary("code")
+    assert excinfo.value.layer == "config"
+    assert excinfo.value.reason == "empty path"
+
+
+def test_resolve_empty_cli_override_raises() -> None:
+    """An empty-string CLI override raises rather than resolving to cwd.
+
+    ``Path("")`` is ``Path(".")``, which exists and is executable, so an
+    empty override must be rejected explicitly for every layer.
+    """
+    binaries.set_cli_overrides(code="")
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries.resolve_binary("code")
+    assert excinfo.value.layer == "cli"
+    assert excinfo.value.reason == "empty path"
+
+
 def test_uv_in_supported_binaries() -> None:
     """uv is a supported binary so its env/config overrides are honored."""
     assert "uv" in binaries.SUPPORTED_BINARIES

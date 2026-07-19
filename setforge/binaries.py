@@ -262,9 +262,15 @@ def _validate(name: str, raw_path: str, layer: str) -> Path:
     """Confirm an override path exists and is executable.
 
     Raises :class:`BinaryOverrideInvalid` with structured fields when
-    the path is missing or not executable. Returns the resolved
-    :class:`Path` otherwise.
+    the path is empty, missing, or not executable. (An empty override
+    resolves to :class:`Path` ``.`` — cwd — which would spuriously pass
+    the exists/executable checks, so it is rejected up front.) Returns
+    the resolved :class:`Path` otherwise.
     """
+    if not raw_path:
+        raise BinaryOverrideInvalid(
+            layer=layer, binary=name, path=raw_path, reason="empty path"
+        )
     p = Path(raw_path)
     if not p.exists():
         raise BinaryOverrideInvalid(
@@ -308,7 +314,7 @@ def resolve_binary(name: str) -> Path | None:
         return _validate(name, raw, layer="cli")
     if (raw := _env_overrides().get(name)) is not None:
         return _validate(name, raw, layer="env")
-    if raw := _load_local_config().get(name):
+    if (raw := _load_local_config().get(name)) is not None:
         return _validate(name, raw, layer="config")
     which = shutil.which(name)
     return Path(which) if which else None
