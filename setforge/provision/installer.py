@@ -1,4 +1,4 @@
-"""The shared archive→verify→extract→pick-binary→install core."""
+"""The shared verify→resolve-mode→(extract+pick-binary | use-raw)→install core."""
 
 from __future__ import annotations
 
