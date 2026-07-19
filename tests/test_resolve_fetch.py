@@ -244,6 +244,21 @@ def test_gzip_bomb_aborts_without_materializing_full_output(
     assert peak < cap * 5
 
 
+def test_multi_member_gzip_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload_a = b"AAA" * 500
+    payload_b = b"BBB" * 500
+    wire = gzip.compress(payload_a) + gzip.compress(payload_b)
+    _patch_urlopen(monkeypatch, _FakeResponse(wire, final_url="https://example.com/q"))
+    out = _fetch.fetch_bytes(
+        "https://example.com/q",
+        timeout=5,
+        max_bytes=len(wire) + 10,
+        decode_gzip=True,
+        max_decompressed=len(payload_a) + len(payload_b) + 1,
+    )
+    assert out == payload_a + payload_b
+
+
 def test_legit_gzip_under_decompressed_cap_round_trips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

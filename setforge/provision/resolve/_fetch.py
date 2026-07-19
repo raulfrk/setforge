@@ -80,7 +80,6 @@ def _gunzip_bounded(body: bytes, *, url: str, max_decompressed: int) -> bytes:
             pending: bytes | None = body[start : start + _DECODE_CHUNK]
             while pending is not None:
                 chunk = decompressor.decompress(pending, _DECODE_CHUNK)
-                pending = decompressor.unconsumed_tail or None
                 out += chunk
                 if len(out) > max_decompressed:
                     raise ResolveError(
@@ -88,6 +87,13 @@ def _gunzip_bounded(body: bytes, *, url: str, max_decompressed: int) -> bytes:
                         f"{max_decompressed}-byte decompressed cap "
                         "(possible decompression bomb)"
                     )
+                if decompressor.unconsumed_tail:
+                    pending = decompressor.unconsumed_tail
+                elif decompressor.eof and decompressor.unused_data:
+                    pending = decompressor.unused_data
+                    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+                else:
+                    pending = None
         out += decompressor.flush()
     except (zlib.error, OSError, EOFError) as exc:
         raise ResolveError(f"failed to gzip-decode response for {url}: {exc}") from exc
