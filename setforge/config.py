@@ -650,12 +650,10 @@ class Config(BaseModel):
     model_config = _STRICT
 
     version: int = 1
-    """File-format version of the ``setforge.yaml`` document itself.
+    """Engine-owned ``setforge.yaml`` file-format version (currently always ``1``).
 
-    Owned by the engine (distinct from the user-declared
-    :attr:`schema_version`). The running build understands exactly one
-    format, so :meth:`_known_file_format` rejects any other value rather
-    than letting an unrecognized format load and misbehave downstream.
+    A strict-mode schema-contract member reserved for a future format-gating
+    check; not gated at runtime today. Distinct from :attr:`schema_version`.
     """
     schema_version: str = "1.0"
     """User-declared schema version for ``setforge migrate`` compatibility checks.
@@ -694,16 +692,6 @@ class Config(BaseModel):
     packages: dict[str, Package] = {}
     bundles: dict[str, BundleSpec] = {}
     profiles: dict[str, Profile]
-
-    @field_validator("version")
-    @classmethod
-    def _known_file_format(cls, v: int) -> int:
-        if v != 1:
-            raise ValueError(
-                f"unknown setforge.yaml file-format version {v!r} — this engine "
-                "understands version 1; upgrade setforge to read a newer format."
-            )
-        return v
 
 
 def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:

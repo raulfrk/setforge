@@ -243,21 +243,6 @@ def test_bare_binary_name_accepted() -> None:
     assert pkg.binary == "my-tool"
 
 
-# --- Config.version file-format guard --------------------------------------
-
-
-def test_config_version_default_accepted() -> None:
-    """The default file-format version (1) is the one this engine understands."""
-    assert _cfg({"only": Profile()}).version == 1
-
-
-@pytest.mark.parametrize("bad", [0, 2, 99])
-def test_config_rejects_unknown_file_format_version(bad: int) -> None:
-    """Any file-format version other than 1 is refused, not silently loaded."""
-    with pytest.raises(ValidationError, match="file-format version"):
-        _cfg({"only": Profile()}, version=bad)
-
-
 # --- Config-level packages registry ----------------------------------------
 
 
