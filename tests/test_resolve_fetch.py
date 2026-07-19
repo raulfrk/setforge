@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import tracemalloc
 from types import TracebackType
 
 import pytest
@@ -166,10 +167,10 @@ def test_wire_cap_fires_before_gzip_decode(monkeypatch: pytest.MonkeyPatch) -> N
     wire = gzip.compress(huge)
     assert len(wire) > 8
 
-    def _explode(_data: bytes) -> bytes:  # pragma: no cover - must NOT be called
-        raise AssertionError("gzip.decompress ran before the wire cap")
+    def _explode(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("gzip decode ran before the wire cap")
 
-    monkeypatch.setattr(_fetch.gzip, "decompress", _explode)
+    monkeypatch.setattr(_fetch.zlib, "decompressobj", _explode)
     _patch_urlopen(
         monkeypatch, _FakeResponse(wire, final_url="https://example.com/bomb")
     )
@@ -191,3 +192,69 @@ def test_non_gzip_body_with_decode_gzip_raises(monkeypatch: pytest.MonkeyPatch) 
         _fetch.fetch_bytes(
             "https://example.com/x", timeout=5, max_bytes=1024, decode_gzip=True
         )
+
+
+def test_gzip_bomb_over_decompressed_cap_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Compressed body sits under the wire cap but inflates past the decoded cap.
+    cap = 4096
+    bomb = gzip.compress(b"\x00" * (cap * 4))
+    assert len(bomb) < cap  # \0-run compresses tiny; passes the wire cap
+    _patch_urlopen(
+        monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
+    )
+    with pytest.raises(ResolveError, match="decompressed cap"):
+        _fetch.fetch_bytes(
+            "https://example.com/bomb",
+            timeout=5,
+            max_bytes=len(bomb) + 10,
+            decode_gzip=True,
+            max_decompressed=cap,
+        )
+
+
+def test_gzip_bomb_aborts_without_materializing_full_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The incremental loop must abort with peak memory bounded near the cap,
+    # never allocating the whole inflated bomb.
+    cap = 1024 * 1024
+    original = b"\x00" * (cap * 200)  # ~200 MiB decoded; 200x the cap
+    bomb = gzip.compress(original)
+    _patch_urlopen(
+        monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
+    )
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(ResolveError, match="decompressed cap"):
+            _fetch.fetch_bytes(
+                "https://example.com/bomb",
+                timeout=5,
+                max_bytes=len(bomb) + 10,
+                decode_gzip=True,
+                max_decompressed=cap,
+            )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Peak stays within a few multiples of the cap — far below the ~200 MiB
+    # a materialize-then-check implementation would have allocated.
+    assert peak < cap * 5
+
+
+def test_legit_gzip_under_decompressed_cap_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"legit marketplace query response" * 100
+    wire = gzip.compress(payload)
+    _patch_urlopen(monkeypatch, _FakeResponse(wire, final_url="https://example.com/q"))
+    out = _fetch.fetch_bytes(
+        "https://example.com/q",
+        timeout=5,
+        max_bytes=len(wire) + 10,
+        decode_gzip=True,
+        max_decompressed=len(payload) + 1,
+    )
+    assert out == payload

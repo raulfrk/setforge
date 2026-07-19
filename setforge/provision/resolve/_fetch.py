@@ -3,19 +3,29 @@
 Guard order is load-bearing: reject non-HTTPS up front, re-check the FINAL
 URL after redirects (a silent https->http downgrade is otherwise followed),
 then cap via ``read(max_bytes + 1)`` before decode — one byte over proves the
-body is too large without buffering the whole stream.
+body is too large without buffering the whole stream. When ``decode_gzip`` is
+set the DECODED output is bounded too: it is inflated incrementally against
+``max_decompressed`` so a gzip bomb (tiny on the wire, huge inflated) cannot
+allocate past the cap.
 """
 
 from __future__ import annotations
 
-import gzip
 import urllib.error
 import urllib.request
+import zlib
 from collections.abc import Mapping
 
 from setforge.errors import ResolveError
 
 __all__ = ["fetch_bytes"]
+
+# Ceiling on gzip-DECODED bytes. Generous relative to real marketplace-query /
+# VSIX responses yet bounded, so a decompression bomb aborts early instead of
+# exhausting RAM. Peak memory stays near this value (cap + one decode chunk).
+_MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 1024
+
+_DECODE_CHUNK = 1024 * 1024
 
 
 def fetch_bytes(
@@ -27,12 +37,13 @@ def fetch_bytes(
     data: bytes | None = None,
     headers: Mapping[str, str] | None = None,
     decode_gzip: bool = False,
+    max_decompressed: int = _MAX_DECOMPRESSED_BYTES,
 ) -> bytes:
     """Fetch ``url`` over HTTPS with an explicit timeout + hard wire cap.
 
     ``data`` makes it a POST; ``decode_gzip`` gunzips AFTER the wire cap is
-    enforced on the pre-decode bytes, so a hostile response cannot inflate
-    past the cap.
+    enforced on the pre-decode bytes. The gunzip is incremental and bounded by
+    ``max_decompressed``, so a gzip bomb cannot inflate past the cap in RAM.
     """
     if not url.startswith("https://"):
         raise ResolveError(f"refusing non-HTTPS URL: {url!r}")
@@ -51,10 +62,38 @@ def fetch_bytes(
     if len(body) > max_bytes:
         raise ResolveError(f"response for {url} exceeds the {max_bytes}-byte wire cap")
     if decode_gzip:
-        try:
-            body = gzip.decompress(body)
-        except (OSError, EOFError) as exc:
-            raise ResolveError(
-                f"failed to gzip-decode response for {url}: {exc}"
-            ) from exc
+        body = _gunzip_bounded(body, url=url, max_decompressed=max_decompressed)
     return body
+
+
+def _gunzip_bounded(body: bytes, *, url: str, max_decompressed: int) -> bytes:
+    """Inflate gzip ``body`` incrementally, aborting past ``max_decompressed``.
+
+    Feeds the input in slices and pulls bounded output via ``decompress(...,
+    max_length)``, so peak memory is (cap + one chunk) rather than the full
+    inflated size — a gzip bomb raises before it can be materialized.
+    """
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    out = bytearray()
+    try:
+        for start in range(0, len(body), _DECODE_CHUNK):
+            pending: bytes | None = body[start : start + _DECODE_CHUNK]
+            while pending is not None:
+                chunk = decompressor.decompress(pending, _DECODE_CHUNK)
+                pending = decompressor.unconsumed_tail or None
+                out += chunk
+                if len(out) > max_decompressed:
+                    raise ResolveError(
+                        f"gzip-decoded response for {url} exceeds the "
+                        f"{max_decompressed}-byte decompressed cap "
+                        "(possible decompression bomb)"
+                    )
+        out += decompressor.flush()
+    except (zlib.error, OSError, EOFError) as exc:
+        raise ResolveError(f"failed to gzip-decode response for {url}: {exc}") from exc
+    if len(out) > max_decompressed:
+        raise ResolveError(
+            f"gzip-decoded response for {url} exceeds the "
+            f"{max_decompressed}-byte decompressed cap (possible decompression bomb)"
+        )
+    return bytes(out)
