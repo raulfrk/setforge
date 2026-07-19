@@ -19,6 +19,9 @@ snapshot) reports the partial-write truth instead.
   restored).
 * ``test_capture_ctrl_c_message_not_false_restore`` — asserts plain
   ``capture``'s Ctrl-C message does NOT claim files were restored.
+* ``test_sync_oserror_restores_tracked_and_base`` — same partial-write hazard
+  but the capture raises ``OSError`` (disk full) mid-run; asserts BOTH the
+  tracked src and the base are restored and the ``OSError`` propagates.
 """
 
 from __future__ import annotations
@@ -147,6 +150,45 @@ def test_sync_ctrl_c_restores_tracked_and_base(
     assert result.exit_code == 130, result.output
     # The message is only true now that the restore actually runs.
     assert "files restored from snapshot" in result.output
+
+    # The load-bearing assertions: both halves restored to pre-sync state.
+    assert _tracked_src(repo).read_bytes() == pre_sync_tracked
+    assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base
+
+
+def test_sync_oserror_restores_tracked_and_base(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-capture ``OSError`` restores the tracked src AND the byte base.
+
+    Same partial-write hazard as the Ctrl-C case, but the failure is an
+    ``OSError`` (e.g. ENOSPC) raised after capture already committed a write.
+    The rollback must fire on this path too, and the ``OSError`` must
+    propagate so the user sees the failure.
+    """
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+
+    assert _install(config).exit_code == 0
+    pre_sync_tracked = _tracked_src(repo).read_bytes()
+    pre_sync_base = base_store.read_base(_PROFILE, _MD_ID)
+    assert pre_sync_base is not None
+
+    _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
+
+    def _partial_then_oserror(*_args: object, **_kwargs: object) -> list[object]:
+        _tracked_src(repo).write_text(_DOC_LIVE_EDIT, encoding="utf-8")
+        base_store.write_base(_PROFILE, _MD_ID, b"ADVANCED-BASE-BYTES\n")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(
+        "setforge.cli.sync.capture_mod.capture_profile", _partial_then_oserror
+    )
+
+    result = _sync(config)
+    # The OSError must propagate (non-zero exit), not be swallowed.
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, OSError)
 
     # The load-bearing assertions: both halves restored to pre-sync state.
     assert _tracked_src(repo).read_bytes() == pre_sync_tracked

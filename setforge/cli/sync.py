@@ -6,6 +6,7 @@
   also records a transition so ``revert`` can replay it.
 """
 
+import contextlib
 import stat
 import sys
 from datetime import UTC
@@ -221,19 +222,24 @@ def sync(
             _render_capture_results(results)
 
             _capture_extensions(config, profile)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, OSError) as exc:
             # capture_profile writes tracked srcs and re-baselines stores
-            # one at a time with no internal rollback. Restore the
-            # pre-capture file + store snapshots so an interrupted sync
-            # leaves no partial tracked writes and no base advanced ahead
-            # of its tracked src — then report the truth (files restored).
-            _restore_sync_snapshots(file_pre, state_pre)
-            typer.secho(
-                "sync cancelled (Ctrl-C); files restored from snapshot",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-            raise typer.Exit(130) from None
+            # one at a time with no internal rollback, so a Ctrl-C OR a
+            # mid-capture OSError (e.g. ENOSPC) can leave a partial tracked
+            # write and a base advanced ahead of its src. Restore the
+            # pre-capture file + store snapshots on both, guarding the
+            # restore so a restore-time failure never masks the original.
+            with contextlib.suppress(OSError):
+                _restore_sync_snapshots(file_pre, state_pre)
+            if isinstance(exc, KeyboardInterrupt):
+                typer.secho(
+                    "sync cancelled (Ctrl-C); files restored from snapshot",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+                raise typer.Exit(130) from None
+            # OSError: snapshots restored; propagate so the user sees it.
+            raise
 
         file_post = transitions.snapshot_paths(src_paths)
         if not no_transition:
