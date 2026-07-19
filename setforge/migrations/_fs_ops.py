@@ -8,50 +8,14 @@ half-written file on disk and so that every touched file has a sibling
 
 The split from :mod:`setforge.migrations._yaml_ops` is intentional —
 YAML round-trip helpers depend on ruamel, while these helpers only
-depend on the stdlib and can be used for tracked-content sweeps
-(markdown, plain-text sentinels, JSON manifests, etc).
+depend on the stdlib.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
-__all__ = ["atomic_replace", "backup_path", "iter_tracked_text_files"]
-
-
-# Binary file suffixes excluded from ``iter_tracked_text_files``.
-# Migrations that need to touch binary content should reach for the
-# specific file path directly — there is no use case yet for sweeping
-# binary content under tracked/.
-_BINARY_SUFFIXES: frozenset[str] = frozenset(
-    {
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".webp",
-        ".ico",
-        ".pdf",
-        ".zip",
-        ".gz",
-        ".tar",
-        ".tgz",
-        ".bz2",
-        ".xz",
-        ".7z",
-        ".whl",
-        ".egg",
-        ".so",
-        ".dylib",
-        ".dll",
-        ".class",
-        ".pyc",
-        ".pyo",
-        ".o",
-        ".a",
-    }
-)
+__all__ = ["atomic_replace", "backup_path"]
 
 
 def backup_path(p: Path, to_version: str) -> Path:
@@ -78,32 +42,3 @@ def atomic_replace(src_tmp: Path, dst: Path) -> None:
     would silently change migration behavior.
     """
     src_tmp.replace(dst)
-
-
-def iter_tracked_text_files(repo_root: Path) -> Iterator[Path]:
-    """Yield every text file under ``repo_root`` a migration might edit.
-
-    Excludes the ``.git`` directory and any path whose suffix is in
-    :data:`_BINARY_SUFFIXES`. Used by migrations that need to sweep
-    tracked content (e.g. renaming a user-section marker namespace
-    across every ``tracked/`` markdown file).
-
-    Order: depth-first, deterministic via ``sorted(p.iterdir())`` so
-    the diff preview is reproducible.
-    """
-    yield from _iter_text_files(repo_root)
-
-
-def _iter_text_files(root: Path) -> Iterator[Path]:
-    if not root.exists():
-        return
-    for entry in sorted(root.iterdir()):
-        if entry.name == ".git":
-            continue
-        if entry.is_dir():
-            yield from _iter_text_files(entry)
-            continue
-        if entry.suffix.lower() in _BINARY_SUFFIXES:
-            continue
-        if entry.is_file():
-            yield entry
