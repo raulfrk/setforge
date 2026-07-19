@@ -486,15 +486,18 @@ class IndexVersionError(ReconcileStoreError):
 
 
 class InvariantViolation(ReconcileStoreError):
-    """Raised when INV-2 or INV-10 is detected at runtime.
+    """Raised when a store/reconstruct invariant (INV-2, INV-8, or INV-10) is
+    detected violated at runtime.
 
-    INV-2 (``base + recorded-local == live``, byte-exact) and INV-10
-    (index ↔ on-disk consistent, no orphan classification) are the store's
-    load-bearing invariants. In this storage layer the INV-2 check is the
-    degenerate case — :func:`~setforge.reconcile.store.verify` confirms the
-    recorded-local bytes hash matches the index (reconstruction is the
-    identity), with the full base-plus-merge form arriving with the 3-way
-    merge. The message names the profile, file-id, and which invariant failed.
+    INV-2 (recorded-local/draft bytes hash to their index-recorded hash) and
+    INV-10 (index ↔ on-disk consistent, no orphan classification) are checked
+    by :func:`~setforge.reconcile.store.verify`. INV-8 (tracked equals ``base``
+    with exactly the promoted shared/drafted set spliced in) is checked by the
+    ``assert_stage_fidelity`` guards in
+    :mod:`~setforge.reconcile.hunks` / :mod:`~setforge.reconcile.structured_units`;
+    those modules' ``reconstruct`` paths also raise it when a ``SHARED_DRAFTED``
+    hunk/key-unit has no draft in the store. The message names the profile /
+    file-id (or the offending anchor) and which invariant failed.
     """
 
 
