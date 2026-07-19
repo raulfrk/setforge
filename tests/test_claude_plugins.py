@@ -2073,3 +2073,19 @@ def test_plugin_state_diff_additive_suppresses_to_disable(fake_claude) -> None:
     fake_claude(plugins=[{"id": "stale@m1", "enabled": True}])
     to_disable = cp._plugin_state_diff(set(), ReconcilePolicy.ADDITIVE)
     assert to_disable == []
+
+
+def test_plugin_state_diff_field_absent_not_pruned(fake_claude) -> None:
+    """An entry lacking ``enabled`` is unknown-state and must NOT be pruned.
+
+    ``to_disable`` drives a destructive ``plugin disable``; a field-less,
+    undeclared entry must be excluded rather than assumed enabled.
+    """
+    fake_claude(
+        plugins=[
+            {"id": "known@m1", "enabled": True},
+            {"id": "fieldless@m1"},
+        ]
+    )
+    to_disable = cp._plugin_state_diff(set(), ReconcilePolicy.PRUNE)
+    assert to_disable == ["known@m1"]

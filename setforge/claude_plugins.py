@@ -527,7 +527,9 @@ def _plugin_state_diff(declared: set[str], policy: ReconcilePolicy) -> list[str]
     if policy is ReconcilePolicy.ADDITIVE:
         return []
     installed = list_installed()
-    enabled = {pid for pid, p in installed.items() if p.get("enabled", True)}
+    # A field-less entry is unknown-state, not enabled: default False so it is
+    # never fed to a destructive prune-disable.
+    enabled = {pid for pid, p in installed.items() if p.get("enabled", False)}
     return sorted(enabled - declared)
 
 
