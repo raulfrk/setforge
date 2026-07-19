@@ -17,7 +17,9 @@ from setforge.cli.config import (
     _complete_path_dispatch,
     _static_template_paths,
 )
+from setforge.config import Config
 from setforge.errors import SetforgeError
+from setforge.local_config import LocalConfig
 
 
 class _FakeCtx:
@@ -26,18 +28,18 @@ class _FakeCtx:
         self.info_name = "show"
 
 
-def test_static_local_template_lists_top_level_keys() -> None:
-    """The static fallback list carries the local-scope top-level keys."""
-    fallback = _static_template_paths(ConfigScope.LOCAL)
-    assert "source" in fallback
-    assert "binaries" in fallback
+def test_static_local_template_matches_model_fields() -> None:
+    """The local fallback list is exactly ``LocalConfig``'s top-level keys.
+
+    Pins the fallback to the model so it can never silently drift from
+    the real config schema — the drift the schema-derived fix retired.
+    """
+    assert _static_template_paths(ConfigScope.LOCAL) == list(LocalConfig.model_fields)
 
 
-def test_static_tracked_template_lists_top_level_keys() -> None:
-    """The static fallback list carries the tracked-scope top-level keys."""
-    fallback = _static_template_paths(ConfigScope.TRACKED)
-    assert "tracked_files" in fallback
-    assert "profiles" in fallback
+def test_static_tracked_template_matches_model_fields() -> None:
+    """The tracked fallback list is exactly ``Config``'s top-level keys."""
+    assert _static_template_paths(ConfigScope.TRACKED) == list(Config.model_fields)
 
 
 def test_dispatch_falls_back_on_schema_walk_error(

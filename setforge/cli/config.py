@@ -823,21 +823,16 @@ def _complete_path_tracked(ctx: typer.Context, incomplete: str) -> list[str]:
 
 
 def _static_template_paths(scope: ConfigScope) -> list[str]:
-    """Static fallback list of top-level keys when dynamic completion fails."""
-    if scope is ConfigScope.LOCAL:
-        return ["source", "binaries", "claude"]
-    return [
-        "version",
-        "schema_version",
-        "tracked_files",
-        "marketplaces",
-        "claude_plugins",
-        "mcp_servers",
-        "section_templates",
-        "packages",
-        "bundles",
-        "profiles",
-    ]
+    """Fallback list of top-level keys when the dotted-path schema walk fails.
+
+    Derived from ``model_fields`` rather than hand-maintained so it can
+    never drift from the real config keys. Reading the field names is a
+    plain dict access — it does not re-run the schema walk that failed,
+    so it stays a safe last-resort for the completion never-raise
+    contract.
+    """
+    model = LocalConfig if scope is ConfigScope.LOCAL else Config
+    return list(model.model_fields)
 
 
 def _complete_value(ctx: typer.Context, incomplete: str) -> list[str]:
