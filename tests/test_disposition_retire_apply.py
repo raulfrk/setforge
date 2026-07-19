@@ -150,3 +150,54 @@ def test_apply_writes_one_transition_capturing_the_legacy_manifest(tmp_path) -> 
     ]
     assert scalar
     assert scalar[0].payload == pre_bytes
+
+
+def test_threaded_pre_chain_text_patch_excludes_store_legs(
+    tmp_path, monkeypatch
+) -> None:
+    """The text patch never overlaps a state_snapshot leg (INV-5).
+
+    When the driver threads a pre-chain image, only the user-facing config
+    stamp rides the text patch — every store leg is reversed by the binary
+    ``state_snapshots`` alone. A store leg in BOTH would let the snapshot
+    (a pre-cutover image) win on revert and strand it at the intermediate
+    schema, so the transition's text-patch pre-image must be config-only.
+    """
+    from typing import Any
+
+    from setforge.migrations import _disposition_retire
+    from setforge.transitions import TransitionDir
+
+    roots_pre = _setup(tmp_path)
+    scalar_base_store.set_bases("default", "conf", {"editor.fontSize": 12})
+
+    # A pre-chain image that carries BOTH the config stamp AND a store leg,
+    # exactly as the driver's ``snapshot_paths(affected)`` would (the cutover's
+    # own ``affected_paths`` enumerates that leg).
+    leg = scalar_base_store.manifest_path("default", "conf")
+    pre_chain = {
+        roots_pre.cfg_path: 'schema_version: "2.1"\n',
+        leg: leg.read_text(encoding="utf-8"),
+    }
+    roots = MigrationRoots(
+        cfg_path=roots_pre.cfg_path,
+        repo_root=roots_pre.repo_root,
+        home=roots_pre.home,
+        pre_chain_snapshot=pre_chain,
+    )
+
+    captured: dict[str, list[Path]] = {}
+    real = _disposition_retire._write_cutover_transition
+
+    def _spy(**kwargs: Any) -> TransitionDir:
+        captured["file_pre"] = list(kwargs["file_pre"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(_disposition_retire, "_write_cutover_transition", _spy)
+    DispositionRetireMigration().apply(roots=roots)
+
+    assert roots.cfg_path in captured["file_pre"]
+    assert leg not in captured["file_pre"], (
+        "store leg leaked into the text patch's pre-image — it overlaps its "
+        "state_snapshot"
+    )

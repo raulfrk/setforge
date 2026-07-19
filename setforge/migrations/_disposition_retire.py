@@ -162,7 +162,7 @@ class DispositionRetireMigration:
         """
         import contextlib
 
-        from setforge import locking, reconcile, transitions
+        from setforge import locking, reconcile
 
         records = _build_legacy_records(roots)  # pass 1: enumerate (read-only)
         _validate_bases(records)  # D4 pre-flight abort — raises before any write
@@ -197,31 +197,32 @@ class DispositionRetireMigration:
             _stamp_schema_version(roots.cfg_path, self.to_version)
             cfg_post = roots.cfg_path.read_text(encoding="utf-8")
 
-            # When the migrate driver threads its pre-chain frozen image, use it
-            # as file_pre so this single transition carries the FULL reverse
-            # delta to the chain's ORIGIN (INV-5) — not just the pre-cutover
-            # (e.g. 2.1) state. file_post re-snapshots the SAME paths now (schema
-            # stamped, before the legacy delete = the 3.0 image). Applied outside
-            # the driver (pre_chain_snapshot is None) keeps the prior behavior.
+            # When the migrate driver threads its pre-chain frozen image, use its
+            # cfg_path entry as file_pre so this single transition carries the
+            # FULL reverse delta to the chain's ORIGIN (INV-5) — not just the
+            # pre-cutover (e.g. 2.1) stamp. file_post re-snapshots cfg_path now
+            # (schema stamped = the 3.0 image). Applied outside the driver
+            # (pre_chain_snapshot is None) keeps the prior behavior.
+            #
+            # The text patch is scoped to cfg_path ALONE, never a store leg —
+            # even though the threaded pre-chain image also carries this
+            # cutover's own affected store paths. INV-5 depends on this: the two
+            # reverse mechanisms must NOT overlap. On revert the text patch
+            # reverses FIRST, then restore_state_snapshots runs, so for any
+            # shared path the (pre-cutover) snapshot would win and strand it at
+            # the intermediate schema rather than the origin. Every store leg is
+            # reversed by its binary state_snapshot alone; cfg_path is the sole
+            # text-patch path. (Mirrors _record_stamp_only_transition in
+            # _span_surface_retire.py.)
             pre = roots.pre_chain_snapshot
             file_pre: dict[Path, str | None]
             file_post: dict[Path, str | None]
             if pre is not None:
-                file_pre = dict(pre)
-                file_post = dict(transitions.snapshot_paths(tuple(pre)))
+                file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
             else:
                 file_pre = {roots.cfg_path: cfg_pre}
-                file_post = {roots.cfg_path: cfg_post}
+            file_post = {roots.cfg_path: cfg_post}
 
-            # INV-5 here rests on a NON-OVERLAP between the two reverse
-            # mechanisms: no path in the text patch's pre-chain image is also a
-            # state_snapshot. On revert the text patch reverses FIRST, then
-            # restore_state_snapshots runs — so for any shared path the snapshot
-            # (a pre-CUTOVER image) would win and restore it to the intermediate
-            # schema, not the origin. Holds today: the framework steps mutate
-            # only cfg_path, never a snapshotted store. A future pre-cutover step
-            # that edits a state-snapshotted store must extend the snapshot set
-            # back to the chain origin, or revert would stop short of it.
             _write_cutover_transition(
                 file_pre=file_pre,
                 file_post=file_post,
