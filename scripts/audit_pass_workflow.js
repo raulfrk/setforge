@@ -34,7 +34,7 @@ const SUBSYSTEMS = [
   { key: 'migration',    paths: 'setforge/migrations/ setforge/errors.py setforge/user_section_markers.py' },
 ]
 
-// Per-lens asks — verbatim from the pre-redesign per-lens cells.
+// Per-lens asks.
 const LENS_ASKS = {
   correctness:  'Hunt real correctness bugs, edge cases, and error-model defects. Trace the logic; find where inputs break it.',
   security:     'Reason about exploitability: injection, path/confinement escape, unsafe deserialization, secret handling, TOCTOU, trust-boundary validation.',
@@ -46,21 +46,21 @@ const LENS_ASKS = {
   deadcode:     'Argue for LESS: dead code, unused symbols, premature abstraction, over-engineered/gold-plated constructs. Verify unused via a reference audit before claiming dead.',
 }
 
-// Three tiered cells per subsystem (was: 8 single-lens cells).
+// Three tiered cells per subsystem.
 const CELL_KINDS = [
   { kind: 'deep',    lenses: ['correctness', 'security', 'concurrency', 'invariants'], model: 'opus',                  perLens: 4, cap: 12 },
   { kind: 'hygiene', lenses: ['test-quality', 'conventions', 'deadcode'],              model: 'sonnet', effort: 'low', perLens: 4, cap: 9 },
   { kind: 'docs',    lenses: ['docs'],                                                 model: 'haiku',  effort: 'low', perLens: 4, cap: 4 },
 ]
 
-// Whole-codebase lenses (run once, not per subsystem) — unchanged set.
+// Whole-codebase lenses (run once, not per subsystem).
 const GLOBAL_LENSES = [
   { key: 'coverage',  agentType: 'test-quality-reviewer', model: 'sonnet', effort: 'low', paths: 'tests/ setforge/',
     ask: 'Produce a COVERAGE-GAP report per tier — UNIT (tests/test_*.py), INTEGRATION (cross-module seams: sync↔install↔reconcile), E2E (tests/docker). Name critical paths with no test at each tier. Numeric gap assessment, not pass/fail. Run `uv run pytest --cov --co -q` context if useful.' },
-  { key: 'cli',       agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/cli/', dynamic: true,
+  { key: 'cli',       agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/cli/',
     ask: 'CLI CORRECTNESS — audit every command for real. For each subcommand: arg parsing, exit codes, --help text, error messages, --profile handling. Prefer DRIVING the real binary (`uv run setforge <cmd> --help`, invalid-arg cases, `--profile=` missing) and checking output/exit code; supplement with reading cli/. Report wrong exit codes, misleading errors, broken help.' },
-  { key: 'visual',    agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/ui/', dynamic: true,
-    ask: 'UI / VISUAL audit (dedicated visual-auditor agent is not yet registered this session — you are the fallback). Assess the terminal UI for visual bugs: alignment, wrapping/overflow (narrow AND wide), broken ANSI, color under 256 vs truecolor, malformed wizard/button-bar/dialog/diff-view panels. Use the tests/docker pyte harness (pyte_pty_session → .display grid) to SEE the rendered output if the e2e image is available; else read setforge/ui/ + theme logic and label findings UNCONFIRMED (static). A visual finding needs a captured grid excerpt.' },
+  { key: 'visual',    agentType: 'visual-auditor',        model: 'sonnet', paths: 'setforge/ui/',
+    ask: 'UI / VISUAL audit. Assess the terminal UI for visual bugs: alignment, wrapping/overflow (narrow AND wide), broken ANSI, color under 256 vs truecolor, malformed wizard/button-bar/dialog/diff-view panels. Use the tests/docker pyte harness (pyte_pty_session → .display grid) to SEE the rendered output if the e2e image is available; else read setforge/ui/ + theme logic and label findings UNCONFIRMED (static). A visual finding needs a captured grid excerpt.' },
   { key: 'migration', agentType: 'general-purpose',       model: 'sonnet', effort: 'low', paths: 'setforge/migrations/ COMPATIBILITY.md',
     ask: 'MIGRATION / SCHEMA-COMPAT audit vs COMPATIBILITY.md guarantees: additive-first, expand→contract, an up AND down migration per schema_version bump, lockstep upgrade. Check every registered migration is reversible and floor-gated; flag any schema bump missing a down migration or a compat guarantee.' },
 ]
@@ -132,7 +132,8 @@ function subsystemOwns(sub, file) {
 // --- instrumentation accumulators -------------------------------------------
 const perLens = {}            // lens → raw finding count (pre-dedupe, all phases)
 const capHits = []            // cell labels whose findings hit maxItems
-const evidenceChecks = { found: 0, relocated: 0, absent: 0 }
+const cellErrors = []         // cell labels whose agent call crashed
+const evidenceChecks = { found: 0, relocated: 0, absent: 0 } // per skeptic verdict (C/H findings counted up to twice)
 const refuteByBatchSize = {}  // batchSize → { calls, refutes, judged }
 
 // --- shared audit-cell runner ------------------------------------------------
@@ -160,19 +161,21 @@ async function runCells(cells, phaseName) {
       model: c.model, ...(c.effort ? { effort: c.effort } : {}), agentType: c.agentType || 'general-purpose',
     })
       .then((r) => ({ cell: c, findings: (r && r.findings) || [] }))
-      .catch(() => ({ cell: c, findings: [] }))
+      .catch((e) => ({ cell: c, findings: [], error: String(e) }))
   ))
-  for (const r of results.filter(Boolean)) {
+  const kept = results.filter(Boolean)
+  for (const r of kept) {
+    if (r.error) cellErrors.push(r.cell.label)
     if (r.findings.length >= r.cell.cap) capHits.push(r.cell.label)
     for (const f of r.findings) perLens[f.lens] = (perLens[f.lens] || 0) + 1
   }
-  return results.filter(Boolean)
+  return kept
 }
 
 function dedupe(cellResults) {
   const seen = new Map()
   for (const { cell, findings } of cellResults) {
-    for (const f of findings.slice(0, cell.cap)) {
+    for (const f of findings) {
       const k = findingKey(f)
       if (!seen.has(k)) seen.set(k, { ...f, lenses: [f.lens], subsystem: cell.subKey })
       else if (!seen.get(k).lenses.includes(f.lens)) seen.get(k).lenses.push(f.lens)
@@ -230,7 +233,7 @@ async function verifyFindings(findings, phaseName) {
       .catch(() => ({ call: c, verdicts: null }))
   ))
   // Tally votes per finding idx. A crashed/null call counts as a refute for
-  // every finding it covered (fail-closed, matching the old per-finding behavior).
+  // every finding it covered (fail-closed).
   const votes = new Map() // idx → { refutes, judged, checks: [] }
   for (const f of withIdx) votes.set(f.idx, { refutes: 0, judged: 0, checks: [] })
   for (const { call, verdicts } of callResults.filter(Boolean)) {
@@ -292,7 +295,7 @@ const split = verified.filter((f) => f.status === 'split')
 const dropped = verified.filter((f) => f.status === 'dropped')
 log(`${RC}: verify → ${confirmed.length} confirmed, ${split.length} split (→ notify user), ${dropped.length} dropped`)
 
-// --- Phase 3: FIX (unchanged mechanics) --------------------------------------
+// --- Phase 3: FIX ------------------------------------------------------------
 phase('Fix')
 const mechanical = confirmed.filter((f) => f.fix_class === 'mechanical')
 const judgment = confirmed.filter((f) => f.fix_class === 'judgment')
@@ -307,11 +310,11 @@ const fixResults = await parallel([...byFile.entries()].map(([file, fs]) => () =
     fs.map((f, i) => `${i + 1}. [${f.severity}] ${f.file}:${f.line || '?'} — ${f.summary}\n   hint: ${f.fix_hint || '(none)'}`).join('\n'),
     { label: `fix:${file}`, phase: 'Fix', model: 'sonnet', agentType: 'general-purpose' }
   ).then((r) => ({ file, applied: fs.length, report: r })).catch((e) => ({ file, applied: 0, error: String(e) }))
-))
+)).then((rs) => rs.filter(Boolean))
 
 // --- Phase 4: RECHECK (post-fix re-audit of touched cells) -------------------
 phase('Recheck')
-const touched = fixResults.filter(Boolean).filter((r) => r.applied > 0).map((r) => r.file)
+const touched = fixResults.filter((r) => r.applied > 0).map((r) => r.file)
 let recheckConfirmed = []
 if (touched.length) {
   const recheckCells = []
@@ -347,7 +350,7 @@ return {
   },
   confirmed,
   needsHuman: [...split, ...judgment, ...recheckConfirmed],
-  fixes: fixResults.filter(Boolean),
+  fixes: fixResults,
   coverageFindings: unique.filter((f) => (f.lenses || []).includes('coverage')),
-  instrumentation: { perLens, capHits, evidenceChecks, refuteByBatchSize },
+  instrumentation: { perLens, capHits, cellErrors, evidenceChecks, refuteByBatchSize },
 }
