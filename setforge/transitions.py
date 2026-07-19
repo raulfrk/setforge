@@ -8,6 +8,10 @@ under ``~/.local/state/setforge/transitions/`` containing:
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
   added / removed marketplaces (omitted if no plugin delta)
+- ``mcp.json`` — added / updated MCP-server registrations (omitted if no
+  MCP delta)
+- ``reconcile_outcomes.json`` — per-item plugin/extension reconcile
+  outcomes (omitted if none)
 - ``file_modes.json`` — per-path pre-command permission bits for files
   whose MODE (not just content) the command changed (omitted if none).
   The content patch carries bytes only; this records the mode axis so
@@ -18,8 +22,9 @@ under ``~/.local/state/setforge/transitions/`` containing:
 
 A subsequent ``setforge revert`` consumes the most recent transition for
 a profile, applies the patch in reverse via ``patch -R``, reverses the
-extension delta, reverses the plugin delta, restores the snapshotted
-store state, and records its own reverse transition.
+extension delta, reverses the plugin delta, reverses the MCP delta,
+restores the snapshotted store state, and records its own reverse
+transition.
 """
 
 import difflib
@@ -1353,7 +1358,8 @@ def write_transition(
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
-    Uses a two-phase write with atomic ``os.rename`` as the commit marker so
+    Uses a two-phase write with atomic ``pending.rename(target)`` as the
+    commit marker so
     a crash mid-write never leaves a half-formed transition visible to
     :func:`load_latest`. The sequence is power-loss durable: every staged
     payload file fsyncs its own fd before the rename, three distinct
@@ -1364,10 +1370,10 @@ def write_transition(
 
     Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
     (if delta non-empty), ``plugins.json`` (if delta non-empty),
-    ``reconcile_outcomes.json`` (if non-empty), ``file_modes.json`` (if
-    non-empty), and ``state_snapshots/``
+    ``mcp.json`` (if delta non-empty), ``reconcile_outcomes.json`` (if
+    non-empty), ``file_modes.json`` (if non-empty), and ``state_snapshots/``
     (if non-empty) into a ``.pending-<dirname>/``
-    staging dir; ``os.rename(pending, target)`` — atomic POSIX rename,
+    staging dir; ``pending.rename(target)`` — atomic POSIX ``Path.rename``,
     same fs; write ``meta.json`` inside the now-real ``target/`` dir as
     the commit point. A crash before that final ``meta.json`` write
     leaves either a ``.pending-<dirname>/`` (skipped by
