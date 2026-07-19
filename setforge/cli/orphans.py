@@ -2,9 +2,9 @@
 
 An orphan is a live path setforge previously deployed (per a
 ``transitions/*/meta.json`` ``paths`` field) that is no longer listed
-in any resolved tracked_files entry. The subcommand has three modes:
+in any resolved tracked_files entry. The subcommand has four modes:
 
-- default (no ``--apply``) — dry-run; print ``WOULD remove`` lines.
+- default (no ``--apply``) — dry-run; print ``WOULD delete`` lines.
 - ``--apply`` + TTY — arrow-key wizard with three choices: abort /
   delete only (irreversible) / delete + write transition (revert-able).
 - ``--apply`` + non-TTY + no ``--yes`` — raises
