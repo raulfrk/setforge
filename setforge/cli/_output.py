@@ -24,7 +24,6 @@ instead of printing directly.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -112,23 +111,21 @@ def render(
     go to stderr exclusively, so a downstream ``| jq`` pipeline never
     has to filter mixed streams.
 
-    ``ctx_obj=None`` is reserved for tests that bypass the root
-    callback (detected via the ``PYTEST_CURRENT_TEST`` env var); outside
-    that context it raises :class:`RuntimeError` so a future subcommand
-    that forgets to declare ``ctx: typer.Context`` fails loudly instead
-    of silently downgrading JSON mode to human output.
+    ``ctx_obj=None`` always raises :class:`RuntimeError`: a subcommand
+    that forgets to declare ``ctx: typer.Context`` (or otherwise fails
+    to thread the root callback's :class:`OutputContext`) must fail
+    loudly instead of silently downgrading JSON mode to human output.
+    Tests exercising the renderer construct a real ``OutputContext``.
 
     ``human_fn`` is a zero-arg closure rather than a function-of-data so
     subcommand call sites can keep their Rich ``Console`` instances and
     ad-hoc multi-block layouts inside the closure.
     """
     if ctx_obj is None:
-        if "PYTEST_CURRENT_TEST" not in os.environ:
-            raise RuntimeError(
-                "render() called with ctx_obj=None outside test context — "
-                "subcommand must thread ctx.obj from root callback"
-            )
-        ctx_obj = OutputContext(format=OutputFormat.HUMAN)
+        raise RuntimeError(
+            "render() called with ctx_obj=None — "
+            "subcommand must thread ctx.obj from root callback"
+        )
     if ctx_obj.format is OutputFormat.JSON:
         sys.stdout.write(wrap_json(command, data))
         sys.stdout.write("\n")

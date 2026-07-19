@@ -397,8 +397,8 @@ def _show_effective(profile: str, *, ctx_obj: OutputContext | None) -> None:
     which requires a :class:`typer.Context` first positional argument.
 
     ``ctx_obj`` is threaded from ``config_show``'s typer context so
-    ``render()`` sees a real :class:`OutputContext` outside test runs;
-    passing ``None`` here would trip the production guard in
+    ``render()`` always sees a real :class:`OutputContext`; passing
+    ``None`` here would trip the guard in
     :func:`setforge.cli._output.render`.
     """
     from setforge.cli.profile import _run_profile_show

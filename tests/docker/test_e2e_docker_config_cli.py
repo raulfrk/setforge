@@ -223,12 +223,10 @@ def test_config_show_effective_smoke_non_pty(
 
     Regression guard for the round-2 ``_show_effective`` extraction:
     the helper used to pass ``ctx_obj=None`` to
-    :func:`setforge.cli._output.render`, which trips the production
-    guard (``RuntimeError("render() called with ctx_obj=None outside
-    test context")``) when ``PYTEST_CURRENT_TEST`` is not set.
-    Subprocess invocation inside the container does NOT inherit
-    ``PYTEST_CURRENT_TEST`` from the host pytest, so this test
-    exercises the real production env-shape.
+    :func:`setforge.cli._output.render`, which raises
+    (``RuntimeError("render() called with ctx_obj=None …")``). This is
+    a real end-to-end run inside the container, so it exercises the
+    genuine production path.
 
     The fix threads ``ctx.obj`` (typer-injected) from ``config_show``
     into ``_show_effective``, so a real :class:`OutputContext` reaches

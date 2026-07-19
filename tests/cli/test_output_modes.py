@@ -142,29 +142,29 @@ def test_render_json_emits_envelope_and_skips_closure(
     assert parsed["command"] == "compare"
 
 
-def test_render_none_ctx_falls_back_to_human(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """When ctx.obj is None under pytest, human renderer runs (test bypass).
+def test_render_none_ctx_always_raises() -> None:
+    """render(None, ...) raises unconditionally — no test-env bypass.
 
-    ``PYTEST_CURRENT_TEST`` is set by pytest for the duration of every
-    test, so this exercise hits the bypass branch.
+    Production control flow must never branch on pytest internals, so a
+    missing ``OutputContext`` is always an error (a subcommand that
+    forgot to thread ``ctx.obj`` from the root callback), regardless of
+    whether the process happens to run under pytest.
     """
-    render(None, "compare", {"a": 1}, human_fn=lambda: print("HUMAN"))
-    captured = capsys.readouterr()
-    assert "HUMAN" in captured.out
+    with pytest.raises(RuntimeError, match="ctx_obj=None"):
+        render(None, "compare", {"a": 1}, human_fn=lambda: None)
 
 
-def test_render_none_ctx_raises_outside_pytest(
+def test_render_does_not_sniff_pytest_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without ``PYTEST_CURRENT_TEST``, render(None, ...) raises RuntimeError.
+    """The presence of ``PYTEST_CURRENT_TEST`` never changes render() behaviour.
 
-    Guards against a future subcommand silently downgrading JSON mode
-    to human output by forgetting to declare ``ctx: typer.Context``.
+    Regression guard against test-detection leaking into shipped control
+    flow: with the pytest env var *present*, ``render(None, ...)`` must
+    still raise — proving the branch does not consult the env var.
     """
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    with pytest.raises(RuntimeError, match="ctx_obj=None outside test context"):
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "some_test (call)")
+    with pytest.raises(RuntimeError, match="ctx_obj=None"):
         render(None, "compare", {"a": 1}, human_fn=lambda: None)
 
 
