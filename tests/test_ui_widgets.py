@@ -108,6 +108,21 @@ def test_explicit_reserved_key_raises() -> None:
         _derive_accelerators(buttons)
 
 
+def test_reserved_key_error_lists_actual_reserved_set() -> None:
+    # The rejection message must name only keys that are truly reserved: a
+    # single-letter accelerator can never be an arrow (arrows are bound
+    # separately, not in _RESERVED_KEYS), so "arrows" must not appear.
+    from setforge.ui.widgets import _RESERVED_KEYS
+
+    buttons = [Button("Foo", 1, key="?")]
+    with pytest.raises(ValueError, match="reserved") as excinfo:
+        _derive_accelerators(buttons)
+    message = str(excinfo.value)
+    assert "arrows" not in message
+    for reserved in _RESERVED_KEYS:
+        assert reserved in message
+
+
 # ---------------------------------------------------------------------------
 # Task 3 — button_bar Application: nav / select / cancel
 # ---------------------------------------------------------------------------
@@ -467,6 +482,32 @@ def test_pager_shrink_clamps_offset_no_crash() -> None:
 
 def test_pager_empty_lines_renders() -> None:
     assert _drive_pager(b"q", lines=[]) is None
+
+
+def test_pager_multiline_fragment_scrolls_to_bottom() -> None:
+    # A single fragment carrying many embedded newlines: fragment count (1) !=
+    # visual-line count (20). ``G`` must reveal the last visual line — a
+    # fragment-index slice against a visual-line clamp would over-shoot the
+    # fragment list and render nothing.
+    lines: _PagerFragments = [
+        ("class:muted", "".join(f"vline {i}\n" for i in range(20)))
+    ]
+    out = _CaptureOutput(rows=10)
+    _drive_pager(b"Gq", lines=lines, out=out)
+    assert "vline 19" in out.captured()
+
+
+def test_pager_multiline_fragment_first_page() -> None:
+    # First page of a single multi-line fragment shows the top visual lines and
+    # stops within the visible window (rows=10 -> 7 visible), not the bottom.
+    lines: _PagerFragments = [
+        ("class:muted", "".join(f"vline {i}\n" for i in range(20)))
+    ]
+    out = _CaptureOutput(rows=10)
+    _drive_pager(b"q", lines=lines, out=out)
+    rendered = out.captured()
+    assert "vline 0" in rendered
+    assert "vline 19" not in rendered
 
 
 def test_seed_prompt_keep_live_real_widget() -> None:

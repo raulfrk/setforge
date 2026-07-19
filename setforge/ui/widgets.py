@@ -109,7 +109,7 @@ def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:
 
     Explicit ``Button.key`` values are reserved FIRST (and validated unique —
     a duplicate explicit key raises :class:`ValueError`; a key that collides
-    with a reserved navigation key — ``?``, arrows, enter, tab, escape — also
+    with one of :data:`_RESERVED_KEYS` — ``?``, enter, tab, escape — also
     raises). Each remaining button then claims the first free lowercase letter
     of its label; if every letter is already taken it gets no accelerator
     (omitted from the mapping).
@@ -123,9 +123,10 @@ def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:
             continue
         key = btn.key.lower()
         if key in _RESERVED_KEYS:
+            reserved = ", ".join(sorted(_RESERVED_KEYS))
             raise ValueError(
                 f"explicit accelerator key {btn.key!r} on button {btn.label!r} "
-                f"is reserved (? , arrows, enter, tab, escape)"
+                f"is reserved ({reserved})"
             )
         if key in taken:
             raise ValueError(
@@ -403,6 +404,27 @@ def _pager_visible_rows() -> int:
 _PAGER_CHROME_ROWS: Final[int] = 3
 
 
+def _to_visual_lines(lines: _Fragments) -> _Fragments:
+    """Split each fragment on embedded ``\\n`` into one entry per visual line.
+
+    The pager slices ``lines`` by fragment index but scrolls in visual-line
+    units; flattening here makes the two agree, so a fragment carrying several
+    ``\\n`` (or none) can no longer make scrolling under- or over-shoot. Each
+    piece keeps its source style class and a trailing ``\\n`` so rendering is
+    byte-for-byte unchanged for the one-line-per-fragment inputs callers pass.
+    """
+    flat: _Fragments = []
+    for cls, text in lines:
+        pieces = text.split("\n")
+        # ``"a\nb\n".split("\n")`` -> ["a", "b", ""]; drop that trailing empty
+        # so a fragment ending in ``\n`` yields exactly its visual-line count.
+        if pieces and pieces[-1] == "":
+            pieces.pop()
+        for piece in pieces:
+            flat.append((cls, f"{piece}\n"))
+    return flat
+
+
 def pager(
     lines: _Fragments,
     *,
@@ -412,7 +434,10 @@ def pager(
     """Full-screen ``less``-style pager; Esc/Ctrl-C return :data:`CANCEL`."""
     if not lines:
         lines = [("class:muted", "(empty)\n")]
-    total = sum(frag_text.count("\n") or 1 for _cls, frag_text in lines)
+    # Flatten to one entry per visual line so the fragment-index slice in
+    # ``_body`` and the visual-line offset clamp share a single coordinate.
+    lines = _to_visual_lines(lines)
+    total = len(lines)
     state = _PagerState()
 
     def _clamp() -> None:
