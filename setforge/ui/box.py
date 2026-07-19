@@ -3,9 +3,7 @@
 Lives apart from :mod:`setforge.ui.widgets` so a future themed diff viewer can
 reuse framing without importing the interactive widget. ``frame`` is pure: it
 takes already-rendered body lines plus a width and returns a list of framed
-plain-text lines with balanced display widths. Widths are measured in
-terminal columns (``wcwidth``), so wide CJK/emoji glyphs — each two columns —
-frame as tightly as ASCII rather than overflowing the box.
+plain-text lines with balanced display widths.
 
 Width is clamped to ``min(width, 100)`` and floored to a small minimum so a
 degenerate terminal size never raises. The caller styles the returned lines
@@ -31,23 +29,12 @@ _H, _V = "─", "│"
 
 
 def _display_width(text: str) -> int:
-    """Return the terminal-column width of ``text`` (wide glyphs count 2).
-
-    ``wcswidth`` returns ``-1`` for a string carrying a control char; the
-    caller sanitizes upstream, but fall back to ``len`` so a stray one can
-    never blow up framing arithmetic.
-    """
+    # wcswidth returns -1 on a control char; len() fallback keeps this safe.
     w = wcswidth(text)
     return len(text) if w < 0 else w
 
 
 def _truncate_to_width(text: str, budget: int) -> str:
-    """Truncate ``text`` to at most ``budget`` display columns.
-
-    Drops the final wide glyph rather than splitting it, so the result never
-    exceeds ``budget`` (may be one column short when a 2-wide glyph straddles
-    the boundary).
-    """
     if _display_width(text) <= budget:
         return text
     out: list[str] = []
@@ -116,10 +103,9 @@ def frame(
     """Frame ``lines`` in a ``┌─┐`` box of clamped ``width``.
 
     Returns the top rule, one ``│ … │`` row per input line, and the bottom
-    rule — every returned line has the same display width (terminal columns,
-    so wide glyphs count as two). ``title`` (if given) is drawn on the top
-    rule and truncated to fit. ``width`` is clamped to
-    ``[_MIN_WIDTH, _MAX_WIDTH]``.
+    rule — every returned line has the same display width. ``title`` (if
+    given) is drawn on the top rule and truncated to fit. ``width`` is clamped
+    to ``[_MIN_WIDTH, _MAX_WIDTH]``.
     """
     w = _clamp_width(width)
     out = [_top_rule(w, title)]

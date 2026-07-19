@@ -72,8 +72,6 @@ def test_frame_truncates_overlong_body() -> None:
 
 
 def test_frame_wide_body_balanced() -> None:
-    # Wide (CJK) glyphs are 2 display columns each; the body row must still
-    # measure exactly the frame width, not overflow it.
     lines = frame(["世界"], width=20)
     assert all(_display_width(ln) == 20 for ln in lines), (
         f"unbalanced widths: {[_display_width(ln) for ln in lines]}"
@@ -81,8 +79,6 @@ def test_frame_wide_body_balanced() -> None:
 
 
 def test_frame_wide_title_balanced() -> None:
-    # A wide-glyph title on the top rule must not push the ``┐`` corner past
-    # the bottom rule's display width.
     lines = frame([], title="クリーンアップ", width=30)
     widths = {_display_width(ln) for ln in lines}
     assert widths == {30}, f"unbalanced widths: {sorted(widths)}"
