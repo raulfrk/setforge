@@ -247,9 +247,9 @@ class MergeTypeMismatch(SetforgeError):
     """Raised when a merge encounters incompatible leaf types at a key
     path (e.g. a str on one side vs a list on the other).
 
-    Raised by the YAML/JSONC merge paths (``yaml_merge.overlay``) and by
-    the scalar 3-way resolver (``scalar_merge.resolve_scalar``) when a
-    non-scalar operand reaches a scalar merge boundary.
+    Raised by the structural/JSONC merge paths (``structural_merge``,
+    ``jsonc``) and by the scalar 3-way resolver (``scalar_merge.resolve_scalar``)
+    when a non-scalar operand reaches a scalar merge boundary.
     """
 
 
