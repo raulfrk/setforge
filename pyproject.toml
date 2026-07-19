@@ -34,6 +34,7 @@ dependencies = [
     "patiencediff>=0.2.18",
     "diff-match-patch>=20241021",
     "tomli-w>=1.0",
+    "wcwidth>=0.2.13",
 ]
 
 [project.urls]

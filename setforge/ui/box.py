@@ -3,7 +3,9 @@
 Lives apart from :mod:`setforge.ui.widgets` so a future themed diff viewer can
 reuse framing without importing the interactive widget. ``frame`` is pure: it
 takes already-rendered body lines plus a width and returns a list of framed
-plain-text lines with balanced display widths.
+plain-text lines with balanced display widths. Widths are measured in
+terminal columns (``wcwidth``), so wide CJK/emoji glyphs — each two columns —
+frame as tightly as ASCII rather than overflowing the box.
 
 Width is clamped to ``min(width, 100)`` and floored to a small minimum so a
 degenerate terminal size never raises. The caller styles the returned lines
@@ -17,6 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from wcwidth import wcswidth
+
 #: Hard upper bound on frame width (RFC: never wider than ~100 columns).
 _MAX_WIDTH: int = 100
 #: Floor below which the frame would have no room for content; clamps up.
@@ -24,6 +28,37 @@ _MIN_WIDTH: int = 6
 
 _TL, _TR, _BL, _BR = "┌", "┐", "└", "┘"
 _H, _V = "─", "│"
+
+
+def _display_width(text: str) -> int:
+    """Return the terminal-column width of ``text`` (wide glyphs count 2).
+
+    ``wcswidth`` returns ``-1`` for a string carrying a control char; the
+    caller sanitizes upstream, but fall back to ``len`` so a stray one can
+    never blow up framing arithmetic.
+    """
+    w = wcswidth(text)
+    return len(text) if w < 0 else w
+
+
+def _truncate_to_width(text: str, budget: int) -> str:
+    """Truncate ``text`` to at most ``budget`` display columns.
+
+    Drops the final wide glyph rather than splitting it, so the result never
+    exceeds ``budget`` (may be one column short when a 2-wide glyph straddles
+    the boundary).
+    """
+    if _display_width(text) <= budget:
+        return text
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        cw = _display_width(ch)
+        if used + cw > budget:
+            break
+        out.append(ch)
+        used += cw
+    return "".join(out)
 
 
 def _clamp_width(width: int) -> int:
@@ -46,15 +81,15 @@ def _top_rule(width: int, title: str | None) -> str:
         return _TL + (_H * inner) + _TR
     # ``┌─ <title> ─...─┐``: two leading dashes + spaces around the title.
     decorated = f"{_H} {title} "
-    if len(decorated) > inner:
+    if _display_width(decorated) > inner:
         # Truncate the title so the decorated segment fits the inner span.
         # Reserve room for the leading ``─ `` and a trailing space.
         budget = inner - 3
         if budget < 0:
             budget = 0
-        decorated = f"{_H} {title[:budget]} "
-        decorated = decorated[:inner]
-    fill = inner - len(decorated)
+        decorated = f"{_H} {_truncate_to_width(title, budget)} "
+        decorated = _truncate_to_width(decorated, inner)
+    fill = inner - _display_width(decorated)
     return _TL + decorated + (_H * fill) + _TR
 
 
@@ -67,9 +102,8 @@ def _body_row(text: str, width: int) -> str:
     inner = width - 4  # two bars + two padding spaces
     if inner < 0:
         inner = 0
-    if len(text) > inner:
-        text = text[:inner]
-    padded = text.ljust(inner)
+    text = _truncate_to_width(text, inner)
+    padded = text + " " * (inner - _display_width(text))
     return f"{_V} {padded} {_V}"
 
 
@@ -82,9 +116,10 @@ def frame(
     """Frame ``lines`` in a ``┌─┐`` box of clamped ``width``.
 
     Returns the top rule, one ``│ … │`` row per input line, and the bottom
-    rule — every returned line has the same display width. ``title`` (if
-    given) is drawn on the top rule and truncated to fit. ``width`` is clamped
-    to ``[_MIN_WIDTH, _MAX_WIDTH]``.
+    rule — every returned line has the same display width (terminal columns,
+    so wide glyphs count as two). ``title`` (if given) is drawn on the top
+    rule and truncated to fit. ``width`` is clamped to
+    ``[_MIN_WIDTH, _MAX_WIDTH]``.
     """
     w = _clamp_width(width)
     out = [_top_rule(w, title)]

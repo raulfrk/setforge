@@ -7,11 +7,14 @@ involved, so the assertions can inspect the exact glyph layout.
 
 from __future__ import annotations
 
+from wcwidth import wcswidth
+
 from setforge.ui.box import frame
 
 
 def _display_width(line: str) -> int:
-    return len(line)
+    w = wcswidth(line)
+    return len(line) if w < 0 else w
 
 
 def test_frame_basic_corners() -> None:
@@ -66,6 +69,23 @@ def test_frame_truncates_overlong_body() -> None:
     # Body wider than the inner width is truncated, never overflows.
     lines = frame(["Y" * 200], width=30)
     assert all(_display_width(ln) == 30 for ln in lines)
+
+
+def test_frame_wide_body_balanced() -> None:
+    # Wide (CJK) glyphs are 2 display columns each; the body row must still
+    # measure exactly the frame width, not overflow it.
+    lines = frame(["世界"], width=20)
+    assert all(_display_width(ln) == 20 for ln in lines), (
+        f"unbalanced widths: {[_display_width(ln) for ln in lines]}"
+    )
+
+
+def test_frame_wide_title_balanced() -> None:
+    # A wide-glyph title on the top rule must not push the ``┐`` corner past
+    # the bottom rule's display width.
+    lines = frame([], title="クリーンアップ", width=30)
+    widths = {_display_width(ln) for ln in lines}
+    assert widths == {30}, f"unbalanced widths: {sorted(widths)}"
 
 
 def test_frame_tiny_width_does_not_crash() -> None:
