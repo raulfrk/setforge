@@ -2,8 +2,9 @@
 
 One home for the dedup key so ref-declared packages (``dispatch``) and
 inline/ref bundle sources (``bundle``) agree on the same key. The match/case
-over the ``Package`` union is exhaustiveness-checked by mypy: a new package
-kind fails to type-check here rather than silently falling through.
+over the ``Package`` union ends in a ``case _`` wildcard that raises, so an
+added package kind is caught at runtime by that wildcard rather than by mypy
+at type-check time.
 """
 
 from __future__ import annotations

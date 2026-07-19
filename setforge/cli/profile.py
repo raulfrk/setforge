@@ -110,8 +110,10 @@ def _run_profile_show(
 
     Other subcommands (e.g. ``setforge config show --effective``) need
     the profile-show render path without owning a typer context. They
-    pass ``ctx_obj=None`` (or their own resolved :class:`OutputContext`)
-    instead of synthesizing a stand-in context.
+    thread their own resolved :class:`OutputContext` as ``ctx_obj``
+    instead of synthesizing a stand-in context. ``ctx_obj`` must be a
+    real :class:`OutputContext`; ``None`` is not a supported contract —
+    it trips the guard in :func:`setforge.cli._output.render`.
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
