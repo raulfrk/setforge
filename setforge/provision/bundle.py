@@ -7,6 +7,7 @@ from setforge.config import (
     Package,
 )
 from setforge.errors import ConfigError, ProvisionItemFailed
+from setforge.provision.identity import package_identity
 from setforge.provision.protocol import (
     Identity,
     Outcome,
@@ -17,16 +18,6 @@ from setforge.provision.protocol import (
     ReconcileResult,
 )
 from setforge.provision.registry import build
-
-
-def _package_identity(pkg: Package) -> Identity:
-    """Mirrors ``dispatch._package_identity`` so inline/ref sources dedup on one key."""
-    name = getattr(pkg, "crate", None) or getattr(pkg, "package", None)
-    name = name or getattr(pkg, "module", None) or getattr(pkg, "repo", None)
-    name = name or getattr(pkg, "binary", None)
-    if name is None:  # pragma: no cover - exhaustive over the Package union
-        raise AssertionError(f"no identity mapping for package {pkg!r}")
-    return Identity(key=name, display=name)
 
 
 def _inline_model(component: BundleComponent) -> Package | None:
@@ -48,7 +39,7 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
         pkg = cfg.packages[component.package]
         return ProvisionItem(
             type=pkg.type.value,
-            identity=_package_identity(pkg),
+            identity=package_identity(pkg),
             config=pkg,
             version=getattr(pkg, "version", None),
             checksum=getattr(pkg, "checksum", None),
@@ -60,7 +51,7 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
         )
     return ProvisionItem(
         type=model.type.value,
-        identity=_package_identity(model),
+        identity=package_identity(model),
         config=model,
         version=getattr(model, "version", None),
         checksum=getattr(model, "checksum", None),

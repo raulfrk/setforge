@@ -11,20 +11,15 @@ import setforge.provision.go as _go  # noqa: F401
 import setforge.provision.local as _local  # noqa: F401
 import setforge.provision.python as _python  # noqa: F401
 from setforge.config import (
-    CargoPackage,
     Config,
     ExtensionPackage,
-    GitHubReleasePackage,
-    GoPackage,
-    LocalPackage,
-    Package,
     PluginPackage,
-    PythonPackage,
     ResolvedProfile,
 )
 from setforge.lockfile import LockFile
 from setforge.provision.bundle import execute_bundle
 from setforge.provision.driver import reconcile
+from setforge.provision.identity import package_identity
 from setforge.provision.lock_apply import apply_lock_to_items
 from setforge.provision.protocol import (
     Identity,
@@ -33,23 +28,6 @@ from setforge.provision.protocol import (
     ReconcileResult,
 )
 from setforge.provision.registry import build
-
-
-def _package_identity(pkg: Package) -> Identity:
-    match pkg:
-        case CargoPackage():
-            name = pkg.crate
-        case PythonPackage():
-            name = pkg.package
-        case GoPackage():
-            name = pkg.module
-        case GitHubReleasePackage():
-            name = pkg.repo
-        case LocalPackage():
-            name = pkg.binary
-        case _:  # pragma: no cover - exhaustive over the Package union
-            raise AssertionError(f"no identity mapping for package {pkg!r}")
-    return Identity(key=name, display=name)
 
 
 def resolve_provision_items(
@@ -73,7 +51,7 @@ def resolve_provision_items(
         _add(
             ProvisionItem(
                 type=pkg.type.value,
-                identity=_package_identity(pkg),
+                identity=package_identity(pkg),
                 config=pkg,
                 version=getattr(pkg, "version", None),
                 checksum=getattr(pkg, "checksum", None),

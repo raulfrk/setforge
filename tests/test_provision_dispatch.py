@@ -27,8 +27,12 @@ from setforge.config import (
     CargoPackage,
     Config,
     ExtensionPackage,
+    GitHubReleasePackage,
+    GoPackage,
+    LocalPackage,
     PluginPackage,
     Profile,
+    PythonPackage,
     ResolvedProfile,
     TrackedFile,
     load_config,
@@ -163,6 +167,57 @@ def test_plugin_and_extension_packages_skipped_from_generic_dispatch() -> None:
     items = resolve_provision_items(cfg, resolved)
     assert {i.identity.key for i in items} == {"ripgrep"}
     assert all(i.type == "cargo" for i in items)
+
+
+# --------------------------------------------------------------------------
+# Shared identity helper: one key mapping for ref-declared (dispatch) and
+# inline/ref bundle sources, exhaustive over the provisioner-backed union.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("pkg", "expected"),
+    [
+        (CargoPackage(crate="ripgrep"), "ripgrep"),
+        (PythonPackage(package="black"), "black"),
+        (GoPackage(module="golang.org/x/tools/gopls"), "golang.org/x/tools/gopls"),
+        (
+            GitHubReleasePackage(
+                repo="sharkdp/fd",
+                tag="v10.1.0",
+                asset="fd.tar.gz",
+                binary="fd",
+                install="~/.local/bin/fd",
+            ),
+            "sharkdp/fd",
+        ),
+        (
+            LocalPackage(
+                path="blobs/mytool.tar.gz",
+                binary="mytool",
+                install="~/.local/bin/mytool",
+            ),
+            "mytool",
+        ),
+    ],
+)
+def test_package_identity_maps_each_kind(pkg: object, expected: str) -> None:
+    from setforge.provision.identity import package_identity
+
+    identity = package_identity(pkg)  # type: ignore[arg-type]
+    assert identity == Identity(key=expected, display=expected)
+
+
+def test_bundle_and_dispatch_share_one_identity_helper() -> None:
+    # The two callers must dedup on the same key; both delegate to the single
+    # shared helper, so identity is byte-for-byte identical for any package.
+    import setforge.provision.bundle as bundle
+    import setforge.provision.dispatch as dispatch
+    from setforge.provision.identity import package_identity
+
+    assert bundle.package_identity is dispatch.package_identity is package_identity
+    pkg = CargoPackage(crate="ripgrep")
+    assert package_identity(pkg) == Identity(key="ripgrep", display="ripgrep")
 
 
 # --------------------------------------------------------------------------
