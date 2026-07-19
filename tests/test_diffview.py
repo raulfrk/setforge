@@ -164,9 +164,6 @@ def test_row_text_carries_resolved_rich_style() -> None:
 
 
 def test_side_by_side_rows_are_line_aligned() -> None:
-    # A ragged model (more left rows than right) must render one output line
-    # per diff-row index, so left row i shares an output line with right row i.
-    # A single opaque per-side block (rich.columns.Columns) does not do this.
     from rich.table import Table
 
     result = MergeResult((Conflict(b"b\n", b"o1\no2\n", b"t1\n"),))
@@ -183,8 +180,6 @@ def test_side_by_side_rows_are_line_aligned() -> None:
     )
     console.print(renderable)
     lines = sink.getvalue().splitlines()
-    # The lone UPSTREAM row pairs with the first left-column row (row index 0),
-    # not drifting onto its own line as Columns would place it.
     assert "+t1" in lines[0]
 
 

@@ -170,8 +170,7 @@ def to_fragments(m: DiffModel, cap: int | None = None) -> list[tuple[str, str]]:
 
 @cache
 def _role_style(role: Role) -> Style:
-    # rich parses "#rrggbb" as a truecolor; the prompt_toolkit "class:" token
-    # is foreign to rich and silently no-ops (renders uncolored).
+    # rich no-ops on prompt_toolkit's "class:" token; needs a real truecolor Style.
     return Style.parse(THEME[role].truecolor)
 
 
@@ -184,8 +183,6 @@ def _row_text(row: DiffRow) -> Text:
 
 def to_rich(m: DiffModel, *, layout: RichLayout) -> RenderableType:
     if layout is RichLayout.SIDE_BY_SIDE:
-        # A Table pairs each side by row index so left row i aligns with right
-        # row i; Columns lays each side out as one opaque block (rows drift).
         table = Table.grid(expand=True)
         table.add_column(ratio=1)
         table.add_column(ratio=1)
