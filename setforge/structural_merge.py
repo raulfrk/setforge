@@ -46,7 +46,7 @@ from json5.model import (
 from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 
 from setforge import jsonc
-from setforge.errors import MergeTypeMismatch
+from setforge.errors import DuplicateKeyInMergeModel, MergeTypeMismatch
 from setforge.jsonc import _find_key_index, _key_text
 from setforge.scalar_merge import (
     ABSENT,
@@ -215,12 +215,25 @@ def _to_plain(node: object) -> object:
 
     The :data:`ABSENT` sentinel passes through unchanged so an absent operand
     stays distinct from a present ``null``.
+
+    A json-five object with DUPLICATE keys (legal in JSON5/JSONC, illegal in
+    strict JSON) raises :class:`~setforge.errors.DuplicateKeyInMergeModel`
+    rather than collapse last-wins into a lossy view that could mis-decide a
+    merge — the fail-closed posture ruamel already takes on the YAML backend.
     """
     if node is ABSENT:
         return ABSENT
     if isinstance(node, JSONObject):
+        keys = [_json5_key_text(kv.key) for kv in node.key_value_pairs]
+        if len(keys) != len(set(keys)):
+            dup = next(k for i, k in enumerate(keys) if k in keys[:i])
+            raise DuplicateKeyInMergeModel(
+                f"duplicate key {dup!r} in json5 object reaching the merge "
+                f"divergence test; collapsing it would be lossy"
+            )
         return {
-            _json5_key_text(kv.key): _to_plain(kv.value) for kv in node.key_value_pairs
+            key: _to_plain(kv.value)
+            for key, kv in zip(keys, node.key_value_pairs, strict=True)
         }
     if isinstance(node, JSONArray):
         return [_to_plain(elem) for elem in node.values]
@@ -955,7 +968,8 @@ def get_at_path(model: object, path: str) -> object:
     never a held ruamel / json-five node alias — so a later in-place mutation of
     the source model cannot clobber the snapshot (B-S1, B-S2). ``path`` is the
     same DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); a list-suffix
-    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError`.
+    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError`. A ``""``
+    ``path`` addresses the ROOT node (whole model) on every navigation seam.
 
     Returns the :data:`setforge.scalar_merge.ABSENT` sentinel when any segment
     on the path (intermediate parent OR the leaf itself) is missing, so an
@@ -965,7 +979,7 @@ def get_at_path(model: object, path: str) -> object:
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for get-at-path: {path!r}")
     node = _json5_inner(model)
-    for seg in split_key_path(path):
+    for seg in split_key_path(path) if path else []:
         if not _is_mapping_node(node):
             return ABSENT
         child = _child_node(node, seg)
@@ -988,13 +1002,14 @@ def get_node_at_path(model: object, path: str) -> object:
     un-copied node reference would reflect post-merge state (B-S1 / B-S2).
 
     ``path`` is the same DOTTED grammar; a list-suffix segment raises
-    :class:`ValueError`. Returns :data:`~setforge.scalar_merge.ABSENT` when any
-    segment is missing (never raises on a miss).
+    :class:`ValueError`. A ``""`` ``path`` addresses the ROOT node. Returns
+    :data:`~setforge.scalar_merge.ABSENT` when any segment is missing (never
+    raises on a miss).
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for get-node-at-path: {path!r}")
     node = _json5_inner(model)
-    for seg in split_key_path(path):
+    for seg in split_key_path(path) if path else []:
         if not _is_mapping_node(node):
             return ABSENT
         child = _child_node(node, seg)
@@ -1014,6 +1029,10 @@ def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
     (``a.b.c``); a list-suffix segment (``[*]`` / ``[]``) is rejected with
     :class:`ValueError`, matching its siblings.
 
+    A ``""`` ``path`` addresses the ROOT node and resolves trivially to
+    ``("", None)`` — the same root meaning its :func:`get_at_path` /
+    :func:`list_keys_at_path` siblings give ``""``.
+
     Returns ``(resolved_prefix, missing_prefix)``:
 
     * full path resolves → ``(path, None)``;
@@ -1028,6 +1047,8 @@ def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for resolve-path-prefix: {path!r}")
+    if not path:
+        return (path, None)
     segments = split_key_path(path)
     node = _json5_inner(model)
     for depth, seg in enumerate(segments):

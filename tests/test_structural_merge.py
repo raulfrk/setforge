@@ -17,14 +17,18 @@ from json5.loader import ModelLoader
 from json5.loader import loads as json5_loads
 from ruamel.yaml import YAML
 
-from setforge.errors import MergeTypeMismatch
+from setforge.errors import DuplicateKeyInMergeModel, MergeTypeMismatch
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
+    JSONObject,
     PathConflict,
     StructuralMergeResult,
+    _json5_inner,
+    _to_plain,
     append_key_segment,
     encode_key_segment,
     get_at_path,
+    get_node_at_path,
     is_structural,
     join_key_segments,
     list_keys_at_path,
@@ -614,6 +618,118 @@ def test_list_keys_at_path_list_suffix_raises() -> None:
     model = _yload("alpha: [1]\n")
     with pytest.raises(ValueError, match="list suffix"):
         list_keys_at_path(model, "alpha.[*]")
+
+
+# --------------------------------------------------------------------------
+# Empty-path "" addresses the ROOT on every navigation seam (one meaning).
+# --------------------------------------------------------------------------
+
+
+def test_empty_path_is_root_on_all_seams_plain_dict() -> None:
+    # "" means "the root node" identically on all four seams: the get seams
+    # return the whole root mapping, resolve reports a fully-resolved root,
+    # and list_keys enumerates the root keys.
+    model = {"a": 1, "b": {"c": 2}}
+    assert get_at_path(model, "") == {"a": 1, "b": {"c": 2}}
+    assert get_node_at_path(model, "") == {"a": 1, "b": {"c": 2}}
+    assert resolve_path_prefix(model, "") == ("", None)
+    assert list_keys_at_path(model, "") == ["a", "b"]
+
+
+def test_empty_path_is_root_not_empty_string_key_lookup() -> None:
+    # The old ambiguity: "" was a lookup of the empty-string KEY on the get /
+    # resolve seams but ROOT on list_keys. Now "" is ROOT everywhere — even
+    # when an empty-string key is present, "" returns the whole root, NOT that
+    # key's value.
+    model = {"": {"a": 1}, "top": 5}
+    # get seams: whole root, not {"a": 1}.
+    assert get_at_path(model, "") == {"": {"a": 1}, "top": 5}
+    assert get_node_at_path(model, "") == {"": {"a": 1}, "top": 5}
+    # resolve: fully resolved to root, not an empty-key hit.
+    assert resolve_path_prefix(model, "") == ("", None)
+    # list_keys: root keys (unchanged behavior).
+    assert list_keys_at_path(model, "") == ["", "top"]
+
+
+def test_empty_path_is_root_when_no_empty_string_key_present() -> None:
+    # Without an empty-string key the seams still agree on root; the get seams
+    # no longer collapse to ABSENT (the old empty-key miss).
+    model = {"top": 5}
+    assert get_at_path(model, "") == {"top": 5}
+    assert get_at_path(model, "") is not ABSENT
+    assert get_node_at_path(model, "") == {"top": 5}
+    assert get_node_at_path(model, "") is not ABSENT
+    assert resolve_path_prefix(model, "") == ("", None)
+    assert list_keys_at_path(model, "") == ["top"]
+
+
+def test_empty_path_root_yaml_backend() -> None:
+    model = _yload("alpha: 1\nbeta:\n  gamma: 2  # c\n")
+    assert get_at_path(model, "") == {"alpha": 1, "beta": {"gamma": 2}}
+    assert get_node_at_path(model, "") == {"alpha": 1, "beta": {"gamma": 2}}
+    assert resolve_path_prefix(model, "") == ("", None)
+    assert list_keys_at_path(model, "") == ["alpha", "beta"]
+
+
+def test_empty_path_root_jsonc_backend() -> None:
+    model = _jload('{\n  "a": 1, // c\n  "b": {"c": 2}\n}')
+    assert get_at_path(model, "") == {"a": 1, "b": {"c": 2}}
+    # get_node_at_path returns the still-WRAPPED root node; unwrap to compare.
+    node = get_node_at_path(model, "")
+    assert isinstance(node, JSONObject)
+    assert _to_plain(node) == {"a": 1, "b": {"c": 2}}
+    assert resolve_path_prefix(model, "") == ("", None)
+    assert list_keys_at_path(model, "") == ["a", "b"]
+
+
+def test_empty_path_root_node_is_deep_copy() -> None:
+    # get_node_at_path("") deep-copies the root, so a later mutation of the
+    # source cannot clobber the captured node (B-S1/B-S2).
+    model = {"a": {"b": 1}}
+    node = get_node_at_path(model, "")
+    model["a"]["b"] = 999
+    assert node == {"a": {"b": 1}}
+
+
+# --------------------------------------------------------------------------
+# Duplicate keys in a json5 object are rejected fail-closed (no lossy view).
+# --------------------------------------------------------------------------
+
+
+def test_to_plain_rejects_duplicate_json5_keys() -> None:
+    # A json5 object may carry duplicate keys (legal in JSON5/JSONC). The old
+    # _to_plain collapsed them last-wins ({"a":1,"a":2} -> {"a":2}), silently
+    # dropping the first pair so the divergence test compared a lossy view.
+    # Now the unwrap fails closed rather than mis-decide a merge.
+    inner = _json5_inner(_jload('{"a": 1, "a": 2}'))
+    with pytest.raises(DuplicateKeyInMergeModel, match="a"):
+        _to_plain(inner)
+
+
+def test_to_plain_rejects_nested_duplicate_json5_keys() -> None:
+    # The refusal reaches nested objects too, not just the top level.
+    inner = _json5_inner(_jload('{"outer": {"k": 1, "k": 2}}'))
+    with pytest.raises(DuplicateKeyInMergeModel, match="k"):
+        _to_plain(inner)
+
+
+def test_to_plain_no_duplicate_keys_unwraps_normally() -> None:
+    # The common no-duplicate case is unchanged: a faithful plain unwrap.
+    inner = _json5_inner(_jload('{"a": 1, "b": {"c": 2}}'))
+    assert _to_plain(inner) == {"a": 1, "b": {"c": 2}}
+
+
+def test_merge_rejects_duplicate_json5_keys_in_divergence_test() -> None:
+    # End-to-end: a duplicate-key object reaching the whole-subtree divergence
+    # test (_check_no_shape_mismatch / _resolve_opaque -> _to_plain) fails
+    # closed. The subtree is compared WHOLE only when the three sides are not
+    # all mappings at that key: here base/theirs keep "a" a scalar while ours
+    # turns it into the dup-key object, so the shape check unwraps ours' "a".
+    base = _jload('{"a": 0}')
+    ours = _jload('{"a": {"x": 1, "x": 2}}')
+    theirs = _jload('{"a": 0}')
+    with pytest.raises(DuplicateKeyInMergeModel, match="x"):
+        merge_structural(base, ours, theirs)
 
 
 # --------------------------------------------------------------------------

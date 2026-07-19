@@ -253,6 +253,17 @@ class MergeTypeMismatch(SetforgeError):
     """
 
 
+class DuplicateKeyInMergeModel(SetforgeError):
+    """Raised when a json-five object reaching the structural merge's
+    divergence test carries duplicate keys.
+
+    Duplicate keys are legal in JSON5/JSONC source but illegal in strict
+    JSON; collapsing them last-wins would give the divergence test a lossy
+    view and could mis-decide a merge. The structural engine fails closed
+    instead — mirroring ruamel's ``DuplicateKeyError`` on the YAML backend.
+    """
+
+
 class ExtensionInstallFailed(SetforgeError):
     """Raised when ``code --install-extension`` or
     ``--uninstall-extension`` exits non-zero or times out, or when
