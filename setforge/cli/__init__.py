@@ -319,6 +319,15 @@ def _config_path_from_argv() -> Path:
 
 
 def _handle_config_validation_error(exc: ValidationError) -> None:
+    """Render an escaped ``load_config`` ``ValidationError`` and exit non-zero.
+
+    Reuses ``validate``'s polished ``✗ SCHEMA VALIDATION ERROR`` formatter
+    (imported lazily to avoid a top-level import cycle: ``validate`` imports
+    from this package). Human mode echoes the report to stderr; ``-o json``
+    mode writes the versioned ``wrap_json`` error envelope (with an ``errors``
+    array) to stdout. Exit code stays ``1``, mirroring the
+    :class:`SetforgeError` branch — a config-validation failure blocks the run.
+    """
     from setforge.cli.validate import render_setforge_yaml_validation_error
 
     config_path = _config_path_from_argv()
