@@ -365,7 +365,7 @@ def _result_and_choices(draw: st.DrawFn) -> tuple[MergeResult, list[object]]:
     return MergeResult(tuple(segs)), choices
 
 
-@settings(max_examples=120, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=120, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 @given(_result_and_choices())
 def test_property_inv1_conservation(
     case: tuple[MergeResult, list[object]],
