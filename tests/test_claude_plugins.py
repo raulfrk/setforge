@@ -1988,6 +1988,69 @@ def test_reconcile_default_is_interactive_auto_false(
 
 
 # ---------------------------------------------------------------------------
+# _reconcile_plugins threads its ``yes`` (non-interactive) signal into the
+# internal reconcile() ``auto`` seam: yes=True ⇒ auto=True (wizard safe-fails
+# rather than prompting), yes=False ⇒ auto=False (interactive default).
+# ---------------------------------------------------------------------------
+
+
+def _spy_reconcile_auto(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace ``claude_plugins_mod.reconcile`` (as seen by _plugin_helpers)
+    with a spy capturing the ``auto`` kwarg, returning an empty report."""
+    import setforge.cli._plugin_helpers as ph
+
+    captured: dict[str, Any] = {}
+
+    def spy(*_a: Any, auto: bool = False, **_k: Any) -> Any:
+        captured["auto"] = auto
+        return cp.ReconcileReport(
+            to_install=[],
+            to_enable=[],
+            to_disable=[],
+            marketplaces_added=[],
+            dry_run=False,
+            failed=[],
+        )
+
+    monkeypatch.setattr(ph.claude_plugins_mod, "reconcile", spy)
+    return captured
+
+
+def test_reconcile_plugins_yes_true_threads_auto_true(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_reconcile_plugins(yes=True) must pass auto=True into reconcile()."""
+    import setforge.cli._plugin_helpers as ph
+
+    fake_claude()
+    captured = _spy_reconcile_auto(monkeypatch)
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
+    profile = _make_resolved(
+        claude_plugins=["a"], plugins_reconcile=ReconcilePolicy.ADDITIVE
+    )
+
+    ph._reconcile_plugins(cfg, profile, yes=True)
+    assert captured["auto"] is True
+
+
+def test_reconcile_plugins_yes_false_threads_auto_false(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_reconcile_plugins() default (yes=False) must pass auto=False."""
+    import setforge.cli._plugin_helpers as ph
+
+    fake_claude()
+    captured = _spy_reconcile_auto(monkeypatch)
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
+    profile = _make_resolved(
+        claude_plugins=["a"], plugins_reconcile=ReconcilePolicy.ADDITIVE
+    )
+
+    ph._reconcile_plugins(cfg, profile)
+    assert captured["auto"] is False
+
+
+# ---------------------------------------------------------------------------
 # _plugin_state_diff narrowed to to_disable only
 # ---------------------------------------------------------------------------
 

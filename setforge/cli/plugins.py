@@ -326,6 +326,15 @@ def plugin_reconcile(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Compute actions without calling claude CLI."
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help=(
+            "Non-interactive: refuse the marketplace-collision wizard's silent "
+            "auto-resolution rather than prompting."
+        ),
+    ),
 ) -> None:
     """Explicit reconcile (in addition to the automatic run inside install).
 
@@ -343,6 +352,9 @@ def plugin_reconcile(
             declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
             policy=policy,
             dry_run=dry_run,
+            # ``--yes`` (non-interactive) ⇒ ``auto``: the cache-collision
+            # wizard safe-fails instead of prompting. Defaults False.
+            auto=yes,
         )
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)

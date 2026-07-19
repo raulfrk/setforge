@@ -211,6 +211,55 @@ def test_plugin_reconcile_live_zero_failures_exits_zero(
     assert "FAILED" not in result.output
 
 
+def _spy_plugin_reconcile_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    """Replace ``plugins_mod.claude_plugins_mod.reconcile`` with a spy that
+    captures the ``auto`` kwarg and returns an empty (no-drift) report."""
+    import setforge.cli.plugins as plugins_mod
+    from setforge.claude_plugins import ReconcileReport
+
+    captured: dict[str, object] = {}
+
+    def spy(*_a: object, auto: bool = False, **_k: object) -> ReconcileReport:
+        captured["auto"] = auto
+        return ReconcileReport(
+            to_install=[],
+            to_enable=[],
+            to_disable=[],
+            marketplaces_added=[],
+            dry_run=False,
+            failed=[],
+        )
+
+    monkeypatch.setattr(plugins_mod.claude_plugins_mod, "reconcile", spy)
+    return captured
+
+
+def test_plugin_reconcile_yes_threads_auto_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`plugin reconcile --yes` must thread auto=True into reconcile()."""
+    _stub_plugin_config_layer(monkeypatch, policy=ReconcilePolicy.ADDITIVE)
+    captured = _spy_plugin_reconcile_auto(monkeypatch)
+
+    result = CliRunner().invoke(app, ["plugin", "reconcile", "--profile=x", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["auto"] is True
+
+
+def test_plugin_reconcile_default_threads_auto_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`plugin reconcile` (no --yes) must keep the interactive auto=False."""
+    _stub_plugin_config_layer(monkeypatch, policy=ReconcilePolicy.ADDITIVE)
+    captured = _spy_plugin_reconcile_auto(monkeypatch)
+
+    result = CliRunner().invoke(app, ["plugin", "reconcile", "--profile=x"])
+    assert result.exit_code == 0, result.output
+    assert captured["auto"] is False
+
+
 def test_plugin_reconcile_readonly_drift_exits_1(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

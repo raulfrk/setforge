@@ -546,6 +546,10 @@ def _reconcile_plugins(
             declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
             policy=reconcile_adapter.plugin_policy(resolved),
             pins=pins,
+            # ``yes`` (non-interactive) ⇒ ``auto``: refuse the marketplace
+            # cache-collision wizard's silent auto-resolution rather than
+            # prompting. Defaults False, so an interactive run still prompts.
+            auto=yes,
         )
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
