@@ -19,6 +19,7 @@ The load-bearing assertions:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -888,7 +889,7 @@ def test_detect_current_schema_malformed_yaml_raises_config_error(
     ``ConfigError``. The load is now wrapped so the trust boundary is uniform.
     """
     cfg = _seed_cfg(tmp_path, "key: [unclosed\n  nested: : :\n")
-    with pytest.raises(ConfigError, match=str(cfg)):
+    with pytest.raises(ConfigError, match=re.escape(str(cfg))):
         detect_current_schema(cfg)
 
 
@@ -903,7 +904,7 @@ def test_detect_current_schema_non_utf8_raises_config_error(
     """
     cfg = tmp_path / "setforge.yaml"
     cfg.write_bytes(b"schema_version: \xff\xfe 2.0\n")
-    with pytest.raises(ConfigError, match=str(cfg)):
+    with pytest.raises(ConfigError, match=re.escape(str(cfg))):
         detect_current_schema(cfg)
 
 
