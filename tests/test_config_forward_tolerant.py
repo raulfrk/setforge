@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pydantic
 import pytest
 
 from setforge.config import load_config
@@ -59,6 +60,26 @@ def test_unknown_key_warns_and_still_loads(
     config = load_config(cfg)
     assert config.version == 1
     assert "stray_typo" in capsys.readouterr().err
+
+
+def test_mixed_tolerable_and_real_error_raises_unchanged(tmp_path: Path) -> None:
+    """A tolerable extra key alongside an un-tolerable missing required field
+    propagates the ORIGINAL ValidationError — the strip-and-retry never fires.
+
+    Exercises the ``len(extra) + len(enum) != len(errors)`` guard in
+    ``_validate_tolerant``: because one error is genuinely un-tolerable
+    (``tracked_files`` is required and absent), the whole set must raise as-is
+    rather than stripping the extra key and retrying.
+    """
+    body = (
+        'version: 1\nschema_version: "1.1"\nprofiles:\n  default: {}\nstray_typo: 1\n'
+    )
+    cfg = _write(tmp_path, body)
+    with pytest.raises(pydantic.ValidationError) as exc:
+        load_config(cfg)
+    error_types = {e["type"] for e in exc.value.errors()}
+    assert "extra_forbidden" in error_types
+    assert "missing" in error_types
 
 
 def test_nested_unknown_key_warned(

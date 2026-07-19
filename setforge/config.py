@@ -408,6 +408,27 @@ def _reject_path_in_bare_name(value: str, field_name: str) -> str:
     return value
 
 
+class _BareNameChmodPackage(BaseModel):
+    """Shared binary/rename bare-name + chmod-policy validators.
+
+    Mixed into package models that carry a downloadable ``binary`` (plus an
+    optional ``rename``) and a ``chmod`` mode, so the identical validator pair
+    is declared once rather than per model.
+    """
+
+    @field_validator("binary", "rename", check_fields=False)
+    @classmethod
+    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return None
+        return _reject_path_in_bare_name(v, info.field_name or "field")
+
+    @field_validator("chmod", check_fields=False)
+    @classmethod
+    def _chmod_policy(cls, v: str) -> str:
+        return _validate_package_chmod(v)
+
+
 class CargoPackage(BaseModel):
     model_config = _STRICT
 
@@ -431,7 +452,7 @@ class GoPackage(BaseModel):
     version: str | None = None
 
 
-class GitHubReleasePackage(BaseModel):
+class GitHubReleasePackage(_BareNameChmodPackage):
     model_config = _STRICT
 
     type: Literal[PackageKind.GITHUB_RELEASE] = PackageKind.GITHUB_RELEASE
@@ -445,20 +466,8 @@ class GitHubReleasePackage(BaseModel):
     extract: bool = True
     chmod: str = "+x"
 
-    @field_validator("binary", "rename")
-    @classmethod
-    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
-        if v is None:
-            return None
-        return _reject_path_in_bare_name(v, info.field_name or "field")
 
-    @field_validator("chmod")
-    @classmethod
-    def _chmod_policy(cls, v: str) -> str:
-        return _validate_package_chmod(v)
-
-
-class LocalPackage(BaseModel):
+class LocalPackage(_BareNameChmodPackage):
     model_config = _STRICT
 
     type: Literal[PackageKind.LOCAL] = PackageKind.LOCAL
@@ -469,18 +478,6 @@ class LocalPackage(BaseModel):
     rename: str | None = None
     extract: bool = True
     chmod: str = "+x"
-
-    @field_validator("binary", "rename")
-    @classmethod
-    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
-        if v is None:
-            return None
-        return _reject_path_in_bare_name(v, info.field_name or "field")
-
-    @field_validator("chmod")
-    @classmethod
-    def _chmod_policy(cls, v: str) -> str:
-        return _validate_package_chmod(v)
 
 
 class PluginPackage(BaseModel):
@@ -653,6 +650,13 @@ class Config(BaseModel):
     model_config = _STRICT
 
     version: int = 1
+    """File-format version of the ``setforge.yaml`` document itself.
+
+    Owned by the engine (distinct from the user-declared
+    :attr:`schema_version`). The running build understands exactly one
+    format, so :meth:`_known_file_format` rejects any other value rather
+    than letting an unrecognized format load and misbehave downstream.
+    """
     schema_version: str = "1.0"
     """User-declared schema version for ``setforge migrate`` compatibility checks.
 
@@ -690,6 +694,16 @@ class Config(BaseModel):
     packages: dict[str, Package] = {}
     bundles: dict[str, BundleSpec] = {}
     profiles: dict[str, Profile]
+
+    @field_validator("version")
+    @classmethod
+    def _known_file_format(cls, v: int) -> int:
+        if v != 1:
+            raise ValueError(
+                f"unknown setforge.yaml file-format version {v!r} — this engine "
+                "understands version 1; upgrade setforge to read a newer format."
+            )
+        return v
 
 
 def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:
