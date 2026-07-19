@@ -143,6 +143,44 @@ def test_to_rich_side_by_side_layout() -> None:
     assert theirs_line.index("theirs") >= width // 2
 
 
+def test_row_text_carries_resolved_rich_style() -> None:
+    from rich.style import Style
+
+    from setforge.ui.theme import THEME, Role
+
+    m = diffview.two_way_lines(b"old\n", b"new\n")
+    add = next(r for r in m.rows if r.kind is RowKind.ADD)
+    text = diffview._row_text(add)
+    style = text.style
+    assert not (isinstance(style, str) and style.startswith("class:")), (
+        f"row style is the unresolved prompt_toolkit token {style!r}, "
+        "which rich renders uncolored"
+    )
+    resolved = Style.parse(style) if isinstance(style, str) else style
+    assert resolved.color is not None
+    assert resolved.color.triplet is not None
+    expected = THEME[Role.WARNING].truecolor
+    assert resolved.color.triplet.hex.lower() == expected.lower()
+
+
+def test_side_by_side_rows_are_line_aligned() -> None:
+    # A ragged pair: two LIVE rows, one UPSTREAM row. Row i on the left must
+    # sit on the same output line as row i on the right.
+    result = MergeResult((Conflict(b"b\n", b"o1\no2\n", b"t1\n"),))
+    m = diffview.three_way_segments(result)
+    renderable = diffview.to_rich(m, layout=RichLayout.SIDE_BY_SIDE)
+    sink = io.StringIO()
+    width = 80
+    console = Console(
+        file=sink, force_terminal=True, color_system="truecolor", width=width
+    )
+    console.print(renderable)
+    lines = sink.getvalue().splitlines()
+    o1 = next(i for i, line in enumerate(lines) if "-o1" in line)
+    t1 = next(i for i, line in enumerate(lines) if "+t1" in line)
+    assert o1 == t1, "first left row and first right row must share an output line"
+
+
 def test_binary_stat_line_reports_byte_count() -> None:
     m = diffview.two_way_lines(b"x" * 10, b"y\x00" * 5)
     assert "10 bytes" in m.rows[0].text or "bytes" in m.rows[0].text
