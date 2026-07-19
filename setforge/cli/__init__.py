@@ -298,20 +298,74 @@ from setforge.cli import inspect as _inspect  # noqa: E402, F401 (A7 3-way viewe
 # isort: on
 
 
+# Root-level short flags that consume a value, mirroring Click's parser so
+# the argv scan below doesn't misread the value of one option as `--config`.
+_VALUE_SHORT_FLAGS = frozenset("cpo")
+
+
+def _short_cluster_config(token: str) -> tuple[str | None, bool]:
+    """Resolve a single-dash short-flag cluster against the `-c` option.
+
+    ``token`` is a single-dash cluster (e.g. ``-vc``, ``-cbad.yaml``). Walk it
+    left to right, Click-style: a value-taking short flag consumes the rest of
+    the cluster as its attached value. Returns ``(attached, wants_next)``:
+
+    * ``attached`` — the `-c` value carried inside this cluster, or ``None``.
+      An attached short value keeps its literal remainder; Click does not strip
+      a leading ``=`` the way it does for the long ``--config=`` form.
+    * ``wants_next`` — ``True`` when the cluster ends on a bare value flag whose
+      value is the *next* argv token; the caller consumes that token as the
+      config path when the flag is `-c`, or skips it otherwise so a
+      `-c…`-shaped value (e.g. ``-p -cx``) isn't misread as ``--config``.
+    """
+    for pos, char in enumerate(token[1:], start=1):
+        if char not in _VALUE_SHORT_FLAGS:
+            continue
+        attached = token[pos + 1 :]
+        if attached:
+            # Value flag with an attached value; only `-c` yields a config.
+            return (attached if char == "c" else None), False
+        # Bare trailing value flag — its value is the next argv token.
+        return None, True
+    return None, False
+
+
 def _config_path_from_argv() -> Path:
+    """Recover the effective ``setforge.yaml`` path for a failed invocation.
+
+    Scans ``sys.argv`` for the per-command ``--config`` / ``-c`` flag —
+    honoring Click's spaced, attached, and stacked short-flag forms — and runs
+    the value through the same :func:`_resolve_config_arg` source-layer
+    fallback the command bodies use, so the polished validation-error report
+    anchors its snippet + ``Fix:`` line on the real file. Best-effort: on any
+    resolution failure (no source configured, unreadable dir) it falls back to
+    the bare default so the error still renders — the downstream renderer
+    degrades gracefully to a ``(1, 1)`` placeholder when the file can't be
+    re-read.
+    """
     argv = sys.argv[1:]
     config = Path("setforge.yaml")
+    skip_next = False
     for i, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
         if arg in ("--config", "-c") and i + 1 < len(argv):
             config = Path(argv[i + 1])
             break
         if arg.startswith("--config="):
             config = Path(arg.split("=", 1)[1])
             break
-        # Click parses attached `-cPATH` same as `-c PATH`; bare `-c` isn't attached.
-        if arg.startswith("-c") and len(arg) > 2:
-            config = Path(arg[2:].removeprefix("="))
-            break
+        if arg.startswith("-") and not arg.startswith("--"):
+            attached, wants_next = _short_cluster_config(arg)
+            if attached is not None:
+                config = Path(attached)
+                break
+            if wants_next:
+                if arg[-1] == "c" and i + 1 < len(argv):
+                    config = Path(argv[i + 1])
+                    break
+                skip_next = True
     try:
         return _resolve_config_arg(config)
     except SetforgeError:

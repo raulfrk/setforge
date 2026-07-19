@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.cli import main
+from setforge.cli import _config_path_from_argv, main
 
 _BAD_CONFIG = """\
 version: 1
@@ -71,6 +71,38 @@ def test_main_validation_error_attached_short_flag_anchors_real_path(
     assert f"({bad_config.name}:" in combined
     assert "(setforge.yaml:1)" not in combined
     assert code == 1
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        # Spaced forms.
+        (["setforge", "compare", "-c", "wanted.yaml"], "wanted.yaml"),
+        (["setforge", "compare", "--config", "wanted.yaml"], "wanted.yaml"),
+        # Attached long form (`=` stripped).
+        (["setforge", "compare", "--config=wanted.yaml"], "wanted.yaml"),
+        # Attached short form — the char(s) after `-c` are the value verbatim,
+        # so a leading `=` is part of the path (Click does NOT strip it).
+        (["setforge", "compare", "-cwanted.yaml"], "wanted.yaml"),
+        (["setforge", "compare", "-c=wanted.yaml"], "=wanted.yaml"),
+        # Stacked short flags: `-c` last in the cluster, spaced value.
+        (["setforge", "compare", "-vc", "wanted.yaml"], "wanted.yaml"),
+        # Stacked short flags: `-c` last in the cluster, attached value.
+        (["setforge", "compare", "-vcwanted.yaml"], "wanted.yaml"),
+        # A `-c…`-shaped token that is the VALUE of a preceding value-option
+        # must not be scraped as `--config` (Click binds it to `-p`).
+        (["setforge", "compare", "-p", "-cnot-a-config"], "setforge.yaml"),
+        # No config flag at all → default.
+        (["setforge", "compare", "--profile", "demo"], "setforge.yaml"),
+    ],
+)
+def test_config_path_from_argv_matches_click_short_flag_parsing(
+    argv: list[str],
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", argv)
+    assert _config_path_from_argv() == Path(expected)
 
 
 def test_main_json_validation_error_envelope(
