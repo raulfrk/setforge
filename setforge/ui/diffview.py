@@ -5,14 +5,16 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
+from functools import cache
 
-from rich.columns import Columns
 from rich.console import Group, RenderableType
+from rich.style import Style
+from rich.table import Table
 from rich.text import Text
 
 from setforge.reconcile import Clean, MergeResult
 from setforge.ui.text import sanitize_controls
-from setforge.ui.theme import Role
+from setforge.ui.theme import THEME, Role
 
 _MAX_BYTES = 5 * 1024 * 1024
 
@@ -166,21 +168,33 @@ def to_fragments(m: DiffModel, cap: int | None = None) -> list[tuple[str, str]]:
     return frags
 
 
+@cache
+def _role_style(role: Role) -> Style:
+    # rich parses "#rrggbb" as a truecolor; the prompt_toolkit "class:" token
+    # is foreign to rich and silently no-ops (renders uncolored).
+    return Style.parse(THEME[role].truecolor)
+
+
 def _row_text(row: DiffRow) -> Text:
     role = _KIND_ROLE[row.kind]
     body = row.text.rstrip("\n")
     prefix = "" if row.kind is RowKind.CONFLICT else _sigil(row.kind)
-    return Text(f"{prefix}{body}", style=f"class:{role.value}")
+    return Text(f"{prefix}{body}", style=_role_style(role))
 
 
 def to_rich(m: DiffModel, *, layout: RichLayout) -> RenderableType:
     if layout is RichLayout.SIDE_BY_SIDE:
-        left = Text()
-        right = Text()
-        for row in m.rows:
-            target = right if row.side is Side.UPSTREAM else left
-            target.append_text(_row_text(row))
-            target.append("\n")
-        return Columns([left, right], equal=True, expand=True)
+        # A Table pairs each side by row index so left row i aligns with right
+        # row i; Columns lays each side out as one opaque block (rows drift).
+        table = Table.grid(expand=True)
+        table.add_column(ratio=1)
+        table.add_column(ratio=1)
+        left = [row for row in m.rows if row.side is not Side.UPSTREAM]
+        right = [row for row in m.rows if row.side is Side.UPSTREAM]
+        for i in range(max(len(left), len(right))):
+            lcell = _row_text(left[i]) if i < len(left) else Text()
+            rcell = _row_text(right[i]) if i < len(right) else Text()
+            table.add_row(lcell, rcell)
+        return table
 
     return Group(*(_row_text(row) for row in m.rows))

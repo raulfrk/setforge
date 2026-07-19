@@ -164,21 +164,28 @@ def test_row_text_carries_resolved_rich_style() -> None:
 
 
 def test_side_by_side_rows_are_line_aligned() -> None:
-    # A ragged pair: two LIVE rows, one UPSTREAM row. Row i on the left must
-    # sit on the same output line as row i on the right.
+    # A ragged model (more left rows than right) must render one output line
+    # per diff-row index, so left row i shares an output line with right row i.
+    # A single opaque per-side block (rich.columns.Columns) does not do this.
+    from rich.table import Table
+
     result = MergeResult((Conflict(b"b\n", b"o1\no2\n", b"t1\n"),))
     m = diffview.three_way_segments(result)
     renderable = diffview.to_rich(m, layout=RichLayout.SIDE_BY_SIDE)
+    assert isinstance(renderable, Table)
+    left = [r for r in m.rows if r.side is not diffview.Side.UPSTREAM]
+    right = [r for r in m.rows if r.side is diffview.Side.UPSTREAM]
+    assert renderable.row_count == max(len(left), len(right))
+
     sink = io.StringIO()
-    width = 80
     console = Console(
-        file=sink, force_terminal=True, color_system="truecolor", width=width
+        file=sink, force_terminal=True, color_system="truecolor", width=80
     )
     console.print(renderable)
     lines = sink.getvalue().splitlines()
-    o1 = next(i for i, line in enumerate(lines) if "-o1" in line)
-    t1 = next(i for i, line in enumerate(lines) if "+t1" in line)
-    assert o1 == t1, "first left row and first right row must share an output line"
+    # The lone UPSTREAM row pairs with the first left-column row (row index 0),
+    # not drifting onto its own line as Columns would place it.
+    assert "+t1" in lines[0]
 
 
 def test_binary_stat_line_reports_byte_count() -> None:
