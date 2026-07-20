@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge.errors import ConfigError, ProfileNotFound
@@ -1013,8 +1014,11 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
     yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+    except YAMLError as exc:
+        raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
     _guard_schema_version(data, path)

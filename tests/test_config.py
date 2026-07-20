@@ -96,6 +96,16 @@ def test_load_config_empty_file(tmp_path: Path) -> None:
         load_config(empty)
 
 
+def test_load_config_malformed_yaml(tmp_path: Path) -> None:
+    # A YAML syntax error must surface as a clean ConfigError (naming the
+    # file), not a raw ruamel ParserError/ScannerError traceback — the
+    # docstring promises ConfigError on parse errors.
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("profiles: [unterminated\n")
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        load_config(bad)
+
+
 def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None:
     """A profile referencing (via a plugin package) a plugin missing from
     the top-level claude_plugins registry raises ConfigError naming both
