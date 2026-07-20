@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 import pytest
 from rich.console import Console
@@ -203,6 +204,32 @@ def test_side_by_side_conflict_theirs_not_floated_to_row_zero() -> None:
     assert ours_row < theirs_row
     # ours is not cross-paired onto the same row as theirs.
     assert "-o1" not in lines[theirs_row]
+
+
+def test_side_by_side_folds_long_unbroken_token_not_crop() -> None:
+    # A long unbroken-token line (path/URL/plugin id) in the half-width
+    # SIDE_BY_SIDE cell must FOLD (character-wrap) so its differing tail stays
+    # visible, not crop-truncate with an ellipsis — losing the tail hides real
+    # byte differences in the exact view used for a merge decision.
+    # Pure insert so only the RIGHT column is populated — the two-column grid
+    # interleaves left/right fragments per physical row, so reconstructing the
+    # token across the fold requires an empty other column.
+    long_line = (
+        b"cfg/aaaa/bbbb/cccc/dddd/eeee/ffff/gggg/hhhh/iiii/jjjj/kkkk/llll/TAIL-END\n"
+    )
+    m = diffview.two_way_lines(b"", long_line)
+    renderable = diffview.to_rich(m, layout=RichLayout.SIDE_BY_SIDE)
+    sink = io.StringIO()
+    Console(file=sink, force_terminal=True, color_system="truecolor", width=140).print(
+        renderable
+    )
+    out = sink.getvalue()
+    # Nothing is ellipsis-cropped (the crop leaves a literal … and drops the
+    # tail); folding wraps the token across physical rows instead, so the tail
+    # survives and is recoverable once newlines/spaces are stripped.
+    assert "…" not in out
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out).replace("\n", "").replace(" ", "")
+    assert "TAIL-END" in plain
 
 
 def test_binary_stat_line_reports_byte_count() -> None:

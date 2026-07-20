@@ -222,8 +222,12 @@ def _side_by_side_rows(rows: list[DiffRow]) -> list[tuple[Text, Text]]:
 def to_rich(m: DiffModel, *, layout: RichLayout) -> RenderableType:
     if layout is RichLayout.SIDE_BY_SIDE:
         table = Table.grid(expand=True)
-        table.add_column(ratio=1)
-        table.add_column(ratio=1)
+        # overflow="fold" hard-wraps a long unbroken token (path / URL / plugin
+        # id) across physical rows inside the half-width cell instead of the
+        # grid default of ellipsis-cropping its tail — losing the tail would
+        # hide a real byte difference in the exact view used for a merge call.
+        table.add_column(ratio=1, overflow="fold")
+        table.add_column(ratio=1, overflow="fold")
         for lcell, rcell in _side_by_side_rows(m.rows):
             table.add_row(lcell, rcell)
         return table
