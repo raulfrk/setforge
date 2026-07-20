@@ -170,6 +170,7 @@ class CompareReport:
     orphan_skipped_absent: int = 0
     orphan_skipped_source: int = 0
     orphan_skipped_unmanaged: int = 0
+    orphan_skipped_host_local: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +191,7 @@ class OrphanDetection:
     skipped_absent: int = 0
     skipped_source: int = 0
     skipped_unmanaged: int = 0
+    skipped_host_local: int = 0
 
 
 def _norm(path: Path) -> Path:
@@ -228,6 +230,24 @@ GENERIC_DST_ROOTS: frozenset[Path] = frozenset(
         "/usr",
         "/opt",
         "/",
+    )
+)
+
+
+# Host-local files setforge WRITES itself (the local.yaml overlay via
+# ``ensure_local_config_stub``; the ``~/.claude/additional-content.md`` stub)
+# but NEVER deploys from a tracked source. Such a file can land in a
+# transition's touched paths AND under a managed dst root — e.g. ``local.yaml``
+# lives in ``~/.config/setforge/``, which a sibling tracked dst
+# (``claude-canary.sh``) makes a managed root — yet reaping it destroys the
+# user's host-local state. The root-level GENERIC_DST_ROOTS denylist cannot
+# catch it (its directory is a legitimate managed root), so it is excluded here
+# at file granularity. See setforge/binaries.py for LOCAL_CONFIG_PATH.
+HOST_LOCAL_FILES: frozenset[Path] = frozenset(
+    _norm(p)
+    for p in (
+        LOCAL_CONFIG_PATH,
+        Path.home() / ".claude" / "additional-content.md",
     )
 )
 
@@ -398,7 +418,14 @@ def detect_orphans(
     skipped_absent = 0
     skipped_source = 0
     skipped_unmanaged = 0
+    skipped_host_local = 0
     for path in sorted(touched_paths - tracked_paths, key=str):
+        if _norm(path) in HOST_LOCAL_FILES:
+            # setforge-written host-local state (never a tracked deployment) —
+            # excluded up front so a file that happens to live under a managed
+            # root is never reaped. Data-loss guard; see HOST_LOCAL_FILES.
+            skipped_host_local += 1
+            continue
         if path.is_relative_to(src_root) or path in src_paths:
             skipped_source += 1
             continue
@@ -414,6 +441,7 @@ def detect_orphans(
         skipped_absent=skipped_absent,
         skipped_source=skipped_source,
         skipped_unmanaged=skipped_unmanaged,
+        skipped_host_local=skipped_host_local,
     )
 
 
@@ -604,6 +632,7 @@ def compare_profile(
     skipped_absent = 0
     skipped_source = 0
     skipped_unmanaged = 0
+    skipped_host_local = 0
     if transitions_dir is not None:
         detection = detect_orphans(
             resolved, config, transitions_dir, repo_root, ignored=ignored
@@ -612,6 +641,7 @@ def compare_profile(
         skipped_absent = detection.skipped_absent
         skipped_source = detection.skipped_source
         skipped_unmanaged = detection.skipped_unmanaged
+        skipped_host_local = detection.skipped_host_local
 
     return CompareReport(
         entries=entries,
@@ -620,6 +650,7 @@ def compare_profile(
         orphan_skipped_absent=skipped_absent,
         orphan_skipped_source=skipped_source,
         orphan_skipped_unmanaged=skipped_unmanaged,
+        orphan_skipped_host_local=skipped_host_local,
     )
 
 

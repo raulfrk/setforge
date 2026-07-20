@@ -107,22 +107,24 @@ def _print_skip_note(
     skipped_absent: int,
     skipped_source: int,
     skipped_unmanaged: int,
+    skipped_host_local: int = 0,
 ) -> None:
     """Print a one-line note when the detection guards filtered candidates.
 
     Suppressed when nothing was filtered. For a destructive tool the
     count is a trust signal — it explains why a previously-touched path
     is absent from the WOULD-delete list (gone from disk, a tracked
-    source that can never be an orphan, or a path outside every
-    currently-managed destination root).
+    source that can never be an orphan, a path outside every
+    currently-managed destination root, or a setforge-written host-local
+    file that must never be reaped).
     """
-    total = skipped_absent + skipped_source + skipped_unmanaged
+    total = skipped_absent + skipped_source + skipped_unmanaged + skipped_host_local
     if total == 0:
         return
     console.print(
         f"note: skipped {total} previously-touched path(s) — "
         f"{skipped_absent} no longer on disk, {skipped_source} tracked source, "
-        f"{skipped_unmanaged} unmanaged"
+        f"{skipped_unmanaged} unmanaged, {skipped_host_local} host-local"
     )
 
 
@@ -133,6 +135,7 @@ def _print_dry_run(
     skipped_absent: int = 0,
     skipped_source: int = 0,
     skipped_unmanaged: int = 0,
+    skipped_host_local: int = 0,
 ) -> None:
     """Print the default-mode dry-run output."""
     if not orphans:
@@ -147,6 +150,7 @@ def _print_dry_run(
         skipped_absent=skipped_absent,
         skipped_source=skipped_source,
         skipped_unmanaged=skipped_unmanaged,
+        skipped_host_local=skipped_host_local,
     )
 
 
@@ -175,6 +179,7 @@ def _detect_orphans_live(
         skipped_absent=report.orphan_skipped_absent,
         skipped_source=report.orphan_skipped_source,
         skipped_unmanaged=report.orphan_skipped_unmanaged,
+        skipped_host_local=report.orphan_skipped_host_local,
     )
     return cfg, detection
 
@@ -462,6 +467,7 @@ def cleanup_orphans(
             skipped_absent=detection.skipped_absent,
             skipped_source=detection.skipped_source,
             skipped_unmanaged=detection.skipped_unmanaged,
+            skipped_host_local=detection.skipped_host_local,
         )
         return
 

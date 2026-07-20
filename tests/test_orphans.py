@@ -365,6 +365,38 @@ def test_detect_orphans_skips_unmanaged_path(
     assert detection.skipped_unmanaged == 1
 
 
+def test_detect_orphans_excludes_host_local_config(
+    tmp_path: Path, managed_boundary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A setforge-written host-local file (LOCAL_CONFIG_PATH) is NEVER an
+    orphan, even when it sits under a managed dst root and was recorded in a
+    transition. Regression for the over-reach where cleanup-orphans wanted to
+    delete ~/.config/setforge/local.yaml (data loss)."""
+    transitions_dir = tmp_path / "transitions"
+    managed = tmp_path / "cfgdir"
+    # A tracked file deploys INTO cfgdir, making it a managed root — mirrors
+    # claude-canary.sh making ~/.config/setforge a managed root.
+    config = _make_config_with(
+        {"canary": TrackedFile(src=Path("canary"), dst=str(managed / "canary.sh"))}
+    )
+    local_yaml = managed / "local.yaml"
+    local_yaml.parent.mkdir(parents=True, exist_ok=True)
+    local_yaml.write_text("tracked_files: {}\n", encoding="utf-8")
+    # HOST_LOCAL_FILES is computed from the real LOCAL_CONFIG_PATH at import;
+    # point it at this fixture (same pattern as managed_boundary/GENERIC_DST_ROOTS).
+    monkeypatch.setattr(
+        compare_mod, "HOST_LOCAL_FILES", frozenset({compare_mod._norm(local_yaml)})
+    )
+    _write_meta_record(
+        transitions_dir, "20260518T120000000000Z-install-p", [str(local_yaml)]
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == []
+    assert detection.skipped_host_local == 1
+
+
 def test_detect_orphans_skips_source_manifest(
     tmp_path: Path, managed_boundary: Path
 ) -> None:
