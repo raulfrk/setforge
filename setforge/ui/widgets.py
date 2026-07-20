@@ -274,7 +274,8 @@ def _build_layout(
             content=FormattedTextControl(
                 text=lambda: [("class:identifier", "← → move · Enter choose · ? help")]
             ),
-            height=1,
+            height=Dimension(min=1),
+            wrap_lines=True,
         )
     )
     children.append(

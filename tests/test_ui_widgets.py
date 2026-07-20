@@ -42,6 +42,37 @@ _PagerFragments = list[tuple[str, str]]
 # ---------------------------------------------------------------------------
 
 
+def test_legend_window_wraps() -> None:
+    # The button-bar legend row must wrap (not clip mid-word) at narrow
+    # widths, matching its sibling body/button Windows. Construction guard:
+    # locate the legend Window in the built layout and assert wrap_lines.
+    from prompt_toolkit.formatted_text import to_formatted_text
+    from prompt_toolkit.layout import walk
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+
+    from setforge.ui.widgets import _BarState, _build_layout
+
+    buttons = [Button("proceed", 1), Button("abort", 2)]
+    accels = _derive_accelerators(buttons)
+    layout = _build_layout(buttons, accels, _BarState(focus=0), title=None, body=None)
+
+    legend = None
+    for container in walk(layout.container):
+        if not isinstance(container, Window):
+            continue
+        control = container.content
+        if not isinstance(control, FormattedTextControl):
+            continue
+        frags = control.text() if callable(control.text) else control.text
+        rendered = "".join(seg[1] for seg in to_formatted_text(frags))
+        if "Enter choose" in rendered:
+            legend = container
+            break
+    assert legend is not None, "legend Window not found in layout"
+    assert legend.wrap_lines(), "legend Window must have wrap_lines enabled"
+
+
 def test_cancel_is_singleton() -> None:
     assert CANCEL is CANCEL
     assert CANCEL is _Cancelled.TOKEN
