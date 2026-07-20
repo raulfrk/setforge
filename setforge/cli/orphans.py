@@ -43,6 +43,7 @@ from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
 from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config
 from setforge.errors import OrphanCleanupRequiresInteractive
+from setforge.locking import profile_lock
 
 __all__ = [
     "ApplyChoice",
@@ -342,19 +343,24 @@ def _execute_cleanup(
     :attr:`ApplyChoice.ABORT` branch is handled by the caller (no
     mutation, no console line beyond the abort marker).
     """
-    transitions.ensure_state_dir_writable()
-    wrote_transition = False
-    if choice is ApplyChoice.DELETE_AND_TRANSITION:
-        transition_dir = _write_orphan_transition(profile, orphans)
-        console.print(f"  transition: {transition_dir}")
-        wrote_transition = True
+    # Serialize the live mutation under profile_lock, like every other
+    # mutating verb (install/sync/revert): a concurrent install/sync
+    # redeploying these very paths must not interleave with the unlink
+    # loop + transition write.
+    with profile_lock(profile):
+        transitions.ensure_state_dir_writable()
+        wrote_transition = False
+        if choice is ApplyChoice.DELETE_AND_TRANSITION:
+            transition_dir = _write_orphan_transition(profile, orphans)
+            console.print(f"  transition: {transition_dir}")
+            wrote_transition = True
 
-    console.print("=== orphan cleanup ===")
-    for orphan in orphans:
-        _unlink_orphan_path(orphan.path, console)
-    _rmdir_empty_parents([o.path.parent for o in orphans], console)
-    if wrote_transition:
-        console.print(f"  to undo: setforge revert --profile={profile}")
+        console.print("=== orphan cleanup ===")
+        for orphan in orphans:
+            _unlink_orphan_path(orphan.path, console)
+        _rmdir_empty_parents([o.path.parent for o in orphans], console)
+        if wrote_transition:
+            console.print(f"  to undo: setforge revert --profile={profile}")
 
 
 def _apply_orphan_cleanup(

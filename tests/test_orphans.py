@@ -699,6 +699,64 @@ def test_apply_yes_writes_transition_first(
     assert not live_orphan.exists()
 
 
+def test_apply_yes_holds_profile_lock(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_execute_cleanup` must enter profile_lock BEFORE any unlink.
+
+    Every other mutating verb (install/sync/revert) serializes its live
+    mutation under profile_lock; orphan cleanup deletes files + writes a
+    transition and must too. Fails against the old unlocked behavior: no
+    "enter" event precedes the "unlink".
+    """
+    import contextlib
+
+    from setforge import locking
+
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("body\n", encoding="utf-8")
+    orphan_entry = OrphanEntry(path=live_orphan)
+
+    events: list[str] = []
+    real_lock = locking.profile_lock
+
+    @contextlib.contextmanager
+    def _recording_lock(profile: str, timeout: float | None = None):
+        events.append("enter")
+        with real_lock(profile, timeout=timeout):
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+    real_unlink = Path.unlink
+
+    def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == live_orphan:
+            events.append("unlink")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr("setforge.cli.orphans.profile_lock", _recording_lock)
+    monkeypatch.setattr(Path, "unlink", _spy_unlink)
+
+    orphans_mod._execute_cleanup(
+        "p",
+        [orphan_entry],
+        orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
+        Console(),
+    )
+
+    assert "enter" in events, "cleanup never acquired the profile lock"
+    assert "unlink" in events, "cleanup never unlinked the orphan"
+    assert events.index("enter") < events.index("unlink"), (
+        f"lock must be held before mutating; order: {events}"
+    )
+    assert events[-1] == "exit", f"lock must be released last; order: {events}"
+
+
 def test_apply_default_branch_uses_yes(monkeypatch: pytest.MonkeyPatch) -> None:
     """`--apply --yes` short-circuits to DELETE_AND_TRANSITION (safe default)."""
     assert (
