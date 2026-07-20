@@ -184,8 +184,8 @@ class DuplicateProvisionerType(SetforgeError):
 
 
 class UnknownResolverType(SetforgeError):
-    """Raised by :func:`setforge.provision.resolve.registry.build` when a
-    package's ``type`` has no registered resolver. The message names the
+    """Raised by :func:`setforge.provision.resolve.registry.get_resolver` when
+    a package's ``type`` has no registered resolver. The message names the
     unknown type and the known ones so the user can correct the config."""
 
 

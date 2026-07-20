@@ -5,7 +5,9 @@ from __future__ import annotations
 #: view (a Trojan-Source-class spoof), so they are neutralized to a visible
 #: ``<U+XXXX>`` token rather than acting on the display. Scoped to exactly the
 #: override/embedding/isolate set — legitimate RTL LETTERS are untouched.
-_BIDI_CONTROLS = frozenset(range(0x202A, 0x202F)) | frozenset(range(0x2066, 0x206A))
+_BIDI_CONTROLS: frozenset[int] = frozenset(range(0x202A, 0x202F)) | frozenset(
+    range(0x2066, 0x206A)
+)
 
 
 def sanitize_controls(text: str) -> str:
