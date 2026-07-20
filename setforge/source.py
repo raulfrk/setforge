@@ -881,38 +881,6 @@ def fetch_source(source: Source) -> str:
     return f"{action} {source.ref} at {clone_dest}"
 
 
-def format_post_write_hint(
-    source: Source, file_count: int, *, subpath: str = "tracked/"
-) -> str:
-    """Build the post-sync/capture hint message pointing at the source dir.
-
-    ``subpath`` is the source-root-relative path the write landed at,
-    rendered verbatim in the hint. The default ``tracked/`` matches the
-    sync/capture target. Pass the actual file (e.g. ``setforge.yaml``) when
-    the write lands directly on the source root — as an ``override --shared``
-    write does — so the hint names the path the user must ``git diff``, not a
-    ``tracked/`` they never touched.
-
-    Three shapes (decided by source kind + git upstream presence):
-
-    * PathSource without ``.git/``: bare file-count message, no git hint.
-    * Git repo without upstream: ``cd ... && git diff && git commit``.
-    * Git repo with upstream: ``... && git push`` appended.
-    """
-    try:
-        source_dir = resolve_source_dir(source)
-    except SourceNotCloned:
-        return f"→ wrote {file_count} files to <source> (not on disk?)"
-    plural = "s" if file_count != 1 else ""
-    base = f"→ wrote {file_count} file{plural} to {source_dir}/{subpath}"
-    if not git_ops.is_git_repo(source_dir):
-        return base
-    upstream = git_ops.rev_parse_upstream(source_dir)
-    if upstream is not None:
-        return f"{base}; cd {source_dir} && git diff && git commit && git push"
-    return f"{base}; cd {source_dir} && git diff && git commit"
-
-
 __all__ = [
     "CLI_FLAG",
     "CONFIG_FILENAME",
@@ -937,7 +905,6 @@ __all__ = [
     "Source",
     "SourceKind",
     "fetch_source",
-    "format_post_write_hint",
     "get_resolved_source",
     "load_local_host_local_sections",
     "resolve_source",

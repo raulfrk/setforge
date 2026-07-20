@@ -121,37 +121,11 @@ class PluginToolMissing(SetforgeError):
     not on PATH."""
 
 
-class PluginReconcileItemFailed(SetforgeError):
-    """Raised by a per-plugin reconcile attempt when the underlying
-    ``claude plugin <verb>`` subprocess (or marketplace add/fetch)
-    exits non-zero or times out.
-
-    Carries the plugin ID, a one-line ``error_summary`` (tail of stderr),
-    and the full captured stderr/diagnostic trace as ``full_stderr`` so
-    the reconcile loop in :mod:`setforge.cli._plugin_helpers` can surface
-    a ``skip / retry / abort / diagnose`` arrow-key prompt without
-    aborting the outer install batch. Subclass of :class:`SetforgeError`
-    so the global handler renders it cleanly when it escapes the prompt
-    boundary (ABORT path)."""
-
-    def __init__(
-        self,
-        *,
-        item_id: str,
-        error_summary: str,
-        full_stderr: str,
-    ) -> None:
-        self.item_id = item_id
-        self.error_summary = error_summary
-        self.full_stderr = full_stderr
-        super().__init__(f"plugin reconcile failed for {item_id!r}: {error_summary}")
-
-
 class ProvisionItemFailed(SetforgeError):
     """Raised by a per-item provisioner apply when the underlying install
     (or checksum verify) fails.
 
-    Generalizes :class:`PluginReconcileItemFailed` for the uniform
+    Generalizes per-plugin reconcile failure for the uniform
     provisioner protocol (Epic B). Carries the item ID, a one-line
     ``error_summary``, the full captured ``full_stderr``, and the
     :class:`~setforge.provision.protocol.Outcome` ``kind`` (SOFT|HARD) so the
