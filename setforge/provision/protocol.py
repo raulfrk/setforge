@@ -117,10 +117,16 @@ class Provisioner(ABC):
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
     ) -> ProvisionDelta:
-        """Compute the delta to reach the declared state. PURE.
+        """Compute the delta to reach the declared state.
 
-        No writes and no mutating subprocess — the driver may call this under
-        REPORT without side effects.
+        PURE in the effect sense: no writes and no mutating subprocess, so the
+        driver may call this under REPORT without side effects. It is NOT
+        required to be a pure function of ``(items, installed)`` alone — an
+        implementation MAY read instance state established by a preceding
+        :meth:`probe` (e.g. plugin activation derives from the disabled subset,
+        which ``installed`` cannot encode). The driver contract therefore calls
+        :meth:`plan` on the SAME instance immediately after :meth:`probe`; do
+        not reuse a plan across instances or a replayed ``installed`` set.
         """
 
     @abstractmethod

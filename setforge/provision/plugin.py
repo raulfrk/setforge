@@ -59,6 +59,11 @@ class PluginProvisioner(Provisioner):
         self, items: Sequence[ProvisionItem], installed: set[Identity]
     ) -> ProvisionDelta:
         present = {i.key for i in installed}
+        # `installed` (set[Identity]) encodes presence only, not enabled-state,
+        # so the activation set is derived from the disabled subset memoized by
+        # probe() — plugin is the one provisioner with an absent→disabled→active
+        # lifecycle. This couples plan() to a preceding probe() on this same
+        # instance (the driver contract); see Provisioner.plan's docstring.
         disabled = {i.key for i in self._disabled}
         return ProvisionDelta(
             installed=tuple(

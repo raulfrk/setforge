@@ -60,6 +60,20 @@ def test_plan_pure_absent_to_install_disabled_to_activate() -> None:
     assert {i.key for i in delta.activated} == {"b@mk"}
 
 
+def test_plan_activation_requires_a_preceding_probe() -> None:
+    # plan() derives `activated` from the disabled subset memoized by probe(),
+    # because `installed` (set[Identity]) encodes presence only, not enabled
+    # state. On a FRESH instance (no probe), self._disabled is empty, so nothing
+    # activates even for an item that IS present in `installed`. This pins the
+    # documented probe->plan instance-coupling (the driver always pairs them on
+    # one instance) as intentional, not accidental.
+    prov = PluginProvisioner()  # deliberately no probe()
+    installed = {Identity(key="b@mk", display="b@mk")}
+    delta = prov.plan([_item("b@mk")], installed)
+    assert delta.installed == ()  # present in `installed` -> not (re)installed
+    assert delta.activated == ()  # no probe -> empty _disabled -> no activation
+
+
 def test_plan_idempotent_when_all_enabled() -> None:
     prov = PluginProvisioner()
     with patch(_LIST, return_value=_live(["a@mk"], [])):
