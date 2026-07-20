@@ -111,6 +111,12 @@ def inspect(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
 ) -> None:
+    """Show the reconcile state (base / live / merge) for one tracked file.
+
+    Takes a tracked-file name or a live path and renders its three-way diff
+    view for the profile, so a drifted file's divergence can be inspected
+    before an install or sync resolves it.
+    """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent

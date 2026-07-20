@@ -107,11 +107,11 @@ def _iter_all_tracked_files(
 
     Consolidates the unfiltered
     resolve_src / resolve_dst / expand_tracked_file walks that ``install``
-    (transition snapshot + copy_atomic loop) and ``sync`` (transition
+    (transition snapshot + deploy loop) and ``sync`` (transition
     snapshot) all duplicate today. Yields ``tracked_file`` alongside the
     ``expand_tracked_file`` synthetic ``sub_name`` (``name`` for plain
     files, ``name/relpath`` for directory entries) and the path pair
-    because the install copy_atomic caller needs per-tracked_file
+    because the install deploy caller needs per-tracked_file
     ``preserve_user_*`` attributes; callers that only need a path
     destructure as ``_, _, _, sub_dst`` or ``_, _, sub_src, _``.
     """

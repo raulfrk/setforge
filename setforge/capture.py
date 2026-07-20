@@ -1,6 +1,6 @@
 """Capture: live → tracked.
 
-The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
+The inverse of ``deploy.write_resolved_deploy``. Reads each profile tracked_file's
 ``dst`` (the live copy) and writes a host-state-stripped version back to
 ``src`` (the tracked copy): legacy ``host_local_sections`` marker pairs that
 ``install`` injected are name-scoped stripped (markers and body both removed).

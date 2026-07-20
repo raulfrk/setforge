@@ -1,7 +1,7 @@
 """install subcommand — orchestrates tracked-file deploy + extension/plugin reconcile.
 
-Wires deploy.copy_atomic, extension/plugin reconcile, and the transition
-snapshot. Imports ``app`` from
+Wires deploy.resolve_deploy / deploy.write_resolved_deploy, extension/plugin
+reconcile, and the transition snapshot. Imports ``app`` from
 :mod:`setforge.cli` so the ``@app.command()`` registration fires at
 module import time; ``setforge/cli/__init__.py`` imports this module at
 the bottom for the side effect.

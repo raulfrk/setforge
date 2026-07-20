@@ -210,11 +210,15 @@ class DuplicateProvisionerType(SetforgeError):
 
 
 class UnknownResolverType(SetforgeError):
-    pass
+    """Raised by :func:`setforge.provision.resolve.registry.build` when a
+    package's ``type`` has no registered resolver. The message names the
+    unknown type and the known ones so the user can correct the config."""
 
 
 class DuplicateResolverType(SetforgeError):
-    pass
+    """Raised by the :func:`setforge.provision.resolve.registry.register`
+    decorator when a resolver ``type`` is registered twice — a programming
+    error caught at import time."""
 
 
 class ResolveError(SetforgeError):

@@ -1,8 +1,10 @@
 """Binary path resolution with host-local override layers.
 
-Production code never calls :func:`shutil.which` directly. Instead it
-calls :func:`resolve_binary`, which walks four layers in order of
-precedence:
+Production code resolves the four dedicated-flag binaries (``code``,
+``claude``, ``gitleaks``, ``patch``) through :func:`resolve_binary` rather
+than :func:`shutil.which` directly; other tools (``git``, ``uv``, the
+``$EDITOR``) call :func:`shutil.which` on their own. :func:`resolve_binary`
+walks four layers in order of precedence:
 
 1. CLI flags (``--code-bin``, ``--claude-bin``, ``--gitleaks-bin``,
    ``--patch-bin``) — stored in module-level state by

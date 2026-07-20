@@ -105,6 +105,12 @@ def lock(
     ),
     config: Path = _CONFIG_OPTION,
 ) -> None:
+    """Resolve the profile's package pins and write the shared lockfile.
+
+    ``--update <key>`` re-resolves only that one package, preserving the
+    rest of the lock. The read→merge→write is serialized under the config
+    dir so concurrent per-profile locks cannot clobber each other.
+    """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent

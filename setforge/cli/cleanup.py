@@ -235,6 +235,11 @@ def _apply_cleanup(
             meta = transitions.make_meta(
                 transitions.TransitionCommand.CLEANUP_ORPHANS, profile
             )
+            # file_pre == file_post == {path: None}, so the patch is empty:
+            # this transition is an AUDIT MARKER, not a restore point. A
+            # provisioned binary is re-obtainable via `install`, and binaries
+            # are not text-patchable like tracked-file orphans, so `revert`
+            # deliberately does NOT resurrect a cleanup-deleted binary.
             recorded = {item.path: None} if item.path is not None else {}
             transitions.write_transition(meta, recorded, dict(recorded), ext_delta=None)
             delete_provisioned(store, item, confine_root=confine_root, console=console)
