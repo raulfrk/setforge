@@ -948,13 +948,20 @@ def _run_post_apply_validate(*, cfg_path: Path) -> None:
         typer.echo("  (skipped: `setforge` binary not on PATH)")
         return
     cmd = [setforge_bin, "validate", "--all", f"--config={cfg_path}"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        # Post-apply validate is best-effort (a non-zero exit is already only a
+        # warning), so a timeout / exec failure must warn too — not leak a raw
+        # traceback AFTER the migration has already been applied.
+        typer.echo(f"  (skipped: validate did not complete: {exc})")
+        return
     if result.returncode == 0:
         typer.echo("  ✓ schema parsed cleanly")
     else:

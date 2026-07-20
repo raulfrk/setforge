@@ -573,3 +573,22 @@ def test_bare_migrate_prints_check_report_and_specify_hint(tmp_path: Path) -> No
     result = runner.invoke(app, ["migrate", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "specify --check, --apply, or --pin" in result.output
+
+
+def test_run_post_apply_validate_timeout_warns_not_raises(monkeypatch, capsys) -> None:
+    """A timeout / exec failure in the best-effort post-apply validate must
+    warn, not leak a raw traceback after the migration already applied."""
+    import subprocess
+    from pathlib import Path
+
+    from setforge.cli import migrate as migrate_mod
+
+    monkeypatch.setattr(migrate_mod.shutil, "which", lambda _n: "/usr/bin/setforge")
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="setforge validate", timeout=60)
+
+    monkeypatch.setattr(migrate_mod.subprocess, "run", _boom)
+    # Must NOT raise:
+    migrate_mod._run_post_apply_validate(cfg_path=Path("/tmp/does-not-matter.yaml"))
+    assert "did not complete" in capsys.readouterr().out

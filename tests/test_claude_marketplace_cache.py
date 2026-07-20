@@ -511,3 +511,12 @@ def test_wizard_import_is_module_level() -> None:
 def test_cache_and_wizard_import_in_either_order(first: str, second: str) -> None:
     """Both import orders resolve cleanly — no circular dependency."""
     _run_fresh_interpreter(f"import {first}\nimport {second}")
+
+
+def test_urls_equivalent_is_case_insensitive() -> None:
+    """GitHub owner/repo is case-insensitive; a case variant must not read as
+    URL-changed (which would re-fire the collision wizard every sync)."""
+    from setforge.claude_marketplace_cache import _urls_equivalent
+
+    assert _urls_equivalent("https://github.com/Owner/Repo.git", "owner/repo")
+    assert _urls_equivalent("owner/repo", "OWNER/REPO")

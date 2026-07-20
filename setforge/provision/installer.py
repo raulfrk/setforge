@@ -227,12 +227,20 @@ def _resolve_mode(chmod: str) -> int:
     if chmod == "+x":
         return _exec_mode()
     try:
-        return int(chmod, 8)
+        mode = int(chmod, 8)
     except ValueError:
         raise InstallError(
             f"unsupported chmod {chmod!r}: expected '+x' or a bare octal mode "
             "(e.g. '755' or '0755')"
         ) from None
+    if mode & 0o6000:
+        # Reject setuid/setgid here too: the config schema already rejects
+        # them, but install_from_bytes is a public (__all__) entry point, so
+        # the guard must not live only in the config layer.
+        raise InstallError(
+            f"refusing chmod {chmod!r}: setuid/setgid bits are not permitted"
+        )
+    return mode
 
 
 def _exec_mode() -> int:

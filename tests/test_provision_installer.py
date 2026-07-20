@@ -323,3 +323,14 @@ def test_missing_binary_in_archive_is_hard(tmp_path: Path) -> None:
         install_from_bytes(data, spec, checksum_required=True)
 
     assert exc.value.kind is Outcome.HARD
+
+
+def test_resolve_mode_rejects_setuid_setgid() -> None:
+    """install_from_bytes is a public entry, so _resolve_mode must reject
+    setuid/setgid bits directly, not only at the config layer."""
+    from setforge.provision.installer import InstallError, _resolve_mode
+
+    for bad in ("4755", "2755", "6755"):
+        with pytest.raises(InstallError, match="setuid/setgid"):
+            _resolve_mode(bad)
+    assert _resolve_mode("755") == 0o755  # ordinary modes still parse

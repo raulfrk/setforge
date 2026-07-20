@@ -777,7 +777,10 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
                 return stripped[len(prefix) :]
         return stripped
 
-    return _normalize(observed) == _normalize(declared)
+    # GitHub owner/repo identifiers are case-insensitive, so a case-variant
+    # slug must not read as URL-changed — that would re-fire the collision
+    # wizard / raise MarketplaceCacheMiss on every sync (INV-4 idempotency).
+    return _normalize(observed).casefold() == _normalize(declared).casefold()
 
 
 def sync_marketplace_cache(
