@@ -605,7 +605,9 @@ def test_load_latest_filters_by_command(
 
 
 def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
+    before = sorted(tmp_path.rglob("*"))
     apply_patch_reverse(TransitionDir(tmp_path))  # no changes.patch → silent no-op
+    assert sorted(tmp_path.rglob("*")) == before  # nothing created/removed
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
@@ -721,7 +723,9 @@ def test_apply_patch_reverse_dry_run_failure_raises_revertfailed(
 def test_apply_patch_reverse_dry_run_no_patch_is_noop(tmp_path: Path) -> None:
     """``dry_run=True`` matches the default-mode no-op shape when the
     transition has no ``changes.patch`` (extension-only transitions)."""
+    before = sorted(tmp_path.rglob("*"))
     apply_patch_reverse(TransitionDir(tmp_path), dry_run=True)
+    assert sorted(tmp_path.rglob("*")) == before  # nothing created/removed
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
