@@ -362,6 +362,62 @@ def test_sync_marketplace_cache_refreshes_existing(fake_git, tmp_path: Path) -> 
     assert reset_calls
 
 
+def test_sync_marketplace_cache_honors_both_collision_alias(
+    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marketplace resolved into a non-basename subdir (BOTH-collision
+    alias) must refresh THAT dir, not the colliding basename dir.
+
+    Fails against the old basename-only computation: the basename dir holds
+    a different owner's clone, so the origin-mismatch guard raises
+    MarketplaceCacheMiss and the aliased marketplace is never refreshable.
+    """
+    from setforge import claude_marketplace_cache as mp_cache
+    from setforge.claude_marketplace_cache import (
+        _record_cache_alias,
+        sync_marketplace_cache,
+    )
+
+    fake = fake_git(known_repos={"bob/tools", "alice/tools"})
+    cache_root = tmp_path / "marketplaces"
+    # Colliding basename dir holds a DIFFERENT owner's clone.
+    basename_dir = cache_root / "tools"
+    basename_dir.mkdir(parents=True)
+    (basename_dir / ".git").mkdir()
+    fake.cloned[basename_dir] = "alice/tools"
+    # bob/tools was cloned into a non-basename subdir + aliased.
+    aliased_dir = cache_root / "tools-bob"
+    aliased_dir.mkdir(parents=True)
+    (aliased_dir / ".git").mkdir()
+    fake.cloned[aliased_dir] = "bob/tools"
+    _record_cache_alias(cache_root, "bob/tools", aliased_dir)
+
+    refreshed_dirs: list[Path] = []
+    real_refresh = mp_cache._refresh_marketplace_cache
+
+    def _spy_refresh(source: object, cache_dir: Path) -> None:
+        refreshed_dirs.append(cache_dir)
+        real_refresh(source, cache_dir)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(mp_cache, "_refresh_marketplace_cache", _spy_refresh)
+
+    cfg = _make_config(
+        marketplaces={
+            "bob": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="bob/tools"
+            )
+        },
+        claude_plugins={"a": ClaudePluginRef(marketplace="bob")},
+    )
+    profile = _make_resolved(claude_plugins=["a"])
+
+    refreshed = sync_marketplace_cache(cfg, profile, cache_root=cache_root)
+    assert refreshed == ["bob"]
+    assert fake.clone_count() == 0
+    # It refreshed the ALIASED dir, never the colliding basename dir.
+    assert refreshed_dirs == [aliased_dir]
+
+
 def test_sync_marketplace_cache_skips_path_sources(fake_git, tmp_path: Path) -> None:
     """PATH-kind marketplaces are skipped (no clone, no fetch)."""
     from setforge.claude_marketplace_cache import sync_marketplace_cache

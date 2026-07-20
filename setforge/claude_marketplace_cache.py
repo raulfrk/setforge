@@ -822,7 +822,15 @@ def sync_marketplace_cache(
             continue
         if not source.repo:
             raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
-        cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
+        # Honor a BOTH-collision alias: if this repo was cloned into a
+        # non-basename subdir (recorded owner/repo -> subdir in the cache
+        # sidecar), refresh THAT dir. Mirrors _source_identity so an
+        # aliased marketplace stays refreshable instead of colliding on the
+        # basename dir and raising MarketplaceCacheMiss forever. Absent/
+        # legacy sidecar degrades to plain basename resolution.
+        alias = read_cache_aliases(root).get(source.repo)
+        subdir = alias if alias is not None else source.repo.rsplit("/", 1)[-1]
+        cache_dir = _safe_cache_dir(root, subdir)
         # This exists()-then-act is check-then-use and is NOT safe against a
         # concurrent setforge process mutating the same cache dir — there is
         # no lockfile; single-invocation-per-cache-root is the supported
