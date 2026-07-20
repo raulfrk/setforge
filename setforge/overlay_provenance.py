@@ -202,7 +202,13 @@ def resolve_plugin_overlay(
         )
         resolved.append(ResolvedPlugin(value=value, origin=origin))
     for value in overlay.add:
-        if value in profile_set:
+        # ``add`` entries carry a ``name@marketplace`` shape, but
+        # ``profile_plugins`` are bare names — compare on the bare name so a
+        # re-route of an already-present plugin (a different marketplace for
+        # the same name) is absorbed, not surfaced as a phantom LOCAL_ADD
+        # (a spurious duplicate ``[from local.yaml]`` row).
+        bare_name = value.split("@", 1)[0]
+        if bare_name in profile_set:
             continue
         resolved.append(ResolvedPlugin(value=value, origin=OverlayOrigin.LOCAL_ADD))
     return resolved

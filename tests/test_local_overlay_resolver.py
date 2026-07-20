@@ -582,3 +582,15 @@ def test_has_local_overlay_false_for_all_profile() -> None:
 
 def test_has_local_overlay_false_for_empty_list() -> None:
     assert not has_local_overlay([])
+
+
+def test_resolve_plugin_overlay_reroute_of_present_plugin_no_phantom_add() -> None:
+    """Re-routing an already-present plugin to a different marketplace (a
+    name@mp add) must be absorbed on the bare name, not surfaced as a phantom
+    LOCAL_ADD duplicate row."""
+    resolved = resolve_plugin_overlay(
+        profile_plugins=["plug"],
+        profile_name="vmh",
+        overlay=PluginOverlay(add=["plug@mp2"]),
+    )
+    assert resolved == [ResolvedPlugin("plug", OverlayOrigin.PROFILE)]
