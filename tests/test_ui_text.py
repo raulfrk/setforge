@@ -29,3 +29,15 @@ def test_printable_and_unicode_are_unchanged() -> None:
 
 def test_empty_string() -> None:
     assert sanitize_controls("") == ""
+
+
+def test_sanitize_controls_neutralizes_bidi_override() -> None:
+    """A bidi-override (U+202E RLO) must render visibly, not pass through to
+    visually reorder the diff view (Trojan-Source spoofing); legit RTL letters
+    are untouched."""
+    from setforge.ui.text import sanitize_controls
+
+    out = sanitize_controls("safe‮EVIL")
+    assert "‮" not in out
+    assert "<U+202E>" in out
+    assert sanitize_controls("א") == "א"  # Hebrew alef, untouched

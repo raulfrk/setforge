@@ -192,3 +192,17 @@ def test_marketplace_add_rolls_back_yaml_on_binary_failure(
     assert "error" in result.output.lower()
     # No orphaned entry, and the file is byte-identical to its pre-call state.
     assert cfg.read_bytes() == before, cfg.read_text(encoding="utf-8")
+
+
+def test_validate_plugin_add_args_conflicting_marketplace_errors() -> None:
+    """`add name@mpA --marketplace=mpB` must fail loud, not silently discard
+    the explicit --marketplace and clone the @-form's."""
+    import typer
+
+    from setforge.cli.plugins import _validate_plugin_add_args
+
+    with pytest.raises(typer.Exit):
+        _validate_plugin_add_args("plug@mpA", "mpB")
+    # Redundant-but-agreeing is fine.
+    assert _validate_plugin_add_args("plug@mpA", "mpA") == ("plug", "mpA")
+    assert _validate_plugin_add_args("plug@mpA", None) == ("plug", "mpA")

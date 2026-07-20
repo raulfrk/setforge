@@ -131,6 +131,16 @@ def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, 
     """
     if "@" in name:
         plugin_name, mp_name = name.split("@", 1)
+        if marketplace and marketplace != mp_name:
+            # Fail loud on contradictory input rather than silently discarding
+            # the explicit --marketplace and network-cloning the @-form's.
+            typer.secho(
+                f"error: conflicting marketplace: {name!r} names {mp_name!r} "
+                f"but --marketplace={marketplace!r} was also given",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
         return plugin_name, mp_name
     if marketplace:
         return name, marketplace

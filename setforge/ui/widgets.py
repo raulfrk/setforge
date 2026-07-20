@@ -284,7 +284,8 @@ def _build_layout(
                 content=FormattedTextControl(
                     text=lambda: _cheatsheet_fragments(buttons, accelerators)
                 ),
-                height=1,
+                height=Dimension(min=1),
+                wrap_lines=True,
             ),
             filter=Condition(lambda: state.cheat),
         )

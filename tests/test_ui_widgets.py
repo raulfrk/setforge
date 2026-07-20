@@ -658,3 +658,25 @@ def test_text_prompt_buffer_left_unclamped_cursor_edits_survive() -> None:
         with create_app_session(input=pipe, output=out):
             result = text_prompt(title="T", default="abcd")
     assert result == "abc"
+
+
+def test_cheatsheet_window_wraps() -> None:
+    # The cheat-sheet row (accelerator legend behind '?') must wrap like every
+    # sibling Window, not clip accelerators off-screen at narrow width.
+    from prompt_toolkit.layout import walk
+    from prompt_toolkit.layout.containers import ConditionalContainer, Window
+
+    from setforge.ui.widgets import _BarState, _build_layout
+
+    buttons = [Button("proceed", 1), Button("abort", 2)]
+    accels = _derive_accelerators(buttons)
+    layout = _build_layout(buttons, accels, _BarState(focus=0), title=None, body=None)
+    windows = [
+        c.content
+        for c in walk(layout.container)
+        if isinstance(c, ConditionalContainer) and isinstance(c.content, Window)
+    ]
+    assert windows, "cheat-sheet ConditionalContainer not found"
+    for win in windows:
+        assert isinstance(win, Window)
+        assert win.wrap_lines(), "cheat-sheet Window must wrap"
