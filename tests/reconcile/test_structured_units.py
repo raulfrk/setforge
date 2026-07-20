@@ -112,15 +112,31 @@ def test_reconstruct_promoted_shared_deleted_leaf_drops_key_yaml() -> None:
 
 
 def test_reconstruct_promoted_shared_deleted_leaf_drops_key_jsonc() -> None:
-    """The JSONC backend deletes a promoted-SHARED deleted leaf in lockstep."""
+    """The JSONC backend drops a promoted-SHARED deleted leaf, sibling intact."""
+    import json
+
     base = b'{\n  "a": 1,\n  "b": 2\n}\n'
     live = b'{\n  "b": 2\n}\n'  # key 'a' deleted live
     units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x")]
 
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.JSONC)
 
-    assert b'"a"' not in out
-    assert b'"b": 2' in out
+    # Re-parse to pin key/value integrity (a non-lockstep delete would desync
+    # keys/values and corrupt the object), not just byte-substrings.
+    assert json.loads(out) == {"b": 2}
+
+
+def test_reconstruct_promoted_shared_absent_in_both_fails_closed() -> None:
+    """A promoted SHARED unit whose path resolves in NEITHER base nor live
+    fails closed (StructuredParseError) rather than silently no-op — the
+    INV-8 residual guard. Pins the else-branch directly (the pre-existing
+    non-string-key test reaches it only incidentally)."""
+    base = b"a: 1\nb: 2\n"
+    live = b"a: 1\nb: 2\n"
+    units = [KeyUnit(HunkClass.SHARED, "ghost", "ghost", "sha256:x")]
+
+    with pytest.raises(StructuredParseError):
+        reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
 
 # Round-trip fidelity: a no-promotion reconstruct (empty unit set) must equal the

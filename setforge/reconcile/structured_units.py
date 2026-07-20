@@ -408,9 +408,14 @@ def reconstruct_structured(
                 # the file uncapturable until the index was hand-edited.
                 delete_node_at_path(base_model, unit.path)
             else:
-                # The path addresses no leaf in EITHER model (e.g. a non-string
-                # mapping key a string path cannot reach). Fail closed rather
-                # than silently no-op — preserves INV-8's residual guard.
+                # The path addresses no leaf in EITHER model — either a
+                # malformed unit (e.g. a non-string mapping key a string path
+                # cannot reach) or a key since dropped from both base and live.
+                # Fail closed rather than silently no-op: preserves INV-8's
+                # residual guard, and a conservative raise never emits wrong
+                # output. (Whether the benign drop-from-both case should instead
+                # no-op is deferred — it needs a fresh-vs-persisted-unit
+                # reachability analysis.)
                 raise StructuredParseError(
                     f"promoted SHARED unit {unit.path!r} addresses no leaf in "
                     f"base or live; cannot reconstruct"
