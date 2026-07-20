@@ -96,6 +96,33 @@ def test_reconstruct_promotes_shared_leaf_preserving_siblings() -> None:
     assert out == b'# top\ntheme: "dark"\nfontSize: 16  # inline note\n'
 
 
+def test_reconstruct_promoted_shared_deleted_leaf_drops_key_yaml() -> None:
+    """A promoted SHARED unit whose live value is ABSENT (the key was deleted
+    live) DROPS the leaf from base — mirroring the line path's empty-span
+    deletion — instead of splicing the ABSENT sentinel, which used to crash
+    _dump_model and leave the file permanently uncapturable."""
+    base = b"# top\na: 1\nb: 2  # keep me\n"
+    live = b"# top\nb: 2  # keep me\n"  # key 'a' deleted live
+    units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x")]
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert b"a: 1" not in out  # the deleted leaf is gone
+    assert b"b: 2  # keep me" in out  # sibling + its inline comment survive
+
+
+def test_reconstruct_promoted_shared_deleted_leaf_drops_key_jsonc() -> None:
+    """The JSONC backend deletes a promoted-SHARED deleted leaf in lockstep."""
+    base = b'{\n  "a": 1,\n  "b": 2\n}\n'
+    live = b'{\n  "b": 2\n}\n'  # key 'a' deleted live
+    units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x")]
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.JSONC)
+
+    assert b'"a"' not in out
+    assert b'"b": 2' in out
+
+
 # Round-trip fidelity: a no-promotion reconstruct (empty unit set) must equal the
 # input byte-for-byte. Each case pins one structured-parser smell (SP1/5/6/7).
 _YAML_ROUNDTRIP = [

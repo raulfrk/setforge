@@ -35,6 +35,7 @@ from setforge.reconcile.types import HunkClass, content_sha
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
     append_key_segment,
+    delete_node_at_path,
     get_at_path,
     get_node_at_path,
     set_at_path,
@@ -396,7 +397,24 @@ def reconstruct_structured(
             set_at_path(base_model, unit.path, parse_scalar_draft(draft, fmt))
         elif _promotes(unit):
             node = get_node_at_path(live_model, unit.path)
-            set_node_at_path(base_model, unit.path, node)
+            if node is not ABSENT:
+                set_node_at_path(base_model, unit.path, node)
+            elif get_node_at_path(base_model, unit.path) is not ABSENT:
+                # A promoted SHARED unit whose LIVE value was deleted (key
+                # present in base, absent in live): drop the leaf from base
+                # (mirroring the line path's empty-span deletion) rather than
+                # splice the ABSENT sentinel, which _dump_model cannot
+                # serialise — the old behavior crashed sync/capture and left
+                # the file uncapturable until the index was hand-edited.
+                delete_node_at_path(base_model, unit.path)
+            else:
+                # The path addresses no leaf in EITHER model (e.g. a non-string
+                # mapping key a string path cannot reach). Fail closed rather
+                # than silently no-op — preserves INV-8's residual guard.
+                raise StructuredParseError(
+                    f"promoted SHARED unit {unit.path!r} addresses no leaf in "
+                    f"base or live; cannot reconstruct"
+                )
     return _dump_model(base_model, fmt)
 
 

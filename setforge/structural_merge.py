@@ -54,13 +54,14 @@ from setforge.scalar_merge import (
     _scalar_eq,
     resolve_scalar,
 )
-from setforge.scalar_path import _set_jsonc_leaf
+from setforge.scalar_path import _delete_jsonc_leaf, _set_jsonc_leaf
 
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
     "append_key_segment",
     "deep_merge_into_node",
+    "delete_node_at_path",
     "encode_key_segment",
     "get_at_path",
     "get_node_at_path",
@@ -905,6 +906,41 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     replaced = parent.get(leaf) if isinstance(parent, Mapping) else None
     _dedup_ruamel_anchors(node, inner, replaced)
     _set_node_leaf(parent, leaf, node, path)
+
+
+def delete_node_at_path(model: object, path: str) -> None:
+    """Delete the leaf at dotted ``path`` from ``model`` in place, comment-aware.
+
+    The deletion sibling of :func:`set_node_at_path`: used when a promoted
+    ``SHARED`` structured unit's live value is :data:`ABSENT` (the key was
+    removed live), so the reconstructed base must DROP the leaf rather than
+    splice the ``ABSENT`` sentinel (which the dumper cannot serialise). Per
+    backend: ruamel ``CommentedMap`` / plain ``dict`` take a plain ``del`` (the
+    key's own comment tokens go with it); json-five parents go through
+    :func:`_delete_jsonc_leaf` (``keys`` / ``values`` removed in lockstep). A
+    no-op when the leaf is already absent. Same dotted grammar as
+    :func:`set_node_at_path`: a list-suffix segment raises :class:`ValueError`,
+    a missing intermediate parent raises :class:`KeyError`, and a non-mapping
+    parent raises :class:`~setforge.errors.MergeTypeMismatch`.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for delete-node-at-path: {path!r}")
+    segments = split_key_path(path)
+    inner = _json5_inner(model)
+    parent = _descend_set_parent(inner, segments, path)
+    leaf = segments[-1]
+    if isinstance(parent, JSONObject):
+        if _find_key_index(parent, leaf) is not None:
+            _delete_jsonc_leaf(parent, leaf)
+        return
+    if isinstance(parent, MutableMapping):
+        if leaf in parent:
+            del parent[leaf]
+        return
+    raise MergeTypeMismatch(
+        f"cannot delete leaf at {path!r}: parent is "
+        f"{type(parent).__name__}, not a mapping"
+    )
 
 
 def deep_merge_into_node(
