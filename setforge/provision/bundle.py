@@ -83,6 +83,19 @@ def validate_bundle(bundle: BundleSpec, cfg: Config) -> None:
                 f"bundle component {component.id!r} uses a 'plugin' source, "
                 f"which is not yet supported for bundle components"
             )
+        if _is_file_component(component) and component.depends_on:
+            # A file component is deploy-only: it is expanded into a synthetic
+            # tracked_file and deployed by the tracked-file pipeline, never
+            # reaching the provisioner driver (execute_bundle skips it). So it
+            # cannot gate on a provisioner prerequisite — a depends_on on it is
+            # silently unhonored. Refuse the nonsensical shape up front rather
+            # than accept a dependency the deploy side structurally ignores.
+            raise ConfigError(
+                f"bundle component {component.id!r} is a file component and "
+                f"must not declare depends_on: a file component is deploy-only "
+                f"(handled by the tracked-file pipeline) and never participates "
+                f"in the provisioner dependency gate"
+            )
 
     _reject_cycle(bundle, by_id)
 

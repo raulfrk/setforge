@@ -100,6 +100,25 @@ def test_file_source_accepted() -> None:
     validate_bundle(bundle, _cfg())
 
 
+def test_file_component_with_depends_on_rejected() -> None:
+    # A file component is deploy-only (deployed by the tracked-file pipeline,
+    # never reaching the provisioner driver), so it cannot gate on a
+    # provisioner prerequisite. Declaring depends_on on it is nonsensical and
+    # silently ignored at execute time — refuse it at config-shape time.
+    bundle = BundleSpec(
+        components=[
+            _comp("pkg", crate="ripgrep"),
+            BundleComponent(
+                id="launcher",
+                depends_on=["pkg"],
+                file=FileComponent(src=Path("launcher"), dst="~/.local/bin/x"),
+            ),
+        ]
+    )
+    with pytest.raises(ConfigError, match="must not declare depends_on"):
+        validate_bundle(bundle, _cfg())
+
+
 def test_execute_bundle_skips_file_component() -> None:
     bundle = BundleSpec(components=[_file_comp("launcher")])
     prov = InMemoryProvisioner()

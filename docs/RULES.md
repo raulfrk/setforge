@@ -119,6 +119,15 @@ Part 2(b)).
 | PROV-5 | User-scope by default; system (apt) needs `allow_system: true` **and** runtime root/sudo capability, else **soft-fail** (warn + skip, never hang). | DETERMINISTIC | `test_provision_no_system_scope` (user-scope-by-construction: no apt/apt-get/dpkg/sudo shell-out) + `design-invariant-reviewer`; the e2e soft-fail path becomes required + authorable once a genuine system(apt) provisioner exists |
 | PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | `legacy-API-ban` lint + e2e |
 
+> **PROV-1 scope — `file:` components are not provisioner-gated.** A bundle
+> `file:` component is deploy-only: it is expanded into a synthetic tracked_file
+> and deployed by the tracked-file pipeline, never reaching the provisioner
+> driver (`execute_bundle` skips it). It order-participates in `depends_on`
+> (INV-9) but has no provisioner outcome, so it neither exit-gates its dependents
+> nor is gated by its own prerequisites. Because a `depends_on` declared *on* a
+> file component is therefore structurally unhonored, `validate_bundle` refuses
+> that shape rather than silently ignore it.
+
 ---
 
 ### 1.6 Self-improvement loop (RFC §7)
