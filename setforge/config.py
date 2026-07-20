@@ -1017,7 +1017,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
-    except YAMLError as exc:
+    except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
@@ -1201,8 +1201,11 @@ def guard_minimum_version(cfg_path: Path) -> None:
     if not cfg_path.exists():
         return
     yaml = YAML(typ="rt")
-    with cfg_path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
+    try:
+        with cfg_path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+    except (YAMLError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"invalid YAML in {cfg_path}: {exc}") from exc
     raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
     _refuse_below_floor(raw_floor, cfg_path)
 

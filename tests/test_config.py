@@ -21,6 +21,7 @@ from setforge.config import (
     ReconcileSpec,
     ResolvedProfile,
     TrackedFile,
+    guard_minimum_version,
     load_config,
     resolve_profile,
 )
@@ -104,6 +105,26 @@ def test_load_config_malformed_yaml(tmp_path: Path) -> None:
     bad.write_text("profiles: [unterminated\n")
     with pytest.raises(ConfigError, match="invalid YAML"):
         load_config(bad)
+
+
+def test_load_config_non_utf8(tmp_path: Path) -> None:
+    # A non-UTF-8 config must also refuse cleanly (ConfigError), parity with
+    # the YAML-parse path and detect_current_schema — not a raw
+    # UnicodeDecodeError traceback.
+    bad = tmp_path / "latin1.yaml"
+    bad.write_bytes(b"greeting: caf\xe9\n")  # 0xe9 is invalid UTF-8
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        load_config(bad)
+
+
+def test_guard_minimum_version_malformed_yaml(tmp_path: Path) -> None:
+    # guard_minimum_version runs on `setforge migrate` BEFORE the hardened
+    # detect_current_schema, so its yaml.load must also clean-refuse a
+    # malformed config with ConfigError, not a raw ruamel traceback.
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("minimum_version: [unterminated\n")
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        guard_minimum_version(bad)
 
 
 def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None:
