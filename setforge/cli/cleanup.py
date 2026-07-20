@@ -20,6 +20,7 @@ from setforge.cli import (
     app,
 )
 from setforge.config import load_config, resolve_profile
+from setforge.locking import profile_lock
 from setforge.provision.dispatch import resolve_provision_items
 from setforge.provision.protocol import Identity
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
@@ -224,13 +225,19 @@ def _apply_cleanup(
         if action is CleanupAction.MARK_ORPHAN:
             mark_orphan(item.identity, console=console)
             continue
-        transitions.ensure_state_dir_writable()
-        meta = transitions.make_meta(
-            transitions.TransitionCommand.CLEANUP_ORPHANS, profile
-        )
-        recorded = {item.path: None} if item.path is not None else {}
-        transitions.write_transition(meta, recorded, dict(recorded), ext_delta=None)
-        delete_provisioned(store, item, confine_root=confine_root, console=console)
+        # Serialize each delete (transition write + unlink) under
+        # profile_lock, like every other mutating verb, so a concurrent
+        # install/sync writing the same profile's state cannot interleave.
+        # Per-item (not whole-loop): _pick_action above is interactive and
+        # must not run while holding the lock.
+        with profile_lock(profile):
+            transitions.ensure_state_dir_writable()
+            meta = transitions.make_meta(
+                transitions.TransitionCommand.CLEANUP_ORPHANS, profile
+            )
+            recorded = {item.path: None} if item.path is not None else {}
+            transitions.write_transition(meta, recorded, dict(recorded), ext_delta=None)
+            delete_provisioned(store, item, confine_root=confine_root, console=console)
 
 
 @app.command("cleanup")

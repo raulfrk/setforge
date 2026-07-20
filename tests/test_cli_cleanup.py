@@ -87,6 +87,61 @@ def test_delete_removes_binary_and_receipt_under_confinement(
     assert store.installed() == set()
 
 
+def test_apply_delete_holds_profile_lock(
+    tmp_path: Path, confine_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_apply_cleanup`'s DELETE branch must enter profile_lock BEFORE it
+    writes the transition / unlinks the binary — like every other mutating
+    verb. Fails against the old unlocked behavior: no "enter" precedes
+    "write_transition".
+    """
+    import contextlib
+
+    from setforge import locking
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
+    monkeypatch.setattr(
+        cleanup_mod, "_pick_action", lambda _item: cleanup_mod.CleanupAction.DELETE
+    )
+
+    store = ReceiptStore(tmp_path / "receipts")
+    binpath = _write_binary(confine_root, "gone")
+    store.record(_ident("gone"), version="1", checksum=None, path=binpath)
+    item = cleanup_mod.CleanupItem(identity=_ident("gone"), path=binpath)
+
+    events: list[str] = []
+    real_lock = locking.profile_lock
+
+    @contextlib.contextmanager
+    def _recording_lock(profile: str, timeout: float | None = None):
+        events.append("enter")
+        with real_lock(profile, timeout=timeout):
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+    real_write = cleanup_mod.transitions.write_transition
+
+    def _spy_write(*args: object, **kwargs: object) -> Path:
+        events.append("write_transition")
+        return real_write(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cleanup_mod, "profile_lock", _recording_lock)
+    monkeypatch.setattr(cleanup_mod.transitions, "write_transition", _spy_write)
+
+    cleanup_mod._apply_cleanup("p", [item], store, Console())
+
+    assert "enter" in events, "cleanup delete never acquired the profile lock"
+    assert "write_transition" in events, "cleanup delete never wrote a transition"
+    assert events.index("enter") < events.index("write_transition"), (
+        f"lock must be held before mutating; order: {events}"
+    )
+    assert events[-1] == "exit", f"lock must be released last; order: {events}"
+    assert not binpath.exists()
+
+
 def test_delete_path_none_drops_only_receipt(
     tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
