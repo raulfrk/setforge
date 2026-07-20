@@ -163,16 +163,31 @@ def test_row_text_carries_resolved_rich_style() -> None:
     assert resolved.color.triplet.hex.lower() == expected.lower()
 
 
-def test_side_by_side_rows_are_line_aligned() -> None:
+def test_side_by_side_pairs_replacement_within_hunk() -> None:
+    # A replace hunk pairs each deleted line with its replacement on the SAME
+    # row (del left, add right) — the alignment fix. It must NOT filter by side
+    # and zip globally, which would align a deletion with an unrelated addition
+    # from a different hunk.
+    m = diffview.two_way_lines(b"keep\nold1\nold2\ntail\n", b"keep\nnew1\nnew2\ntail\n")
+    paired = [(lc.plain, rc.plain) for lc, rc in diffview._side_by_side_rows(m.rows)]
+    assert ("-old1", "+new1") in paired
+    assert ("-old2", "+new2") in paired
+    # Context renders identically in both columns.
+    assert (" keep", " keep") in paired
+    # No deletion is ever cross-paired with a non-matching addition.
+    assert ("-old1", "+new2") not in paired
+
+
+def test_side_by_side_conflict_theirs_not_floated_to_row_zero() -> None:
+    # Regression: the old index-zip put the sole UPSTREAM (theirs) row on row 0
+    # next to the <<<<<<< marker, detached from the === it belongs under. Correct
+    # rendering keeps ours (left) and theirs (right) in their real positions.
     from rich.table import Table
 
     result = MergeResult((Conflict(b"b\n", b"o1\no2\n", b"t1\n"),))
     m = diffview.three_way_segments(result)
     renderable = diffview.to_rich(m, layout=RichLayout.SIDE_BY_SIDE)
     assert isinstance(renderable, Table)
-    left = [r for r in m.rows if r.side is not diffview.Side.UPSTREAM]
-    right = [r for r in m.rows if r.side is diffview.Side.UPSTREAM]
-    assert renderable.row_count == max(len(left), len(right))
 
     sink = io.StringIO()
     console = Console(
@@ -180,7 +195,14 @@ def test_side_by_side_rows_are_line_aligned() -> None:
     )
     console.print(renderable)
     lines = sink.getvalue().splitlines()
-    assert "+t1" in lines[0]
+    # theirs no longer floats to the top row...
+    assert "+t1" not in lines[0]
+    # ...and the ours lines appear above theirs in document order.
+    ours_row = next(i for i, ln in enumerate(lines) if "-o1" in ln)
+    theirs_row = next(i for i, ln in enumerate(lines) if "+t1" in ln)
+    assert ours_row < theirs_row
+    # ours is not cross-paired onto the same row as theirs.
+    assert "-o1" not in lines[theirs_row]
 
 
 def test_binary_stat_line_reports_byte_count() -> None:

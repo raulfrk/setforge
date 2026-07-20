@@ -181,16 +181,50 @@ def _row_text(row: DiffRow) -> Text:
     return Text(f"{prefix}{body}", style=_role_style(role))
 
 
+def _side_by_side_rows(rows: list[DiffRow]) -> list[tuple[Text, Text]]:
+    """Pair rows into side-by-side ``(left, right)`` cells preserving hunk locality.
+
+    Walks the row stream in order rather than filtering by :class:`Side` and
+    zipping by raw index (which cross-pairs a deletion with an unrelated
+    addition from another hunk). Context lines show identically in both
+    columns; a conflict marker spans the left column (empty right); a ``DEL``
+    run and the ``ADD`` run that immediately follows it (a replace hunk) are
+    zipped row-for-row with blank padding on the shorter side, so a deletion
+    aligns against its actual replacement.
+    """
+    cells: list[tuple[Text, Text]] = []
+    i, n = 0, len(rows)
+    while i < n:
+        row = rows[i]
+        if row.kind is RowKind.CTX:
+            shared = _row_text(row)
+            cells.append((shared, shared))
+            i += 1
+        elif row.kind is RowKind.CONFLICT:
+            cells.append((_row_text(row), Text()))
+            i += 1
+        else:
+            dels: list[DiffRow] = []
+            while i < n and rows[i].kind is RowKind.DEL:
+                dels.append(rows[i])
+                i += 1
+            adds: list[DiffRow] = []
+            while i < n and rows[i].kind is RowKind.ADD:
+                adds.append(rows[i])
+                i += 1
+            for k in range(max(len(dels), len(adds))):
+                lcell = _row_text(dels[k]) if k < len(dels) else Text()
+                rcell = _row_text(adds[k]) if k < len(adds) else Text()
+                cells.append((lcell, rcell))
+    return cells
+
+
 def to_rich(m: DiffModel, *, layout: RichLayout) -> RenderableType:
     if layout is RichLayout.SIDE_BY_SIDE:
         table = Table.grid(expand=True)
         table.add_column(ratio=1)
         table.add_column(ratio=1)
-        left = [row for row in m.rows if row.side is not Side.UPSTREAM]
-        right = [row for row in m.rows if row.side is Side.UPSTREAM]
-        for i in range(max(len(left), len(right))):
-            lcell = _row_text(left[i]) if i < len(left) else Text()
-            rcell = _row_text(right[i]) if i < len(right) else Text()
+        for lcell, rcell in _side_by_side_rows(m.rows):
             table.add_row(lcell, rcell)
         return table
 
