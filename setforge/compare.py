@@ -252,6 +252,24 @@ HOST_LOCAL_FILES: frozenset[Path] = frozenset(
 )
 
 
+def _host_local_files(config: Config) -> frozenset[Path]:
+    """Every file setforge WRITES but never deploys from a tracked source.
+
+    The :data:`HOST_LOCAL_FILES` floor (``local.yaml`` + the
+    ``additional-content.md`` stub, bootstrapped independently of any profile)
+    UNIONED with every profile's ``bootstrap`` dst — each ``touch``ed by
+    :func:`setforge.deploy.bootstrap_local` and recorded in the transition
+    ledger, yet never a tracked deployment (e.g. ``~/.claude/header.md``).
+    Unioned across ALL profiles (like :func:`_managed_dst_roots`) so a
+    bootstrap stub left by a retired sibling profile is excluded too. Reaping
+    any of these via ``cleanup-orphans`` is data loss.
+    """
+    paths = set(HOST_LOCAL_FILES)
+    for profile in config.profiles.values():
+        paths.update(_norm(p) for p in profile.bootstrap)
+    return frozenset(paths)
+
+
 def _managed_dst_roots(config: Config, repo_root: Path) -> set[Path]:
     """Directories setforge currently deploys into — the orphan scope.
 
@@ -414,16 +432,19 @@ def detect_orphans(
     src_paths = _tracked_source_paths(config, repo_root)
     managed_roots = _managed_dst_roots(config, repo_root)
 
+    host_local = _host_local_files(config)
     kept: list[OrphanEntry] = []
     skipped_absent = 0
     skipped_source = 0
     skipped_unmanaged = 0
     skipped_host_local = 0
     for path in sorted(touched_paths - tracked_paths, key=str):
-        if _norm(path) in HOST_LOCAL_FILES:
-            # setforge-written host-local state (never a tracked deployment) —
-            # excluded up front so a file that happens to live under a managed
-            # root is never reaped. Data-loss guard; see HOST_LOCAL_FILES.
+        if _norm(path) in host_local:
+            # setforge-written host-local state (the local.yaml/additional-content
+            # stubs + every profile's bootstrap dst) — never a tracked
+            # deployment, excluded up front so a file that happens to live under
+            # a managed root is never reaped. Data-loss guard; see
+            # _host_local_files.
             skipped_host_local += 1
             continue
         if path.is_relative_to(src_root) or path in src_paths:

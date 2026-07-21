@@ -397,6 +397,34 @@ def test_detect_orphans_excludes_host_local_config(
     assert detection.skipped_host_local == 1
 
 
+def test_detect_orphans_excludes_bootstrap_stubs(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """A config-driven bootstrap stub (e.g. ~/.claude/header.md) is NEVER an
+    orphan even under a managed root + recorded in a transition. Derived from
+    every profile's bootstrap list (not a hardcoded literal) — the header.md
+    sibling of the local.yaml data-loss class."""
+    transitions_dir = tmp_path / "transitions"
+    managed = tmp_path / "claude"
+    header = managed / "header.md"
+    header.parent.mkdir(parents=True, exist_ok=True)
+    header.write_text("# host header\n", encoding="utf-8")
+    config = Config(
+        tracked_files={
+            "canary": TrackedFile(src=Path("canary"), dst=str(managed / "canary.sh"))
+        },
+        profiles={"p": Profile(tracked_files=["canary"], bootstrap=[header])},
+    )
+    _write_meta_record(
+        transitions_dir, "20260518T120000000000Z-install-p", [str(header)]
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == []
+    assert detection.skipped_host_local == 1
+
+
 def test_detect_orphans_skips_source_manifest(
     tmp_path: Path, managed_boundary: Path
 ) -> None:
