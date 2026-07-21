@@ -16,11 +16,12 @@ explicit control flow exactly; do not improvise gate invocations.
 ## Inputs — compute ONCE, broadcast to every sub-dispatch
 
 Resolve the inputs up front and pass the once-computed **range** explicitly into
-every sub-dispatch. Never let a sub-skill fall back to its own default — the
-defaults diverge (the converging fan workflow bases on `merge-base HEAD main`, no
-`origin/`). The input *shapes* differ per reviewer (see Step 2): the python fan
-and the two project agents take five inputs; `reviewing-bd-leaks` takes its own
-four (`BASE_SHA`, `HEAD_SHA`, `changed_files`, `pr_number`).
+the workflow (Step 2). Never let the workflow fall back to its own default — pin
+the base to local `merge-base HEAD main` (no `origin/`; local main leads origin
+while unpushed). The whole set (`base`, `head`, `changedFiles`, `repo`, `jobTmp`,
+`specPath`, `bdId`, `prNumber`, `extraAspects`) rides in one `Workflow` args object;
+the workflow fans the aspect agents internally (Step 2), so there is no longer a
+per-reviewer dispatch to broadcast to.
 
 ```sh
 BASE_SHA=$(git merge-base HEAD main)   # canonical base — pinned (local main; origin lags while unpushed)
@@ -82,41 +83,61 @@ emit the BLOCKED verdict (below) quoting the failing gate's captured output, and
 **STOP — do not dispatch the fan.** The fan section below runs only when
 `rc_policy == 0 && rc_schema == 0 && rc_bdrefs == 0`.
 
-## Step 2 — Dispatch the review fan (only when Tier-1 is all-zero)
+## Step 2 — Run the converging review workflow (only when Tier-1 is all-zero)
 
-One parallel batch over the same computed range. Reference the global fans **by
-skill name** (so a new upstream aspect agent is picked up automatically — never
-hard-code the python aspect roster). Each sub-source takes its own input shape —
-pass them explicitly, do not rely on a sub-skill's default range:
+Invoke the `reviewing-fan-workflow` (the `review-fan` Workflow) as the advisory
+review engine — it fans the file-type-matched aspect reviewers, verifies findings,
+applies devil's-advocate-gated fixes, and **unwinds them to one staged diff**. This
+REPLACES the old per-agent dispatch; invoking a Workflow from this skill satisfies
+the Workflow opt-in (a skill whose instructions call `Workflow`). Pass the
+once-computed range explicitly:
 
-1. **Skill `reviewing-python-code`** — the 4-aspect python fan. Inputs: `BASE_SHA`,
-   `HEAD_SHA`, `changed_files`, `spec_path`, `bd_id`.
-2. **Skill `reviewing-bd-leaks`** — the advisory tracker-leak scan. Inputs:
-   `BASE_SHA`, `HEAD_SHA`, `changed_files`, `pr_number` (pass `(none)` when not a
-   PR) — it does NOT take `spec_path` / `bd_id`. **Owned here** — enforce-tests runs
-   it exactly once; the CLAUDE.md manifest tells session-flow not to also dispatch it.
-3. **Agent `test-quality-reviewer`** (direct) — the five inputs (as #1).
-4. **Agent `design-invariant-reviewer`** (direct) — the five inputs (as #1).
+```js
+Workflow({
+  name: 'review-fan',
+  args: {
+    base: BASE_SHA, head: HEAD_SHA, changedFiles: <the changed_files list>,
+    repo: <repo root>, jobTmp: "$CLAUDE_JOB_DIR/tmp",
+    specPath: <spec_path>, bdId: <bd_id>, prNumber: <pr_number>,
+    extraAspects: ['test-quality-reviewer', 'design-invariant-reviewer'],
+  },
+})
+```
 
-**Partial-failure rule.** Every one of the four sub-sources MUST return a verdict.
-A sub-source that dies or returns no `Verdict:` line folds into the consolidation
-as **non-PASS (error)** — never silently dropped, so a missing report can never
-produce a falsely-clean top verdict.
+- **`extraAspects` injects the two setforge PROJECT agents** into the workflow's
+  fan. The generic `selectAspects` already picks `python-*` + security + concurrency
+  + complexity-adversary + `bd-leak-reviewer` by file type — never hard-code that
+  roster; the workflow selects it, and `extraAspects` only adds the project pair.
+- **bd-leak is still OWNED here, but run ONCE — inside the workflow.** The workflow
+  always fans `bd-leak-reviewer`; read its result from the workflow findings rather
+  than dispatching `reviewing-bd-leaks` separately. Do NOT also run the leak scan —
+  session-flow's manifest still routes the single leak run through this skill.
+- The workflow **auto-fixes** confirmed Important+ findings (devil's-advocate-gated)
+  and returns them **unwound to one uncommitted STAGED diff** (`fixDiff`) — no
+  `fix(review): round N` commits leak into history. It returns
+  `{status: clean|stalled|budget|error, confirmedFixed, openResidual, fixDiff}`.
+
+**Partial-failure rule.** If the workflow returns `status: 'error'` (bad args / no
+scope) or dies, fold it into the consolidation as **non-PASS (error)** — never a
+falsely-clean top verdict.
 
 ## Step 3 — Consolidate ONE two-axis verdict
 
 Two axes, so the three block-authorities never collapse into one ambiguous token:
 
-- **BLOCKING axis** — the Tier-1 gate rows + the `reviewing-bd-leaks` result.
-  These are the only hard blocks. **Top verdict = BLOCK iff a Tier-1 gate failed
-  OR bd-leak blocked.** The BLOCKING axis strictly dominates: an advisory PASS can
-  never override a blocking BLOCK.
-- **ADVISORY axis** — worst-of-N over `reviewing-python-code`
-  (`PASS / CONCERNS / BLOCK`) + `test-quality-reviewer` + `design-invariant-reviewer`
-  (`CRITICAL / IMPORTANT / MINOR` findings plus their own verdict line). Define the
-  mapping from each source's vocabulary into the top table explicitly. The advisory
-  "BLOCK" is **do-not-merge advice to the human (Phase 6) gate, never a CI
-  hard-block** — these agents never block directly.
+- **BLOCKING axis** — the Tier-1 gate rows + the bd-leak result (**read from the
+  workflow's `bd-leak-reviewer` findings**, not a separate dispatch). These are the
+  only hard blocks. **Top verdict = BLOCK iff a Tier-1 gate failed OR bd-leak
+  blocked.** The BLOCKING axis strictly dominates: an advisory PASS can never
+  override a blocking BLOCK.
+- **ADVISORY axis** — the workflow's outcome maps to the top table: `clean` ⇒ PASS,
+  `stalled` / `budget` ⇒ CONCERNS (findings it couldn't converge), `error` ⇒
+  non-PASS. The advisory content is `confirmedFixed` (auto-fixed, staged in
+  `fixDiff`) + `openResidual` (couldn't fix). The `test-quality-reviewer` +
+  `design-invariant-reviewer` findings arrive INSIDE the fan (via `extraAspects`),
+  gated/surfaced like any aspect; their sidecar manifests still carry (below). The
+  advisory outcome is **do-not-merge advice to the human (Phase 6) gate, never a CI
+  hard-block**.
 
 **Sidecars** (carried as their own sections, not flattened into severity):
 `test-quality-reviewer`'s per-test `KEEP / CHANGE-DETECTOR / OVER-MOCKED / …`
@@ -136,6 +157,25 @@ flips this line when the coverage + mutation gates land.
 backlog, no dedup, no second-occurrence capture, no revdiff surfacing. That loop
 is owned by the F7 self-improvement work, not this skill.
 
+## Step 4 — Serve the Phase-6 gate on Atelier (ALWAYS)
+
+The workflow returns to the orchestrator; **serving the human gate is the
+orchestrator's job** (a Workflow runs to completion and cannot block a turn on an
+Atelier Submit). This is the mandatory, **un-skippable** Phase-6 review surface —
+never fall back to a chat verdict + a "review on Atelier?" offer.
+
+- **Author a verdict page** carrying: the two-axis verdict table (BLOCKING /
+  ADVISORY) + the staged **`fixDiff`** (what the fan auto-fixed, for the human to
+  approve) + **`openResidual`** (what it couldn't fix) + the sidecar manifests.
+- **Serve + wait:**
+  `python3 ~/.claude/skills/atelier/scripts/atelier.py publish <page> --id <slug>-review`
+  then `atelier.py wait <slug>-review`; END THE TURN on the wait (per the `atelier`
+  skill's `/wait` contract).
+- **On Submit & Close (approve)** → commit the staged fixes with a real message,
+  then proceed to merge. **On plain Submit** → address the notes, re-serve. A
+  BLOCKING BLOCK still serves (so the human sees it) but merge is refused until it
+  clears.
+
 ## Verdict templates
 
 ```
@@ -150,16 +190,18 @@ is owned by the F7 self-improvement work, not this skill.
 => TOP: BLOCK iff any BLOCKED above, else see advisory.
 
 ## ADVISORY axis (do-not-merge advice to the human gate; never a CI hard-block)
-- reviewing-python-code   : <worst-of-N + findings>
-- test-quality-reviewer   : <verdict + findings>   (+ per-test manifest sidecar)
-- design-invariant-reviewer: <verdict + findings>  (+ CONCERNS (human gate) sidecar)
+- review-fan workflow      : clean | stalled | budget | error  (=> PASS | CONCERNS | non-PASS)
+- confirmedFixed (staged in fixDiff) : <n>   ·   openResidual : <n>
+- test-quality-reviewer    : <per-test manifest sidecar>        (ran INSIDE the fan via extraAspects)
+- design-invariant-reviewer: <CONCERNS (human gate) sidecar>    (ran INSIDE the fan via extraAspects)
 
 ## self_improvement (pass-through)
 - <note> …
 ```
 
 On Tier-1 short-circuit, emit only the BLOCKING axis with the failing gate's
-output quoted and `FAN SKIPPED (tree cannot merge)`.
+output quoted and `WORKFLOW SKIPPED (tree cannot merge)`. The Phase-6 Atelier gate
+(Step 4) still serves the BLOCKING verdict so the human sees the block.
 
 ## Bugs and code smells this skill must not commit
 
@@ -176,10 +218,11 @@ Gate-invocation:
 Orchestration:
 
 - **Block-authority conflation** — keep the BLOCKING and ADVISORY axes separate.
-- **Base-ref drift** — broadcast the once-computed range to every sub-source.
-- **Broadcast fallback gap** — pass each sub-source its full input shape (Step 2), never let it recompute.
-- **Severity-vocab mismatch** — map each source's vocabulary explicitly; carry the sidecars.
-- **Manifest roster drift** — reference the global fans by skill name, never a hard-coded aspect roster.
+- **Base-ref drift** — pass the once-computed range into the workflow args; never let it recompute a default.
+- **Args-shape gap** — pass the full args object (Step 2); the workflow fails loud on missing `base`/`head`/`changedFiles`.
+- **Outcome-vocab mismatch** — map the workflow `clean`/`stalled`/`budget`/`error` into the top table; carry the sidecars.
+- **Aspect-roster drift** — let the workflow's `selectAspects` pick the roster; inject ONLY the project agents via `extraAspects`.
 - **Cross-repo pointer rot** — the manifest and the session-flow pointer reference each other.
-- **Roster double / missed dispatch** — own `reviewing-bd-leaks` once; be the engine review entry.
-- **Partial-failure silent drop** — every sub-source returns a verdict or folds to non-PASS.
+- **bd-leak double-run** — the workflow fans `bd-leak-reviewer` once; read it from the workflow, never dispatch `reviewing-bd-leaks` separately.
+- **Gate-skip regression** — ALWAYS serve the Phase-6 Atelier gate (Step 4); never a chat verdict + a "review on Atelier?" offer.
+- **Partial-failure silent drop** — a workflow `error` folds to non-PASS, never a clean top verdict.
