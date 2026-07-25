@@ -69,12 +69,19 @@ class ReceiptStore:
         version: str | None,
         checksum: str | None,
         path: Path | str | None = None,
+        source_digest: str | None = None,
     ) -> None:
         """Write one receipt for ``identity`` atomically, replacing any prior.
 
         Called by a marker-based provisioner immediately after an install
         succeeds. Reuses :func:`~setforge.atomicio.atomic_write_text` so a
         crash mid-write never leaves a torn file.
+
+        ``source_digest`` is the digest of the bytes the install was made
+        FROM — distinct from ``checksum``, which is the value the config
+        *declared*. A provisioner whose identity carries no version (``local``)
+        needs it to tell a rebuilt source from an unchanged one; the others
+        leave it None.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -83,6 +90,7 @@ class ReceiptStore:
             "version": version,
             "checksum": checksum,
             "path": str(path) if path is not None else None,
+            "source_digest": source_digest,
         }
         atomic_write_text(
             self._root / _receipt_name(identity),
@@ -137,6 +145,26 @@ class ReceiptStore:
                 continue
             bin_path = Path(recorded) if recorded is not None else None
             yield ReceiptEntry(identity=identity, path=bin_path, corrupt_path=None)
+
+    def digest_for(self, identity: Identity) -> str | None:
+        """Return the recorded ``source_digest``, or None when there is none.
+
+        None covers three cases the caller must treat alike: no receipt, a
+        receipt written before this field existed, and a provisioner that does
+        not record one. All three mean "cannot prove the source is unchanged".
+        """
+        receipt = self._root / _receipt_name(identity)
+        if not receipt.is_file():
+            return None
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+            # Discarded: validates key/display shape only, so a malformed
+            # receipt raises here rather than reading a digest off it.
+            Identity(key=data["key"], display=data["display"])
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise CorruptReceiptError(receipt) from exc
+        recorded = data.get("source_digest")
+        return recorded if isinstance(recorded, str) else None
 
     def path_for(self, identity: Identity) -> Path | None:
         # Only source of an UNDECLARED item's install path (needed to unlink it).

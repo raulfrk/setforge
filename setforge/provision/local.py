@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -71,12 +72,54 @@ class LocalProvisioner(Provisioner):
     ) -> ProvisionDelta:
         return ProvisionDelta(
             installed=tuple(
-                item.identity for item in items if item.identity not in installed
+                item.identity
+                for item in items
+                if item.identity not in installed or self._is_stale(item)
             )
         )
 
+    def _source_digest(self, item: ProvisionItem) -> str | None:
+        """sha256 of the tracked bytes this item installs from, or None.
+
+        None means "cannot read the source" — a missing file, a path that
+        escapes the tracked root, an unreadable one. Callers treat that as
+        NOT stale, so a declared package whose tracked file has since gone
+        missing is left alone rather than escalated into a failure.
+        """
+        pkg = item.config
+        if not isinstance(pkg, LocalPackage):  # pragma: no cover
+            return None
+        try:
+            source = _resolve_tracked_source(self._resolve_tracked_root(), pkg.path)
+            return hashlib.sha256(source.read_bytes()).hexdigest()
+        except (LocalSourceError, OSError):
+            return None
+
+    def _is_stale(self, item: ProvisionItem) -> bool:
+        """True when an ALREADY-INSTALLED item's source bytes no longer match.
+
+        This is the whole reason ``local`` needs a content check at all. Its
+        identity is the bare binary name (:func:`package_identity`) and it
+        carries no version, so nothing else can distinguish a rebuilt tracked
+        binary from the one already deployed: ``plan`` dropped the item from
+        the delta forever, ``driver.reconcile`` therefore never called
+        ``apply_one`` for it, and the install reported success while the live
+        binary kept the old bytes.
+
+        A receipt with no recorded digest — every receipt written before
+        ``source_digest`` existed — reads as stale exactly once. The reinstall
+        records the digest, so the next run settles. That is what makes the fix
+        self-healing for receipts already on disk.
+        """
+        current = self._source_digest(item)
+        if current is None:
+            return False
+        return current != self._receipts.digest_for(item.identity)
+
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
-        if item.identity in self.probe():
+        # Same predicate `plan` used, not a second copy of the rule — the two
+        # disagreeing is how a reinstall gets planned and then skipped.
+        if item.identity in self.probe() and not self._is_stale(item):
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
 
         pkg = item.config
@@ -117,6 +160,11 @@ class LocalProvisioner(Provisioner):
             version=None,
             checksum=pkg.checksum,
             path=dest,
+            # The bytes actually installed from, so the next run can tell a
+            # rebuilt source from an unchanged one. Hashed here rather than
+            # reusing `_source_digest` so it describes exactly what was
+            # written, not a possibly re-read file.
+            source_digest=hashlib.sha256(data).hexdigest(),
         )
         return ProvisionOutcome(
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"

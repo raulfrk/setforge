@@ -336,3 +336,100 @@ def test_install_path_confinement_end_to_end(tmp_path: Path) -> None:
         )
     assert not (tmp_path / "escape").exists()
     assert list(install_dir.iterdir()) == []
+
+
+# --- content drift: a rebuilt tracked binary must redeploy -------------------
+
+
+def test_plan_reports_an_installed_item_whose_source_bytes_changed(
+    tmp_path: Path,
+) -> None:
+    # The bug this guards: a LocalPackage's identity is its bare binary name and
+    # it carries no version, so once a receipt exists `plan` dropped the item
+    # from the delta forever. `driver.reconcile` only calls `apply_one` for
+    # items in the delta, so a rebuilt binary was silently never deployed while
+    # the run still reported success.
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"build-one")
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    prov = _provisioner(tmp_path, tracked)
+    item = _item(pkg)
+
+    assert prov.apply_one(item).outcome is Outcome.OK
+    assert prov.plan([item], prov.probe()).installed == ()
+
+    _write(tracked, "bin/tool", b"build-two")
+
+    assert prov.plan([item], prov.probe()).installed == (item.identity,)
+    outcome = prov.apply_one(item)
+    assert outcome.outcome is Outcome.OK, outcome.detail
+    assert (install_dir / "tool").read_bytes() == b"build-two"
+
+    # And settled again: no third install for unchanged bytes.
+    assert prov.plan([item], prov.probe()).installed == ()
+    assert prov.apply_one(item).outcome is Outcome.SKIP
+
+
+def test_receipt_without_a_recorded_digest_is_stale_exactly_once(
+    tmp_path: Path,
+) -> None:
+    # Receipts written before source_digest existed carry no digest. They must
+    # read as stale once — that is what makes the fix self-healing for receipts
+    # already on disk — and then settle.
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"same-bytes")
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    receipts = ReceiptStore(tmp_path / "receipts")
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tracked)
+    item = _item(pkg)
+
+    # A pre-fix receipt: recorded without a digest.
+    receipts.record(
+        item.identity, version=None, checksum=None, path=install_dir / "tool"
+    )
+
+    assert prov.plan([item], prov.probe()).installed == (item.identity,)
+    assert prov.apply_one(item).outcome is Outcome.OK
+    assert prov.plan([item], prov.probe()).installed == ()
+
+
+def test_unreadable_source_does_not_make_an_installed_item_stale(
+    tmp_path: Path,
+) -> None:
+    # A declared package whose tracked file has gone missing but which is
+    # already installed keeps today's behaviour (left alone), rather than being
+    # escalated into a HARD failure by the new staleness check.
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"payload")
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    prov = _provisioner(tmp_path, tracked)
+    item = _item(pkg)
+
+    assert prov.apply_one(item).outcome is Outcome.OK
+    (tracked / "bin" / "tool").unlink()
+
+    assert prov.plan([item], prov.probe()).installed == ()
+    assert prov.apply_one(item).outcome is Outcome.SKIP
+
+
+def test_archive_sourced_package_tracks_the_archive_bytes(tmp_path: Path) -> None:
+    # Staleness keys on the SOURCE bytes, so it works for extract=True too,
+    # where the installed file is never equal to the source.
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool.tar.gz", _tar_gz({"tool": b"inner-one"}))
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool.tar.gz", binary="tool", extract=True)
+    prov = _provisioner(tmp_path, tracked)
+    item = _item(pkg)
+
+    assert prov.apply_one(item).outcome is Outcome.OK
+    assert prov.plan([item], prov.probe()).installed == ()
+
+    _write(tracked, "bin/tool.tar.gz", _tar_gz({"tool": b"inner-two"}))
+
+    assert prov.plan([item], prov.probe()).installed == (item.identity,)
+    assert prov.apply_one(item).outcome is Outcome.OK
+    assert (install_dir / "tool").read_bytes() == b"inner-two"
