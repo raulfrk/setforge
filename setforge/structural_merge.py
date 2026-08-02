@@ -253,7 +253,8 @@ def _unwrap_ruamel_scalar(node: object) -> object:
     Round-trip mode does NOT keep builtin types for formatted scalars:
     ``1.5``/``1e3`` -> ``ScalarFloat``, ``0xFF`` -> ``HexCapsInt``,
     ``1_000`` -> ``ScalarInt``, ``2020-01-01`` -> ``datetime.date``,
-    ``!!str 5`` -> ``TaggedScalar``. These subclass/aren't the builtins
+    quoted strings -> ``ScalarString``, ``!!str 5`` -> ``TaggedScalar``. These
+    subclass/aren't the builtins
     :func:`setforge.scalar_merge._is_scalar` allows by EXACT type, so they
     must collapse to a builtin here (the single divergence-test entry point)
     or the scalar resolver rejects them as non-scalar.
@@ -267,6 +268,8 @@ def _unwrap_ruamel_scalar(node: object) -> object:
     """
     if isinstance(node, TaggedScalar):
         return str(node.value)
+    if isinstance(node, str):
+        return str(node)
     if isinstance(node, datetime.date | datetime.datetime):
         return node.isoformat()
     if isinstance(node, bool):

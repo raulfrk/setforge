@@ -3,7 +3,8 @@
 ruamel round-trip mode does NOT keep builtin types for formatted scalars:
 ``1.5``/``1e3`` -> ``ScalarFloat``, ``0xFF`` -> ``HexCapsInt``,
 ``1_000`` -> ``ScalarInt``, ``2020-01-01`` -> ``datetime.date``,
-``!!str 5`` -> ``TaggedScalar``. Before the fix, :func:`_to_plain` passed these
+quoted strings -> ``ScalarString``, ``!!str 5`` -> ``TaggedScalar``. Before the
+fix, :func:`_to_plain` passed these
 subclass leaves through unchanged, so the scalar resolver's EXACT-type guard
 rejected them and ``merge_structural`` crashed with ``MergeTypeMismatch`` on
 ANY YAML model containing such a scalar. These tests PARSE real ruamel text
@@ -35,6 +36,7 @@ _FORMATTED_SCALARS = [
     "0xFF",  # HexCapsInt
     "1_000",  # ScalarInt (underscore-formatted)
     "2020-01-01",  # datetime.date
+    '"755"',
     "!!str 5",  # TaggedScalar
 ]
 
@@ -117,10 +119,9 @@ def test_date_edit_takes_theirs() -> None:
 
 
 def test_to_plain_unwraps_formatted_scalars_to_builtins() -> None:
-    """Unit-level: every formatted ruamel scalar collapses to a builtin (or a
-    comparable str for date/tagged) so the divergence test sees plain types."""
     model = _yload(
-        "f: 1.5\ns: 1e3\nh: 0xFF\nu: 1_000\nd: 2020-01-01\nt: !!str 5\ni: 1\nb: true"
+        "f: 1.5\ns: 1e3\nh: 0xFF\nu: 1_000\nd: 2020-01-01\n"
+        'q: "755"\nt: !!str 5\ni: 1\nb: true'
     )
     plain: Any = _to_plain(model)
 
@@ -134,6 +135,8 @@ def test_to_plain_unwraps_formatted_scalars_to_builtins() -> None:
     assert plain["u"] == 1000
     assert type(plain["d"]) is str
     assert plain["d"] == "2020-01-01"
+    assert type(plain["q"]) is str
+    assert plain["q"] == "755"
     assert type(plain["t"]) is str
     assert plain["t"] == "5"
     # Plain builtins pass through with their type intact (the 1 != 1.0 / True != 1
