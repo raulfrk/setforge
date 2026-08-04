@@ -534,6 +534,9 @@ def _reconcile_plugins(
     failures surface. ``yes=True`` short-circuits to the default
     :attr:`FailureAction.SKIP`.
     """
+    # Marketplaces are registries, not install intent for every profile.
+    if not reconcile_adapter.plugin_bare_names(cfg, resolved):
+        return None, ()
     try:
         pre_plugins = claude_plugins_mod.list_installed()
         pre_marketplaces = claude_plugins_mod.list_marketplaces()

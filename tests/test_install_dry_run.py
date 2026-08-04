@@ -121,6 +121,36 @@ def _invoke_dry_run(
     assert result.exit_code == 0, result.output
 
 
+def test_profile_without_plugins_skips_global_claude_marketplace_reconcile(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def tripwire(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        raise AssertionError("Claude plugin reconcile ran for a plugin-free profile")
+
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.claude_plugins_mod.reconcile", tripwire
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-git-check",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert "WOULD add-marketplace" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # Tripwire tests — each asserts a specific mutating leaf is unreachable.
 # ---------------------------------------------------------------------------

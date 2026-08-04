@@ -1284,9 +1284,7 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     reconcile raises :class:`PluginToolMissing`; surface that as a
     skip-warn line (no failure exit — dry-run is informational).
 
-    Short-circuits the subprocess work entirely when neither the
-    profile NOR the top-level config declares anything plugin-related
-    (no ``claude_plugins`` entries, no ``marketplaces``). The
+    Short-circuits when the profile has no packages; marketplaces are registries.
     underlying ``claude_plugins.reconcile`` calls ``list_installed``
     + ``list_marketplaces`` unconditionally — each subprocess can
     block up to 30s on a misconfigured ``claude``; the short-circuit
@@ -1294,10 +1292,7 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     layer at all.
     """
     typer.echo("=== would-be plugin reconcile ===")
-    if (
-        not reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
-        and not ctx.cfg.marketplaces
-    ):
+    if not reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved):
         typer.echo("  nothing declared")
         return
     try:

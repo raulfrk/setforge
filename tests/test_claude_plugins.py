@@ -2050,6 +2050,27 @@ def test_reconcile_plugins_yes_false_threads_auto_false(
     assert captured["auto"] is False
 
 
+def test_reconcile_plugins_skips_global_marketplaces_without_profile_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.cli._plugin_helpers as ph
+
+    cfg = _make_config(
+        marketplaces={
+            "elsewhere": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="owner/repo"
+            )
+        }
+    )
+    profile = _make_resolved()
+
+    def tripwire() -> dict[str, dict]:
+        raise AssertionError("Claude plugin backend was probed without plugin intent")
+
+    monkeypatch.setattr(ph.claude_plugins_mod, "list_installed", tripwire)
+    assert ph._reconcile_plugins(cfg, profile) == (None, ())
+
+
 # ---------------------------------------------------------------------------
 # _plugin_state_diff narrowed to to_disable only
 # ---------------------------------------------------------------------------
