@@ -10,7 +10,7 @@ import copy
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, Self
 
 from pydantic import (
@@ -409,17 +409,42 @@ def _reject_path_in_bare_name(value: str, field_name: str) -> str:
     return value
 
 
+def _reject_unsafe_archive_member(value: str, field_name: str) -> str:
+    """Allow a bare name or a normalized, confined POSIX archive-member path."""
+    if "\\" in value:
+        raise ValueError(
+            f"{field_name} {value!r} must use '/' archive-member separators — "
+            "backslashes are rejected."
+        )
+    if "/" not in value:
+        return _reject_path_in_bare_name(value, field_name)
+
+    stripped = value.strip()
+    path = PurePosixPath(value)
+    parts = value.split("/")
+    if not stripped or path.is_absolute():
+        raise ValueError(
+            f"{field_name} {value!r} must be a relative archive-member path."
+        )
+    if any(part in {"", "."} for part in parts) or path.as_posix() != value:
+        raise ValueError(
+            f"{field_name} {value!r} must be normalized — empty and '.' path "
+            "components are rejected."
+        )
+    if ".." in parts:
+        raise ValueError(
+            f"{field_name} {value!r} must stay inside the archive — "
+            "'..' path components are rejected."
+        )
+    return value
+
+
 class _BareNameChmodPackage(BaseModel):
-    """Shared binary/rename bare-name + chmod-policy validators.
+    """Shared rename bare-name + chmod-policy validators."""
 
-    Mixed into package models that carry a downloadable ``binary`` (plus an
-    optional ``rename``) and a ``chmod`` mode, so the identical validator pair
-    is declared once rather than per model.
-    """
-
-    @field_validator("binary", "rename", check_fields=False)
+    @field_validator("rename", check_fields=False)
     @classmethod
-    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
+    def _bare_rename(cls, v: str | None, info: ValidationInfo) -> str | None:
         if v is None:
             return None
         return _reject_path_in_bare_name(v, info.field_name or "field")
@@ -467,6 +492,19 @@ class GitHubReleasePackage(_BareNameChmodPackage):
     extract: bool = True
     chmod: str = "+x"
 
+    @field_validator("binary")
+    @classmethod
+    def _archive_member(cls, v: str) -> str:
+        return _reject_unsafe_archive_member(v, "binary")
+
+    @model_validator(mode="after")
+    def _nested_binary_requires_rename(self) -> Self:
+        if "/" in self.binary and self.rename is None:
+            raise ValueError(
+                "a nested github_release binary path requires a non-empty bare rename"
+            )
+        return self
+
 
 class LocalPackage(_BareNameChmodPackage):
     model_config = _STRICT
@@ -479,6 +517,11 @@ class LocalPackage(_BareNameChmodPackage):
     rename: str | None = None
     extract: bool = True
     chmod: str = "+x"
+
+    @field_validator("binary")
+    @classmethod
+    def _bare_binary(cls, v: str) -> str:
+        return _reject_path_in_bare_name(v, "binary")
 
 
 class PluginPackage(BaseModel):

@@ -88,6 +88,29 @@ def test_happy_path_installs_and_records_receipt(tmp_path: Path, monkeypatch) ->
     assert store.path_for(Identity(key=pkg.repo, display=pkg.repo)) == dest
 
 
+def test_nested_binary_installs_to_bare_renamed_destination(
+    tmp_path: Path, monkeypatch
+) -> None:
+    install_dir = tmp_path / "bin"
+    payload = b"#!/bin/sh\necho nested\n"
+    data = _tar_gz({"release/bin/tool": payload})
+    pkg = _pkg(
+        install_dir,
+        checksum=_sha256(data),
+        binary="release/bin/tool",
+        rename="tool",
+    )
+    prov = _provisioner(tmp_path, data, monkeypatch)
+
+    outcome = prov.apply_one(_item(pkg))
+
+    dest = install_dir / "tool"
+    assert outcome.outcome is Outcome.OK
+    assert dest.read_bytes() == payload
+    assert not (install_dir / "release").exists()
+    assert prov._receipts.path_for(_item(pkg).identity) == dest
+
+
 def test_rerun_is_skip_and_writes_no_new_receipt(tmp_path: Path, monkeypatch) -> None:
     install_dir = tmp_path / "bin"
     data = _tar_gz({"tool": b"payload"})

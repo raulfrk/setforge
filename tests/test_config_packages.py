@@ -127,6 +127,56 @@ def test_union_rejects_bad_type() -> None:
 # --- binary/rename path-traversal defense (layer 1) ------------------------
 
 
+def test_github_release_accepts_nested_binary_with_bare_rename() -> None:
+    pkg = GitHubReleasePackage(
+        repo="o/r",
+        tag="v1",
+        asset="a.tgz",
+        binary="release/bin/tool",
+        install="~/bin",
+        rename="tool",
+    )
+
+    assert pkg.binary == "release/bin/tool"
+    assert pkg.rename == "tool"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/release/tool",
+        "release//tool",
+        "release/./tool",
+        "release/../tool",
+        "../release/tool",
+        "release/tool/",
+        "release\\tool",
+        "release\\..\\evil/tool",
+    ],
+)
+def test_github_release_rejects_unsafe_nested_binary_with_rename(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        GitHubReleasePackage(
+            repo="o/r",
+            tag="v1",
+            asset="a.tgz",
+            binary=bad,
+            install="~/bin",
+            rename="tool",
+        )
+
+
+def test_github_release_rejects_nested_binary_without_rename() -> None:
+    with pytest.raises(ValidationError, match=r"nested.*requires.*rename"):
+        GitHubReleasePackage(
+            repo="o/r",
+            tag="v1",
+            asset="a.tgz",
+            binary="release/bin/tool",
+            install="~/bin",
+        )
+
+
 @pytest.mark.parametrize("bad", ["../x", "a/b", "..", "/abs"])
 def test_github_release_rejects_bad_binary(bad: str) -> None:
     with pytest.raises(ValidationError):
