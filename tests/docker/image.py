@@ -13,10 +13,14 @@ import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal, cast
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
-IMAGE_TAG_PREFIX: str = "setforge-e2e:test"
+IMAGE_TAG_PREFIX: str = "setforge-e2e"
+ImageTarget = Literal["smoke", "full"]
+IMAGE_TARGETS: frozenset[str] = frozenset(("smoke", "full"))
+DEFAULT_IMAGE_TARGET: ImageTarget = "full"
 
 
 class DockerImageBuildError(RuntimeError):
@@ -53,11 +57,12 @@ _HASH_INPUT_FILES: tuple[Path, ...] = (
     DOCKERFILE,
     REPO_ROOT / "pyproject.toml",
     REPO_ROOT / "uv.lock",
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "tests" / "docker" / "_button_bar_demo.py",
 )
 _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "fixtures" / "e2e",
     REPO_ROOT / "setforge",
-    REPO_ROOT / "tracked",
 )
 _DOCKERIGNORE_DIRS, _DOCKERIGNORE_SUFFIXES, _DOCKERIGNORE_FILES = _parse_dockerignore(
     REPO_ROOT / ".dockerignore"
@@ -111,10 +116,19 @@ def _compute_inputs_hash() -> str:
     return digest.hexdigest()[:12]
 
 
+def _validated_target(target: str) -> ImageTarget:
+    """Return an allowlisted Docker target or fail before launching Docker."""
+    if target not in IMAGE_TARGETS:
+        expected = ", ".join(sorted(IMAGE_TARGETS))
+        raise ValueError(f"unknown E2E image target {target!r}; expected {expected}")
+    return cast(ImageTarget, target)
+
+
 @functools.cache
-def _image_tag() -> str:
-    """Return the per-process content-hashed image tag."""
-    return f"{IMAGE_TAG_PREFIX}-{_compute_inputs_hash()}"
+def _image_tag(target: str = DEFAULT_IMAGE_TARGET) -> str:
+    """Return the target-specific, content-hashed image tag."""
+    selected = _validated_target(target)
+    return f"{IMAGE_TAG_PREFIX}:{selected}-{_compute_inputs_hash()}"
 
 
 def docker_available() -> bool:
@@ -141,12 +155,15 @@ def _run_docker(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess
         ) from exc
 
 
-def ensure_docker_image() -> str | None:
+def ensure_docker_image(
+    target: str = DEFAULT_IMAGE_TARGET,
+) -> str | None:
     """Inspect or build the E2E image, returning ``None`` without Docker."""
+    selected = _validated_target(target)
     if not docker_available():
         return None
 
-    tag = _image_tag()
+    tag = _image_tag(selected)
     inspect = _run_docker(
         ["docker", "image", "inspect", tag],
         timeout=30,
@@ -155,8 +172,18 @@ def ensure_docker_image() -> str | None:
         return tag
 
     build = _run_docker(
-        ["docker", "build", "-t", tag, "-f", str(DOCKERFILE), str(REPO_ROOT)],
-        timeout=600,
+        [
+            "docker",
+            "build",
+            "--target",
+            selected,
+            "-t",
+            tag,
+            "-f",
+            str(DOCKERFILE),
+            str(REPO_ROOT),
+        ],
+        timeout=660,
     )
     if build.returncode != 0:
         raise DockerImageBuildError(

@@ -8,6 +8,7 @@ keep the docker image-tag hash stable when ephemerals listed in
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -272,11 +273,67 @@ def test_iter_hash_inputs_covers_files_missing_roots_and_excluded_dirs(
     assert yielded == {included.resolve()}
 
 
-def test_image_tag_uses_content_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("target", ["smoke", "full"])
+def test_image_tag_uses_target_and_content_hash(
+    target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     docker_image._image_tag.cache_clear()
     monkeypatch.setattr(docker_image, "_compute_inputs_hash", lambda: "abc123")
 
-    assert docker_image._image_tag() == "setforge-e2e:test-abc123"
+    assert docker_image._image_tag(target) == f"setforge-e2e:{target}-abc123"
+
+
+def test_image_tag_rejects_unknown_target() -> None:
+    with pytest.raises(ValueError, match="expected full, smoke"):
+        docker_image._image_tag("unknown")
+
+
+def test_hash_inputs_match_explicit_runtime_copy_surface() -> None:
+    relative_files = {
+        path.relative_to(docker_image.REPO_ROOT).as_posix()
+        for path in docker_image._HASH_INPUT_FILES
+    }
+    relative_dirs = {
+        path.relative_to(docker_image.REPO_ROOT).as_posix()
+        for path in docker_image._HASH_INPUT_DIRS
+    }
+
+    assert relative_files == {
+        "README.md",
+        "pyproject.toml",
+        "tests/docker/Dockerfile",
+        "tests/docker/_button_bar_demo.py",
+        "uv.lock",
+    }
+    assert relative_dirs == {"setforge", "tests/fixtures/e2e"}
+
+
+def test_dockerfile_copy_sources_match_hash_inputs() -> None:
+    copied: set[str] = set()
+    for line in docker_image.DOCKERFILE.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("COPY "):
+            continue
+        words = [word for word in shlex.split(line) if not word.startswith("--")]
+        copied.update(source.rstrip("/") for source in words[1:-1])
+
+    hashed = {
+        path.relative_to(docker_image.REPO_ROOT).as_posix().rstrip("/")
+        for path in (*docker_image._HASH_INPUT_FILES, *docker_image._HASH_INPUT_DIRS)
+        if path != docker_image.DOCKERFILE
+    }
+    assert copied == hashed
+
+
+def test_lock_sensitive_dependencies_follow_stable_tool_stages() -> None:
+    dockerfile = docker_image.DOCKERFILE.read_text(encoding="utf-8")
+
+    assert dockerfile.index("FROM python-runtime AS vscode-base") < dockerfile.index(
+        "FROM vscode-base AS smoke-deps"
+    )
+    assert dockerfile.index("FROM vscode-base AS full-tools") < dockerfile.index(
+        "FROM full-tools AS full-deps"
+    )
+    assert dockerfile.count("COPY --chown=tester:tester pyproject.toml uv.lock ./") == 2
 
 
 def test_docker_available_delegates_to_path_lookup(

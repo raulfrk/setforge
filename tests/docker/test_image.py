@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -36,11 +38,13 @@ def test_ensure_docker_image_reuses_existing_tag(
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(image, "docker_available", lambda: True)
-    monkeypatch.setattr(image, "_image_tag", lambda: "setforge-e2e:test-existing")
+    monkeypatch.setattr(
+        image, "_image_tag", lambda _target: "setforge-e2e:full-existing"
+    )
     monkeypatch.setattr(image.subprocess, "run", fake_run)
 
-    assert image.ensure_docker_image() == "setforge-e2e:test-existing"
-    assert calls == [["docker", "image", "inspect", "setforge-e2e:test-existing"]]
+    assert image.ensure_docker_image() == "setforge-e2e:full-existing"
+    assert calls == [["docker", "image", "inspect", "setforge-e2e:full-existing"]]
 
 
 def test_ensure_docker_image_builds_after_inspect_miss(
@@ -61,12 +65,31 @@ def test_ensure_docker_image_builds_after_inspect_miss(
         return next(results)
 
     monkeypatch.setattr(image, "docker_available", lambda: True)
-    monkeypatch.setattr(image, "_image_tag", lambda: "setforge-e2e:test-new")
+    monkeypatch.setattr(image, "_image_tag", lambda _target: "setforge-e2e:smoke-new")
     monkeypatch.setattr(image.subprocess, "run", fake_run)
 
-    assert image.ensure_docker_image() == "setforge-e2e:test-new"
-    assert calls[0] == ["docker", "image", "inspect", "setforge-e2e:test-new"]
-    assert calls[1][:5] == ["docker", "build", "-t", "setforge-e2e:test-new", "-f"]
+    assert image.ensure_docker_image("smoke") == "setforge-e2e:smoke-new"
+    assert calls[0] == ["docker", "image", "inspect", "setforge-e2e:smoke-new"]
+    assert calls[1][:7] == [
+        "docker",
+        "build",
+        "--target",
+        "smoke",
+        "-t",
+        "setforge-e2e:smoke-new",
+        "-f",
+    ]
+
+
+def test_ensure_docker_image_rejects_unknown_target_before_docker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        image, "docker_available", lambda: pytest.fail("must not inspect Docker")
+    )
+
+    with pytest.raises(ValueError, match="unknown E2E image target"):
+        image.ensure_docker_image("smoke; touch /tmp/injected")
 
 
 def test_ensure_docker_image_reports_build_output(
@@ -79,7 +102,7 @@ def test_ensure_docker_image_reports_build_output(
         )
     )
     monkeypatch.setattr(image, "docker_available", lambda: True)
-    monkeypatch.setattr(image, "_image_tag", lambda: "setforge-e2e:test-broken")
+    monkeypatch.setattr(image, "_image_tag", lambda _target: "setforge-e2e:full-broken")
     monkeypatch.setattr(
         image.subprocess, "run", lambda *_args, **_kwargs: next(results)
     )
@@ -101,7 +124,9 @@ def test_ensure_docker_image_normalizes_inspect_timeout(
         raise timeout
 
     monkeypatch.setattr(image, "docker_available", lambda: True)
-    monkeypatch.setattr(image, "_image_tag", lambda: "setforge-e2e:test-timeout")
+    monkeypatch.setattr(
+        image, "_image_tag", lambda _target: "setforge-e2e:full-timeout"
+    )
     monkeypatch.setattr(image.subprocess, "run", time_out)
 
     with pytest.raises(image.DockerImageBuildError, match="timed out") as exc_info:
@@ -127,7 +152,7 @@ def test_ensure_docker_image_normalizes_build_launch_error(
         return result
 
     monkeypatch.setattr(image, "docker_available", lambda: True)
-    monkeypatch.setattr(image, "_image_tag", lambda: "setforge-e2e:test-launch")
+    monkeypatch.setattr(image, "_image_tag", lambda _target: "setforge-e2e:full-launch")
     monkeypatch.setattr(image.subprocess, "run", fake_run)
 
     with pytest.raises(
@@ -141,32 +166,54 @@ def test_ensure_docker_image_normalizes_build_launch_error(
 def test_docker_image_fixture_returns_prepared_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        docker_fixtures, "ensure_docker_image", lambda: "setforge-e2e:test-ready"
+    calls: list[str] = []
+
+    def prepared(target: str) -> str:
+        calls.append(target)
+        return "setforge-e2e:smoke-ready"
+
+    monkeypatch.setattr(docker_fixtures, "ensure_docker_image", prepared)
+    request = SimpleNamespace(
+        config=SimpleNamespace(
+            getoption=lambda _name, default="": "e2e_docker and smoke"
+        )
     )
 
     assert (
-        docker_fixtures.docker_image.__wrapped__()  # type: ignore[attr-defined]
-        == "setforge-e2e:test-ready"
+        docker_fixtures.docker_image.__wrapped__(  # type: ignore[attr-defined]
+            cast(pytest.FixtureRequest, request)
+        )
+        == "setforge-e2e:smoke-ready"
     )
+    assert calls == ["smoke"]
 
 
 def test_docker_image_fixture_skips_without_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(docker_fixtures, "ensure_docker_image", lambda: None)
+    monkeypatch.setattr(docker_fixtures, "ensure_docker_image", lambda _target: None)
+    request = SimpleNamespace(
+        config=SimpleNamespace(getoption=lambda _name, default="": "e2e_docker")
+    )
 
     with pytest.raises(pytest.skip.Exception, match="docker binary not on PATH"):
-        docker_fixtures.docker_image.__wrapped__()  # type: ignore[attr-defined]
+        docker_fixtures.docker_image.__wrapped__(  # type: ignore[attr-defined]
+            cast(pytest.FixtureRequest, request)
+        )
 
 
 def test_docker_image_fixture_reports_build_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail() -> None:
+    def fail(_target: str) -> None:
         raise image.DockerImageBuildError("fixture build failure")
 
     monkeypatch.setattr(docker_fixtures, "ensure_docker_image", fail)
 
+    request = SimpleNamespace(
+        config=SimpleNamespace(getoption=lambda _name, default="": "e2e_docker")
+    )
     with pytest.raises(pytest.fail.Exception, match="fixture build failure"):
-        docker_fixtures.docker_image.__wrapped__()  # type: ignore[attr-defined]
+        docker_fixtures.docker_image.__wrapped__(  # type: ignore[attr-defined]
+            cast(pytest.FixtureRequest, request)
+        )

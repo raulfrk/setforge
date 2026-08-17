@@ -63,6 +63,7 @@ import pytest
 
 from tests.docker.image import DockerImageBuildError, ensure_docker_image
 from tests.docker.pyte_session import PyteSession
+from tests.e2e_xdist import image_target_for_markexpr
 
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
 """Shared fixture path for the setforge test config used by every Docker e2e test."""
@@ -96,7 +97,7 @@ def _env_args(env: dict[str, str] | None) -> list[str]:
 
 
 @pytest.fixture(scope="session")
-def docker_image() -> str:
+def docker_image(request: pytest.FixtureRequest) -> str:
     """Build the E2E image once per session; return the image tag.
 
     Skips every dependent test cleanly when ``docker`` is missing on
@@ -107,7 +108,8 @@ def docker_image() -> str:
     without burying it in a fixture-error stack.
 
     The tag is content-hashed over the inputs that define the image
-    (Dockerfile, ``tests/fixtures/e2e/**``, ``setforge/**``) — see
+    (Dockerfile, package metadata/README, ``tests/fixtures/e2e/**``,
+    ``tests/docker/_button_bar_demo.py``, and ``setforge/**``) — see
     :func:`tests.docker.image._compute_inputs_hash`. A workspace
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
@@ -124,7 +126,8 @@ def docker_image() -> str:
     tag-keyed lockfile (e.g. ``flock /tmp/setforge-build-${tag}.lock``).
     """
     try:
-        tag = ensure_docker_image()
+        markexpr = request.config.getoption("markexpr", default="") or ""
+        tag = ensure_docker_image(image_target_for_markexpr(markexpr))
     except DockerImageBuildError as exc:
         pytest.fail(
             str(exc),

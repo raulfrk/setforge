@@ -13,7 +13,13 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.test_infra]
 
 
-def test_xdist_controller_builds_once_before_worker_collection(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("markexpr", "target"),
+    [("e2e_docker", "full"), ("e2e_docker and smoke", "smoke")],
+)
+def test_xdist_controller_builds_once_before_worker_collection(
+    tmp_path: Path, markexpr: str, target: str
+) -> None:
     """Cross the real pytest/xdist/process boundary with a stateful fake Docker."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -49,9 +55,9 @@ def test_xdist_controller_builds_once_before_worker_collection(tmp_path: Path) -
     probe = repo_root / "tests" / "docker" / f"test_xdist_probe_{uuid.uuid4().hex}.py"
     probe.write_text(
         "import pytest\n"
-        "pytestmark = pytest.mark.e2e_docker\n"
+        "pytestmark = [pytest.mark.e2e_docker, pytest.mark.smoke]\n"
         "def test_probe(docker_image):\n"
-        "    assert docker_image.startswith('setforge-e2e:test-')\n",
+        f"    assert docker_image.startswith('setforge-e2e:{target}-')\n",
         encoding="utf-8",
     )
     try:
@@ -62,7 +68,7 @@ def test_xdist_controller_builds_once_before_worker_collection(tmp_path: Path) -
                 "pytest",
                 str(probe.relative_to(repo_root)),
                 "-m",
-                "e2e_docker",
+                markexpr,
                 "-n",
                 "2",
                 "--dist=each",
@@ -89,3 +95,5 @@ def test_xdist_controller_builds_once_before_worker_collection(tmp_path: Path) -
     assert sum(call.startswith("image inspect ") for call in calls) == 3
     assert calls[0].startswith("image inspect ")
     assert calls[1].startswith("build ")
+    assert f"--target {target}" in calls[1]
+    assert all(f"setforge-e2e:{target}-" in call for call in calls)

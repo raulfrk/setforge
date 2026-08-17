@@ -69,16 +69,19 @@ jobs:
       - name: Compute E2E image tag
         id: tag
         run: |
-          uv run python -c 'from tests.docker.conftest import _image_tag; print(f"image_tag={_image_tag()}")' >> "$GITHUB_OUTPUT"
+          uv run python -c 'from tests.docker.image import _image_tag; print("image_tag=" + _image_tag("smoke"))' >> "$GITHUB_OUTPUT"
       - name: Build E2E image (with GHA cache)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: tests/docker/Dockerfile
+          target: smoke
           tags: ${{ steps.tag.outputs.image_tag }}
           load: true
-          cache-from: type=gha,scope=e2e
-          cache-to: type=gha,scope=e2e,mode=max
+          cache-from: |
+            type=gha,scope=e2e-smoke
+            type=gha,scope=e2e-full
+          cache-to: type=gha,scope=e2e-smoke,mode=max
       - name: Run E2E smoke subset
         # The thin `smoke`-marked golden-path subset only. --no-cov for the
         # same xdist/pytest-cov reason as the full e2e job (see below).
@@ -126,23 +129,26 @@ jobs:
       - run: uv sync --extra dev
       # Compute the same content-hashed tag the fixture expects, so the
       # prebuild image matches what `docker image inspect` looks for
-      # inside `docker_image` (see `_image_tag` in tests/docker/conftest.py).
+      # inside `docker_image` (see `_image_tag` in tests/docker/image.py).
       # Without this, the prebuild would tag the image
-      # with a name the fixture never asks for, and the fixture would
+      # with a name/target the fixture never asks for, and the fixture would
       # rebuild from scratch, defeating the GHA layer cache.
       - name: Compute E2E image tag
         id: tag
         run: |
-          uv run python -c 'from tests.docker.conftest import _image_tag; print(f"image_tag={_image_tag()}")' >> "$GITHUB_OUTPUT"
+          uv run python -c 'from tests.docker.image import _image_tag; print("image_tag=" + _image_tag("full"))' >> "$GITHUB_OUTPUT"
       - name: Build E2E image (with GHA cache)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: tests/docker/Dockerfile
+          target: full
           tags: ${{ steps.tag.outputs.image_tag }}
           load: true
-          cache-from: type=gha,scope=e2e
-          cache-to: type=gha,scope=e2e,mode=max
+          cache-from: |
+            type=gha,scope=e2e-full
+            type=gha,scope=e2e-smoke
+          cache-to: type=gha,scope=e2e-full,mode=max
       - name: Run E2E variants
         # --no-cov is mandatory: the project conftest auto-activates xdist
         # (-n 2) for `-m e2e_docker`, and pytest-cov's Central controller

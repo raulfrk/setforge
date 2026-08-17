@@ -2,61 +2,33 @@
 #
 # Dockerfile for the E2E test ring.
 #
-# Build with the repo root as the context (so COPY can pull in
-# pyproject.toml / uv.lock / setforge/ / tracked/):
+# The PR smoke lane builds the named `smoke` target. It keeps the real Debian,
+# VS Code, gitleaks, shells, Python, and SetForge boundaries used by smoke tests
+# while omitting Claude, Go, and Rust. The final/default `full` target retains
+# every tool used by the exhaustive Docker ring.
 #
-#   docker build -t setforge-e2e:test-<inputs-hash> -f tests/docker/Dockerfile .
+# Build from the repository root:
 #
-# A repo-root .dockerignore keeps the context lean. The conftest
-# `docker_image` fixture invokes the same form; the `-<inputs-hash>`
-# suffix is derived from the content of all hashed inputs (see
-# `_image_tag` in tests/docker/image.py) and changes whenever
-# anything baked into the image changes.
+#   docker build --target smoke -t setforge-e2e:smoke-<hash> -f tests/docker/Dockerfile .
+#   docker build --target full  -t setforge-e2e:full-<hash>  -f tests/docker/Dockerfile .
 #
-# Layer order is stable→volatile so GHA cache misses on source edits
-# don't invalidate the slow binary-install layers:
-#
-#   1. base image
-#   2. apt deps + Microsoft repo + pinned `code` (root)
-#   3. nodejs + pinned `@anthropic-ai/claude-code` (root)
-#   4b/4c. gitleaks + Go toolchain (root, /usr/local)
-#   4. create non-root user `tester` (open question 3 resolution —
-#      `code --list-extensions` refuses to run as root)
-#   5. uv install + managed Python 3.13, then rustup (as tester)
-#   6. pyproject + uv.lock → uv sync (Python deps; as tester)
-#   7. project source COPY + final uv sync (as tester)
-#
-# Pinned versions (open question 1 resolution):
-#   - claude-code:  pinned via `@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`
-#   - code:         pinned to ${VSCODE_VERSION}-stable from Microsoft's repo
-#   - python:       uv-managed ${PYTHON_VERSION} (Debian 12 apt only
-#                   ships 3.11; setforge uses PEP 695 generics so >= 3.12
-#                   is required).
+# Runtime COPY inputs are intentionally explicit and mirror the content hash in
+# tests/docker/image.py. Unrelated repository files must not invalidate images.
 
-FROM debian:12-slim
+FROM debian:12-slim AS system-base
 
 ARG VSCODE_VERSION=1.95.3
-# claude-code 2.1.x is required for the `claude plugin` subcommand
-# (which the comprehensive variant exercises). Pinned at the current
-# npm `stable` dist-tag at spec-writing time.
 ARG CLAUDE_CODE_VERSION=2.1.126
 ARG NODE_MAJOR=20
 ARG PYTHON_VERSION=3.13
-# Gitleaks v8.x — used by the pre-deploy secrets scan
-# Docker e2e cases. Pinned to a recent stable release.
 ARG GITLEAKS_VERSION=8.21.2
-# Go toolchain — supports the `go install` package-provisioner e2e
-# cases. Pinned to a recent stable release.
 ARG GO_VERSION=1.22.5
-# Rust toolchain (rustup) — supports the `cargo install`
-# package-provisioner e2e cases. Pinned to a recent stable channel.
 ARG RUST_VERSION=1.79.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ----------------------------------------------------------------------
-# Layer 2: apt prerequisites (stable, rarely changes)
-# ----------------------------------------------------------------------
+# Shared system boundary: all smoke and full tests run against the same Debian
+# packages and pinned gitleaks binary.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -69,9 +41,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------------------------------------------------
-# Layer 3: Microsoft VSCode apt repo + pinned `code` install
-# ----------------------------------------------------------------------
+RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+        | tar -xz -C /usr/local/bin gitleaks \
+    && chmod +x /usr/local/bin/gitleaks
+
+RUN useradd --create-home --shell /bin/bash tester \
+    && mkdir -p /workspace \
+    && chown tester:tester /workspace
+
+FROM system-base AS python-runtime
+
+USER tester
+ENV HOME=/home/tester
+ENV GOBIN=/home/tester/go/bin
+ENV PATH=/home/tester/.local/bin:/home/tester/.cargo/bin:${GOBIN}:${PATH}
+WORKDIR /workspace
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && /home/tester/.local/bin/uv python install ${PYTHON_VERSION}
+
+FROM python-runtime AS vscode-base
+
+USER root
 RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
         | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
@@ -80,17 +71,31 @@ RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
     && apt-get install -y --no-install-recommends "code=${VSCODE_VERSION}-*" \
     && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------------------------------------------------
-# Layer 4: nodejs + pinned @anthropic-ai/claude-code via npm -g
-# ----------------------------------------------------------------------
-# claude-code ships its native binary as a platform optionalDependency wired in
-# by its postinstall. npm treats an optional-dep fetch miss as NON-fatal, so a
-# flaky-network build silently produces a stub `claude` that only errors at
-# runtime (and the broken layer then caches). Defenses: bound npm's own retry
-# window so a bad window fails fast instead of hanging ~30 min; retry the whole
-# install+verify loop so a good window on a later attempt lands the native
-# binary; and `claude --version` fails the build loudly if it's still absent, so
-# a broken image never ships silently. `curl --retry` covers the nodesource hop.
+# Lock-sensitive dependencies sit after stable tools so pyproject/lock edits do
+# not rebuild VS Code (or Claude/Go/Rust in the full graph).
+FROM vscode-base AS smoke-deps
+
+USER tester
+COPY --chown=tester:tester pyproject.toml uv.lock ./
+RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project
+
+# The PR target stops before the expensive full-only toolchain layers.
+FROM smoke-deps AS smoke
+
+COPY --chown=tester:tester README.md ./
+COPY --chown=tester:tester setforge/ ./setforge/
+COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
+COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py
+RUN uv sync --extra dev --python ${PYTHON_VERSION}
+
+CMD ["sleep", "infinity"]
+
+FROM vscode-base AS full-tools
+
+USER root
+# claude-code's native binary is an optional dependency. Bound npm's retry
+# window, retry install+verification as a unit, and never cache a stub-only
+# installation as a successful layer.
 RUN curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL \
         "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
@@ -106,76 +111,27 @@ RUN curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL \
        done \
     && claude --version
 
-# ----------------------------------------------------------------------
-# Layer 4b: gitleaks (pinned) — supports setforge install's pre-deploy
-# secrets scan e2e cases. Installed to /usr/local/bin so it lives on
-# PATH for the `tester` user. The "no-gitleaks" case removes/renames
-# this binary at test time.
-# ----------------------------------------------------------------------
-RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-        | tar -xz -C /usr/local/bin gitleaks \
-    && chmod +x /usr/local/bin/gitleaks
-
-# ----------------------------------------------------------------------
-# Layer 4c: Go toolchain (pinned) — supports the `go install`
-# package-provisioner e2e cases. Extracted to /usr/local/go (root);
-# /usr/local/go/bin is added to PATH below (before the USER switch so
-# both root and tester see it). `go install` binaries land in
-# GOBIN (set to a tester-writable dir on PATH in the tester layer).
-# ----------------------------------------------------------------------
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
         | tar -xz -C /usr/local
 ENV PATH=/usr/local/go/bin:${PATH}
 
-# ----------------------------------------------------------------------
-# Create non-root user; everything from here on runs as `tester`.
-# ----------------------------------------------------------------------
-RUN useradd --create-home --shell /bin/bash tester \
-    && mkdir -p /workspace \
-    && chown tester:tester /workspace
 USER tester
-ENV HOME=/home/tester
-# `.cargo/bin` — rustup's cargo/rustc (installed in the rust layer below).
-# `go/bin` (GOBIN) — where `go install` drops built binaries; kept
-# tester-writable and on PATH so the go provisioner's binaries resolve.
-ENV GOBIN=/home/tester/go/bin
-ENV PATH=/home/tester/.local/bin:/home/tester/.cargo/bin:${GOBIN}:${PATH}
-WORKDIR /workspace
-
-# ----------------------------------------------------------------------
-# Layer 5: uv install + managed Python (as tester)
-# ----------------------------------------------------------------------
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && /home/tester/.local/bin/uv python install ${PYTHON_VERSION}
-
-# ----------------------------------------------------------------------
-# Layer 5b: Rust toolchain via rustup (pinned, as tester). Installs
-# cargo + rustc into /home/tester/.cargo (already on PATH above).
-# `-y` runs rustup non-interactively; `--default-toolchain` pins the
-# channel; `--profile minimal` skips docs/clippy the e2e cases don't
-# need, keeping the image lean.
-# ----------------------------------------------------------------------
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y \
             --profile minimal \
             --default-toolchain ${RUST_VERSION}
 
-# ----------------------------------------------------------------------
-# Layer 6: Python deps (changes only when pyproject/uv.lock change).
-# Skips project install — `--no-install-project` avoids a wasted
-# re-install in the final layer that COPYs setforge/ source.
-# ----------------------------------------------------------------------
+FROM full-tools AS full-deps
+
 COPY --chown=tester:tester pyproject.toml uv.lock ./
 RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project
 
-# ----------------------------------------------------------------------
-# Layer 7: project source (most volatile — must be last)
-# ----------------------------------------------------------------------
-COPY --chown=tester:tester . .
-# Drop any host-build .venv that survived .dockerignore (defense-in-depth)
-# and re-sync against the prepared dep tree.
-RUN rm -rf .venv \
-    && uv sync --extra dev --python ${PYTHON_VERSION}
+FROM full-deps AS full
 
-# Default to a no-op shell — tests `docker exec` everything they need.
+COPY --chown=tester:tester README.md ./
+COPY --chown=tester:tester setforge/ ./setforge/
+COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
+COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py
+RUN uv sync --extra dev --python ${PYTHON_VERSION}
+
 CMD ["sleep", "infinity"]

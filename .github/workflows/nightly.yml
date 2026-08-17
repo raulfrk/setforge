@@ -28,6 +28,22 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
+      - name: Compute full E2E image tag
+        id: tag
+        run: |
+          uv run python -c 'from tests.docker.image import _image_tag; print("image_tag=" + _image_tag("full"))' >> "$GITHUB_OUTPUT"
+      - name: Build full E2E image (with GHA cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/Dockerfile
+          target: full
+          tags: ${{ steps.tag.outputs.image_tag }}
+          load: true
+          cache-from: |
+            type=gha,scope=e2e-full
+            type=gha,scope=e2e-smoke
+          cache-to: type=gha,scope=e2e-full,mode=max
       # The full e2e suite. --no-cov is mandatory: the project conftest
       # auto-activates xdist (-n 2) for `-m e2e_docker`, and pytest-cov's
       # Central controller crashes at xdist worker setup when --cov is in
