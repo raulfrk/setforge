@@ -53,51 +53,20 @@ _FIXTURE_YAML = _FIXTURE_DIR / "setforge.test.yaml"
 _FIXTURE_TRACKED = _FIXTURE_DIR / "tracked"
 
 
-def _sanitize_to_unified_model(yaml_path: Path) -> None:
-    """Rewrite a copied fixture config to the current strict schema model.
-
-    The shared ``tests/fixtures/e2e/setforge.test.yaml`` still declares the
-    retired ``disposition:`` / ``spans:`` tracked-file keys because the Docker
-    e2e ring keeps exercising that legacy corpus. The strict model ``setforge
-    validate`` loads rejects those keys, so the inner CliRunner ring sanitizes
-    its OWN copy in place: strip every ``disposition`` / ``spans`` tracked-file
-    key and stamp ``schema_version`` to the build's current major. Runtime
-    install / sync / compare behavior is unchanged — the tolerant loader
-    already strips those keys at load time — this only makes the strict
-    ``validate`` path clean.
-    """
-    from ruamel.yaml import YAML
-
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    data = yaml.load(yaml_path.read_text(encoding="utf-8"))
-    data["schema_version"] = "6.0"
-    tracked_files = data.get("tracked_files") or {}
-    for entry in tracked_files.values():
-        if not hasattr(entry, "pop"):
-            continue
-        entry.pop("disposition", None)
-        entry.pop("spans", None)
-    with yaml_path.open("w", encoding="utf-8") as handle:
-        yaml.dump(data, handle)
-
-
 @pytest.fixture
 def fixture_repo(tmp_path: Path) -> Path:
     """Copy the fixture repo into ``tmp_path`` so tests can mutate freely.
 
     Returns the path to the copied ``setforge.test.yaml``. The
     accompanying ``tracked/`` tree sits beside it (yaml's parent = repo
-    root for ``resolve_src``). The copy is rewritten to the schema-3.0
-    unified model (:func:`_sanitize_to_unified_model`) so the strict
-    ``validate`` path accepts it while the shared on-disk fixture stays
-    legacy for the Docker ring.
+    root for ``resolve_src``). The shared fixture is kept at the current schema,
+    so the copy is accepted unchanged by both tolerant runtime loading and the
+    strict ``validate`` path.
     """
     target = tmp_path / "repo"
     target.mkdir()
     shutil.copy2(_FIXTURE_YAML, target / "setforge.test.yaml")
     shutil.copytree(_FIXTURE_TRACKED, target / "tracked")
-    _sanitize_to_unified_model(target / "setforge.test.yaml")
     return target / "setforge.test.yaml"
 
 

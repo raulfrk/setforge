@@ -11,7 +11,7 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
-schema_version: '3.0'
+schema_version: '6.0'
 version: 1
 
 # ----------------------------------------------------------------------
@@ -19,7 +19,8 @@ version: 1
 # preserve / template / section directives. Keys are stable identifiers
 # referenced by profile.tracked_files lists below. Every tracked_file is a
 # plain reconcile file under the unified engine (schema 3.0 retired the
-# per-file disposition/spans model).
+# per-file disposition/spans model; this fixture is stamped at the current
+# schema so unconfirmed PTY journeys reach their intended UI boundary).
 # ----------------------------------------------------------------------
 tracked_files:
   # Plain text — floor case, no overlays, byte copy.

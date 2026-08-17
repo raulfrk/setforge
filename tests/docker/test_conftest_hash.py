@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from setforge.migrations import current_expected_schema_version, detect_current_schema
 from tests.docker import image as docker_image
 from tests.docker.image import (
     _compute_inputs_hash,
@@ -307,6 +308,13 @@ def test_hash_inputs_match_explicit_runtime_copy_surface() -> None:
         "uv.lock",
     }
     assert relative_dirs == {"setforge", "tests/fixtures/e2e"}
+
+
+def test_shared_e2e_fixture_uses_current_schema() -> None:
+    """Keep unconfirmed CLI journeys from stopping at the migration prompt."""
+    fixture = docker_image.REPO_ROOT / "tests/fixtures/e2e/setforge.test.yaml"
+
+    assert detect_current_schema(fixture) == current_expected_schema_version
 
 
 def test_dockerfile_copy_sources_match_hash_inputs() -> None:

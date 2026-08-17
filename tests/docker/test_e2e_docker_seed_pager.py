@@ -19,6 +19,9 @@ _LIVE_BODY = "".join(f"live-line-{i}\n" for i in range(60))
 _UPSTREAM_BODY = "".join(f"upstream-line-{i}\n" for i in range(60))
 
 _FRAME_GLYPH = "┌"
+# Cold CLI startup under Docker/xdist can exceed the PTY helper's 5 s default;
+# later content and exit assertions keep the interaction itself tightly checked.
+_FRAME_TIMEOUT_S = 30.0
 
 
 def _seed_session(
@@ -62,7 +65,7 @@ def test_seed_pager_view_scroll_resize_then_choose(
     _seed_divergence(c)
 
     s = _seed_session(pyte_pty_session, c, cols=120, lines=40)
-    s.expect_in_display(_FRAME_GLYPH)
+    s.expect_in_display(_FRAME_GLYPH, timeout=_FRAME_TIMEOUT_S)
     s.expect_in_display("live vs upstream")
     s.expect_in_display("View diff")
 
@@ -92,7 +95,7 @@ def test_seed_pager_escape_aborts_file_unchanged(
     _seed_divergence(c)
 
     s = _seed_session(pyte_pty_session, c)
-    s.expect_in_display(_FRAME_GLYPH)
+    s.expect_in_display(_FRAME_GLYPH, timeout=_FRAME_TIMEOUT_S)
     s.expect_in_display("View diff")
     s.send_keys("v")
     s.expect_in_display("-live-line-0")

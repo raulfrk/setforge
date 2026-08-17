@@ -49,6 +49,9 @@ _UPSTREAM_EDIT = "one\ntwo-UPSTREAM\nthree\n"
 # on before sending input (the title could split across cursor moves, but the
 # corner paints as one cell).
 _FRAME_GLYPH = "┌"
+# Cold CLI startup under Docker/xdist can exceed the PTY helper's 5 s default;
+# later content and exit assertions keep the interaction itself tightly checked.
+_FRAME_TIMEOUT_S = 30.0
 
 
 def _prof(c: ContainerHandle, verb: str, *extra: str) -> tuple[int, str, str]:
@@ -112,7 +115,7 @@ def test_interactive_conflict_take_theirs_writes_upstream(
     _seed_conflict(c)
 
     s = _conflict_session(pyte_pty_session, c)
-    s.expect_in_display(_FRAME_GLYPH)  # the wizard frame rendered
+    s.expect_in_display(_FRAME_GLYPH, timeout=_FRAME_TIMEOUT_S)
     s.expect_in_display("Theirs")  # the per-region button bar is up
     s.send_keys("\x1b[C\r")  # focus Ours(0) → Theirs(1), Enter
     s.wait_for_exit(timeout=60, expected_code=0)
@@ -131,7 +134,7 @@ def test_interactive_conflict_keep_ours_keeps_host(
     _seed_conflict(c)
 
     s = _conflict_session(pyte_pty_session, c)
-    s.expect_in_display(_FRAME_GLYPH)
+    s.expect_in_display(_FRAME_GLYPH, timeout=_FRAME_TIMEOUT_S)
     s.expect_in_display("Ours")
     s.send_keys("\r")  # Ours is focused first → Enter selects it
     s.wait_for_exit(timeout=60, expected_code=0)
