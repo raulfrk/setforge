@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e-docker-full:
     name: Full E2E Docker suite
@@ -50,7 +54,7 @@ jobs:
       # default addopts. No continue-on-error: a failure here MUST fail the
       # job loudly — a behavior the suite asserted is broken on the default
       # branch.
-      - run: uv run pytest -m "e2e_docker and not network_canary" -n 2 --no-cov -v
+      - run: uv run pytest -m "e2e_docker and not network_canary" --no-cov -v
 
   network-canaries:
     name: Live-upstream E2E canaries
