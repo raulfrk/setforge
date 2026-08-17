@@ -488,12 +488,11 @@ def _handle_config_repo(*, no_prompt: bool, console: Console) -> int:
     :exc:`ConfirmRequiresInteractive` from the dir prompt before scaffolding,
     which propagates to the top-level CLI handler.
 
-    The gate is :func:`is_initialized`, NOT a bare ``local.yaml`` existence
-    check: the Typer root callback writes the ``local.yaml`` stub on every
-    invocation, so an existence check would always skip the bootstrap and
-    leave the host-local share dir uncreated. ``is_initialized`` (sentinel
-    file AND host-local dir both present) is the same gate bare ``init``
-    uses, so ``--config-repo`` performs the identical host-local bootstrap.
+    The gate is :func:`is_initialized`, not a bare ``local.yaml`` existence
+    check: a user may have created that file without completing the host-local
+    bootstrap. ``is_initialized`` (sentinel file and host-local dir both
+    present) is the same gate bare ``init`` uses, so ``--config-repo`` performs
+    the identical host-local bootstrap.
     """
     probe = probe_environment()
     if is_initialized(probe):
@@ -528,10 +527,9 @@ _SOURCE_BLOCK_MARKER = "\n# Pre-configured by `setforge init"
 def _local_yaml_is_pristine_stub() -> bool:
     """Return True iff the existing local.yaml is an untouched stub.
 
-    The root Typer callback writes ``_STUB_TEMPLATE`` on every invocation,
-    and the PATH/GIT init paths append a generated ``source:`` block to it.
-    A file whose content is exactly the stub — or the stub followed solely
-    by an init-generated, marker-tagged source block — carries no user
+    The PATH/GIT init paths append a generated ``source:`` block to the stub.
+    A file whose content is exactly the stub — or the stub followed solely by
+    an init-generated, marker-tagged source block — carries no user
     customization and is safe to overwrite. Any other content — a
     hand-edited ``binaries:`` block, a custom or hand-appended ``source:``,
     plugin/extension overlays — must be preserved.
@@ -570,10 +568,8 @@ def _apply_bootstrap(
     """Create the three init paths + write the local.yaml stub.
 
     Uses :func:`_mkdir_with_retry` for the TOCTOU-resilient idempotent
-    mkdir per research brief §7. The root callback's
-    ``ensure_local_config_stub`` may have already created
-    ``LOCAL_CONFIG_PATH``; this function rewrites it. When
-    ``source_spec`` carries a PATH or GIT choice, appends a
+    mkdir per research brief §7. When ``source_spec`` carries a PATH or GIT
+    choice, appends a
     pre-configured ``source:`` block to the stub.
 
     ``force=True`` means the caller already resolved the overwrite/backup

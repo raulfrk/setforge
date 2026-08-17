@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -316,8 +317,9 @@ def _patch_subprocess_run(
 
 def test_cli_upgrade_check_mode_does_not_mutate(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """``--check`` must NOT shell out to ``uv tool upgrade``."""
+    """``--check`` neither shells out nor bootstraps host-local config."""
     _patch_pypi(monkeypatch, version="0.3.0")
     _patch_notes(monkeypatch, notes="- body")
 
@@ -327,10 +329,13 @@ def test_cli_upgrade_check_mode_does_not_mutate(
     monkeypatch.setattr(upgrade_mod.subprocess, "run", fail_run)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     runner = CliRunner()
+    local_config = tmp_path / "local.yaml"
+    assert not local_config.exists()
     result = runner.invoke(app, ["upgrade", "--check"])
     assert result.exit_code == 0, result.output
     assert "0.3.0" in result.output
     assert "=== schema impact ===" in result.output
+    assert not local_config.exists()
 
 
 def test_cli_upgrade_already_latest_short_circuits(

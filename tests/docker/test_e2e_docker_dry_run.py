@@ -1,11 +1,11 @@
 """Docker E2E tests for ``setforge install --dry-run``.
 
 Thirteen named cases per SPEC 4. The single highest-value gate is
-:func:`test_dry_run_zero_filesystem_diff` — a fresh container's full
-``$HOME`` tree is snapshotted (mtime + sha256) BEFORE the dry-run
-invocation and immediately AFTER, with the assertion that the two
-snapshots are byte-identical. This is the load-bearing acceptance for
-the spec; the remaining twelve cases anchor individual contract
+:func:`test_dry_run_zero_filesystem_diff` — a fresh container's defined
+install mutation roots are snapshotted as typed path/mode/mtime/payload
+records BEFORE the dry-run invocation and immediately AFTER, with the
+assertion that the two snapshots are byte-identical. This is the load-bearing
+acceptance for the spec; the remaining twelve cases anchor individual contract
 points (output shape, no-confirm-substring, final-line marker,
 plugin/extension reconcile coverage, profile flag wiring, cross-check
 against the real pipeline).
@@ -103,43 +103,38 @@ def _dry_run_install(
 def _snapshot_home(container: ContainerHandle) -> str:
     """Snapshot the setforge-install-mutation-surface, sorted by path.
 
-    Scopes the snapshot to the directories ``setforge install`` writes
-    to: ``$HOME/.setforge_e2e/`` (tracked-file dst paths under the e2e
-    fixture profiles), ``$HOME/.local/state/setforge/`` (transition
-    state dir + per-run records), the secrets-allowlist file
-    (``$HOME/.config/setforge/secrets-allowlist``), and
-    ``/workspace/tracked/`` (tracked-side baseline; the
-    ``stamp_tracked_baseline`` mutation lands here).
+    Scopes the snapshot to the directories ``setforge install`` writes to:
+    ``$HOME/.setforge_e2e/`` (tracked-file destinations),
+    ``$HOME/.local/state/setforge/`` (transition state),
+    ``$HOME/.config/setforge/`` (host-local configuration and allowlist), and
+    ``/workspace/tracked/`` (tracked-side baseline).
 
-    Two host-level files are deliberately EXCLUDED from the snapshot:
+    Tooling-owned ``~/.cache/``, ``~/.local/share/uv/``, and Microsoft
+    DeveloperTools state remain excluded because every ``uv run`` invocation
+    may update them.
 
-    - ``$HOME/.config/setforge/local.yaml`` — the host-local config
-      stub created by the typer root callback
-      (``binaries.ensure_local_config_stub``) on EVERY ``setforge``
-      invocation, regardless of the subcommand. Including it would
-      surface the stub-creation as a false-positive "the dry-run
-      mutated state" diff on a fresh container.
-    - ``~/.cache/`` / ``~/.local/share/uv/`` / Microsoft DeveloperTools
-      state — uv-tooling state mutated by every ``uv run`` invocation.
-
-    Missing roots skip silently — a fresh container has no
-    ``.local/state/setforge``, which is the whole point of test #6.
-    Uses ``find -type f`` for enumeration, ``stat`` for sub-second
-    mtime (``%Y.%N``), and ``sha256sum`` for content. Sorted by path
-    so iteration order matches across hosts.
+    Missing roots receive an explicit marker. Existing roots include every
+    directory, regular file, and symlink, so empty-directory and symlink-only
+    mutations are visible. Records include the entry type, mode, nanosecond-
+    resolution textual mtime (``%y``), and either file content hash or symlink
+    target. Sorted by path so iteration order matches across hosts.
     """
     script = (
         "set -eu; "
         'roots=("$HOME/.setforge_e2e" "$HOME/.local/state/setforge" '
-        '"$HOME/.config/setforge/secrets-allowlist" "/workspace/tracked"); '
+        '"$HOME/.config/setforge" "/workspace/tracked"); '
         '{ for r in "${roots[@]}"; do '
-        '  [ -e "$r" ] || continue; '
-        '  find "$r" -type f -print0; '
+        '  if [ -e "$r" ] || [ -L "$r" ]; then find "$r" -print0; '
+        "  else printf '%s\\0' \"!missing:$r\"; fi; "
         "done; } | sort -z | "
         "while IFS= read -r -d '' p; do "
-        "  m=$(stat -c '%Y.%9N' \"$p\"); "
-        "  h=$(sha256sum \"$p\" | awk '{print $1}'); "
-        '  printf \'%s|%s|%s\\n\' "$p" "$m" "$h"; '
+        '  case "$p" in !missing:*) printf \'%s\\n\' "$p"; continue;; esac; '
+        "  t=$(stat -c '%F' \"$p\"); mode=$(stat -c '%a' \"$p\"); "
+        "  m=$(stat -c '%y' \"$p\"); payload=-; "
+        '  if [ -f "$p" ] && [ ! -L "$p" ]; then '
+        "    payload=$(sha256sum \"$p\" | awk '{print $1}'); "
+        '  elif [ -L "$p" ]; then payload=$(readlink "$p"); fi; '
+        '  printf \'%s|%s|%s|%s|%s\\n\' "$p" "$t" "$mode" "$m" "$payload"; '
         "done"
     )
     result = container.exec(["bash", "-c", script], check=True)
@@ -154,17 +149,45 @@ def _snapshot_home(container: ContainerHandle) -> str:
 def test_dry_run_zero_filesystem_diff(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Fresh container; snapshot ``$HOME`` mtime+hash before/after; ZERO diff.
+    """Fresh container; snapshot install mutation roots before/after; ZERO diff.
 
     The single highest-value gate per spec SPEC 4. Captures the full
-    ``$HOME`` tree's path/mtime/sha256 triples before the dry-run
+    install roots' typed path/mode/mtime/payload records before the dry-run
     invocation, runs ``setforge install --profile=test-comprehensive
-    --dry-run``, then captures the same triples after. The two
-    snapshots must match byte-for-byte; any drift (file created,
-    touched, hashed) fails the test loudly.
+    --dry-run``, then captures the same records after. The two
+    snapshots must match byte-for-byte; any directory, file, or symlink drift
+    fails the test loudly.
     """
     c = docker_container()
     pre = _snapshot_home(c)
+    # Prove the snapshot itself notices the directory-only mutation that this
+    # gate exists to catch, without adding another container or E2E test.
+    c.exec(["bash", "-c", 'mkdir -p "$HOME/.config/setforge"'])
+    assert _snapshot_home(c) != pre
+    c.exec(
+        [
+            "bash",
+            "-c",
+            'touch -d @1700000000.100000000 "$HOME/.config/setforge"',
+        ]
+    )
+    first_mtime = _snapshot_home(c)
+    c.exec(
+        [
+            "bash",
+            "-c",
+            'touch -d @1700000000.200000000 "$HOME/.config/setforge"',
+        ]
+    )
+    assert _snapshot_home(c) != first_mtime
+    c.exec(
+        [
+            "bash",
+            "-c",
+            'rmdir "$HOME/.config/setforge"; rmdir "$HOME/.config" 2>/dev/null || true',
+        ]
+    )
+    assert _snapshot_home(c) == pre
     result = _dry_run_install(
         c, _PROFILE_COMPREHENSIVE, extra=["--auto=use-tracked", "--yes"]
     )

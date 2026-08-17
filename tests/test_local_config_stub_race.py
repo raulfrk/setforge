@@ -1,19 +1,16 @@
-"""TOCTOU + opt-out + HOME-isolation tests for ``ensure_local_config_stub``.
+"""TOCTOU, explicit creation, and HOME-isolation tests for the local stub.
 
-The function writes ``~/.config/setforge/local.yaml`` on every Typer
-callback invocation. The previous shape used
-``if LOCAL_CONFIG_PATH.exists(): return`` followed by
-``write_text(...)``, racing on the file under parallel pytest workers.
-The new shape uses ``open("x")`` + ``FileExistsError``
-suppression for an atomic create-or-skip.
+Local config editing calls :func:`ensure_local_config_stub`; ``init`` owns its
+separate full bootstrap write directly. The helper uses ``open("x")`` plus
+``FileExistsError`` suppression for an atomic create-or-skip.
 
 Three test surfaces here:
 
 1. :func:`test_ensure_local_config_stub_is_toctou_safe` — 10 threads
    race on the same target path; assert only ONE process writes the
    stub content and no exception escapes any thread.
-2. :func:`test_skip_env_var_works` — ``SETFORGE_SKIP_LOCAL_STUB=1``
-   bypasses the write entirely (no file created).
+2. :func:`test_ensure_local_config_stub_is_idempotent` — repeated calls
+   preserve pre-existing content byte-for-byte.
 3. :func:`test_isolate_home_fixture_redirects_path_home` — the
    ``_isolate_home`` autouse fixture monkeypatches ``Path.home``
    correctly, so ``Path.home()`` returns the per-test tmp dir.
@@ -37,7 +34,6 @@ def test_ensure_local_config_stub_is_toctou_safe(
     """10 concurrent calls produce ONE write, no exceptions."""
     target = tmp_path / "local.yaml"
     monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
-    monkeypatch.delenv("SETFORGE_SKIP_LOCAL_STUB", raising=False)
 
     errors: list[BaseException] = []
 
@@ -67,41 +63,12 @@ def test_ensure_local_config_stub_is_idempotent(
     """Existing file is preserved verbatim across repeated invocations."""
     target = tmp_path / "local.yaml"
     monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
-    monkeypatch.delenv("SETFORGE_SKIP_LOCAL_STUB", raising=False)
     target.write_text("user-edited content\n", encoding="utf-8")
 
     binaries.ensure_local_config_stub()
     binaries.ensure_local_config_stub()
 
     assert target.read_text(encoding="utf-8") == "user-edited content\n"
-
-
-def test_skip_env_var_works(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``SETFORGE_SKIP_LOCAL_STUB=1`` → no file created."""
-    target = tmp_path / "local.yaml"
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
-    monkeypatch.setenv("SETFORGE_SKIP_LOCAL_STUB", "1")
-
-    binaries.ensure_local_config_stub()
-
-    assert not target.exists()
-
-
-def test_skip_env_var_value_zero_does_not_skip(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Only the literal value ``"1"`` opts out — ``"0"`` is no-skip."""
-    target = tmp_path / "local.yaml"
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
-    monkeypatch.setenv("SETFORGE_SKIP_LOCAL_STUB", "0")
-
-    binaries.ensure_local_config_stub()
-
-    assert target.is_file()
 
 
 def test_isolate_home_fixture_redirects_path_home() -> None:

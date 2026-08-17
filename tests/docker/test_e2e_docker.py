@@ -1507,15 +1507,12 @@ def test_e2e_docker_init_fresh(
 ) -> None:
     """init-bootstrap: fresh --no-prompt init creates all three bootstrap paths.
 
-    Wipes the local.yaml stub that the Typer root callback writes on
-    every invocation, then asserts that init creates the canonical
-    config dir, the local.yaml template, and the host-local share
-    directory in one shot.
+    Starts without SetForge host state, then asserts that init creates the
+    canonical config dir, local.yaml template, and host-local share directory
+    in one shot.
     """
     c = docker_container()
-    # Strip any pre-existing setforge state so this exercises the
-    # fresh-init branch (root callback re-writes local.yaml, but the
-    # host-local dir staying absent triggers the bootstrap path).
+    # Strip any pre-existing SetForge state so this exercises fresh bootstrap.
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
     c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
     result = _init(c, extra=["--no-prompt"])
@@ -1665,10 +1662,8 @@ def test_e2e_docker_init_check_readonly(
 ) -> None:
     """init-bootstrap: --check prints the env/dirs/capabilities report; no side effects.
 
-    Wipes setforge state, runs --check, and asserts the host-local
-    share directory does NOT appear (the root callback writes the
-    local.yaml stub regardless; --check must not create anything
-    BEYOND that).
+    Wipes setforge state, runs ``--check``, and asserts neither the host-local
+    config directory nor the host-local share directory appears.
     """
     c = docker_container()
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
@@ -1677,6 +1672,8 @@ def test_e2e_docker_init_check_readonly(
     assert "checking environment" in result.stderr, result.stderr
     assert "checking config directories" in result.stderr, result.stderr
     assert "check complete" in result.stderr, result.stderr
+    config_check = c.exec(["test", "-d", "/home/tester/.config/setforge"], check=False)
+    assert config_check.returncode != 0, "--check must NOT create the config directory"
     host_local_check = c.exec(
         ["test", "-d", "/home/tester/.local/share/setforge/host-local"], check=False
     )
@@ -1707,6 +1704,7 @@ def test_e2e_docker_upgrade_check_mode(
     :mod:`setforge._pypi_client` lights up identically.
     """
     c = docker_container()
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
     fake_pypi_body = json.dumps(
         {
             "info": {"version": "99.0.0"},
@@ -1756,6 +1754,10 @@ def test_e2e_docker_upgrade_check_mode(
     )
     assert "=== schema impact ===" in result.stdout, (
         f"expected always-on schema impact panel; got: {result.stdout!r}"
+    )
+    config_check = c.exec(["test", "-d", "/home/tester/.config/setforge"], check=False)
+    assert config_check.returncode != 0, (
+        "upgrade --check must NOT create the config directory"
     )
 
 

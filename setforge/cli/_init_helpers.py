@@ -262,12 +262,9 @@ def is_initialized(probe: EnvProbe) -> bool:
     1. ``local.yaml`` is present AND carries the stub sentinel OR an
        uncommented ``binaries:`` block (an empty leftover does NOT
        count — that is an aborted init, not an initialized state).
-    2. ``~/.local/share/setforge/host-local/`` exists — the second
-       half of the bootstrap contract. Required because the root
-       Typer callback writes the local.yaml stub on every invocation
-       via :func:`setforge.binaries.ensure_local_config_stub`; the
-       host-local dir is the distinguishing signal between
-       "just-arrived stub" and "init already ran".
+    2. ``~/.local/share/setforge/host-local/`` exists — the second half of the
+       bootstrap contract. A user-created or partially written ``local.yaml``
+       alone does not prove that ``init`` completed.
 
     Reads through ``LOCAL_CONFIG_PATH`` directly (probe carries
     existence only, not content) so the same helper works against a

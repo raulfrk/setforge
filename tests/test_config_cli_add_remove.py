@@ -181,10 +181,8 @@ def test_remove_local_missing_yaml_exits_clean_without_creating(
     The guard must report nothing-to-remove and NOT materialize the file —
     a no-op remove must leave no stray artifact behind.
     """
-    # The conftest autouse fixtures redirect the binaries/source/compare
-    # LOCAL_CONFIG_PATH to ``tmp_path/local.yaml`` and the Typer root
-    # callback materializes a stub there. Point the config-scope path at a
-    # distinct, un-stubbed location so it is genuinely absent at remove time.
+    # Point the config command's imported path at a distinct absent location
+    # so this test pins its no-op remove boundary directly.
     missing = tmp_path / "absent" / "local.yaml"
     assert not missing.exists()
     monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", missing)

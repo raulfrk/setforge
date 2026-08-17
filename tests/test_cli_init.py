@@ -538,7 +538,7 @@ def test_is_initialized_false_when_yaml_is_empty(home: Path) -> None:
 
 
 def test_is_initialized_false_when_host_local_missing(home: Path) -> None:
-    """Stub-only state (root callback wrote local.yaml) doesn't count as initialized."""
+    """A stub without the host-local directory is only a partial bootstrap."""
     cfg = home / ".config" / "setforge"
     cfg.mkdir(parents=True)
     (cfg / "local.yaml").write_text("# setforge host-local config\n", encoding="utf-8")
@@ -603,16 +603,14 @@ def test_init_check_prints_checking_and_exits_zero(home: Path) -> None:
 def test_init_check_does_not_write_host_local_dir(home: Path) -> None:
     runner = CliRunner()
     runner.invoke(app, ["init", "--check"])
-    # Root callback creates ~/.config/setforge/local.yaml; --check
-    # must NOT additionally create the host-local share dir.
+    assert not (home / ".config" / "setforge").exists()
     assert not (home / ".local" / "share" / "setforge" / "host-local").exists()
 
 
 def test_init_fresh_creates_three_paths_with_no_prompt(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Ensure no prior init state exists at the start (root callback runs first
-    # and may create local.yaml; we wipe to simulate a true fresh init).
+    # Ensure no prior init state exists at the start.
     cfg = home / ".config" / "setforge"
     runner = CliRunner()
     # Source-config & apply prompts are bypassed under --no-prompt; the

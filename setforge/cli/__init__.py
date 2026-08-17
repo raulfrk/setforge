@@ -207,14 +207,13 @@ def _root(
         is_eager=True,
     ),
 ) -> None:
-    """Wire host-local binary overrides + source-layer override + logging + local stub.
+    """Wire host-local binary overrides, source override, logging, and output.
 
     Side effects (in order): mutex-check ``--quiet`` + ``-v``, resolve
     effective log level, install :class:`RedactingFilter` on the root
     logger's stderr handler, set CLI binary overrides via
-    ``binaries.set_cli_overrides``, ensure ``~/.config/setforge/local.yaml``
-    stub exists via ``binaries.ensure_local_config_stub``, set the
-    ``--source`` override via ``source_mod.set_cli_source``, wire
+    ``binaries.set_cli_overrides``, set the ``--source`` override via
+    ``source_mod.set_cli_source``, wire
     :class:`OutputContext` onto ``ctx.obj`` for the renderer boundary.
     ``--version`` is wired as an eager callback that prints
     ``setforge.__version__`` and exits before this body runs.
@@ -261,7 +260,6 @@ def _root(
         gitleaks=gitleaks_bin,
         patch=patch_bin,
     )
-    binaries.ensure_local_config_stub()
     source_mod.set_cli_source(source)
     ctx.obj = OutputContext(format=output_format)
     global _INVOCATION_FORMAT

@@ -326,9 +326,9 @@ def ensure_local_config_stub() -> None:
     """Create ``LOCAL_CONFIG_PATH`` with a commented stub if absent.
 
     Idempotent: a pre-existing file (regardless of content) is never
-    touched. Creates parent directories as needed. Called from the
-    Typer ``@app.callback()`` so a fresh install gets the discoverable
-    file on first invocation of any subcommand.
+    touched. Creates parent directories as needed. Called by local config
+    editing, which explicitly owns this mutation; ``init`` owns its separate
+    full bootstrap write directly. Read-only commands never call it.
 
     TOCTOU-safe under concurrent invocation. The previous shape used
     ``if LOCAL_CONFIG_PATH.exists(): return`` followed by
@@ -341,13 +341,7 @@ def ensure_local_config_stub() -> None:
     swallow it (the file's existence is the invariant, not which
     process wrote it).
 
-    Opt-out via the ``SETFORGE_SKIP_LOCAL_STUB=1`` environment
-    variable. Useful in headless / read-only-home contexts where
-    creating the stub is undesirable (e.g. CI containers that mount
-    ``$HOME`` read-only).
     """
-    if os.environ.get("SETFORGE_SKIP_LOCAL_STUB") == "1":
-        return
     LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         with LOCAL_CONFIG_PATH.open("x", encoding="utf-8") as fh:

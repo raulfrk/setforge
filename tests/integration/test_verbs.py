@@ -43,6 +43,55 @@ def _assert_transition_command(meta: dict[str, object], command: str) -> None:
     assert "preserve_user_keys_applied" not in meta
 
 
+_READ_ONLY_COMMANDS: tuple[tuple[list[str], bool, bool, int], ...] = (
+    (["compare", "--check"], True, True, 1),
+    (["status"], True, True, 0),
+    (["inspect", "note"], True, True, 0),
+    (["validate"], True, True, 0),
+    (["profile", "show", "it"], True, False, 0),
+    (["stage", "--list"], True, True, 0),
+    (["snapshot", "list"], False, False, 0),
+    (["config", "show", "--local"], False, False, 0),
+    (["init", "--check"], False, False, 0),
+    (["migrate", "--check"], True, False, 0),
+    (
+        ["install", "--dry-run", "--yes", "--no-git-check", "--no-secrets-scan"],
+        True,
+        True,
+        0,
+    ),
+    (["cleanup-orphans"], True, True, 0),
+)
+
+
+@pytest.mark.parametrize(
+    ("argv", "inject_config", "inject_profile", "expected_exit"),
+    _READ_ONLY_COMMANDS,
+)
+def test_read_only_commands_do_not_bootstrap_local_config(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    inject_config: bool,
+    inject_profile: bool,
+    expected_exit: int,
+) -> None:
+    """The finite read/check/dry-run matrix leaves absent ``local.yaml`` absent."""
+    env = integration_env()
+    monkeypatch.setenv("SETFORGE_SOURCE", str(env.repo))
+    assert not env.local_config.parent.exists()
+
+    result = env.run_verb(
+        argv, inject_config=inject_config, inject_profile=inject_profile
+    )
+
+    assert result.exit_code == expected_exit, result.output
+    assert not env.local_config.parent.exists(), (
+        f"read-only command created {env.local_config.parent}: {' '.join(argv)}"
+    )
+
+
 class TestInstall:
     def test_deploys_and_records_transition(
         self,

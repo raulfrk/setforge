@@ -89,6 +89,7 @@ def integration_subprocess(
 class IntegrationEnv:
     home: Path
     state_dir: Path
+    local_config: Path
     repo: Path
     config: Path
     profile: str
@@ -181,7 +182,7 @@ def integration_env(
     home = tmp_path / "home"
     state_dir = tmp_path / "state"
     mp_cache = tmp_path / "mp"
-    local_yaml = tmp_path / "local.yaml"
+    local_yaml = home / ".config" / "setforge" / "local.yaml"
     for d in (home, state_dir, mp_cache):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -262,6 +263,7 @@ def integration_env(
         return IntegrationEnv(
             home=home,
             state_dir=state_dir,
+            local_config=local_yaml,
             repo=repo,
             config=cfg,
             profile=profile,

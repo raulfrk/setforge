@@ -100,15 +100,11 @@ def _isolate_home(
 ) -> Path | None:
     """Redirect ``$HOME`` + ``Path.home()`` to a per-test tmp directory.
 
-    Belt-and-suspenders against parallel-worker races on the shared
-    ``~/.config/setforge/local.yaml`` stub that the Typer root callback
-    writes via :func:`setforge.binaries.ensure_local_config_stub`.
-    :func:`_isolated_local_config` already redirects the
-    ``LOCAL_CONFIG_PATH`` module constants — but any other production
-    code path that resolves ``Path.home()`` lazily (completion,
-    snapshots, transitions, migrations) would still race on the real
-    dev-host home. Monkeypatching at the ``Path.home`` level catches
-    every reachable site.
+    Belt-and-suspenders against production code that resolves ``Path.home()``
+    lazily (completion, snapshots, transitions, migrations). The
+    :func:`_isolated_local_config` fixture redirects imported
+    ``LOCAL_CONFIG_PATH`` constants; monkeypatching at the ``Path.home`` level
+    catches every other reachable site and keeps parallel workers isolated.
 
     Skip on tests carrying the ``no_home_isolation`` marker — used by
     tests that legitimately need the live ``$HOME``. The marker is a
