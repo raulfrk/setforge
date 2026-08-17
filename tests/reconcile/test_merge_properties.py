@@ -36,7 +36,9 @@ def _side(strategy: st.SearchStrategy[bytes]) -> st.SearchStrategy[bytes | Absen
     return st.one_of(st.just(ABSENT), strategy)
 
 
-_io = settings(max_examples=300)
+# Wall-clock deadlines are not correctness assertions and become flaky under
+# local xdist load; the nightly deep profile owns larger example budgets.
+_io = settings(max_examples=300, deadline=None)
 
 
 @_io

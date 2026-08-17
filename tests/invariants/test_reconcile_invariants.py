@@ -19,11 +19,16 @@ from tests.harness.invariants import (
 )
 from tests.harness.model import StubReconcileModel
 
+pytestmark = pytest.mark.slow
+
 # too_slow is suppressed for real fsync-backed I/O latency, not to mask a
 # subprocess escape (the machine's own guard already raises on any shell-out).
 _REAL_RUN = settings(
-    max_examples=60,
-    stateful_step_count=20,
+    # Match Hypothesis's generated ``RuleBasedStateMachine.TestCase`` defaults
+    # while collecting only this explicit runner, so deduplication does not
+    # reduce the prior 5,000-step exploration budget.
+    max_examples=100,
+    stateful_step_count=50,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
 )
@@ -82,9 +87,6 @@ class ReconcileInvariantMachine(InvariantStateMachine):
 
 def test_reconcile_invariant_machine() -> None:
     run_state_machine_as_test(ReconcileInvariantMachine, settings=_REAL_RUN)
-
-
-TestReconcileInvariantMachine = ReconcileInvariantMachine.TestCase
 
 
 def test_revert_install_is_byte_exact_inverse(isolated_model_root) -> None:

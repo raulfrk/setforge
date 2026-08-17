@@ -355,7 +355,10 @@ def test_vendored_templates_match_typer_output(shell: ShellKind, filename: str) 
         capture_output=True,
         text=True,
         check=False,
-        timeout=10,
+        # Coverage-instrumented parallel workers can spend several seconds in
+        # interpreter startup/shutdown even after producing stdout. Keep the
+        # subprocess bounded without turning host scheduling into a failure.
+        timeout=30,
         env=env,
     )
     assert proc.returncode == 0, proc.stderr

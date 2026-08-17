@@ -163,6 +163,89 @@ def test_deterministic_lanes_exclude_network_canaries() -> None:
     assert "e2e_docker and not network_canary" in nightly
 
 
+def _assert_ci_pytest_lane(command: str, *, marker: str, verdict: str) -> None:
+    assert shlex.split(command) == [
+        "uv",
+        "run",
+        "pytest",
+        "-n",
+        "${{ steps.pytest-workers.outputs.count }}",
+        "--dist=worksteal",
+        "-m",
+        marker,
+        verdict,
+    ]
+
+
+def test_regular_ci_splits_fast_coverage_from_slow_properties() -> None:
+    jobs = _workflow("ci.yml")["jobs"]
+    worker_steps = [
+        next(
+            step
+            for step in jobs[job]["steps"]
+            if step.get("name") == "Select bounded pytest workers"
+        )
+        for job in ("tests", "slow-properties")
+    ]
+    coverage_step = next(
+        step
+        for step in jobs["tests"]["steps"]
+        if step.get("name") == "Run unit and integration coverage in parallel"
+    )
+    slow_step = next(
+        step
+        for step in jobs["slow-properties"]["steps"]
+        if step.get("name") == "Run exhaustive properties without coverage overhead"
+    )
+
+    assert coverage_step["env"] == {"HYPOTHESIS_PROFILE": "parallel"}
+    assert slow_step["env"] == {"HYPOTHESIS_PROFILE": "parallel"}
+    assert jobs["tests"]["timeout-minutes"] == 25
+    assert jobs["slow-properties"]["timeout-minutes"] == 10
+    worker_script = "\n".join(
+        [
+            "cpus=$(nproc)",
+            "workers=$(( cpus < 6 ? cpus : 6 ))",
+            'echo "count=$workers" >> "$GITHUB_OUTPUT"',
+        ]
+    )
+    assert all(step["run"].strip() == worker_script for step in worker_steps)
+
+    expected = [
+        (
+            coverage_step["run"],
+            "not e2e_docker and not test_infra and not slow",
+            "--cov-fail-under=85",
+        ),
+        (
+            slow_step["run"],
+            "slow and not e2e_docker and not test_infra",
+            "--no-cov",
+        ),
+    ]
+    for command, marker, verdict_option in expected:
+        _assert_ci_pytest_lane(command, marker=marker, verdict=verdict_option)
+
+
+@pytest.mark.parametrize(
+    "override",
+    ["-n12", "-mslow", "--dist loadscope", "--no-cov", "--cov=setforge"],
+)
+def test_regular_ci_lane_contract_rejects_appended_overrides(override: str) -> None:
+    command = (
+        'uv run pytest -n "${{ steps.pytest-workers.outputs.count }}" '
+        '--dist=worksteal -m "not e2e_docker and not test_infra and not slow" '
+        f"--cov-fail-under=85 {override}"
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_ci_pytest_lane(
+            command,
+            marker="not e2e_docker and not test_infra and not slow",
+            verdict="--cov-fail-under=85",
+        )
+
+
 def test_every_known_live_upstream_test_has_both_canary_gates() -> None:
     for relative_path, function_names in _KNOWN_LIVE_UPSTREAM_TESTS.items():
         tree = ast.parse((_ROOT / relative_path).read_text(encoding="utf-8"))

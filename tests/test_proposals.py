@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from scripts.proposals import (
@@ -92,6 +92,8 @@ def test_norm_strips_addresses_uuids_and_epochs() -> None:
     assert a.dedup_key == b.dedup_key
 
 
+@pytest.mark.slow
+@settings(deadline=None)
 @given(st.text())
 def test_norm_idempotent(a: str) -> None:
     assert norm(norm(a)) == norm(a)

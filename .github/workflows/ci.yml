@@ -13,6 +13,7 @@ jobs:
   tests:
     name: setforge unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -41,7 +42,19 @@ jobs:
       # hard CI failure. Standalone — NOT a pytest test, so markers / addopts
       # cannot disarm it.
       - run: uv run python scripts/check_e2e_manifest.py
-      - run: uv run pytest --cov-fail-under=85
+      - name: Select bounded pytest workers
+        id: pytest-workers
+        run: |
+          cpus=$(nproc)
+          workers=$(( cpus < 6 ? cpus : 6 ))
+          echo "count=$workers" >> "$GITHUB_OUTPUT"
+      - name: Run unit and integration coverage in parallel
+        env:
+          HYPOTHESIS_PROFILE: parallel
+        run: >-
+          uv run pytest -n "${{ steps.pytest-workers.outputs.count }}" --dist=worksteal
+          -m "not e2e_docker and not test_infra and not slow"
+          --cov-fail-under=85
       - name: Test pytest/xdist infrastructure with branch coverage
         run: |
           uv run coverage erase
@@ -58,6 +71,27 @@ jobs:
             -m 'not e2e_docker' --no-cov -q
           uv run coverage report --rcfile=/dev/null --fail-under=100 \
             --include='tests/e2e_xdist.py,tests/docker/container_runtime.py,tests/docker/image.py,tests/docker/network.py,tests/docker/offline_extension.py'
+
+  slow-properties:
+    name: Slow property and state-machine tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      - name: Select bounded pytest workers
+        id: pytest-workers
+        run: |
+          cpus=$(nproc)
+          workers=$(( cpus < 6 ? cpus : 6 ))
+          echo "count=$workers" >> "$GITHUB_OUTPUT"
+      - name: Run exhaustive properties without coverage overhead
+        env:
+          HYPOTHESIS_PROFILE: parallel
+        run: >-
+          uv run pytest -n "${{ steps.pytest-workers.outputs.count }}" --dist=worksteal
+          -m "slow and not e2e_docker and not test_infra" --no-cov
 
   pr-e2e-smoke:
     name: E2E Docker smoke (PR)

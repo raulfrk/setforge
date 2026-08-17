@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tests import e2e_xdist
@@ -75,6 +75,7 @@ def test_image_target_for_marker_expression(expression: str, target: str) -> Non
     assert e2e_xdist.image_target_for_markexpr(expression) == target
 
 
+@settings(deadline=None)
 @given(
     e2e_negations=st.integers(min_value=0, max_value=6),
     smoke_negations=st.integers(min_value=0, max_value=6),

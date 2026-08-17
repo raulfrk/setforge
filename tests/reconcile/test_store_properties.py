@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -14,6 +15,8 @@ from setforge import locking
 from setforge.reconcile import store
 from setforge.reconcile.index_model import FileEntry, Index, dumps, loads
 from setforge.reconcile.types import ABSENT, file_id
+
+pytestmark = pytest.mark.slow
 
 # These properties do real fsync-backed atomic writes per example, so per-example
 # latency is I/O-bound and variable — disable Hypothesis's wall-clock deadline
@@ -81,6 +84,7 @@ def test_record_then_verify(fid: str, data: bytes) -> None:
         store.verify("prof", f)  # must not raise
 
 
+@_io_bound
 @given(
     files=st.dictionaries(
         _fid,

@@ -49,6 +49,9 @@ from setforge.config import (
 # HYPOTHESIS_PROFILE=deep) raises max_examples and drops the per-example
 # deadline so the slow nightly job can shake out rare falsifying inputs.
 settings.register_profile("deep", max_examples=1000, deadline=None)
+settings.register_profile("parallel", deadline=None)
+if hypothesis_profile := os.environ.get("HYPOTHESIS_PROFILE"):
+    settings.load_profile(hypothesis_profile)
 
 
 @pytest.fixture(autouse=True)

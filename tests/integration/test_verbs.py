@@ -37,9 +37,9 @@ def _assert_transition_command(meta: dict[str, object], command: str) -> None:
     assert isinstance(meta.get("end_timestamp"), str)
     command_line = meta.get("command_line")
     # CliRunner stays in the pytest process, so the captured argv is pytest's;
-    # the Docker lifecycle separately pins real ``setforge <command>`` argv.
+    # xdist workers may expose an empty argv. The dedicated redaction test below
+    # injects a non-empty value, while Docker pins real ``setforge`` argv.
     assert isinstance(command_line, list)
-    assert command_line
     assert "preserve_user_keys_applied" not in meta
 
 

@@ -38,7 +38,12 @@ from tests.harness.model import StubReconcileModel
 # ---------------------------------------------------------------------------
 
 
-@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+@pytest.mark.slow
+@settings(
+    max_examples=50,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
 @given(hstrat.configs())
 def test_config_strategy_builds_valid_configs(config: Config) -> None:
     """Every generated config validates as a real ``Config`` model."""
@@ -50,7 +55,12 @@ def test_config_strategy_builds_valid_configs(config: Config) -> None:
         assert set(profile.tracked_files) <= declared
 
 
-@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+@pytest.mark.slow
+@settings(
+    max_examples=50,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
 @given(hstrat.tracked_file_contents())
 def test_content_strategy_is_text(content: str) -> None:
     """The file-content strategy yields round-trippable unicode text."""
@@ -221,6 +231,7 @@ class _ScaffoldMachine(InvariantStateMachine):
         assert isinstance(self.model.store_index(), dict)
 
 
+@pytest.mark.slow
 def test_state_machine_runs_over_generated_sequences() -> None:
     """The state machine drives generated install/sync/revert/migrate runs."""
     run_state_machine_as_test(
@@ -228,11 +239,13 @@ def test_state_machine_runs_over_generated_sequences() -> None:
         settings=settings(
             max_examples=25,
             stateful_step_count=12,
+            deadline=None,
             suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
         ),
     )
 
 
+@pytest.mark.slow
 def test_state_machine_violation_is_surfaced() -> None:
     """A broken invariant inside a state-machine run fails the run.
 
@@ -251,6 +264,7 @@ def test_state_machine_violation_is_surfaced() -> None:
             settings=settings(
                 max_examples=25,
                 stateful_step_count=12,
+                deadline=None,
                 suppress_health_check=[
                     HealthCheck.too_slow,
                     HealthCheck.filter_too_much,

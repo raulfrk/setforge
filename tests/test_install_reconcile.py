@@ -312,7 +312,10 @@ def test_claude_merge_wired_only_when_interactive(
 
     captured: dict[str, object] = {}
     sentinel = object()
-    monkeypatch.setattr(ih, "make_claude_merge_fn", lambda *, display_path: sentinel)
+    monkeypatch.setattr(
+        "setforge.reconcile.claude_merge.make_claude_merge_fn",
+        lambda *, display_path: sentinel,
+    )
 
     def _fake_rpf(_profile: str, _fid: object, **kw: object) -> ReconcileOutcome:
         captured["cm"] = kw["claude_merge"]
