@@ -86,6 +86,7 @@ COPY --chown=tester:tester README.md ./
 COPY --chown=tester:tester setforge/ ./setforge/
 COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
 COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py
+COPY --chown=tester:tester tests/docker/offline_extension.py ./tests/docker/offline_extension.py
 RUN uv sync --extra dev --python ${PYTHON_VERSION}
 
 CMD ["sleep", "infinity"]
@@ -132,6 +133,7 @@ COPY --chown=tester:tester README.md ./
 COPY --chown=tester:tester setforge/ ./setforge/
 COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
 COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py
+COPY --chown=tester:tester tests/docker/offline_extension.py ./tests/docker/offline_extension.py
 RUN uv sync --extra dev --python ${PYTHON_VERSION}
 
 CMD ["sleep", "infinity"]

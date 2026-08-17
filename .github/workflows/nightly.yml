@@ -1,8 +1,8 @@
 name: Nightly
 
-# Deep, slow gates that are too expensive for every PR: the FULL e2e Docker
-# suite and a deep Hypothesis profile run. Scheduled nightly on the default
-# branch, plus a manual trigger.
+# Deep, slow gates that are too expensive for every PR: deterministic full
+# Docker E2E, separately reported live-network canaries, and a deep Hypothesis
+# profile run. Scheduled nightly on the default branch, plus a manual trigger.
 on:
   schedule:
     # 04:00 UTC daily.
@@ -50,7 +50,56 @@ jobs:
       # default addopts. No continue-on-error: a failure here MUST fail the
       # job loudly — a behavior the suite asserted is broken on the default
       # branch.
-      - run: uv run pytest -m e2e_docker -n 2 --no-cov -v
+      - run: uv run pytest -m "e2e_docker and not network_canary" -n 2 --no-cov -v
+
+  network-canaries:
+    name: Live-upstream E2E canaries
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: e2e-docker-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      - name: Compute full E2E image tag
+        id: tag
+        run: |
+          uv run python -c 'from tests.docker.image import _image_tag; print("image_tag=" + _image_tag("full"))' >> "$GITHUB_OUTPUT"
+      - name: Build full E2E image from the deterministic-lane cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/Dockerfile
+          target: full
+          tags: ${{ steps.tag.outputs.image_tag }}
+          load: true
+          cache-from: |
+            type=gha,scope=e2e-full
+            type=gha,scope=e2e-smoke
+      - name: Run bounded network canaries with one lane retry
+        env:
+          SETFORGE_E2E_NETWORK: "1"
+        run: |
+          cleanup_canary_containers() {
+            docker ps --all --quiet --filter label=setforge.e2e.managed=true \
+              | xargs --no-run-if-empty docker rm --force
+          }
+          trap cleanup_canary_containers EXIT
+          set +e
+          timeout --kill-after=30s 20m uv run pytest \
+            -m "e2e_docker and network_canary" \
+            -n 2 --dist=loadgroup --no-cov -v
+          first_status=$?
+          if [ "$first_status" -eq 0 ]; then
+            exit 0
+          fi
+          echo "Network canary lane failed with status $first_status; retrying once"
+          cleanup_canary_containers
+          timeout --kill-after=30s 20m uv run pytest \
+            -m "e2e_docker and network_canary" \
+            -n 2 --dist=loadgroup --no-cov -v
 
   hypothesis-deep:
     name: Deep Hypothesis profile

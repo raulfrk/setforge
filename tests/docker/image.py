@@ -59,6 +59,7 @@ _HASH_INPUT_FILES: tuple[Path, ...] = (
     REPO_ROOT / "uv.lock",
     REPO_ROOT / "README.md",
     REPO_ROOT / "tests" / "docker" / "_button_bar_demo.py",
+    REPO_ROOT / "tests" / "docker" / "offline_extension.py",
 )
 _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "fixtures" / "e2e",

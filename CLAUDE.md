@@ -38,12 +38,14 @@ Profiles are defined in the USER's config repo's `setforge.yaml`. The author's d
 
 A 300+ test end-to-end suite at `tests/docker/` exercises `install`/`sync`/`compare`/`revert`/`validate`/`init`/`migrate`/`upgrade` and the new secrets-scan + reconcile-failure UX surfaces against a fresh Debian 12 container with real `claude`/`code`/`gitleaks` binaries — the canonical behavior-preservation gate for this project.
 
-- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v` (bare — xdist auto-activates with `-n 2`).
+- **Deterministic invocation:** `uv run pytest tests/docker/ -m "e2e_docker and not network_canary" -v` (xdist auto-activates with `-n 2`). Live upstream probes are excluded explicitly.
 - **Image targets:** `-m "e2e_docker and smoke"` selects the lean `smoke` target (real Debian, VS Code, gitleaks, shells, Python, and SetForge; no Claude/Go/Rust). Every other positive `e2e_docker` selection uses the default `full` target with all pinned tools. Target names are part of the content-hashed image tag, so the two capability sets cannot alias.
 - **Parallel execution:** auto-activated by the project-root `conftest.py:pytest_configure` hook when `-m e2e_docker` is selected and `-n` was not passed explicitly. Capped at **2 workers** — empirically validated as the stable maximum for this host's Docker daemon (~300 tests in ~42 min wall, zero `TimeoutExpired` flakes). Earlier attempts at `-n 4` saturated the daemon AND the host VM under sustained load; `-n auto` (= 6 on a 6-core host) produces ~20 transient timeouts per run. Override the cap with `-n N` on the CLI when running on a host with different daemon throughput; `-n 0` opts out of xdist for serial-mode debugging.
 - **Image preparation:** the xdist controller builds a missing content-hashed image before workers start; worker fixtures inspect and reuse it. Serial `-n 0` runs retain fixture-side build fallback.
 - **Build guardrails:** reference-host diagnostics are a no-cache smoke build at or below 420s and at least 25% below the recorded 559s full baseline, unchanged preparation below 15s, source-only rebuild below 90s, and full no-cache below 620s. These are reprofile thresholds, not timing assertions in CI: apt/npm/marketplace latency is external and would make a wall-clock test flaky. Build failures remain bounded by the helper timeout.
 - **Measured split (2026-08-17):** final no-cache smoke build 410s (26.7% faster than the 559s baseline); source-only rebuild 14s; unchanged repeat 6s. The smoke image was 1.37 GB versus 2.58 GB for full. A no-cache full build during the same run was 551s and retained every pinned capability.
+- **Extension boundary:** deterministic extension E2E generates a minimal local VSIX, selects a narrow `SETFORGE_CODE_BIN` adapter, and still installs/lists it through the real `/usr/bin/code`. This removes public Marketplace latency without replacing the SetForge subprocess or VS Code boundaries.
+- **Live-network canaries:** every intentional upstream probe carries `network_canary`, is skipped unless `SETFORGE_E2E_NETWORK=1` exactly, and runs separately with `uv run pytest -m "e2e_docker and network_canary" -n 2 --dist=loadgroup --no-cov -v`. Nightly gives the lane one retry, forcibly terminates each attempt after a 20-minute limit plus 30-second grace, removes labeled E2E containers between/after attempts, and caps the complete cold-build-capable job at 60 minutes. SetForge's individual VS Code install timeout remains 30 seconds. Canary failures report upstream health separately from deterministic E2E correctness.
 - **Runtime with `-n 2` (default):** ~42 min on a 6-core host (~300 tests).
 - **Runtime serial (`-n 0`):** ~90+ min (proportional estimate; not re-measured).
 - **When to run:** required whenever Phase 7 fires (post-merge cross-cutting review). See `## Final checks (post-merge)` below.
@@ -58,7 +60,7 @@ After merging a non-trivial branch into `main`, both of these must exit 0:
 
 ```sh
 pre-commit run --all-files
-uv run pytest tests/docker/ -m e2e_docker -v --no-cov
+uv run pytest tests/docker/ -m "e2e_docker and not network_canary" -v --no-cov
 ```
 
 `pre-commit` catches tool-version skew (e.g. the ruff mismatch the cxj batch

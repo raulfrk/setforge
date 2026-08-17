@@ -39,6 +39,12 @@ import pytest
 # conftest.py before sibling test modules, so the import is always
 # satisfied at collection time.
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
+from tests.docker.network import NETWORK_ONLY
+from tests.docker.offline_extension import (
+    FIXTURE_EXTENSION_ID,
+    FIXTURE_VSIX_PATH,
+    fixture_vsix_bytes,
+)
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -406,6 +412,8 @@ def test_install_chain_resolution_and_bootstrap(
 # --- Variant L ------------------------------------------------------------
 
 
+@pytest.mark.network_canary
+@NETWORK_ONLY
 @pytest.mark.xdist_group("docker_daemon")
 def test_install_comprehensive_plugins_extensions(
     docker_container: Callable[..., ContainerHandle],
@@ -440,6 +448,8 @@ def test_install_comprehensive_plugins_extensions(
 # --- Variant L1 (verbosity surface) --------------------------
 
 
+@pytest.mark.network_canary
+@NETWORK_ONLY
 @pytest.mark.xdist_group("docker_daemon")
 def test_install_verbose_emits_setforge_debug(
     docker_container: Callable[..., ContainerHandle],
@@ -1181,12 +1191,15 @@ if [ "${ARGV[0]:-}" = "--install-extension" ]; then
                 exit 1
             fi
             ;;
+        setforge.fixture-extension)
+            ARGV[1]=/tmp/setforge-fixture-extension.vsix
+            ;;
     esac
 fi
 # Fall through to the real code binary (typically /usr/bin/code).
 PATH_WITHOUT_ME="$(echo "$PATH" | tr ':' '\\n' \
     | grep -v "^${ME_DIR}$" | paste -sd: -)"
-exec env PATH="$PATH_WITHOUT_ME" code "$@"
+exec env PATH="$PATH_WITHOUT_ME" code "${ARGV[@]}"
 """
 
 
@@ -1199,6 +1212,7 @@ def _seed_failing_code_stub(c: ContainerHandle) -> str:
     absolute path so the caller can chmod / inspect it.
     """
     stub_path = "/home/tester/bin/code"
+    c.write_bytes(FIXTURE_VSIX_PATH, fixture_vsix_bytes())
     c.exec(["mkdir", "-p", "/home/tester/bin"], check=True)
     c.write_text(stub_path, _FAILING_CODE_STUB)
     c.exec(["chmod", "+x", stub_path], check=True)
@@ -1220,25 +1234,32 @@ def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> 
     """
     out_path = "tests/fixtures/e2e/setforge.patched-ext.test.yaml"
     text = c.exec(["cat", CONFIG_FIXTURE], check=True).stdout
-    # 6.0 shape: editorconfig lives as a top-level ``packages:`` map entry
-    # AND as a 6-space-indented ref under the profile's ``packages:`` list.
-    # Inject ``extra_ext`` in both places so the ref resolves to a declared
-    # package (else load_config rejects it before the reconcile-failure path).
+    # Replace the profile's live plugin/Marketplace and public extension with
+    # one local VSIX before injecting the deliberately failing extension.
+    plugin_ref = "      - superpowers\n"
     profile_ref = "      - editorconfig.editorconfig\n"
     pkg_entry = (
         "  editorconfig.editorconfig:\n"
         "    type: extension\n"
         "    extension: editorconfig.editorconfig\n"
     )
-    if profile_ref not in text or pkg_entry not in text:
+    if plugin_ref not in text or profile_ref not in text or pkg_entry not in text:
         raise AssertionError(
             f"fixture {CONFIG_FIXTURE!r} no longer carries the "
             "editorconfig anchor; reconcile-failure patches need refresh"
         )
-    patched = text.replace(profile_ref, profile_ref + f"      - {extra_ext}\n", 1)
+    fixture_ref = f"      - {FIXTURE_EXTENSION_ID}\n"
+    patched = text.replace(plugin_ref, "", 1)
+    patched = patched.replace(
+        profile_ref,
+        fixture_ref + f"      - {extra_ext}\n",
+        1,
+    )
     patched = patched.replace(
         pkg_entry,
-        pkg_entry
+        f"  {FIXTURE_EXTENSION_ID}:\n"
+        + "    type: extension\n"
+        + f"    extension: {FIXTURE_EXTENSION_ID}\n"
         + f"  {extra_ext}:\n"
         + "    type: extension\n"
         + f"    extension: {extra_ext}\n",
@@ -1405,11 +1426,11 @@ def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    # editorconfig.editorconfig succeeded ahead of the failure → still
+    # The local fixture extension succeeded ahead of the failure → still
     # installed (default-SKIP behavior, NOT abort/rollback).
     listed = c.exec(["/usr/bin/code", "--list-extensions"], check=False)
-    assert "editorconfig.editorconfig" in listed.stdout, (
-        f"editorconfig.editorconfig should remain installed under default-SKIP; "
+    assert FIXTURE_EXTENSION_ID in listed.stdout, (
+        f"{FIXTURE_EXTENSION_ID} should remain installed under default-SKIP; "
         f"got stdout:{listed.stdout!r}\nstderr:{listed.stderr!r}"
     )
 
@@ -1440,7 +1461,7 @@ def test_e2e_docker_install_retry_failed_flag(
             "run",
             "setforge",
             "install",
-            "--profile=test-comprehensive",
+            "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
             "--retry-failed",
             "--yes",

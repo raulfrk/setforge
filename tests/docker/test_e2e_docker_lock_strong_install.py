@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 
 import pytest
 
 from tests.docker.conftest import ContainerHandle
+from tests.docker.network import NETWORK_ONLY
 
 pytestmark = pytest.mark.e2e_docker
-
-_NETWORK_ENV = "SETFORGE_E2E_NETWORK"
-_network_only = pytest.mark.skipif(
-    os.environ.get(_NETWORK_ENV, "") == "",
-    reason=f"set {_NETWORK_ENV}=1 to run the real lock/marketplace network cases",
-)
 
 _SRC_REPO_A = "/tmp/cfg-strong-plugin"
 _CONFIG_A = f"{_SRC_REPO_A}/setforge.yaml"
@@ -203,7 +197,8 @@ def _install_locked_b(c: ContainerHandle, *, check: bool = False):
     )
 
 
-@_network_only
+@pytest.mark.network_canary
+@NETWORK_ONLY
 @pytest.mark.xdist_group("docker_daemon")
 def test_install_locked_extension_installs_verified_vsix_via_code(
     docker_container: Callable[..., ContainerHandle],

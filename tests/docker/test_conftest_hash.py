@@ -303,6 +303,7 @@ def test_hash_inputs_match_explicit_runtime_copy_surface() -> None:
         "pyproject.toml",
         "tests/docker/Dockerfile",
         "tests/docker/_button_bar_demo.py",
+        "tests/docker/offline_extension.py",
         "uv.lock",
     }
     assert relative_dirs == {"setforge", "tests/fixtures/e2e"}

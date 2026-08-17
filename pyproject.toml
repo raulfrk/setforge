@@ -130,6 +130,7 @@ markers = [
     "test_infra: process-level tests of the test harness itself (opt-in; excluded from the fast default suite)",
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
     "smoke: thin golden-path subset of the e2e_docker suite, run per-PR as a fast smoke split (select via -m 'e2e_docker and smoke')",
+    "network_canary: default-off live-upstream Docker probes (require SETFORGE_E2E_NETWORK=1; run separately from deterministic E2E)",
     "fresh_host: opt this test out of the autouse fresh-host suppression fixture so the install welcome gate fires",
     "xdist_group: serialize tagged tests to one xdist worker for daemon-bound resources (see tests/docker/conftest.py docker_daemon convention)",
 ]

@@ -6,7 +6,8 @@ exactly the integration-emergent surface the Docker suite exists to guard:
 
 - ``ext add`` rewrites ``setforge.yaml`` (mints a top-level ``packages``
   extension entry + a profile ref via ruamel round-trip) AND shells out to
-  the real ``code --install-extension``.
+  the real ``code --install-extension``. Deterministic cases map a fixture ID
+  to a generated local VSIX; the public Marketplace remains a separate canary.
 - ``ext remove`` drops the profile ref (and, with ``--exclude``, appends to
   ``reconcile.extensions.exclude``).
 - standalone ``ext reconcile`` (non-dry-run) actually installs /
@@ -14,9 +15,9 @@ exactly the integration-emergent surface the Docker suite exists to guard:
   logic: read-only modes (REPORT policy or ``--dry-run``) exit 1 on any
   remaining drift; a live run exits 1 only on failed actions.
 
-The e2e image ships a real ``code`` binary (pinned VSCode from the
-Microsoft apt repo), so these tests exercise the true YAML round-trip +
-real-binary-invocation + exit-code paths a CliRunner unit test cannot.
+The e2e image ships a real ``code`` binary (pinned VSCode from the Microsoft
+apt repo), so these tests exercise the true YAML round-trip + real VSIX
+installation + exit-code paths a CliRunner unit test cannot.
 
 Self-contained: each test writes its own config repo under ``/tmp/cfg``
 and passes it via ``--config`` so the ``ext add`` / ``ext remove``
@@ -31,16 +32,33 @@ from collections.abc import Callable
 import pytest
 
 from tests.docker.conftest import ContainerHandle
+from tests.docker.network import NETWORK_ONLY
+from tests.docker.offline_extension import (
+    FIXTURE_EXTENSION_ID,
+    FIXTURE_VSIX_PATH,
+    fixture_vsix_bytes,
+)
 
 pytestmark = pytest.mark.e2e_docker
 
 _CFG_REPO = "/tmp/cfg"
 _CFG_YAML = f"{_CFG_REPO}/setforge.yaml"
 
-# A small, real marketplace extension that installs quickly via
-# `code --install-extension`. Used as the add/reconcile target so the
-# real binary path is exercised end-to-end.
-_EXT_ID = "editorconfig.editorconfig"
+_EXT_ID = FIXTURE_EXTENSION_ID
+_ADAPTER_PATH = "/tmp/setforge-code-adapter"
+_MARKETPLACE_EXT_ID = "editorconfig.editorconfig"
+
+
+def _install_offline_extension_adapter(c: ContainerHandle) -> None:
+    """Install the local VSIX and the narrow real-``code`` adapter."""
+    c.write_bytes(FIXTURE_VSIX_PATH, fixture_vsix_bytes())
+    c.write_text(
+        _ADAPTER_PATH,
+        "#!/bin/sh\n"
+        "exec /workspace/.venv/bin/python "
+        '-m tests.docker.offline_extension "$@"\n',
+    )
+    c.exec(["chmod", "0755", _ADAPTER_PATH])
 
 
 def _write_config(c: ContainerHandle, *, reconcile: str | None = None) -> None:
@@ -73,7 +91,10 @@ def _write_config(c: ContainerHandle, *, reconcile: str | None = None) -> None:
 
 
 def _ext(
-    c: ContainerHandle, *args: str, check: bool = False
+    c: ContainerHandle,
+    *args: str,
+    check: bool = False,
+    offline_extension: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``setforge ext <args> --profile=base --config=<cfg>``."""
     return c.exec(
@@ -87,6 +108,7 @@ def _ext(
             f"--config={_CFG_YAML}",
         ],
         check=check,
+        env={"SETFORGE_CODE_BIN": _ADAPTER_PATH} if offline_extension else None,
     )
 
 
@@ -101,9 +123,10 @@ def test_ext_add_writes_yaml_and_installs(
 ) -> None:
     """``ext add`` declares the id via ``packages`` AND installs via ``code``."""
     c = docker_container()
+    _install_offline_extension_adapter(c)
     _write_config(c)
 
-    res = _ext(c, "add", _EXT_ID)
+    res = _ext(c, "add", _EXT_ID, offline_extension=True)
     combined = res.stdout + res.stderr
     assert res.returncode == 0, combined
     # The id is now declared on the profile via the packages surface.
@@ -181,11 +204,12 @@ def test_ext_reconcile_live_applies_and_installs(
     must install it via the real ``code`` binary and exit 0.
     """
     c = docker_container()
+    _install_offline_extension_adapter(c)
     # ADDITIVE is the default reconcile policy; declare the ext in include.
     _write_config(c, reconcile="additive")
     assert _EXT_ID.lower() not in _list_extensions(c)
 
-    res = _ext(c, "reconcile")
+    res = _ext(c, "reconcile", offline_extension=True)
     combined = res.stdout + res.stderr
     assert res.returncode == 0, combined
     # Live run prints the bare verb (not "would install") and applies it.
@@ -194,10 +218,38 @@ def test_ext_reconcile_live_applies_and_installs(
     assert _EXT_ID.lower() in _list_extensions(c), combined
 
     # Second reconcile is a clean no-op once the ext is present.
-    again = _ext(c, "reconcile")
+    again = _ext(c, "reconcile", offline_extension=True)
     again_out = again.stdout + again.stderr
     assert again.returncode == 0, again_out
     assert "nothing to reconcile" in again.stdout, again_out
+
+
+@pytest.mark.network_canary
+@NETWORK_ONLY
+def test_ext_add_live_marketplace_canary(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Probe the public marketplace separately, retrying one bounded install."""
+    c = docker_container()
+    _write_config(c)
+    attempts: list[str] = []
+
+    for _attempt in range(2):
+        result = _ext(
+            c,
+            "add",
+            _MARKETPLACE_EXT_ID,
+            offline_extension=False,
+        )
+        attempts.append(result.stdout + result.stderr)
+        if result.returncode == 0:
+            assert _MARKETPLACE_EXT_ID in _list_extensions(c)
+            return
+
+    pytest.fail(
+        "live VS Code Marketplace install failed after one retry; "
+        f"each SetForge install attempt is bounded at 30s:\n{attempts!r}"
+    )
 
 
 def test_ext_reconcile_report_policy_exits_1_on_drift(

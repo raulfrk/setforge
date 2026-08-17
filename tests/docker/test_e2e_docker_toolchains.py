@@ -15,12 +15,12 @@ cases are, so the offline smoke assertions always run.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 
 import pytest
 
 from tests.docker.conftest import ContainerHandle
+from tests.docker.network import NETWORK_ONLY
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -28,11 +28,6 @@ pytestmark = pytest.mark.e2e_docker
 # and a real ``cargo install``). Mirrors the convention other
 # network-touching e2e cases follow: default-off so the suite stays
 # hermetic, flip the env var on to exercise the real build paths.
-_NETWORK_ENV = "SETFORGE_E2E_NETWORK"
-_network_only = pytest.mark.skipif(
-    os.environ.get(_NETWORK_ENV, "") == "",
-    reason=f"set {_NETWORK_ENV}=1 to run the real toolchain-install network cases",
-)
 
 
 def test_toolchains_present(
@@ -73,7 +68,8 @@ def test_rustc_present(
     assert rustc.stdout.startswith("rustc "), rustc.stdout
 
 
-@_network_only
+@pytest.mark.network_canary
+@NETWORK_ONLY
 def test_go_install_lands_on_path(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -99,7 +95,8 @@ def test_go_install_lands_on_path(
     assert which.stdout.strip().endswith("/hello"), which.stdout
 
 
-@_network_only
+@pytest.mark.network_canary
+@NETWORK_ONLY
 def test_cargo_install_compiles_links_and_lands_on_path(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

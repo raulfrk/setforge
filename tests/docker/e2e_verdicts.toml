@@ -82,10 +82,16 @@ smoke = false
 signal = "ext add-remove-reconcile audit-fix path"
 verbs = ["ext", "reconcile"]
 
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_add_live_marketplace_canary"]
+verdict = "keep"
+smoke = false
+signal = "separately bounded live VS Code Marketplace availability canary"
+verbs = ["ext"]
+
 [tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_add_writes_yaml_and_installs"]
 verdict = "keep"
 smoke = false
-signal = "ext add-remove-reconcile audit-fix path"
+signal = "offline local-VSIX ext add path through the real VS Code CLI"
 verbs = ["ext", "reconcile"]
 
 [tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_dry_run_exits_1_on_drift"]
@@ -97,7 +103,7 @@ verbs = ["ext", "reconcile"]
 [tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_live_applies_and_installs"]
 verdict = "keep"
 smoke = true
-signal = "ext add-remove-reconcile audit-fix path"
+signal = "offline local-VSIX reconcile path through the real VS Code CLI"
 verbs = ["reconcile", "ext"]
 
 [tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_report_policy_exits_1_on_drift"]

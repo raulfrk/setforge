@@ -47,12 +47,16 @@ jobs:
           uv run coverage erase
           uv run coverage run --rcfile=/dev/null --branch -m pytest \
             tests/docker/test_conftest_hash.py \
+            tests/docker/test_container_runtime.py \
             tests/docker/test_image.py \
+            tests/docker/test_network.py \
+            tests/docker/test_offline_extension.py \
             tests/test_e2e_xdist_prebuild.py \
+            tests/test_network_canary_contract.py \
             tests/integration/test_e2e_prebuild.py \
             -m 'not e2e_docker' --no-cov -q
           uv run coverage report --rcfile=/dev/null --fail-under=100 \
-            --include='tests/e2e_xdist.py,tests/docker/image.py'
+            --include='tests/e2e_xdist.py,tests/docker/container_runtime.py,tests/docker/image.py,tests/docker/network.py,tests/docker/offline_extension.py'
 
   pr-e2e-smoke:
     name: E2E Docker smoke (PR)
@@ -85,7 +89,7 @@ jobs:
       - name: Run E2E smoke subset
         # The thin `smoke`-marked golden-path subset only. --no-cov for the
         # same xdist/pytest-cov reason as the full e2e job (see below).
-        run: uv run pytest -m "e2e_docker and smoke" -v --no-cov
+        run: uv run pytest -m "e2e_docker and smoke and not network_canary" -v --no-cov
 
   pr-mutmut-diff:
     name: Mutation testing (PR diff)
@@ -155,7 +159,7 @@ jobs:
         # crashes at xdist worker setup (AttributeError: 'Central' object
         # has no attribute 'configure_node') when --cov is in default
         # addopts. Coverage is meaningless for e2e tests anyway.
-        run: uv run pytest -m e2e_docker -v --no-cov
+        run: uv run pytest -m "e2e_docker and not network_canary" -v --no-cov
 
   secrets-scan:
     name: Secrets scan (gitleaks)

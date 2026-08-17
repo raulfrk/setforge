@@ -33,6 +33,7 @@ from collections.abc import Callable
 import pytest
 
 from tests.docker.conftest import ContainerHandle
+from tests.docker.network import NETWORK_ONLY
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -254,6 +255,8 @@ def test_marketplace_add_writes_yaml_and_registers(
     assert _MP_NAME not in yaml_after, yaml_after
 
 
+@pytest.mark.network_canary
+@NETWORK_ONLY
 def test_marketplace_add_binary_failure_does_not_leave_orphan_yaml_entry(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

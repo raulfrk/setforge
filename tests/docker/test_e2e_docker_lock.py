@@ -3,21 +3,15 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 
 import pytest
 
 from tests.docker.conftest import ContainerHandle
+from tests.docker.network import NETWORK_ONLY
 
 pytestmark = pytest.mark.e2e_docker
-
-_NETWORK_ENV = "SETFORGE_E2E_NETWORK"
-_network_only = pytest.mark.skipif(
-    os.environ.get(_NETWORK_ENV, "") == "",
-    reason=f"set {_NETWORK_ENV}=1 to run the real lock/marketplace network cases",
-)
 
 _SRC_REPO = "/tmp/cfg-lock"
 _CONFIG = f"{_SRC_REPO}/setforge.yaml"
@@ -98,7 +92,8 @@ def _install_locked(c: ContainerHandle, *, check: bool = False):
     )
 
 
-@_network_only
+@pytest.mark.network_canary
+@NETWORK_ONLY
 @pytest.mark.xdist_group("docker_daemon")
 def test_lock_writes_concrete_pins_across_ecosystems(
     docker_container: Callable[..., ContainerHandle],
@@ -125,7 +120,8 @@ def test_lock_writes_concrete_pins_across_ecosystems(
     assert ext_pin["checksum"].startswith("sha256:"), ext_pin
 
 
-@_network_only
+@pytest.mark.network_canary
+@NETWORK_ONLY
 @pytest.mark.xdist_group("docker_daemon")
 def test_install_locked_passes_on_match_and_fails_on_drift(
     docker_container: Callable[..., ContainerHandle],

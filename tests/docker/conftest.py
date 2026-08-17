@@ -61,6 +61,11 @@ from pathlib import Path
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
+from tests.docker.container_runtime import (
+    container_run_argv,
+    env_args,
+    stream_bytes,
+)
 from tests.docker.image import DockerImageBuildError, ensure_docker_image
 from tests.docker.pyte_session import PyteSession
 from tests.e2e_xdist import image_target_for_markexpr
@@ -79,17 +84,6 @@ can queue behind 3 sibling-worker calls before its budget burns. The
 test over. 120s leaves headroom without slowing the green-path case
 (``docker exec`` for the e2e suite completes in 5-15s typical).
 """
-
-
-def _env_args(env: dict[str, str] | None) -> list[str]:
-    """Return ``-e KEY=VAL`` argv chunks for a ``docker`` env mapping."""
-    if env is None:
-        return []
-    args: list[str] = []
-    for k, v in env.items():
-        args += ["-e", f"{k}={v}"]
-    return args
-
 
 # ---------------------------------------------------------------------------
 # Image: build once per session
@@ -168,7 +162,7 @@ class ContainerHandle:
         argv: list[str] = ["docker", "exec"]
         if workdir is not None:
             argv += ["-w", workdir]
-        argv += _env_args(env)
+        argv += env_args(env)
         if input_text is not None:
             argv += ["-i"]
         argv += [self.cid, *cmd]
@@ -217,6 +211,16 @@ class ContainerHandle:
             timeout=DOCKER_EXEC_TIMEOUT_S,
         )
 
+    def write_bytes(self, path_in_container: str, content: bytes) -> None:
+        """Stream arbitrary bytes into a container-owned file."""
+        stream_bytes(
+            cid=self.cid,
+            path=path_in_container,
+            content=content,
+            ensure_parent=lambda parent: self.exec(["mkdir", "-p", parent]),
+            timeout=DOCKER_EXEC_TIMEOUT_S,
+        )
+
     def read_text(self, path_in_container: str) -> str:
         """Read a file inside the container; return its text content."""
         return self.exec(["cat", path_in_container]).stdout
@@ -243,16 +247,6 @@ def docker_container(
         env: dict[str, str] | None = None,
     ) -> ContainerHandle:
         name = f"setforge-e2e-{uuid.uuid4().hex[:10]}"
-        argv: list[str] = [
-            "docker",
-            "run",
-            "--rm",
-            "-d",
-            "--name",
-            name,
-            "-w",
-            "/workspace",
-        ]
         # Suppress the fresh-host welcome panel by default
         # for the Docker e2e suite. The welcome's spec behavior raises
         # WelcomeRequiresInteractive on non-TTY + no --yes, which would
@@ -262,10 +256,12 @@ def docker_container(
         # by passing ``env={"SETFORGE_NO_WELCOME": ""}`` to exercise the
         # welcome path end-to-end.
         merged_env = {"SETFORGE_NO_WELCOME": "1"} | (env or {})
-        argv += _env_args(merged_env)
-        argv += [docker_image]
-        if cmd is not None:
-            argv += cmd
+        argv = container_run_argv(
+            name=name,
+            image=docker_image,
+            env=merged_env,
+            cmd=cmd,
+        )
         proc = subprocess.run(
             argv,
             check=True,
@@ -325,7 +321,7 @@ def docker_pty_session(
         timeout: int = 60,
     ) -> pexpect.spawn:
         argv = ["exec", "-it"]
-        argv += _env_args(env)
+        argv += env_args(env)
         argv += [container.cid, *cmd]
         session = pexpect.spawn("docker", argv, encoding="utf-8", timeout=timeout)
         sessions.append(session)
