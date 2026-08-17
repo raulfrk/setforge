@@ -279,7 +279,12 @@ class TestNoLeakProof:
         integration_subprocess,
     ) -> None:
         env = integration_env()
-        env.present_binary("claude")
-        result = env.run_verb(["install", "--yes"])
+        claude = env.present_binary("claude")
+        # ``install`` intentionally skips Claude when a profile declares no
+        # plugins. ``plugin list`` always probes the present binary, making it
+        # the direct proof that an unregistered subprocess cannot reach host.
+        result = env.run_verb(["plugin", "list"])
+        error = str(result.exception) + result.output
         assert result.exit_code != 0
-        assert "not registered" in (str(result.exception) + result.output).lower()
+        assert "not registered" in error.lower()
+        assert f"{claude} plugin list --json" in error
