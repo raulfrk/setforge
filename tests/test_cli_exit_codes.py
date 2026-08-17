@@ -24,16 +24,27 @@ version: 1
 tracked_files:
   d:
     src: x
-    dst: y
+    dst: {dst}
+marketplaces:
+  test-marketplace:
+    source: github
+    repo: owner/marketplace
+claude_plugins:
+  declared.plugin:
+    marketplace: test-marketplace
 packages:
   declared.one:
     type: extension
     extension: declared.one
+  declared.plugin:
+    type: plugin
+    plugin: declared.plugin
 profiles:
   vmh:
     tracked_files: [d]
     packages:
       - declared.one
+      - declared.plugin
     reconcile:
       extensions:
         policy: report
@@ -50,7 +61,7 @@ profiles:
 def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Write a minimal setforge.yaml + tracked tree, mock the code CLI."""
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(_FIXTURE_YAML, encoding="utf-8")
+    cfg.write_text(_FIXTURE_YAML.format(dst=tmp_path / "live"), encoding="utf-8")
     (tmp_path / "tracked").mkdir()
     (tmp_path / "tracked" / "x").write_text("data\n")
 
@@ -128,7 +139,7 @@ def test_ext_reconcile_prune_exits_0_after_acting(
 def test_install_warns_and_exits_0_when_claude_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """install with claude absent emits a warning and still exits 0."""
+    """install with a declared plugin warns on missing Claude and exits 0."""
     cfg = _setup_fixture(tmp_path, monkeypatch)
 
     # Claude binary is absent.
@@ -148,8 +159,10 @@ def test_install_warns_and_exits_0_when_claude_absent(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, f"output: {result.output}"
-    # Warning must mention 'claude' (case-insensitive).
-    assert "claude" in result.output.lower()
+    assert (
+        "warning: skipping claude plugin reconcile — claude binary not found"
+        in result.output.lower()
+    )
 
 
 def test_ext_reconcile_clean_state_exits_0(
