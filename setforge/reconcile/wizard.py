@@ -36,17 +36,21 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from setforge._editor import run_editor
 from setforge.reconcile._claude_ui import _themed_style
+from setforge.reconcile.conflict_choices import (
+    ClaudeMergeFn,
+    claude_merge_unavailable,
+)
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.types import FileId
+from setforge.ui.primitives import CANCEL, Button, Cancelled
 from setforge.ui.text import sanitize_controls
-from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar
+from setforge.ui.widgets import button_bar
 
 __all__ = [
     "ClaudeMergeFn",
@@ -58,8 +62,6 @@ __all__ = [
 #: Resolve ONE conflict region. Returns the merged bytes, or :data:`CANCEL` to
 #: decline (the wizard then re-prompts that region). A4 injects the real
 #: resumable ``claude -p`` session; :func:`claude_merge_unavailable` is the stub.
-type ClaudeMergeFn = Callable[[Conflict], bytes | Cancelled]
-
 #: Styled-fragment list — prompt_toolkit's ``(style_class, text)`` shape.
 type _Fragments = list[tuple[str, str]]
 
@@ -72,11 +74,6 @@ _THEIRS_MARKER = ">>>>>>> THEIRS (upstream)"
 #: Above this many lines a rendered side is truncated (display only — the folded
 #: bytes are always the full raw side).
 _MAX_DISPLAY_LINES = 40
-
-
-def claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
-    """Default Claude-merge stub: always declines (re-prompts the region)."""
-    return CANCEL
 
 
 @dataclass(frozen=True, slots=True)

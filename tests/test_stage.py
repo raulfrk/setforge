@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from setforge.cli import stage as stage_mod
 from setforge.cli.stage import QUIT, FileStage, _Quit, collect_stages, counts, walk
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.reconcile.types import HunkClass, file_id
@@ -16,6 +17,38 @@ _LIVE = (
     b"## Shell\nPrefer zsh.\n\n"
     b"## Host paths\nworkdir: /home/raul\n"
 )
+
+
+def test_lazy_interactive_seams_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from prompt_toolkit.styles import Style
+
+    from setforge.reconcile import _claude_ui, share_draft
+    from setforge.ui import widgets
+
+    sentinel = object()
+    style = Style.from_dict({})
+    draft_calls: list[str] = []
+
+    def fake_hunk(*_args: object, **_kwargs: object) -> stage_mod.Cancelled:
+        draft_calls.append("hunk")
+        return stage_mod.CANCEL
+
+    def fake_key(*_args: object, **_kwargs: object) -> stage_mod.Cancelled:
+        draft_calls.append("key")
+        return stage_mod.CANCEL
+
+    monkeypatch.setattr(widgets, "button_bar", lambda *args, **kwargs: sentinel)
+    monkeypatch.setattr(_claude_ui, "_themed_style", lambda: style)
+    monkeypatch.setattr(share_draft, "draft_hunk", fake_hunk)
+    monkeypatch.setattr(share_draft, "draft_key_unit", fake_key)
+
+    assert stage_mod.button_bar([stage_mod.Button("choose", sentinel)]) is sentinel
+    assert stage_mod._themed_style() is style
+    stage_mod.share_draft.draft_hunk(b"x", display_path="x")
+    stage_mod.share_draft.draft_key_unit(
+        "x", display_path="x", fmt=stage_mod.StructuredFormat.YAML
+    )
+    assert draft_calls == ["hunk", "key"]
 
 
 def _write(path: Path, data: bytes) -> None:

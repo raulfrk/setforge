@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Final
 
 from prompt_toolkit.application import Application, get_app
@@ -42,39 +41,14 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 
 from setforge.ui.box import frame
+from setforge.ui.primitives import CANCEL, Button, Cancelled, _Cancelled
 from setforge.ui.theme import pt_style
+
+__all__ = ["CANCEL", "Button", "Cancelled", "button_bar", "pager", "text_prompt"]
 
 #: Styled-fragment list, the shape prompt_toolkit's ``FormattedTextControl``
 #: accepts: ``(style_class, text)`` pairs.
 type _Fragments = list[tuple[str, str]]
-
-
-class _Cancelled(Enum):
-    """The type of the :data:`CANCEL` singleton (one member, ``TOKEN``)."""
-
-    TOKEN = auto()
-
-
-#: Sentinel returned when the user cancels (Esc / Ctrl-C). An Enum-singleton
-#: rather than ``object()``: typeable (``T | _Cancelled``), real ``repr``, a
-#: true singleton, distinct from every button value and from every falsy
-#: stand-in. Callers test ``if result is CANCEL``.
-CANCEL: Final = _Cancelled.TOKEN
-
-#: Public alias for the cancel sentinel's type, so callers can spell the return
-#: union of widgets that may cancel (e.g. ``WizardResult | Cancelled``) without
-#: reaching for the private member name.
-type Cancelled = _Cancelled
-
-
-@dataclass(frozen=True, slots=True)
-class Button[T]:
-    """One selectable button: a ``label``, the ``value`` it yields, and an
-    optional explicit accelerator ``key`` (a single lowercase letter)."""
-
-    label: str
-    value: T
-    key: str | None = None
 
 
 # Keys reserved by navigation / control — an accelerator may never collide with

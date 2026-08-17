@@ -6,9 +6,12 @@ The directory walks ``expand_tracked_file`` runs for tracked entries whose
 that walk cost.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -23,8 +26,10 @@ from setforge.compare import (
 )
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
-from setforge.reconcile_apply import ReconcileAuto
 from setforge.user_section_markers import detect_duplicate_section_names
+
+if TYPE_CHECKING:
+    from setforge.reconcile_apply import ReconcileAuto
 
 
 @dataclass(slots=True, frozen=True)
@@ -89,6 +94,8 @@ def _parse_section_auto(
         raise typer.Exit(2)
     if auto_value is None:
         return None
+    from setforge.reconcile_apply import ReconcileAuto
+
     try:
         return ReconcileAuto(auto_value)
     except ValueError:

@@ -36,6 +36,24 @@ def test_install_helpers_module_imports() -> None:
     assert callable(_install_helpers._write_install_transition)
 
 
+def test_claude_merge_factory_loads_only_for_interactive_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge.reconcile import claude_merge
+    from setforge.reconcile.conflict_choices import claude_merge_unavailable
+
+    sentinel = lambda _conflict: b"merged"  # noqa: E731
+    monkeypatch.setattr(claude_merge, "make_claude_merge_fn", lambda **_kw: sentinel)
+
+    assert (
+        _install_helpers._claude_merge_for(Path("live"), interactive=False)
+        is claude_merge_unavailable
+    )
+    assert (
+        _install_helpers._claude_merge_for(Path("live"), interactive=True) is sentinel
+    )
+
+
 def test_check_unexpected_drift_no_entries_is_noop(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,

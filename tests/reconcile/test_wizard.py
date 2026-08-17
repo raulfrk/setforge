@@ -28,6 +28,16 @@ from setforge.reconcile.types import FileId
 from setforge.reconcile.wizard import ClaudeMergeFn
 from setforge.ui.widgets import CANCEL
 
+
+def test_reconcile_facade_rejects_unknown_lazy_export() -> None:
+    import setforge.reconcile as reconcile
+
+    with pytest.raises(AttributeError, match="has no attribute"):
+        getattr(  # noqa: B009 - exercises PEP 562 fallback
+            reconcile, "missing_reconcile_export"
+        )
+
+
 # Private helpers/consts live on the module; the façade re-exports the public API.
 W = importlib.import_module("setforge.reconcile.wizard")
 

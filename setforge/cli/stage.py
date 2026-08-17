@@ -14,14 +14,13 @@ from __future__ import annotations
 import stat
 import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import typer
-from prompt_toolkit.styles import Style
 from rich.console import Console
 
 from setforge import atomicio
@@ -38,17 +37,67 @@ from setforge.config import Config, ResolvedProfile, load_config, resolve_profil
 from setforge.errors import StructuredParseError
 from setforge.locking import profile_lock
 from setforge.reconcile import hunks as hunks_mod
-from setforge.reconcile import share_draft
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
-from setforge.reconcile._claude_ui import _themed_style
 from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import FileId, HunkClass, content_sha, file_id
 from setforge.scalar_merge import ABSENT
-from setforge.ui import Button, button_bar
-from setforge.ui.widgets import CANCEL
+from setforge.ui.primitives import CANCEL, Button, Cancelled
+
+if TYPE_CHECKING:
+    from prompt_toolkit.styles import BaseStyle, Style
+
+    from setforge.reconcile.share_draft import DraftResult
+
+
+def button_bar[T](
+    buttons: Sequence[Button[T]],
+    *,
+    title: str | None = None,
+    body: str | list[tuple[str, str]] | None = None,
+    initial: int = 0,
+    style: BaseStyle | None = None,
+) -> T | Cancelled:
+    """Load the terminal widget on first interactive use."""
+    from setforge.ui.widgets import button_bar as render
+
+    return render(
+        buttons,
+        title=title,
+        body=body,
+        initial=initial,
+        style=style,
+    )
+
+
+def _themed_style() -> Style:
+    """Load prompt-toolkit styling on first interactive use."""
+    from setforge.reconcile._claude_ui import _themed_style as build
+
+    return build()
+
+
+class _ShareDraftProxy:
+    """Patchable lazy proxy for the two Claude drafting entry points."""
+
+    def draft_hunk(
+        self, region: bytes, *, display_path: str
+    ) -> DraftResult | Cancelled:
+        from setforge.reconcile.share_draft import draft_hunk
+
+        return draft_hunk(region, display_path=display_path)
+
+    def draft_key_unit(
+        self, original: object, *, display_path: str, fmt: StructuredFormat
+    ) -> DraftResult | Cancelled:
+        from setforge.reconcile.share_draft import draft_key_unit
+
+        return draft_key_unit(original, display_path=display_path, fmt=fmt)
+
+
+share_draft = _ShareDraftProxy()
 
 
 @dataclass(frozen=True, slots=True)

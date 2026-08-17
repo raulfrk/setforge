@@ -80,17 +80,19 @@ from setforge.errors import (
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.reconcile import FileId
-from setforge.reconcile.claude_merge import make_claude_merge_fn
+from setforge.reconcile.conflict_choices import (
+    ClaudeMergeFn,
+    claude_merge_unavailable,
+)
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
-from setforge.reconcile.wizard import claude_merge_unavailable
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
     validate_host_local_sections_file_type,
 )
 from setforge.ui.diffview import to_fragments, two_way_lines
-from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, pager
+from setforge.ui.primitives import CANCEL, Button, Cancelled
 
 
 def _load_validated_host_local_sections(
@@ -293,11 +295,22 @@ class _SeedButton(Enum):
     VIEW_DIFF = auto()
 
 
+def _claude_merge_for(display_path: Path, *, interactive: bool) -> ClaudeMergeFn:
+    """Return a lazy interactive Claude callback or the no-op stub."""
+    if not interactive:
+        return claude_merge_unavailable
+    from setforge.reconcile.claude_merge import make_claude_merge_fn
+
+    return make_claude_merge_fn(display_path=str(display_path))
+
+
 def _seed_prompt_interactive(
     display_path: str,
     live: bytes,
     tracked: bytes,
 ) -> reconcile_apply.SeedChoice | Cancelled:
+    from setforge.ui.widgets import button_bar, pager
+
     model = two_way_lines(live, tracked)
     body = f"{display_path} differs from upstream, no merge base recorded.\n"
     body += f"live vs upstream · {model.summary}"
@@ -370,11 +383,7 @@ def _resolve_plain_reconcile(
     # in a non-interactive / --auto / CI run it stays the unavailable stub so
     # it is never auto-invoked. The factory returns a closure — claude is
     # spawned only if the user presses the button.
-    claude_merge = (
-        make_claude_merge_fn(display_path=str(sub_dst))
-        if interactive
-        else claude_merge_unavailable
-    )
+    claude_merge = _claude_merge_for(sub_dst, interactive=interactive)
     outcome = reconcile_apply.reconcile_plain_file(
         profile,
         fid,
@@ -426,11 +435,7 @@ def _resolve_structured_reconcile(
     ):
         return None
     fid = reconcile.file_id(sub_name)
-    claude_merge = (
-        make_claude_merge_fn(display_path=str(sub_dst))
-        if interactive
-        else claude_merge_unavailable
-    )
+    claude_merge = _claude_merge_for(sub_dst, interactive=interactive)
     outcome = reconcile_apply.reconcile_structured_file(
         profile,
         fid,

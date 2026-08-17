@@ -6,6 +6,9 @@ Re-exports the button-bar widget surface (``Button``, ``button_bar``,
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+from setforge.ui.primitives import CANCEL, Button
 from setforge.ui.theme import (
     THEME,
     Cap,
@@ -16,7 +19,18 @@ from setforge.ui.theme import (
     sgr,
     styled,
 )
-from setforge.ui.widgets import CANCEL, Button, button_bar
+
+if TYPE_CHECKING:
+    from setforge.ui.widgets import button_bar
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 - lazy public re-export
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
+
+        return button_bar
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CANCEL",

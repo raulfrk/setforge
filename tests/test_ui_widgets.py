@@ -85,6 +85,14 @@ def test_cancel_is_singleton() -> None:
     assert "Cancelled" in repr(CANCEL)
 
 
+def test_ui_facade_lazily_reexports_button_bar() -> None:
+    import setforge.ui as ui
+
+    assert ui.button_bar is button_bar
+    with pytest.raises(AttributeError, match="has no attribute"):
+        getattr(ui, "missing_widget")  # noqa: B009 - exercises PEP 562 fallback
+
+
 def test_button_frozen() -> None:
     btn = Button(label="Ours", value=1)
     with pytest.raises((AttributeError, TypeError)):

@@ -53,6 +53,7 @@ jobs:
             tests/docker/test_offline_extension.py \
             tests/test_e2e_xdist_prebuild.py \
             tests/test_network_canary_contract.py \
+            tests/integration/test_cli_lazy_ui_import.py \
             tests/integration/test_e2e_prebuild.py \
             -m 'not e2e_docker' --no-cov -q
           uv run coverage report --rcfile=/dev/null --fail-under=100 \

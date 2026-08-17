@@ -33,6 +33,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from setforge.reconcile import (
     ABSENT,
@@ -42,7 +43,10 @@ from setforge.reconcile import (
     merge,
     read_base,
     read_local,
-    resolve_conflicts,
+)
+from setforge.reconcile.conflict_choices import (
+    ClaudeMergeFn,
+    claude_merge_unavailable,
 )
 from setforge.reconcile.merge_model import MergeInput
 from setforge.reconcile.structured_units import (
@@ -51,13 +55,11 @@ from setforge.reconcile.structured_units import (
     _load_model,
 )
 from setforge.reconcile.types import Absent
-from setforge.reconcile.wizard import (
-    CANCEL,
-    Cancelled,
-    ClaudeMergeFn,
-    claude_merge_unavailable,
-)
 from setforge.structural_merge import merge_structural
+from setforge.ui.primitives import CANCEL, Cancelled
+
+if TYPE_CHECKING:
+    from setforge.reconcile.wizard import WizardResult
 
 __all__ = [
     "AutoSide",
@@ -111,6 +113,24 @@ class SeedChoice(StrEnum):
 
 # Decide the seed for one divergent file; returns CANCEL to abort the file.
 type SeedPrompt = Callable[[str, bytes, bytes], SeedChoice | Cancelled]
+
+
+def resolve_conflicts(
+    file_id: FileId,
+    result: MergeResult,
+    *,
+    display_path: str | None = None,
+    claude_merge: ClaudeMergeFn = claude_merge_unavailable,
+) -> WizardResult | Cancelled:
+    """Load the interactive conflict UI only when reconciliation needs it."""
+    from setforge.reconcile.wizard import resolve_conflicts as resolve
+
+    return resolve(
+        file_id,
+        result,
+        display_path=display_path,
+        claude_merge=claude_merge,
+    )
 
 
 class ReconcileKind(StrEnum):

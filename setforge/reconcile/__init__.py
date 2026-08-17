@@ -8,6 +8,8 @@ without touching consumers.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from setforge.reconcile.host_local_record import (
     record_local_reloc_sections,
     section_heading_of_body,
@@ -28,7 +30,18 @@ from setforge.reconcile.store import (
     write_local,
 )
 from setforge.reconcile.types import ABSENT, FileId, HunkClass, file_id
-from setforge.reconcile.wizard import WizardResult, resolve_conflicts
+
+if TYPE_CHECKING:
+    from setforge.reconcile.wizard import WizardResult, resolve_conflicts
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 - lazy public re-export
+    if name in {"WizardResult", "resolve_conflicts"}:
+        from setforge.reconcile import wizard
+
+        return getattr(wizard, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ABSENT",
