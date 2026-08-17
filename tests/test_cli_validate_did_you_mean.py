@@ -409,6 +409,44 @@ def test_validate_local_yaml_multiple_errors_all_reported(
     # Final summary names the count.
     assert "validation FAILED:" in result.output
     assert "errors" in result.output
+    assert "no changes will be made" in result.output
+    assert result.output.index("no changes will be made") > result.output.index(
+        "validation FAILED:"
+    )
+
+
+def test_validate_local_yaml_tolerates_retired_host_local_sections(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """Validate strips retired span declarations just like the source loader."""
+    cfg = _write_minimal_config(tmp_path)
+    local_yaml_at.write_text(
+        "tracked_files:\n"
+        "  d:\n"
+        "    host_local_sections:\n"
+        "      foo:\n"
+        "        body: hello\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "ok" in result.output
+    assert "SCHEMA VALIDATION ERROR" not in result.output
+
+
+def test_validate_local_yaml_tracked_file_typo_suggests_disposition(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """A near tracked-file overlay typo uses that nested model's candidates."""
+    cfg = _write_minimal_config(tmp_path)
+    local_yaml_at.write_text(
+        "tracked_files:\n  d:\n    dispositon: forked\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "Did you mean 'disposition'" in result.output
+    assert "←─── line 3" in result.output
 
 
 def test_validate_local_yaml_no_ansi_when_not_tty(

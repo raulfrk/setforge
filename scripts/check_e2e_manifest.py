@@ -37,6 +37,18 @@ REQUIRED_SMOKE_VERBS: frozenset[str] = frozenset(
     }
 )
 
+# Raising any ceiling requires an explicit review of the new observable
+# Docker boundary.  Lower these values whenever another right-sizing pass
+# moves coverage down the pyramid.
+ALL_E2E_EXPR = "e2e_docker"
+DETERMINISTIC_E2E_EXPR = "e2e_docker and not network_canary"
+PR_SMOKE_EXPR = "e2e_docker and smoke and not network_canary"
+
+MAX_TOTAL_E2E_TESTS = 233
+MAX_DETERMINISTIC_E2E_TESTS = 224
+MAX_NETWORK_CANARY_TESTS = 9
+MAX_PR_SMOKE_TESTS = 9
+
 
 def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:
     # Explicit -m overrides the default addopts exclude; a nonzero exit raises
@@ -90,6 +102,41 @@ def gate_collect_nonempty(collected: list[str]) -> list[str]:
             "to pass vacuously"
         ]
     return []
+
+
+def gate_suite_budgets(
+    collected: list[str],
+    deterministic_collected: list[str],
+    network_collected: list[str],
+    smoke_collected: list[str],
+) -> list[str]:
+    """Prevent gradual Docker-suite growth from erasing the speed win."""
+    out: list[str] = []
+    if len(collected) > MAX_TOTAL_E2E_TESTS:
+        out.append(
+            f"suite-budget: collected {len(collected)} Docker tests, budget is "
+            f"{MAX_TOTAL_E2E_TESTS}; prove the new host/tool/TTY/process boundary "
+            "or move the coverage to integration"
+        )
+    if len(deterministic_collected) > MAX_DETERMINISTIC_E2E_TESTS:
+        out.append(
+            f"suite-budget: collected {len(deterministic_collected)} deterministic "
+            f"Docker tests, budget is {MAX_DETERMINISTIC_E2E_TESTS}; prove the new "
+            "host/tool/TTY/process boundary or "
+            "move the coverage to integration"
+        )
+    if len(network_collected) > MAX_NETWORK_CANARY_TESTS:
+        out.append(
+            f"suite-budget: collected {len(network_collected)} network canaries, "
+            f"budget is {MAX_NETWORK_CANARY_TESTS}; keep upstream probes "
+            "separately bounded"
+        )
+    if len(smoke_collected) > MAX_PR_SMOKE_TESTS:
+        out.append(
+            f"suite-budget: collected {len(smoke_collected)} smoke tests, budget "
+            f"is {MAX_PR_SMOKE_TESTS}; keep the PR lane to one golden path per verb"
+        )
+    return out
 
 
 def gate_row_shape(manifest: dict[str, dict[str, object]]) -> list[str]:
@@ -210,7 +257,7 @@ def gate_verb_smoke_coverage(
 
 def run_all_gates() -> list[str]:
     try:
-        collected = _collect_node_ids(extra_marker_expr="e2e_docker")
+        collected = _collect_node_ids(extra_marker_expr=ALL_E2E_EXPR)
     except RuntimeError as err:
         return [str(err)]
 
@@ -229,9 +276,24 @@ def run_all_gates() -> list[str]:
     violations.extend(gate_superseded_by_live(collected, manifest))
 
     try:
-        smoke_collected = _collect_node_ids(extra_marker_expr="e2e_docker and smoke")
+        deterministic_collected = _collect_node_ids(
+            extra_marker_expr=DETERMINISTIC_E2E_EXPR
+        )
+    except RuntimeError as err:
+        return [*violations, f"deterministic-collect: {err}"]
+    try:
+        smoke_collected = _collect_node_ids(extra_marker_expr=PR_SMOKE_EXPR)
     except RuntimeError as err:
         return [*violations, f"smoke-collect: {err}"]
+    network_collected = sorted(set(collected) - set(deterministic_collected))
+    violations.extend(
+        gate_suite_budgets(
+            collected,
+            deterministic_collected,
+            network_collected,
+            smoke_collected,
+        )
+    )
     violations.extend(gate_verb_smoke_coverage(smoke_collected, manifest))
     return violations
 
@@ -245,7 +307,7 @@ def main() -> int:
         return 1
     print(
         "E2E verdict-manifest gate passed: set-equality, uniqueness, "
-        "superseded-by-liveness, verb-smoke-coverage, fail-closed."
+        "superseded-by-liveness, suite-budgets, verb-smoke-coverage, fail-closed."
     )
     return 0
 

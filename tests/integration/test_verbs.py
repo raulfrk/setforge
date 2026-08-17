@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,24 @@ def _transition_dirs(env: IntegrationEnv) -> list[Path]:
     if not root.exists():
         return []
     return sorted(p for p in root.iterdir() if p.is_dir())
+
+
+def _latest_transition_meta(env: IntegrationEnv) -> dict[str, object]:
+    dirs = _transition_dirs(env)
+    assert dirs, "expected at least one transition"
+    return json.loads((dirs[-1] / "meta.json").read_text())
+
+
+def _assert_transition_command(meta: dict[str, object], command: str) -> None:
+    """Pin the command metadata at the fast CLI/filesystem boundary."""
+    assert meta["command"] == command
+    assert isinstance(meta.get("end_timestamp"), str)
+    command_line = meta.get("command_line")
+    # CliRunner stays in the pytest process, so the captured argv is pytest's;
+    # the Docker lifecycle separately pins real ``setforge <command>`` argv.
+    assert isinstance(command_line, list)
+    assert command_line
+    assert "preserve_user_keys_applied" not in meta
 
 
 class TestInstall:
@@ -39,8 +58,29 @@ class TestInstall:
         dirs = _transition_dirs(env)
         assert len(dirs) == 1, f"expected one transition, got {dirs}"
         meta = json.loads((dirs[0] / "meta.json").read_text())
-        assert meta["command"] == "install"
+        _assert_transition_command(meta, "install")
         assert meta["profile"] == env.profile
+
+    def test_persisted_command_line_redacts_secret_argv(
+        self,
+        integration_env: Callable[..., IntegrationEnv],
+        integration_subprocess,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The install transition writer applies redaction before persistence."""
+        env = integration_env()
+        secret = "ghp_DO_NOT_PERSIST"
+        monkeypatch.setattr(
+            "setforge.cli._install_helpers.sys",
+            SimpleNamespace(argv=["setforge", "install", f"--token={secret}"]),
+        )
+        result = env.run_verb(["install"])
+        assert result.exit_code == 0, result.output
+        command_line = _latest_transition_meta(env)["command_line"]
+        assert isinstance(command_line, list)
+        rendered = " ".join(str(arg) for arg in command_line)
+        assert secret not in rendered
+        assert "--token=<REDACTED>" in rendered
 
     def test_idempotent_second_run(
         self,
@@ -77,6 +117,7 @@ class TestSync:
         result = env.run_verb(["sync", "--auto=use-live", "--yes"])
         assert result.exit_code == 0, result.output
         assert env.tracked("text/note.txt").read_text() == "edited live\n"
+        _assert_transition_command(_latest_transition_meta(env), "sync")
 
     def test_keep_tracked_refuses_absorb(
         self,
@@ -127,6 +168,7 @@ class TestRevert:
         result = env.run_verb(["revert", "--yes"])
         assert result.exit_code == 0, result.output
         assert not live.exists()
+        _assert_transition_command(_latest_transition_meta(env), "revert")
 
 
 class TestMigrate:
