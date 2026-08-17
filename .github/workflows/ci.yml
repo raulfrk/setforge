@@ -42,6 +42,17 @@ jobs:
       # cannot disarm it.
       - run: uv run python scripts/check_e2e_manifest.py
       - run: uv run pytest --cov-fail-under=85
+      - name: Test pytest/xdist infrastructure with branch coverage
+        run: |
+          uv run coverage erase
+          uv run coverage run --rcfile=/dev/null --branch -m pytest \
+            tests/docker/test_conftest_hash.py \
+            tests/docker/test_image.py \
+            tests/test_e2e_xdist_prebuild.py \
+            tests/integration/test_e2e_prebuild.py \
+            -m 'not e2e_docker' --no-cov -q
+          uv run coverage report --rcfile=/dev/null --fail-under=100 \
+            --include='tests/e2e_xdist.py,tests/docker/image.py'
 
   pr-e2e-smoke:
     name: E2E Docker smoke (PR)

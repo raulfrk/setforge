@@ -2,8 +2,8 @@
 
 Four fixtures:
 
-- :func:`docker_image` — session-scoped: builds the image once per
-  pytest session via ``docker/build-push-action``-equivalent CLI. Skips
+- :func:`docker_image` — session-scoped: reuses the controller-prepared image
+  under xdist, or builds it once in serial mode. Skips
   every dependent test cleanly when ``docker`` is missing or build
   fails (with stderr captured).
 - :func:`docker_container` — function-scoped factory: ``docker run
@@ -50,10 +50,7 @@ line matcher cannot reliably anchor on. The pyte harness lives in
 from __future__ import annotations
 
 import contextlib
-import functools
-import hashlib
 import posixpath
-import shutil
 import subprocess
 import uuid
 from collections.abc import Callable, Iterator
@@ -64,6 +61,7 @@ from pathlib import Path
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
+from tests.docker.image import DockerImageBuildError, ensure_docker_image
 from tests.docker.pyte_session import PyteSession
 
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
@@ -82,147 +80,6 @@ test over. 120s leaves headroom without slowing the green-path case
 """
 
 
-REPO_ROOT: Path = Path(__file__).resolve().parents[2]
-DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
-IMAGE_TAG_PREFIX: str = "setforge-e2e:test"
-
-
-def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
-    """Parse a .dockerignore file into (dirs, suffixes, filenames).
-
-    - ``#``/blank → skipped.
-    - trailing ``/`` → directory pattern.
-    - leading ``*`` → suffix pattern.
-    - other → filename pattern.
-
-    Glob metacharacters (``**``, ``?``, brace expansion) are not
-    supported; the current ``.dockerignore`` does not use them.
-    """
-    dirs: set[str] = set()
-    suffixes: set[str] = set()
-    filenames: set[str] = set()
-    if not path.is_file():
-        return dirs, suffixes, filenames
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return dirs, suffixes, filenames
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.endswith("/"):
-            dirs.add(line.rstrip("/"))
-        elif line.startswith("*"):
-            suffix = line[1:]
-            if not suffix:
-                continue
-            suffixes.add(suffix)
-        else:
-            filenames.add(line)
-    return dirs, suffixes, filenames
-
-
-# Inputs whose content determines the docker image identity. Anything baked
-# into the image (Dockerfile + sources copied in) or read by the e2e tests
-# from inside the image (the e2e config fixture) goes here. A change to
-# any of these flips the content hash, which flips the image tag, which
-# naturally invalidates the build cache.
-_HASH_INPUT_FILES: tuple[Path, ...] = (
-    REPO_ROOT / "tests" / "docker" / "Dockerfile",
-    REPO_ROOT / "pyproject.toml",
-    REPO_ROOT / "uv.lock",
-)
-_HASH_INPUT_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / "tests" / "fixtures" / "e2e",
-    REPO_ROOT / "setforge",
-    REPO_ROOT / "tracked",
-)
-
-# Patterns harvested from .dockerignore at import time so the hash exclusion
-# list stays aligned with what docker build actually filters out of the
-# context. The hardcoded baselines below are unioned with these so behavior is
-# resilient if .dockerignore is deleted or unreadable: _parse_dockerignore
-# returns empty sets on UnicodeDecodeError rather than blocking test
-# collection at module load.
-_DOCKERIGNORE_DIRS, _DOCKERIGNORE_SUFFIXES, _DOCKERIGNORE_FILES = _parse_dockerignore(
-    REPO_ROOT / ".dockerignore"
-)
-
-
-def _iter_hash_input_paths() -> Iterator[Path]:
-    """Yield every file feeding the image-tag hash, in deterministic order.
-
-    Sorted by repo-relative POSIX path so the hash is stable across
-    filesystems and OS walk orders. Missing inputs are silently skipped:
-    a deleted input legitimately changes the hash via its absence.
-
-    Excludes anything Python or test tooling regenerates at runtime
-    (``__pycache__`` bytecode, ``.pytest_cache``, ``.ruff_cache``,
-    editor swap files) plus everything ``.dockerignore`` filters out
-    of the build context (``.coverage``, ``htmlcov/``, etc.). Without
-    the ``.dockerignore`` union the hash flaps when ephemerals land
-    under hash-input dirs even though docker build cache is unaffected.
-    """
-    excluded_dirs = {
-        "__pycache__",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".mypy_cache",
-    } | _DOCKERIGNORE_DIRS
-    excluded_suffixes = {".pyc", ".pyo", ".swp", ".swo"} | _DOCKERIGNORE_SUFFIXES
-    excluded_filenames = set(_DOCKERIGNORE_FILES)
-    seen: set[Path] = set()
-    for path in _HASH_INPUT_FILES:
-        if path.is_file():
-            resolved = path.resolve()
-            if resolved.is_relative_to(REPO_ROOT):
-                seen.add(resolved)
-    for root in _HASH_INPUT_DIRS:
-        if not root.is_dir():
-            continue
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            if path.suffix in excluded_suffixes:
-                continue
-            if path.name in excluded_filenames:
-                continue
-            if any(part in excluded_dirs for part in path.parts):
-                continue
-            resolved = path.resolve()
-            if not resolved.is_relative_to(REPO_ROOT):
-                continue
-            seen.add(resolved)
-    yield from sorted(seen, key=lambda p: p.relative_to(REPO_ROOT).as_posix())
-
-
-def _compute_inputs_hash() -> str:
-    """Return a short content hash over the files that define the image.
-
-    First 12 hex chars of SHA-256 over each input's repo-relative POSIX
-    path, a NUL separator, the byte content, and a record separator.
-    Twelve chars is ~48 bits — collision risk is negligible for the
-    handful of distinct workspace states a developer holds at once.
-    """
-    digest = hashlib.sha256()
-    for path in _iter_hash_input_paths():
-        rel = path.relative_to(REPO_ROOT).as_posix().encode("utf-8")
-        digest.update(rel)
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\x1e")
-    return digest.hexdigest()[:12]
-
-
-# Session-scoped cache: do NOT invoke _image_tag.cache_clear() mid-session
-# — it breaks the per-session hash invariant the docstring promises.
-@functools.cache
-def _image_tag() -> str:
-    """Return the per-session content-hashed image tag (cached)."""
-    return f"{IMAGE_TAG_PREFIX}-{_compute_inputs_hash()}"
-
-
 def _env_args(env: dict[str, str] | None) -> list[str]:
     """Return ``-e KEY=VAL`` argv chunks for a ``docker`` env mapping."""
     if env is None:
@@ -238,11 +95,6 @@ def _env_args(env: dict[str, str] | None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _docker_available() -> bool:
-    """Return True iff a usable ``docker`` binary is on PATH."""
-    return shutil.which("docker") is not None
-
-
 @pytest.fixture(scope="session")
 def docker_image() -> str:
     """Build the E2E image once per session; return the image tag.
@@ -256,7 +108,7 @@ def docker_image() -> str:
 
     The tag is content-hashed over the inputs that define the image
     (Dockerfile, ``tests/fixtures/e2e/**``, ``setforge/**``) — see
-    :func:`_compute_inputs_hash`. A workspace
+    :func:`tests.docker.image._compute_inputs_hash`. A workspace
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
     rebuild is skipped (fast cache hit); when no image carries the
@@ -271,40 +123,15 @@ def docker_image() -> str:
     matrix is added, wrap the inspect+build sequence in ``flock`` against a
     tag-keyed lockfile (e.g. ``flock /tmp/setforge-build-${tag}.lock``).
     """
-    if not _docker_available():
-        pytest.skip("docker binary not on PATH")
-
-    tag = _image_tag()
-    inspect = subprocess.run(
-        ["docker", "image", "inspect", tag],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    if inspect.returncode == 0:
-        return tag
-
-    proc = subprocess.run(
-        [
-            "docker",
-            "build",
-            "-t",
-            tag,
-            "-f",
-            str(DOCKERFILE),
-            str(REPO_ROOT),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=600,
-    )
-    if proc.returncode != 0:
+    try:
+        tag = ensure_docker_image()
+    except DockerImageBuildError as exc:
         pytest.fail(
-            f"docker build failed:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
+            str(exc),
             pytrace=False,
         )
+    if tag is None:
+        pytest.skip("docker binary not on PATH")
     return tag
 
 

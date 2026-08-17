@@ -127,16 +127,18 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 [tool.pytest.ini_options]
 markers = [
     "integration: cross-module verb integration tests (real git against a tmp source repo, mocked claude/code/gitleaks); runs in the default suite, no Docker",
+    "test_infra: process-level tests of the test harness itself (opt-in; excluded from the fast default suite)",
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
     "smoke: thin golden-path subset of the e2e_docker suite, run per-PR as a fast smoke split (select via -m 'e2e_docker and smoke')",
     "fresh_host: opt this test out of the autouse fresh-host suppression fixture so the install welcome gate fires",
     "xdist_group: serialize tagged tests to one xdist worker for daemon-bound resources (see tests/docker/conftest.py docker_daemon convention)",
 ]
-# Default run skips e2e_docker so plain `pytest` stays fast and docker-free.
+# Default run skips Docker E2E and process-level test-infrastructure probes so
+# plain `pytest` stays fast and docker-free. CI runs test_infra separately.
 # --ignore=mutants keeps a leftover mutmut sandbox (gitignored mutants/, with its
 # copied mutants/tests/) from breaking a local `uv run pytest` with an
 # ImportPathMismatchError. (mutmut's own runs clear addopts via `-o addopts=`.)
-addopts = "-m 'not e2e_docker' --strict-markers --cov=setforge --cov-branch --cov-report=term-missing --ignore=mutants"
+addopts = "-m 'not e2e_docker and not test_infra' --strict-markers --cov=setforge --cov-branch --cov-report=term-missing --ignore=mutants"
 
 [tool.coverage.run]
 source = ["setforge"]
@@ -172,7 +174,8 @@ source_paths = ["setforge"]
 # tests (docs-sync / author-scaffold / dep-triage) `from scripts import ...`.
 # mutmut already auto-copies tests/, pyproject.toml and setup.cfg; scripts/ is
 # the only other tree the unit suite imports. (The root conftest.py holds no
-# fixtures — only the e2e auto-xdist hook — so it is intentionally not copied.)
+# fixtures — only the e2e xdist activation/prebuild hooks — so it is
+# intentionally not copied.)
 also_copy = ["scripts"]
 # Restrict which files actually get mutated to the merge/reconcile/store core
 # (RFC §6). Everything else is copied (so imports resolve) but never mutated.

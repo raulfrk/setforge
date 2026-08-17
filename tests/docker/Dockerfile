@@ -10,7 +10,7 @@
 # A repo-root .dockerignore keeps the context lean. The conftest
 # `docker_image` fixture invokes the same form; the `-<inputs-hash>`
 # suffix is derived from the content of all hashed inputs (see
-# `_image_tag` in conftest.py) and changes whenever
+# `_image_tag` in tests/docker/image.py) and changes whenever
 # anything baked into the image changes.
 #
 # Layer order is stable→volatile so GHA cache misses on source edits

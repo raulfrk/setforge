@@ -1,6 +1,6 @@
-"""Tests for the conftest hash-input filter.
+"""Tests for the Docker image hash-input filter.
 
-Covers :func:`tests.docker.conftest._parse_dockerignore` (pattern
+Covers :func:`tests.docker.image._parse_dockerignore` (pattern
 classification) plus the integration behavior that the parsed patterns
 keep the docker image-tag hash stable when ephemerals listed in
 ``.dockerignore`` appear under hash-input dirs.
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.docker import conftest as docker_conftest
-from tests.docker.conftest import (
+from tests.docker import image as docker_image
+from tests.docker.image import (
     _compute_inputs_hash,
     _iter_hash_input_paths,
     _parse_dockerignore,
@@ -79,7 +79,7 @@ def test_parse_dockerignore_rejects_bare_star(tmp_path: Path) -> None:
     """
     dockerignore = tmp_path / ".dockerignore"
     dockerignore.write_text("*\n", encoding="utf-8")
-    _dirs, suffixes, _files = docker_conftest._parse_dockerignore(dockerignore)
+    _dirs, suffixes, _files = docker_image._parse_dockerignore(dockerignore)
     assert "" not in suffixes
 
 
@@ -87,7 +87,7 @@ def test_parse_dockerignore_survives_malformed_utf8(tmp_path: Path) -> None:
     """Invalid UTF-8 bytes return empty sets instead of raising at import."""
     dockerignore = tmp_path / ".dockerignore"
     dockerignore.write_bytes(b"\xff\xfe")
-    dirs, suffixes, files = docker_conftest._parse_dockerignore(dockerignore)
+    dirs, suffixes, files = docker_image._parse_dockerignore(dockerignore)
     assert dirs == set()
     assert suffixes == set()
     assert files == set()
@@ -114,10 +114,10 @@ def hash_inputs_in_tmp(
     tracked = tmp_path / "tracked"
     tracked.mkdir()
     (tracked / "real.txt").write_text("payload\n", encoding="utf-8")
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (tracked,))
-    monkeypatch.setattr(docker_conftest, "_DOCKERIGNORE_FILES", {".coverage"})
+    monkeypatch.setattr(docker_image, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_DIRS", (tracked,))
+    monkeypatch.setattr(docker_image, "_DOCKERIGNORE_FILES", {".coverage"})
     return tracked
 
 
@@ -162,9 +162,9 @@ def test_iter_hash_input_paths_excludes_outside_repo_symlink(
     outside.write_text("escape", encoding="utf-8")
     link = inside / "link"
     link.symlink_to(outside)
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    monkeypatch.setattr(docker_image, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_DIRS", (inside,))
     yielded = set(_iter_hash_input_paths())
     assert link.resolve() not in yielded
 
@@ -186,9 +186,9 @@ def test_iter_hash_input_paths_includes_inside_repo_symlink(
     target.write_text("kept", encoding="utf-8")
     link = inside / "link"
     link.symlink_to(target)
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    monkeypatch.setattr(docker_image, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_DIRS", (inside,))
     yielded = set(_iter_hash_input_paths())
     assert target.resolve() in yielded
 
@@ -210,9 +210,9 @@ def test_compute_inputs_hash_changes_on_file_edit_in_input_dir(
     inside.mkdir(parents=True)
     target = inside / "file.txt"
     target.write_text("before", encoding="utf-8")
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    monkeypatch.setattr(docker_image, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_DIRS", (inside,))
     h1 = _compute_inputs_hash()
     target.write_text("after", encoding="utf-8")
     h2 = _compute_inputs_hash()
@@ -233,12 +233,55 @@ def test_compute_inputs_hash_ignores_pycache_additions(
     inside = repo_root / "inside"
     inside.mkdir(parents=True)
     (inside / "real.txt").write_text("payload", encoding="utf-8")
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
-    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    monkeypatch.setattr(docker_image, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_DIRS", (inside,))
     h1 = _compute_inputs_hash()
     pycache = inside / "__pycache__"
     pycache.mkdir()
     (pycache / "x.pyc").write_bytes(b"\x00\x01\x02")
     h2 = _compute_inputs_hash()
     assert h1 == h2
+
+
+def test_iter_hash_inputs_covers_files_missing_roots_and_excluded_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The file and directory input paths obey the same repository boundary."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    included = repo_root / "included.txt"
+    included.write_text("included", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    missing = repo_root / "missing.txt"
+    cache_dir = repo_root / "tracked" / ".pytest_cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "ignored.txt").write_text("ignored", encoding="utf-8")
+    monkeypatch.setattr(docker_image, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_image, "_HASH_INPUT_FILES", (included, outside, missing))
+    monkeypatch.setattr(
+        docker_image,
+        "_HASH_INPUT_DIRS",
+        (repo_root / "tracked", repo_root / "missing-root"),
+    )
+
+    yielded = set(_iter_hash_input_paths())
+
+    assert yielded == {included.resolve()}
+
+
+def test_image_tag_uses_content_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    docker_image._image_tag.cache_clear()
+    monkeypatch.setattr(docker_image, "_compute_inputs_hash", lambda: "abc123")
+
+    assert docker_image._image_tag() == "setforge-e2e:test-abc123"
+
+
+def test_docker_available_delegates_to_path_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(docker_image.shutil, "which", lambda name: f"/bin/{name}")
+
+    assert docker_image.docker_available() is True

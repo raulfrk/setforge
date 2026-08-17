@@ -40,13 +40,14 @@ A 300+ test end-to-end suite at `tests/docker/` exercises `install`/`sync`/`comp
 
 - **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v` (bare — xdist auto-activates with `-n 2`).
 - **Parallel execution:** auto-activated by the project-root `conftest.py:pytest_configure` hook when `-m e2e_docker` is selected and `-n` was not passed explicitly. Capped at **2 workers** — empirically validated as the stable maximum for this host's Docker daemon (~300 tests in ~42 min wall, zero `TimeoutExpired` flakes). Earlier attempts at `-n 4` saturated the daemon AND the host VM under sustained load; `-n auto` (= 6 on a 6-core host) produces ~20 transient timeouts per run. Override the cap with `-n N` on the CLI when running on a host with different daemon throughput; `-n 0` opts out of xdist for serial-mode debugging.
+- **Image preparation:** the xdist controller builds a missing content-hashed image before workers start; worker fixtures inspect and reuse it. Serial `-n 0` runs retain fixture-side build fallback.
 - **Runtime with `-n 2` (default):** ~42 min on a 6-core host (~300 tests).
 - **Runtime serial (`-n 0`):** ~90+ min (proportional estimate; not re-measured).
 - **When to run:** required whenever Phase 7 fires (post-merge cross-cutting review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH; the suite skips containers missing docker. `gitleaks` is baked into the e2e image (Dockerfile pins v8.21.2), so the secrets-scan cases need NO host `gitleaks` — they run gitleaks inside the container, and the absent-gitleaks warn-and-continue path is itself covered by `test_e2e_docker_install_no_gitleaks_warns_and_continues`. (Host `gitleaks` matters only for the repo's pre-commit hook, not this suite.)
 - **Full-screen TUI tests:** prompt_toolkit's `radiolist_dialog` / `input_dialog` panels emit cursor-positioning ANSI that pexpect's line matcher cannot anchor on. Use the `pyte_pty_session` fixture in `tests/docker/conftest.py` for those — it feeds the PTY byte stream into a `pyte.HistoryScreen` and exposes `.display: list[str]` for line-by-line asserts. See `tests/docker/pyte_session.py` for the API (anti-smell items: `docker exec -it` is required, arrow keys are `\x1b[A/B/C/D`, Enter is `\r`). The plain-stdout `docker_pty_session` (raw pexpect) still suits non-TUI interactives.
 
-The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pytest` run via `pyproject.toml`'s `addopts = "-m 'not e2e_docker'"`, so plain `uv run pytest` will not run it.
+The suite is gated by `pytest -m e2e_docker` and excluded from the default run. Process-level tests of these pytest/xdist hooks use `test_infra` and are also excluded from the fast default. `pyproject.toml` sets `addopts = "-m 'not e2e_docker and not test_infra' ..."`; CI runs the infrastructure lane separately with explicit branch coverage.
 
 ## Final checks (post-merge)
 
