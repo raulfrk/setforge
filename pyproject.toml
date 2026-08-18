@@ -127,7 +127,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 [tool.pytest.ini_options]
 markers = [
     "integration: cross-module verb integration tests (real git against a tmp source repo, mocked claude/code/gitleaks); runs in the default suite, no Docker",
-    "test_infra: process-level tests of the test harness itself (opt-in; excluded from the fast default suite)",
+    "test_infra: process-level infrastructure and recovery tests (opt-in; excluded from the fast default suite)",
     "slow: high-example-count, state-machine, or fsync-heavy properties run in the separate exhaustive-property lane",
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
     "smoke: thin golden-path subset of the e2e_docker suite, run per-PR as a fast smoke split (select via -m 'e2e_docker and smoke')",

@@ -111,12 +111,12 @@ def test_apply_delete_holds_profile_lock(
     item = cleanup_mod.CleanupItem(identity=_ident("gone"), path=binpath)
 
     events: list[str] = []
-    real_lock = locking.profile_lock
+    real_locks = locking.mutation_locks
 
     @contextlib.contextmanager
-    def _recording_lock(profile: str, timeout: float | None = None):
+    def _recording_locks(**kwargs: object):
         events.append("enter")
-        with real_lock(profile, timeout=timeout):
+        with real_locks(**kwargs):  # type: ignore[arg-type]
             try:
                 yield
             finally:
@@ -128,7 +128,7 @@ def test_apply_delete_holds_profile_lock(
         events.append("write_transition")
         return real_write(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(cleanup_mod, "profile_lock", _recording_lock)
+    monkeypatch.setattr(cleanup_mod, "mutation_locks", _recording_locks)
     monkeypatch.setattr(cleanup_mod.transitions, "write_transition", _spy_write)
 
     cleanup_mod._apply_cleanup("p", [item], store, Console())

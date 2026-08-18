@@ -6,12 +6,25 @@ import inspect
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TypedDict
 
 import pytest
 
 from setforge.errors import SetforgeError
-from setforge.locking import install_resources_lock, lockfile_lock, profile_lock
+from setforge.locking import (
+    _profile_lock_path,
+    install_resources_lock,
+    lockfile_lock,
+    mutation_locks,
+    profile_lock,
+)
 from setforge.transitions import state_root
+
+
+class _MutationLockKwargs(TypedDict, total=False):
+    resources: bool
+    config_dir: Path
+    profile: str
 
 
 @pytest.fixture(autouse=True)
@@ -22,10 +35,10 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_lock_creates_lockfile_and_runs_body() -> None:
-    """profile_lock("p") creates state_root()/locks/p.lock and the body runs."""
+    """profile_lock creates its digest-named sidecar and runs the body."""
     executed: list[bool] = []
     with profile_lock("p"):
-        lock_path = state_root() / "locks" / "p.lock"
+        lock_path = _profile_lock_path("p")
         assert lock_path.exists(), "lockfile must exist while the lock is held"
         executed.append(True)
     assert executed == [True]
@@ -40,7 +53,7 @@ def test_lock_released_after_exit() -> None:
     # description, not per-path, so a second open + LOCK_NB below would
     # still succeed even with a leak — but open + LOCK_EX + LOCK_NB from
     # a second fd is the correct re-entrant test).
-    lock_path = state_root() / "locks" / "p.lock"
+    lock_path = _profile_lock_path("p")
     fd = lock_path.open("a")
     try:
         # LOCK_NB: if the lock were still held this would raise BlockingIOError
@@ -53,7 +66,7 @@ def test_lock_released_after_exit() -> None:
 
 def test_timeout_raises_on_contention(state_dir: Path) -> None:
     """Lock held by another fd: profile_lock(..., timeout=0.2) raises SetforgeError."""
-    lock_path = state_dir / "locks" / "p.lock"
+    lock_path = _profile_lock_path("p")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.touch()
 
@@ -75,9 +88,8 @@ def test_timeout_raises_on_contention(state_dir: Path) -> None:
 
 def test_different_profiles_do_not_block_each_other(state_dir: Path) -> None:
     """profile_lock("a") held, profile_lock("b", timeout=0.2) must succeed."""
-    locks_dir = state_dir / "locks"
-    locks_dir.mkdir(parents=True, exist_ok=True)
-    lock_a = locks_dir / "a.lock"
+    lock_a = _profile_lock_path("a")
+    lock_a.parent.mkdir(parents=True, exist_ok=True)
     lock_a.touch()
 
     holder = lock_a.open("a")
@@ -91,6 +103,15 @@ def test_different_profiles_do_not_block_each_other(state_dir: Path) -> None:
     finally:
         fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
         holder.close()
+
+
+def test_profile_lock_name_cannot_escape_for_nested_or_traversal_profile() -> None:
+    for profile in ("team/dev", "../escape"):
+        with profile_lock(profile):
+            lock_path = _profile_lock_path(profile)
+            assert lock_path.parent == state_root() / "locks"
+            assert lock_path.name.startswith("profile-")
+            assert lock_path.suffix == ".lock"
 
 
 def test_install_resources_lock_serializes_cross_profile_resources(
@@ -120,6 +141,68 @@ def test_global_resource_lock_ignores_transition_state_override(
         assert lock_path.parent != state_dir / "locks"
 
 
+@pytest.mark.parametrize(
+    "lock_kwargs",
+    [
+        {"config_dir": Path("config-a")},
+        {"profile": "profile-b"},
+    ],
+)
+def test_global_mutation_gate_serializes_prepublication_across_scopes(
+    lock_kwargs: _MutationLockKwargs,
+) -> None:
+    """Different mutation scopes cannot both pass refusal before publishing."""
+    gate = Path.home() / ".cache/setforge/locks/mutation-gate.lock"
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    holder = gate.open("a")
+    try:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        with (
+            pytest.raises(SetforgeError, match="global mutation gate"),
+            mutation_locks(timeout=0.01, **lock_kwargs),
+        ):
+            pass
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+
+@pytest.mark.parametrize(
+    ("lock_kwargs", "journal_resources"),
+    [
+        ({"resources": True, "profile": "other"}, True),
+        ({"config_dir": Path("cfg")}, False),
+    ],
+)
+def test_mutation_locks_refuse_cross_profile_active_journal(
+    lock_kwargs: _MutationLockKwargs,
+    journal_resources: bool,
+    tmp_path: Path,
+) -> None:
+    from setforge import operations
+
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    if "config_dir" in lock_kwargs:
+        lock_kwargs["config_dir"] = config_dir
+    journal = operations.prepare(
+        command="install",
+        profile="first",
+        config_dir=config_dir,
+        resources_lock=journal_resources,
+        command_line=("install",),
+        paths=(),
+    )
+
+    with (
+        pytest.raises(SetforgeError, match="unfinished install"),
+        mutation_locks(**lock_kwargs),
+    ):
+        pass
+
+    operations.complete(journal)
+
+
 def test_global_resource_writers_share_one_lock() -> None:
     """Every CLI writer of adapter/cache state enters the canonical lock."""
     from setforge.cli import ext, install, plugins, revert
@@ -147,9 +230,55 @@ def test_global_resource_writers_share_one_lock() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
-        if "install_resources_lock" not in calls:
+        if not {"install_resources_lock", "mutation_locks"}.intersection(calls):
             missing.append(writer.__name__)
 
+    assert missing == []
+
+
+def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
+    """Closed inventory: mutation entrypoints declare scopes through one API."""
+    from setforge.cli import (
+        cleanup,
+        config,
+        init,
+        install,
+        lock,
+        migrate,
+        orphans,
+        snapshot,
+        stage,
+        sync,
+        upgrade,
+        validate,
+    )
+
+    writers = (
+        install.install,
+        lock.lock,
+        sync.capture,
+        migrate.migrate,
+        snapshot.snapshot_create,
+        snapshot.snapshot_restore,
+        stage._apply,
+        stage._apply_structured,
+        cleanup._apply_cleanup,
+        orphans._apply_orphan_cleanup,
+        config._run_add,
+        config.config_remove,
+        init.init,
+        upgrade.upgrade,
+        validate.fetch,
+    )
+    missing = []
+    for writer in writers:
+        calls = {
+            node.func.id
+            for node in ast.walk(ast.parse(inspect.getsource(writer)))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        if "mutation_locks" not in calls:
+            missing.append(writer.__name__)
     assert missing == []
 
 
@@ -174,7 +303,9 @@ def test_live_reconcile_reloads_desired_state_inside_global_lock() -> None:
                 for call in ast.walk(item.context_expr)
                 if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
             }
-            if "install_resources_lock" not in lock_calls:
+            if not {"install_resources_lock", "mutation_locks"}.intersection(
+                lock_calls
+            ):
                 continue
             locked_loads.extend(
                 call
@@ -198,7 +329,7 @@ def test_live_reconcile_waits_for_lock_before_reloading(
     loads: list[bool] = []
 
     @contextmanager
-    def recording_lock():
+    def recording_lock(**_kwargs: object):
         nonlocal held
         held = True
         try:
@@ -214,7 +345,7 @@ def test_live_reconcile_waits_for_lock_before_reloading(
         return cfg
 
     if adapter_name == "ext":
-        monkeypatch.setattr(ext, "install_resources_lock", recording_lock)
+        monkeypatch.setattr(ext, "mutation_locks", recording_lock)
         monkeypatch.setattr(ext, "load_config", locked_load)
         monkeypatch.setattr(
             ext,
@@ -234,7 +365,7 @@ def test_live_reconcile_waits_for_lock_before_reloading(
             dry_run=False,
         )
     else:
-        monkeypatch.setattr(plugins, "install_resources_lock", recording_lock)
+        monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
         monkeypatch.setattr(plugins, "load_config", locked_load)
         monkeypatch.setattr(
             plugins,
@@ -272,7 +403,7 @@ def test_extension_remove_edits_desired_state_inside_global_lock(
     edits: list[bool] = []
 
     @contextmanager
-    def recording_lock():
+    def recording_lock(**_kwargs: object):
         nonlocal held
         held = True
         try:
@@ -285,7 +416,7 @@ def test_extension_remove_edits_desired_state_inside_global_lock(
         return True
 
     monkeypatch.setattr(ext, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(ext, "install_resources_lock", recording_lock)
+    monkeypatch.setattr(ext, "mutation_locks", recording_lock)
     monkeypatch.setattr(ext.vscode_extensions, "remove_from_include", guarded_remove)
 
     ext.ext_remove(
@@ -307,7 +438,7 @@ def test_plugin_remove_resolves_disable_id_from_post_wait_config(
     disabled: list[str] = []
 
     @contextmanager
-    def recording_lock():
+    def recording_lock(**_kwargs: object):
         nonlocal held
         held = True
         try:
@@ -322,7 +453,7 @@ def test_plugin_remove_resolves_disable_id_from_post_wait_config(
         )
 
     monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(plugins, "install_resources_lock", recording_lock)
+    monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
     monkeypatch.setattr(plugins, "load_config", locked_load)
     monkeypatch.setattr(
         plugins.claude_yaml_editor_mod,
@@ -357,7 +488,7 @@ def test_sync_cache_resolves_marketplaces_after_wait(
     resolved = object()
 
     @contextmanager
-    def recording_lock():
+    def recording_lock(**_kwargs: object):
         nonlocal held
         held = True
         try:
@@ -375,7 +506,7 @@ def test_sync_cache_resolves_marketplaces_after_wait(
         return []
 
     monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(plugins, "install_resources_lock", recording_lock)
+    monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
     monkeypatch.setattr(plugins, "load_config", locked_load)
     monkeypatch.setattr(
         plugins.binaries,
@@ -416,10 +547,104 @@ def test_lockfile_lock_ignores_transition_state_override(
 ) -> None:
     config_dir = tmp_path / "config-repo"
     config_dir.mkdir()
+    lock_dir = Path.home() / ".cache/setforge/locks"
     with lockfile_lock(config_dir):
+        lock_path = next(lock_dir.glob("config-*.lock"))
+    holder = lock_path.open("a")
+    try:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
         monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "alternate-state"))
         with (
             pytest.raises(SetforgeError, match=r"setforge\.lock"),
             lockfile_lock(config_dir, timeout=0.01),
         ):
             pass
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+
+def test_mutation_locks_acquire_canonical_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    @contextmanager
+    def recording(name: str):
+        events.append(f"enter:{name}")
+        try:
+            yield
+        finally:
+            events.append(f"exit:{name}")
+
+    monkeypatch.setattr(
+        "setforge.locking._mutation_gate_lock",
+        lambda timeout=None: recording("mutation"),
+    )
+    monkeypatch.setattr(
+        "setforge.locking.install_resources_lock",
+        lambda timeout=None: recording("resources"),
+    )
+    monkeypatch.setattr(
+        "setforge.locking.lockfile_lock",
+        lambda config_dir, timeout=None: recording("config"),
+    )
+    monkeypatch.setattr(
+        "setforge.locking.profile_lock",
+        lambda profile, timeout=None: recording("profile"),
+    )
+
+    with mutation_locks(resources=True, config_dir=tmp_path, profile="p"):
+        events.append("body")
+
+    assert events == [
+        "enter:mutation",
+        "enter:resources",
+        "enter:config",
+        "enter:profile",
+        "body",
+        "exit:profile",
+        "exit:config",
+        "exit:resources",
+        "exit:mutation",
+    ]
+
+
+def test_direct_lock_order_inversion_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("setforge.locking.state_root", lambda: tmp_path / "state")
+    with (
+        profile_lock("p"),
+        pytest.raises(SetforgeError, match="inverted lock order"),
+        lockfile_lock(tmp_path),
+    ):
+        pass
+
+
+def test_mutation_locks_acquire_multiple_profiles_in_sorted_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquired: list[str] = []
+
+    @contextmanager
+    def recording_profile(profile: str, timeout: float | None = None):
+        del timeout
+        acquired.append(profile)
+        yield
+
+    monkeypatch.setattr("setforge.locking.profile_lock", recording_profile)
+
+    with mutation_locks(profiles=("z", "a", "z")):
+        pass
+
+    assert acquired == ["a", "z"]
+
+
+def test_duplicate_rank_refuses_before_self_deadlock(tmp_path: Path) -> None:
+    with (
+        profile_lock("p"),
+        pytest.raises(SetforgeError, match="duplicate or inverted"),
+        profile_lock("p"),
+    ):
+        pass

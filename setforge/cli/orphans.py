@@ -31,7 +31,7 @@ from rich.console import Console
 from ruamel.yaml import YAML
 
 from setforge import compare as compare_mod
-from setforge import transitions
+from setforge import operations, transitions
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -43,7 +43,7 @@ from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
 from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import OrphanCleanupRequiresInteractive
-from setforge.locking import profile_lock
+from setforge.locking import mutation_locks
 
 __all__ = [
     "ApplyChoice",
@@ -398,7 +398,8 @@ def _apply_orphan_cleanup(
         return
 
     confirmed = {_orphan_path_identity(orphan.path) for orphan in orphans}
-    with profile_lock(profile):
+    with mutation_locks(config_dir=config_path.resolve().parent, profile=profile):
+        operations.refuse_active(profile)
         _, refreshed = _detect_orphans_live(profile, config_path)
         approved_still_orphaned = [
             orphan

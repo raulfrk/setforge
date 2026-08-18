@@ -49,6 +49,7 @@ from setforge.errors import (
     ValidationErrorWithContext,
 )
 from setforge.local_config import LocalConfig as _LocalConfig
+from setforge.locking import mutation_locks
 from setforge.migrations._local_yaml import guard_local_yaml_schema, strip_retired_keys
 from setforge.overlay_provenance import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
@@ -1329,5 +1330,11 @@ def fetch() -> None:
     git/SSH/credential-helper config.
     """
     resolved_source = source_mod.get_resolved_source()
-    msg = source_mod.fetch_source(resolved_source)
+    config_dir = (
+        resolved_source.resolved_clone_dest
+        if isinstance(resolved_source, source_mod.GitSource)
+        else None
+    )
+    with mutation_locks(config_dir=config_dir):
+        msg = source_mod.fetch_source(resolved_source)
     typer.echo(msg)

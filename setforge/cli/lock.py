@@ -12,13 +12,14 @@ import setforge.provision.resolve.github_release as _ghr_resolver  # noqa: F401
 import setforge.provision.resolve.go as _go_resolver  # noqa: F401
 import setforge.provision.resolve.plugin as _plugin_resolver  # noqa: F401
 import setforge.provision.resolve.python as _python_resolver  # noqa: F401
+from setforge import operations
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import LOCK_EXAMPLES
 from setforge.cli._lock_enumerate import _LockItem, enumerate_lock_items
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import LockConflict, ResolveError
 from setforge.lockfile import LockFile, lock_path, parse_lock, write_lock
-from setforge.locking import lockfile_lock
+from setforge.locking import mutation_locks
 from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.provision.resolve.registry import get_resolver
 
@@ -112,12 +113,8 @@ def lock(
     dir so concurrent per-profile locks cannot clobber each other.
     """
     config = _resolve_config_arg(config)
-    cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-
     path = lock_path(config)
-    items = enumerate_lock_items(cfg, resolved)
 
     # The lockfile is shared across ALL profiles, so concurrent
     # `setforge lock --profile=A` and `--profile=B` would each read the same
@@ -126,7 +123,12 @@ def lock(
     # existing lock UNDER the lock so a second writer sees the first's pins and
     # merge_lock unions them. Keyed on the config dir (not the profile) because
     # the lockfile is profile-independent.
-    with lockfile_lock(path.parent):
+    with mutation_locks(config_dir=path.parent, profile=profile):
+        operations.refuse_active(profile)
+        operations.refuse_config_mutation(path.parent)
+        cfg = load_config(config)
+        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+        items = enumerate_lock_items(cfg, resolved)
         existing = _load_existing_lock(path)
 
         if update is not None:

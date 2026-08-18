@@ -13,6 +13,7 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 import json
 import os
 import stat
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,8 +23,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from setforge import transitions
+from setforge import operations, transitions
 from setforge._editor import run_editor
+from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -62,7 +64,7 @@ from setforge.errors import (
     RevertFailed,
     SetforgeError,
 )
-from setforge.locking import install_resources_lock, profile_lock
+from setforge.locking import mutation_locks
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -664,13 +666,31 @@ def revert(
     # acquiring it here — after the confirm wizard, before any patch-reverse
     # or store restore — keeps revert inside that contract.
     # Canonical order shared with install: global adapters, then profile files.
-    with install_resources_lock(), profile_lock(profile):
+    state_profiles = _revert_locked_profiles((transition,), profile)
+    with (
+        mutation_locks(
+            resources=True,
+            config_dir=config.resolve().parent,
+            profiles=state_profiles,
+        ),
+        operations.recover_on_error(profile, "revert"),
+    ):
+        operations.refuse_active(profile)
         current = transitions.load_latest(profile)
         if current != transition:
             raise SetforgeError(
                 "transition history changed after confirmation; retry revert"
             )
+        journal = _prepare_revert_journal((transition,), profile, config)
+        journal = operations.begin_checkpoint(
+            journal,
+            name="revert-chain",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore pre-revert files, stores, modes, and adapter inventories",
+        )
         _apply_revert(transition, profile, config)
+        journal = operations.finish_checkpoint(journal)
+        operations.complete(journal)
 
 
 def _resolve_to_before_chain(
@@ -752,12 +772,21 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     if choice is RevertChoice.ABORT:
         return
 
-    total = len(chain)
     # Hold the profile lock across the whole apply loop so the multi-step
     # reverse chain cannot interleave with a concurrent install/sync/revert
     # (each step's reverse patch is defined against the state the previous
     # step produced; an interleaving deploy would invalidate that chain).
-    with install_resources_lock(), profile_lock(profile):
+    transition_dirs = tuple(entry.directory for entry in chain)
+    state_profiles = _revert_locked_profiles(transition_dirs, profile)
+    with (
+        mutation_locks(
+            resources=True,
+            config_dir=config.resolve().parent,
+            profiles=state_profiles,
+        ),
+        operations.recover_on_error(profile, "revert"),
+    ):
+        operations.refuse_active(profile)
         refreshed = _resolve_to_before_chain(profile, to_before)
         if tuple(entry.directory for entry in refreshed) != tuple(
             entry.directory for entry in chain
@@ -765,14 +794,133 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
             raise SetforgeError(
                 "transition history changed after confirmation; retry revert"
             )
-        for index, entry in enumerate(chain, start=1):
-            try:
-                _apply_revert(entry.directory, profile, config)
-            except RevertFailed as exc:
-                raise SetforgeError(
-                    f"applied {index - 1} of {total}; system is in inconsistent "
-                    f"state; run setforge transitions show to inspect:\n{exc}"
-                ) from exc
+        journal = _prepare_revert_journal(transition_dirs, profile, config)
+        journal = operations.begin_checkpoint(
+            journal,
+            name="revert-chain",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore pre-chain files, stores, modes, and adapter inventories",
+        )
+        for entry in chain:
+            _apply_revert(entry.directory, profile, config)
+        journal = operations.finish_checkpoint(journal)
+        operations.complete(journal)
+
+
+def _prepare_revert_journal(
+    chain: tuple[transitions.TransitionDir, ...], profile: str, config: Path
+) -> operations.OperationJournal:
+    """Capture the whole confirmed reverse chain before its first mutation."""
+    touched: dict[Path, None] = {}
+    state_keys: dict[
+        tuple[transitions.SnapshotStore, str, str],
+        transitions.StateSnapshotEntry,
+    ] = {}
+    has_extensions = False
+    has_plugins = False
+    mcp_names: dict[str, None] = {}
+    for transition in chain:
+        touched.update(dict.fromkeys(_load_meta_touched_paths(transition)))
+        snapshots = transitions.load_state_snapshots(transition) or ()
+        for snapshot in snapshots:
+            identity = (snapshot.store, snapshot.profile, snapshot.key)
+            state_keys[identity] = transitions.snapshot_store_state(*identity)
+        has_extensions |= (transition / "extensions.json").exists()
+        has_plugins |= (transition / "plugins.json").exists()
+        mcp_path = transition / "mcp.json"
+        if mcp_path.exists():
+            delta = transitions.mcp_delta_from_json(
+                json.loads(mcp_path.read_text(encoding="utf-8"))
+            )
+            mcp_names.update(dict.fromkeys(name for name, _, _ in delta.added))
+            mcp_names.update(dict.fromkeys(name for name, _, _ in delta.updated))
+    touched.update(dict.fromkeys(_revert_symlink_paths(config, profile)))
+    return operations.prepare(
+        command="revert",
+        profile=profile,
+        config_dir=config.resolve().parent,
+        resources_lock=True,
+        command_line=tuple(redact_argv(sys.argv[1:])),
+        paths=tuple(touched),
+        state_snapshots=tuple(state_keys.values()),
+        adapters=_revert_adapter_snapshots(
+            extensions=has_extensions,
+            plugins=has_plugins,
+            mcp_names=tuple(mcp_names),
+        ),
+    )
+
+
+def _revert_locked_profiles(
+    chain: tuple[transitions.TransitionDir, ...], journal_profile: str
+) -> tuple[str, ...]:
+    """Return the sorted profile lock envelope for a reverse chain."""
+    profiles = {journal_profile}
+    for transition in chain:
+        profiles.update(
+            snapshot.profile
+            for snapshot in transitions.load_state_snapshots(transition) or ()
+        )
+    return tuple(sorted(profiles))
+
+
+def _revert_symlink_paths(config: Path, profile: str) -> tuple[Path, ...]:
+    cfg = load_config(config)
+    repo_root = config.resolve().parent
+    try:
+        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    except ProfileNotFound:
+        return ()
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    return tuple(
+        sub_dst
+        for tracked_file, _name, _src, sub_dst in _iter_all_tracked_files(ctx)
+        if tracked_file.symlink is not None
+    )
+
+
+def _revert_adapter_snapshots(
+    *, extensions: bool, plugins: bool, mcp_names: tuple[str, ...]
+) -> tuple[operations.AdapterSnapshot, ...]:
+    from setforge import claude_plugins, mcp_servers, vscode_extensions
+
+    snapshots: list[operations.AdapterSnapshot] = []
+    if extensions:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.EXTENSIONS,
+                json.dumps(sorted(vscode_extensions.list_installed())),
+            )
+        )
+    if plugins:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.PLUGINS,
+                json.dumps(
+                    {
+                        "plugins": claude_plugins.list_installed(),
+                        "marketplaces": claude_plugins.list_marketplaces(),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+    if mcp_names:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.MCP,
+                json.dumps(
+                    [
+                        {"name": name, "prior": mcp_servers.mcp_get_command(name)}
+                        for name in mcp_names
+                    ],
+                    sort_keys=True,
+                ),
+            )
+        )
+    return tuple(snapshots)
 
 
 transitions_app: typer.Typer = typer.Typer(

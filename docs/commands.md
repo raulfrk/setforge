@@ -60,7 +60,21 @@ setforge ships eight subcommand groups for narrow inspections and edits. Run
 Other top-level commands: `init` (bootstrap config dirs + `local.yaml`),
 `upgrade` (PyPI check + release notes + `uv` upgrade), `migrate` (schema
 migrations against `setforge.yaml`), `cleanup-orphans` (review/remove
-tracked-file orphans).
+tracked-file orphans), and `recover` (inspect or restore an interrupted
+write-ahead operation; manual remediation records require explicit
+`--acknowledge-manual --yes`).
+
+Mutating commands share one lock order: a user-global mutation gate, then
+user-global package/adapter resources, the canonical config repository, and
+finally profile state. The gate covers the interval before a write-ahead journal
+can be published, including migrations that later lock multiple real profiles.
+An interrupted
+install/sync/revert/migration leaves a durable per-profile journal in the
+user-global recovery registry. Conflicting mutations refuse across profiles
+and across `SETFORGE_STATE_DIR` overrides until automatic recovery succeeds or
+the operator runs `setforge recover --profile=<name> --apply --yes` from the
+recorded transition-state root. A begun package checkpoint is intentionally
+reported as uncertain/manual even if it did not reach its completion marker.
 
 ### Managing user-section markers
 

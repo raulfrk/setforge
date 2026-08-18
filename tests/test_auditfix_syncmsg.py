@@ -195,6 +195,31 @@ def test_sync_oserror_restores_tracked_and_base(
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base
 
 
+def test_sync_recovery_failure_never_masks_capture_error(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected compensator failure is attached to the primary error."""
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    primary = OSError(28, "capture failed")
+
+    def fail_capture(*_args: object, **_kwargs: object) -> list[object]:
+        raise primary
+
+    def fail_recovery(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("compensator failed")
+
+    monkeypatch.setattr("setforge.cli.sync.capture_mod.capture_profile", fail_capture)
+    monkeypatch.setattr("setforge.operations.recover_files", fail_recovery)
+
+    result = _sync(config)
+
+    assert result.exception is primary
+    assert any("compensator failed" in note for note in primary.__notes__)
+
+
 def test_capture_ctrl_c_message_not_false_restore(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

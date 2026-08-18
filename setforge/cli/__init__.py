@@ -279,6 +279,7 @@ from setforge.cli import orphans as _orphans  # noqa: E402, F401 (cleanup-orphan
 from setforge.cli import cleanup as _cleanup  # noqa: E402, F401
 from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
 from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
+from setforge.cli import recover as _recover  # noqa: E402, F401
 from setforge.cli import ext as _ext  # noqa: E402, F401
 from setforge.cli import plugins as _plugins  # noqa: E402, F401 (plugin + marketplace subgroups)
 from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + fetch)

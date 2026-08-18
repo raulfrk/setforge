@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 import typer
 from rich.console import Console
 
-from setforge import atomicio
+from setforge import atomicio, operations
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -40,7 +40,7 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import StructuredParseError
-from setforge.locking import profile_lock
+from setforge.locking import mutation_locks
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
@@ -322,7 +322,11 @@ def walk_structured(
 
 
 def _apply_structured(
-    profile: str, stage: StructuredFileStage, result: StructuredWalkResult
+    profile: str,
+    stage: StructuredFileStage,
+    result: StructuredWalkResult,
+    *,
+    config_dir: Path | None = None,
 ) -> None:
     """Persist a structured walk's classifications + drafts under ONE profile lock.
 
@@ -331,7 +335,8 @@ def _apply_structured(
     whole record here (and, once adopt-locally lands, its live write too) —
     mirroring :func:`_apply` so a concurrent install/sync cannot interleave.
     """
-    with profile_lock(profile):
+    with mutation_locks(config_dir=config_dir, profile=profile):
+        operations.refuse_active(profile)
         _persist_structured(profile, stage, result, stage.live)
 
 
@@ -616,7 +621,13 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     return b"".join(out)
 
 
-def _apply(profile: str, stage: FileStage, result: WalkResult) -> None:
+def _apply(
+    profile: str,
+    stage: FileStage,
+    result: WalkResult,
+    *,
+    config_dir: Path | None = None,
+) -> None:
     """Apply the walk under ONE profile lock: rewrite live for any Adopt (atomic,
     captured mode), then persist the classifications + drafts.
 
@@ -626,7 +637,8 @@ def _apply(profile: str, stage: FileStage, result: WalkResult) -> None:
     a live tree whose bytes no longer match the classifications persisted here.
     """
     final_live = _adopt_live(stage, result)
-    with profile_lock(profile):
+    with mutation_locks(config_dir=config_dir, profile=profile):
+        operations.refuse_active(profile)
         if final_live != stage.live:
             # stat() (follow) so a symlinked dst keeps its target's mode, not the
             # link's.
@@ -754,7 +766,7 @@ def stage(
         if not stage_item.hunks:
             continue
         result = walk(stage_item.hunks, _interactive_choice(stage_item))
-        _apply(profile, stage_item, result)
+        _apply(profile, stage_item, result, config_dir=repo_root)
         tally = counts(result.hunks)
         drafted = tally[HunkClass.SHARED_DRAFTED]
         drafted_note = f"  {drafted} drafted" if drafted else ""
@@ -770,7 +782,7 @@ def stage(
         sresult = walk_structured(
             struct_item.units, _structured_interactive_choice(struct_item)
         )
-        _apply_structured(profile, struct_item, sresult)
+        _apply_structured(profile, struct_item, sresult, config_dir=repo_root)
         stally = _struct_counts(sresult.units)
         sdrafted = stally[HunkClass.SHARED_DRAFTED]
         sdrafted_note = f"  {sdrafted} drafted" if sdrafted else ""

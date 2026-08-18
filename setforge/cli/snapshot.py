@@ -18,6 +18,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from setforge import operations
 from setforge import snapshots as snap_mod
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -33,6 +34,7 @@ from setforge.cli._help_examples import (
 from setforge.cli._helpers import ProfileContext
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import SetforgeError
+from setforge.locking import mutation_locks
 from setforge.transitions import now_utc as _now_utc
 
 
@@ -127,10 +129,13 @@ def snapshot_create(
     ),
 ) -> None:
     """Capture the profile's live state into a new snapshot."""
-    ctx = _build_profile_ctx(profile, config)
-    meta = snap_mod.create_snapshot(
-        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile, label, keep=keep
-    )
+    resolved_config = _resolve_config_arg(config)
+    with mutation_locks(config_dir=resolved_config.resolve().parent, profile=profile):
+        operations.refuse_active(profile)
+        ctx = _build_profile_ctx(profile, resolved_config)
+        meta = snap_mod.create_snapshot(
+            ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile, label, keep=keep
+        )
     _emit_create_summary(meta, console=Console())
 
 
@@ -274,7 +279,6 @@ def snapshot_restore(
     (no pre-restore snapshot — opt into that via the interactive
     choice).
     """
-    ctx = _build_profile_ctx(profile, config)
     target = snap_mod.resolve_snapshot(snapshot)
     skip_prompt = yes or non_interactive
     console = Console()
@@ -282,24 +286,31 @@ def snapshot_restore(
         choice = RestoreChoice.RESTORE
     else:
         choice = _prompt_restore_choice(target, console=console)
-    match choice:
-        case RestoreChoice.ABORT:
-            console.print("[red]aborted[/red] — no live mutations applied")
-            raise typer.Exit(code=1)
-        case RestoreChoice.RESTORE:
-            snap_mod.restore_snapshot(target.snapshot_id, pre_snapshot=False)
-            _emit_restore_summary(target, console=console)
-        case RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT:
-            snap_mod.restore_snapshot(
-                target.snapshot_id,
-                pre_snapshot=True,
-                pre_snapshot_ctx=snap_mod.PreSnapshotCtx(
-                    cfg=ctx.cfg,
-                    resolved=ctx.resolved,
-                    repo_root=ctx.repo_root,
-                    profile=ctx.profile,
-                ),
-            )
-            _emit_restore_summary(target, console=console)
-        case _:  # pragma: no cover — exhaustive over StrEnum
-            assert_never(choice)
+    if choice is RestoreChoice.ABORT:
+        console.print("[red]aborted[/red] — no live mutations applied")
+        raise typer.Exit(code=1)
+    resolved_config = _resolve_config_arg(config)
+    with mutation_locks(config_dir=resolved_config.resolve().parent, profile=profile):
+        operations.refuse_active(profile)
+        ctx = _build_profile_ctx(profile, resolved_config)
+        refreshed = snap_mod.resolve_snapshot(snapshot)
+        if refreshed.snapshot_id != target.snapshot_id:
+            raise SetforgeError("snapshot selection changed after confirmation; retry")
+        match choice:
+            case RestoreChoice.RESTORE:
+                snap_mod.restore_snapshot(target.snapshot_id, pre_snapshot=False)
+                _emit_restore_summary(target, console=console)
+            case RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT:
+                snap_mod.restore_snapshot(
+                    target.snapshot_id,
+                    pre_snapshot=True,
+                    pre_snapshot_ctx=snap_mod.PreSnapshotCtx(
+                        cfg=ctx.cfg,
+                        resolved=ctx.resolved,
+                        repo_root=ctx.repo_root,
+                        profile=ctx.profile,
+                    ),
+                )
+                _emit_restore_summary(target, console=console)
+            case _:  # pragma: no cover — exhaustive over StrEnum
+                assert_never(choice)

@@ -19,7 +19,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import git_ops
+from setforge import git_ops, operations
 from setforge import source as source_mod
 from setforge.cli import app
 from setforge.errors import SetforgeError, SourceNotCloned
@@ -48,6 +48,29 @@ def _write_config(repo: Path) -> Path:
     return config
 
 
+def _write_local_package_config(repo: Path) -> Path:
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.0'\n"
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "packages:\n"
+        "  helper:\n"
+        "    type: local\n"
+        "    path: helper\n"
+        "    binary: helper\n"
+        "    install: ~/.local/bin\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    packages: [helper]\n",
+        encoding="utf-8",
+    )
+    tracked = repo / "tracked"
+    tracked.mkdir()
+    (tracked / "helper").write_bytes(b"#!/bin/sh\nexit 0\n")
+    return config
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
@@ -70,6 +93,54 @@ def _install(config: Path, *extra: str) -> Result:
         *extra,
     ]
     return CliRunner().invoke(app, args)
+
+
+def test_install_without_package_delta_does_not_begin_irreversible_checkpoint(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write_config(repo)
+    begun: list[str] = []
+    real_begin = operations.begin_checkpoint
+
+    def record_begin(
+        journal: operations.OperationJournal, **kwargs: Any
+    ) -> operations.OperationJournal:
+        begun.append(kwargs["name"])
+        return real_begin(journal, **kwargs)
+
+    monkeypatch.setattr(operations, "begin_checkpoint", record_begin)
+
+    result = _install(config, "--no-fetch", "--no-transition")
+
+    assert result.exit_code == 0, result.output
+    assert "packages" not in begun
+    assert "secrets-and-bootstrap" not in begun
+
+
+def test_install_package_failure_retains_uncertain_manual_recovery(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write_local_package_config(repo)
+    package_effect = repo / "package-effect"
+
+    def fail_after_effect(*_args: object, **_kwargs: object) -> list[object]:
+        package_effect.write_text("possibly installed", encoding="utf-8")
+        raise RuntimeError("package manager interrupted")
+
+    monkeypatch.setattr("setforge.cli.install.reconcile_packages", fail_after_effect)
+
+    result = _install(config, "--no-fetch", "--no-transition")
+
+    assert result.exit_code == 1
+    assert package_effect.exists(), (result.output, result.exception)
+    assert package_effect.read_text(encoding="utf-8") == "possibly installed"
+    journal = operations.load(_PROFILE)
+    assert journal.phase is operations.OperationPhase.MANUAL
+    package_checkpoint = next(
+        item for item in journal.checkpoints if item.name == "packages"
+    )
+    assert not package_checkpoint.completed
+    operations.complete(journal)
 
 
 def test_install_report_adapters_emit_drift_without_writes_or_transition(
@@ -157,8 +228,9 @@ class TestFetchWiring:
         held = False
 
         @contextmanager
-        def recording_lock() -> Iterator[None]:
+        def recording_lock(**scopes: object) -> Iterator[None]:
             nonlocal held
+            assert scopes["resources"] is True
             held = True
             try:
                 yield
@@ -169,7 +241,7 @@ class TestFetchWiring:
             assert held, "fetch escaped the cross-profile install resource lock"
             return "ok"
 
-        monkeypatch.setattr(install_mod, "install_resources_lock", recording_lock)
+        monkeypatch.setattr(install_mod, "mutation_locks", recording_lock)
         monkeypatch.setattr(source_mod, "fetch_source", guarded_fetch)
 
         result = _install(_write_config(repo))

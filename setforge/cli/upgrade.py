@@ -49,6 +49,7 @@ from setforge._pypi_client import PyPIVersionInfo, fetch_latest_version
 from setforge.cli import app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive, PyPIFetchError, UpgradeError
+from setforge.locking import mutation_locks
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -633,8 +634,9 @@ def upgrade(
     if choice is UpgradeChoice.ABORT:
         return
 
-    _run_uv_tool_upgrade(target=plan.target_version, pinned=to is not None)
-    _verify_post_upgrade(expected=plan.target_version)
+    with mutation_locks(resources=True):
+        _run_uv_tool_upgrade(target=plan.target_version, pinned=to is not None)
+        _verify_post_upgrade(expected=plan.target_version)
 
     if choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK:
         _run_migrate_check_subprocess()

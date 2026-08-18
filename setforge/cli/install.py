@@ -9,7 +9,9 @@ the bottom for the side effect.
 
 from __future__ import annotations
 
+import json
 import stat
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ import typer
 from setforge import (
     binaries,
     deploy,
+    operations,
     reconcile_adapter,
     reconcile_apply,
     transitions,
@@ -31,6 +34,7 @@ from setforge import (
 from setforge import secrets as secrets_mod
 from setforge import source as source_mod
 from setforge import vscode_extensions as vscode_extensions_mod
+from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -87,7 +91,7 @@ from setforge.config import (
 )
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
-from setforge.locking import install_resources_lock, lockfile_lock, profile_lock
+from setforge.locking import mutation_locks
 from setforge.provision.dispatch import (
     ProvisioningPlan,
     has_hard_failure,
@@ -125,6 +129,13 @@ class InstallPlan:
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
+
+
+def _provisioning_plan_has_work(plan: ProvisioningPlan) -> bool:
+    """Return whether applying the frozen package plan may change the host."""
+    return bool(plan.bundles) or any(
+        not batch.delta.is_empty() for batch in plan.batches
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,10 +727,14 @@ def install(
         return
 
     with (
-        install_resources_lock(),
-        profile_lock(profile),
-        lockfile_lock(config.parent),
+        mutation_locks(
+            resources=True,
+            config_dir=config.parent,
+            profile=profile,
+        ),
+        operations.recover_on_error(profile, "install"),
     ):
+        operations.refuse_active(profile)
         install_source = resolve_source_for_git_check(repo_root)
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
@@ -788,12 +803,71 @@ def install(
         _validate_external_plan(plan)
         if not no_transition:
             transitions.ensure_state_dir_writable()
-        _apply_secret_plan(secret_plan)
-        deploy.bootstrap_local(plan.bootstrap)
-        # SOFT failures warn but never gate; HARD gates after the transition.
-        provision_results = reconcile_packages(
-            cfg, resolved, lock=active_lock, plan=plan.provisioning
+
+        state_pre = install_helpers_mod._capture_store_snapshots(profile, plan.deploys)
+        secrets_checkpoint_paths = (
+            *plan.bootstrap,
+            *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
         )
+        journal_paths = tuple(
+            dict.fromkeys(
+                (
+                    *plan.dst_paths,
+                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
+                    *secrets_checkpoint_paths,
+                )
+            )
+        )
+        tracked_checkpoint_paths = tuple(
+            dict.fromkeys(
+                (
+                    *plan.dst_paths,
+                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
+                )
+            )
+        )
+        adapter_snapshots = _install_adapter_snapshots(plan)
+        adapter_kinds = {item.kind for item in adapter_snapshots}
+        journal = operations.prepare(
+            command="install",
+            profile=profile,
+            config_dir=config.parent,
+            resources_lock=True,
+            command_line=tuple(redact_argv(sys.argv[1:])),
+            paths=journal_paths,
+            state_snapshots=state_pre,
+            adapters=adapter_snapshots,
+        )
+        journal = _apply_secrets_and_bootstrap(
+            journal,
+            secret_plan=secret_plan,
+            bootstrap=plan.bootstrap,
+            checkpoint_paths=secrets_checkpoint_paths,
+        )
+
+        # SOFT failures warn but never gate; HARD gates after the transition.
+        if _provisioning_plan_has_work(plan.provisioning):
+            journal = operations.begin_checkpoint(
+                journal,
+                name="packages",
+                kind=operations.CheckpointKind.IRREVERSIBLE,
+                recovery=(
+                    "inspect package-manager output and receipts; SetForge will not "
+                    "guess an uninstall for potentially user-owned software"
+                ),
+                paths=(),
+                restore_state=False,
+                restore_transitions=False,
+                adapters=(),
+            )
+            provision_results = reconcile_packages(
+                cfg, resolved, lock=active_lock, plan=plan.provisioning
+            )
+            journal = operations.finish_checkpoint(journal)
+        else:
+            provision_results = reconcile_packages(
+                cfg, resolved, lock=active_lock, plan=plan.provisioning
+            )
 
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
@@ -813,6 +887,16 @@ def install(
         # interactive-reconcile mode AND stdout is a tty (the same gate the
         # shared user-section wizard uses). Non-tty / --auto ⇒ False, so the
         # driver keeps the bare warn-and-defer / auto behavior.
+        journal = operations.begin_checkpoint(
+            journal,
+            name="tracked-files-and-stores",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore captured paths and reconcile-store snapshots",
+            paths=tracked_checkpoint_paths,
+            restore_state=True,
+            restore_transitions=False,
+            adapters=(),
+        )
         deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
             profile, plan.deploys
         )
@@ -827,9 +911,22 @@ def install(
                 err=True,
                 fg=typer.colors.GREEN,
             )
+        journal = operations.finish_checkpoint(journal)
 
         retry_failed_ids = (
             _collect_retry_failed_ids(profile) if retry_failed else frozenset()
+        )
+        journal = operations.begin_checkpoint(
+            journal,
+            name="extensions",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore the frozen pre-install extension inventory",
+            paths=(),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(operations.AdapterKind.EXTENSIONS,)
+            if operations.AdapterKind.EXTENSIONS in adapter_kinds
+            else (),
         )
         ext_delta, ext_outcomes = _apply_extension_plan(
             plan,
@@ -837,13 +934,40 @@ def install(
             yes=yes,
             lock=active_lock,
         )
+        journal = operations.finish_checkpoint(journal)
+        journal = operations.begin_checkpoint(
+            journal,
+            name="plugins-and-marketplaces",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore frozen plugin and marketplace inventories",
+            paths=(),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(operations.AdapterKind.PLUGINS,)
+            if operations.AdapterKind.PLUGINS in adapter_kinds
+            else (),
+        )
         plugin_delta, plugin_outcomes = _apply_plugin_plan(
             plan,
             retry_failed_ids=retry_failed_ids,
             yes=yes,
             lock=active_lock,
         )
+        journal = operations.finish_checkpoint(journal)
+        journal = operations.begin_checkpoint(
+            journal,
+            name="mcp-servers",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore frozen MCP registrations",
+            paths=(),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(operations.AdapterKind.MCP,)
+            if operations.AdapterKind.MCP in adapter_kinds
+            else (),
+        )
         mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
+        journal = operations.finish_checkpoint(journal)
 
         file_post = transitions.snapshot_paths(dst_paths)
 
@@ -859,6 +983,16 @@ def install(
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
             seeded=bool(seeded),
         ):
+            journal = operations.begin_checkpoint(
+                journal,
+                name="transition-record",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery="remove the transition record committed by this install",
+                paths=(),
+                restore_state=False,
+                restore_transitions=True,
+                adapters=(),
+            )
             target = _write_install_transition(
                 profile,
                 file_pre,
@@ -873,6 +1007,9 @@ def install(
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+            journal = operations.finish_checkpoint(journal)
+
+        operations.complete(journal)
 
         _gate_on_mcp_failures(mcp_failed)
         _gate_on_provisioning_failures(provision_results)
@@ -905,6 +1042,52 @@ def _gate_on_deferred_reconcile(
         fg=typer.colors.RED,
     )
     raise typer.Exit(code=1)
+
+
+def _install_adapter_snapshots(
+    plan: InstallPlan,
+) -> tuple[operations.AdapterSnapshot, ...]:
+    """Project frozen install-plan inventories into recovery baselines."""
+    snapshots: list[operations.AdapterSnapshot] = []
+    if plan.extensions is not None:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.EXTENSIONS,
+                json.dumps(sorted(plan.extensions.installed)),
+            )
+        )
+    if plan.plugins is not None:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.PLUGINS,
+                json.dumps(
+                    {
+                        "plugins": plan.plugins.pre_plugins,
+                        "marketplaces": plan.plugins.pre_marketplaces,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+    if plan.mcp.value is not None:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.MCP,
+                json.dumps(
+                    [
+                        {
+                            "name": name,
+                            "prior": (
+                                None if prior is None else [list(prior[0]), prior[1]]
+                            ),
+                        }
+                        for name, prior in plan.mcp.value.preconditions
+                    ],
+                    sort_keys=True,
+                ),
+            )
+        )
+    return tuple(snapshots)
 
 
 def _refuse_on_symlink_dst_conflicts(ctx: ProfileContext) -> None:
@@ -1002,6 +1185,33 @@ def _apply_secret_plan(plan: SecretPlan) -> None:
             snippet_hash=snippet_hash,
             allowlist_path=plan.allowlist_path,
         )
+
+
+def _apply_secrets_and_bootstrap(
+    journal: operations.OperationJournal,
+    *,
+    secret_plan: SecretPlan,
+    bootstrap: tuple[Path, ...],
+    checkpoint_paths: tuple[Path, ...],
+) -> operations.OperationJournal:
+    """Apply the first reversible phase without claiming untouched paths."""
+    if not checkpoint_paths:
+        _apply_secret_plan(secret_plan)
+        deploy.bootstrap_local(bootstrap)
+        return journal
+    applying = operations.begin_checkpoint(
+        journal,
+        name="secrets-and-bootstrap",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore captured allowlist and bootstrap paths",
+        paths=checkpoint_paths,
+        restore_state=False,
+        restore_transitions=False,
+        adapters=(),
+    )
+    _apply_secret_plan(secret_plan)
+    deploy.bootstrap_local(bootstrap)
+    return operations.finish_checkpoint(applying)
 
 
 def _collect_retry_failed_ids(profile: str) -> frozenset[str]:

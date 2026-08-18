@@ -864,12 +864,12 @@ def test_apply_yes_holds_profile_lock(
     orphan_entry = OrphanEntry(path=live_orphan)
 
     events: list[str] = []
-    real_lock = locking.profile_lock
+    real_locks = locking.mutation_locks
 
     @contextlib.contextmanager
-    def _recording_lock(profile: str, timeout: float | None = None):
+    def _recording_locks(**kwargs: object):
         events.append("enter")
-        with real_lock(profile, timeout=timeout):
+        with real_locks(**kwargs):  # type: ignore[arg-type]
             try:
                 yield
             finally:
@@ -882,7 +882,7 @@ def test_apply_yes_holds_profile_lock(
             events.append("unlink")
         real_unlink(self, missing_ok=missing_ok)
 
-    monkeypatch.setattr("setforge.cli.orphans.profile_lock", _recording_lock)
+    monkeypatch.setattr("setforge.cli.orphans.mutation_locks", _recording_locks)
     monkeypatch.setattr(Path, "unlink", _spy_unlink)
     detection = OrphanDetection(orphans=[orphan_entry])
     monkeypatch.setattr(

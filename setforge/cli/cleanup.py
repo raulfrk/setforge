@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 from ruamel.yaml import YAML
 
-from setforge import binaries, transitions
+from setforge import binaries, operations, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -20,7 +20,7 @@ from setforge.cli import (
     app,
 )
 from setforge.config import load_config, resolve_effective_profile
-from setforge.locking import profile_lock
+from setforge.locking import mutation_locks
 from setforge.provision.dispatch import resolve_provision_items
 from setforge.provision.protocol import Identity
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
@@ -216,6 +216,8 @@ def _apply_cleanup(
     items: list[CleanupItem],
     store: ReceiptStore,
     console: Console,
+    *,
+    config_dir: Path | None = None,
 ) -> None:
     confine_root = _confinement_root()
     for item in items:
@@ -231,7 +233,8 @@ def _apply_cleanup(
         # install/sync writing the same profile's state cannot interleave.
         # Per-item (not whole-loop): _pick_action above is interactive and
         # must not run while holding the lock.
-        with profile_lock(profile):
+        with mutation_locks(resources=True, config_dir=config_dir, profile=profile):
+            operations.refuse_active(profile)
             transitions.ensure_state_dir_writable()
             meta = transitions.make_meta(
                 transitions.TransitionCommand.CLEANUP_ORPHANS, profile
@@ -279,4 +282,10 @@ def cleanup(
         )
         raise typer.Exit(code=2)
 
-    _apply_cleanup(profile, items, store, console)
+    _apply_cleanup(
+        profile,
+        items,
+        store,
+        console,
+        config_dir=resolved_config.resolve().parent,
+    )

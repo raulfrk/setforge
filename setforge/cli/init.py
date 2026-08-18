@@ -45,6 +45,7 @@ from setforge.cli._init_helpers import (
     probe_environment,
 )
 from setforge.errors import ConfirmRequiresInteractive
+from setforge.locking import mutation_locks
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -759,6 +760,30 @@ def init(
     if check:
         _handle_check_mode(console=console)
         return
+
+    with mutation_locks(config_dir=LOCAL_CONFIG_PATH.parent):
+        _run_init_mutation(
+            force=force,
+            no_prompt=no_prompt,
+            path_source=path_source,
+            git_source=git_source,
+            git_ref=git_ref,
+            config_repo=config_repo,
+            console=console,
+        )
+
+
+def _run_init_mutation(
+    *,
+    force: bool,
+    no_prompt: bool,
+    path_source: Path | None,
+    git_source: str | None,
+    git_ref: str,
+    config_repo: bool,
+    console: Console,
+) -> None:
+    """Run every init write under the canonical config lock."""
 
     if config_repo:
         exit_code = _handle_config_repo(no_prompt=no_prompt, console=console)

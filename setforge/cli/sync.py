@@ -6,7 +6,6 @@
   also records a transition so ``revert`` can replay it.
 """
 
-import contextlib
 import stat
 import sys
 from datetime import UTC
@@ -16,6 +15,7 @@ import typer
 
 from setforge import (
     atomicio,
+    operations,
     transitions,
     vscode_extensions,
 )
@@ -62,10 +62,8 @@ from setforge.config import (
     refuse_unmigrated_host_local_leak,
     resolve_effective_profile,
 )
-from setforge.errors import (
-    ExtensionToolMissing,
-)
-from setforge.locking import profile_lock
+from setforge.errors import ExtensionToolMissing
+from setforge.locking import mutation_locks
 from setforge.overlay_provenance import ResolvedExtension
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import file_id
@@ -136,27 +134,29 @@ def capture(
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
 
-    cfg = load_config(config)
-    refuse_unmigrated_host_local_leak(cfg, verb="capture", profile=profile)
     repo_root = config.resolve().parent
-    effective = resolve_effective_profile(cfg, profile, repo_root)
-    resolved = effective.resolved
-    try:
-        results = _run_capture(
-            cfg, profile, repo_root, config, auto_enum, resolved=resolved
-        )
-    except KeyboardInterrupt:
-        # Plain ``capture`` takes no snapshot (only ``sync`` records a
-        # transition + restorable snapshots), and ``capture_profile`` has
-        # no internal rollback — so writes already committed survive.
-        # Report that truthfully instead of a false "restored" claim.
-        typer.secho(
-            "capture cancelled (Ctrl-C); some files may have been partially "
-            "written — run `setforge compare` to inspect",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        raise typer.Exit(130) from None
+    with mutation_locks(config_dir=repo_root, profile=profile):
+        operations.refuse_active(profile)
+        cfg = load_config(config)
+        refuse_unmigrated_host_local_leak(cfg, verb="capture", profile=profile)
+        effective = resolve_effective_profile(cfg, profile, repo_root)
+        resolved = effective.resolved
+        try:
+            results = _run_capture(
+                cfg, profile, repo_root, config, auto_enum, resolved=resolved
+            )
+        except KeyboardInterrupt:
+            # Plain ``capture`` takes no snapshot (only ``sync`` records a
+            # transition + restorable snapshots), and ``capture_profile`` has
+            # no internal rollback — so writes already committed survive.
+            # Report that truthfully instead of a false "restored" claim.
+            typer.secho(
+                "capture cancelled (Ctrl-C); some files may have been partially "
+                "written — run `setforge compare` to inspect",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+            raise typer.Exit(130) from None
     _render_capture_results(results)
 
 
@@ -194,18 +194,21 @@ def sync(
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
 
-    cfg = load_config(config)
-    # Same host-local leak gate as install (see install.py).
-    refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
     repo_root = config.resolve().parent
-    effective = resolve_effective_profile(cfg, profile, repo_root)
-    resolved = effective.resolved
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    _refuse_duplicate_section_names(ctx, command="sync")
-
-    with profile_lock(profile):
+    with (
+        mutation_locks(config_dir=repo_root, profile=profile),
+        operations.recover_on_error(profile, "sync"),
+    ):
+        operations.refuse_active(profile)
+        cfg = load_config(config)
+        # Same host-local leak gate as install (see install.py).
+        refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
+        effective = resolve_effective_profile(cfg, profile, repo_root)
+        resolved = effective.resolved
+        ctx = ProfileContext(
+            cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+        )
+        _refuse_duplicate_section_names(ctx, command="sync")
         if not no_transition:
             transitions.ensure_state_dir_writable()
 
@@ -220,6 +223,21 @@ def sync(
         # would leave the base AHEAD of the reverted tracked src — the
         # corruption direction the codebase guards against.
         state_pre = _capture_sync_store_snapshots(ctx)
+        journal = operations.prepare(
+            command="sync",
+            profile=profile,
+            config_dir=repo_root,
+            resources_lock=False,
+            command_line=tuple(redact_argv(sys.argv[1:])),
+            paths=tuple(src_paths),
+            state_snapshots=state_pre,
+        )
+        journal = operations.begin_checkpoint(
+            journal,
+            name="capture-files-and-stores",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore captured tracked/config paths and reconcile stores",
+        )
 
         try:
             results = _run_capture(
@@ -239,11 +257,22 @@ def sync(
             # write and a base advanced ahead of its src. Restore the
             # pre-capture file + store snapshots on both, guarding the
             # restore so a restore-time failure never masks the original.
-            with contextlib.suppress(OSError):
-                _restore_sync_snapshots(file_pre, state_pre)
+            recovered = False
+            try:
+                operations.recover_files(journal)
+                operations.complete(journal)
+                recovered = True
+            except BaseException as recovery_error:
+                exc.add_note(f"automatic recovery failed: {recovery_error}")
             if isinstance(exc, KeyboardInterrupt):
                 typer.secho(
-                    "sync cancelled (Ctrl-C); files restored from snapshot",
+                    "sync cancelled (Ctrl-C); "
+                    + (
+                        "files restored from snapshot journal"
+                        if recovered
+                        else "recovery incomplete; run `setforge recover --profile="
+                        f"{profile} --apply`"
+                    ),
                     err=True,
                     fg=typer.colors.YELLOW,
                 )
@@ -251,6 +280,7 @@ def sync(
             # OSError: snapshots restored; propagate so the user sees it.
             raise
 
+        journal = operations.finish_checkpoint(journal)
         file_post = transitions.snapshot_paths(src_paths)
         if not no_transition:
             _write_sync_transition(
@@ -259,6 +289,7 @@ def sync(
                 file_post=file_post,
                 state_snapshots=state_pre,
             )
+        operations.complete(journal)
 
 
 def _run_capture_confirm_gate(

@@ -37,6 +37,7 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
+from setforge import operations
 from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
 from setforge.cli import app
 from setforge.cli._config_helpers import (
@@ -68,6 +69,7 @@ from setforge.cli._output import OutputContext
 from setforge.config import Config, MarketplaceSource, MarketplaceSourceKind
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
+from setforge.locking import mutation_locks
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.source import get_resolved_source, validate_source_dir
 
@@ -509,23 +511,25 @@ def _run_add(
     readable.
     """
     scope = _resolve_scope(local=local, tracked=tracked)
-    _check_profile_arg(path, profile)
-    if path == "marketplaces.add":
-        _add_marketplace(scope, value, source=source, repo=repo, yes=yes)
-        return
-    node = _resolve_path(scope, path)
-    if node is None:
-        raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
-    yaml_path = _prepare_scope_yaml(scope)
-    _mutate_and_write(
-        scope=scope,
-        yaml_path=yaml_path,
-        dotted=path,
-        op_value=value,
-        op="add",
-        is_list=node.is_list,
-        yes=yes,
-    )
+    with mutation_locks(config_dir=_scope_yaml_path(scope).parent):
+        operations.refuse_config_mutation(_scope_yaml_path(scope).parent)
+        _check_profile_arg(path, profile)
+        if path == "marketplaces.add":
+            _add_marketplace(scope, value, source=source, repo=repo, yes=yes)
+            return
+        node = _resolve_path(scope, path)
+        if node is None:
+            raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
+        yaml_path = _prepare_scope_yaml(scope)
+        _mutate_and_write(
+            scope=scope,
+            yaml_path=yaml_path,
+            dotted=path,
+            op_value=value,
+            op="add",
+            is_list=node.is_list,
+            yes=yes,
+        )
 
 
 def _prepare_scope_yaml(scope: ConfigScope) -> Path:
@@ -568,25 +572,27 @@ def config_remove(
 ) -> None:
     """Pop-from-list OR unset-scalar at the dotted path."""
     scope = _resolve_scope(local=local, tracked=tracked)
-    _check_profile_arg(path, profile)
-    node = _resolve_path(scope, path)
-    if node is None:
-        raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
-    yaml_path = _scope_yaml_path(scope)
-    if scope is ConfigScope.LOCAL and not yaml_path.exists():
-        typer.echo("nothing to remove")
-        raise typer.Exit(0)
-    if scope is ConfigScope.TRACKED:
-        _run_tracked_git_check(yaml_path)
-    _mutate_and_write(
-        scope=scope,
-        yaml_path=yaml_path,
-        dotted=path,
-        op_value=value,
-        op="remove",
-        is_list=node.is_list,
-        yes=yes,
-    )
+    with mutation_locks(config_dir=_scope_yaml_path(scope).parent):
+        operations.refuse_config_mutation(_scope_yaml_path(scope).parent)
+        _check_profile_arg(path, profile)
+        node = _resolve_path(scope, path)
+        if node is None:
+            raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
+        yaml_path = _scope_yaml_path(scope)
+        if scope is ConfigScope.LOCAL and not yaml_path.exists():
+            typer.echo("nothing to remove")
+            raise typer.Exit(0)
+        if scope is ConfigScope.TRACKED:
+            _run_tracked_git_check(yaml_path)
+        _mutate_and_write(
+            scope=scope,
+            yaml_path=yaml_path,
+            dotted=path,
+            op_value=value,
+            op="remove",
+            is_list=node.is_list,
+            yes=yes,
+        )
 
 
 def _mutate_and_write(

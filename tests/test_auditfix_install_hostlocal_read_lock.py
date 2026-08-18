@@ -50,18 +50,18 @@ def _recording_lock() -> tuple[Callable[..., object], list[str]]:
     from setforge import locking
 
     events: list[str] = []
-    real_lock = locking.profile_lock
+    real_locks = locking.mutation_locks
 
     @contextlib.contextmanager
-    def recording_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
+    def recording_locks(**kwargs: object) -> Iterator[None]:
         events.append("enter")
-        with real_lock(profile, timeout=timeout):
+        with real_locks(**kwargs):  # type: ignore[arg-type]
             try:
                 yield
             finally:
                 events.append("exit")
 
-    return recording_lock, events
+    return recording_locks, events
 
 
 def _recording_read(
@@ -89,7 +89,7 @@ def test_install_reads_host_local_overlay_under_lock(
 
     recording_lock, events = _recording_lock()
     recording_read = _recording_read(events)
-    monkeypatch.setattr("setforge.cli.install.profile_lock", recording_lock)
+    monkeypatch.setattr("setforge.cli.install.mutation_locks", recording_lock)
     monkeypatch.setattr(
         "setforge.cli.install._load_validated_host_local_sections", recording_read
     )

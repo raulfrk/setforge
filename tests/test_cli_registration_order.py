@@ -27,6 +27,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "capture",
     "sync",
     "revert",
+    "recover",
     "validate",
     "fetch",
     "lock",

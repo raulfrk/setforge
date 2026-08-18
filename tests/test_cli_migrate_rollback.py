@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from setforge import transitions
+from setforge import operations, transitions
 from setforge.cli import app
 from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
 
@@ -26,6 +26,34 @@ def _write_cfg(tmp_path: Path, body: str) -> Path:
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(body, encoding="utf-8")
     return cfg
+
+
+def test_migrate_journal_reserves_every_declared_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_cfg(
+        tmp_path,
+        "version: 1\ntracked_files: {}\nprofiles:\n  default: {}\n  team/dev: {}\n",
+    )
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_StampStep(),))
+    captured: list[tuple[str, ...]] = []
+    real_prepare = operations.prepare
+
+    def recording_prepare(**kwargs: object) -> operations.OperationJournal:
+        profiles = kwargs["profiles"]
+        assert isinstance(profiles, tuple)
+        captured.append(profiles)
+        return real_prepare(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("setforge.cli.migrate.operations.prepare", recording_prepare)
+
+    result = runner.invoke(
+        app,
+        ["migrate", "--config", str(cfg), "--to", "1.1", "--apply", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == [("default", "migrate", "team/dev")]
 
 
 @dataclass(slots=True, frozen=True)

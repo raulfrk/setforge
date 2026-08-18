@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from setforge import transitions
 from setforge.cli import app
 
 _FIXTURE_YAML = """\
@@ -62,10 +63,10 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Patch ``profile_lock`` + ``apply_patch_reverse`` to record call order.
+    """Patch ``mutation_locks`` + patch reversal to record call order.
 
     Returns the shared event list. The recording lock wraps the real
-    :func:`setforge.locking.profile_lock`, appending ``"enter"`` /
+    :func:`setforge.locking.mutation_locks`, appending ``"enter"`` /
     ``"exit"`` markers around it so the lock's serialization is exercised
     for real while the order is observable. ``apply_patch_reverse`` is
     wrapped to append ``"apply"`` before delegating to the real impl.
@@ -75,13 +76,13 @@ def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     from setforge.transitions import TransitionDir
 
     events: list[str] = []
-    real_lock = locking.profile_lock
+    real_lock = locking.mutation_locks
     real_apply = transitions_module.apply_patch_reverse
 
     @contextlib.contextmanager
-    def recording_lock(profile: str, timeout: float | None = None):
+    def recording_lock(**scopes: object):
         events.append("enter")
-        with real_lock(profile, timeout=timeout):
+        with real_lock(**scopes):  # type: ignore[arg-type]
             try:
                 yield
             finally:
@@ -96,7 +97,7 @@ def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             events.append("apply")
         real_apply(transition_dir, dry_run=dry_run)
 
-    monkeypatch.setattr("setforge.cli.revert.profile_lock", recording_lock)
+    monkeypatch.setattr("setforge.cli.revert.mutation_locks", recording_lock)
     monkeypatch.setattr(transitions_module, "apply_patch_reverse", recording_apply)
     return events
 
@@ -125,6 +126,33 @@ def test_single_step_revert_holds_lock_before_mutating(
         f"lock must be held before mutating; observed order: {events}"
     )
     assert events[-1] == "exit", f"lock must be released last; order: {events}"
+
+
+def test_revert_apply_failure_restores_real_cli_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compensatable revert failure restores files and clears its journal."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    installed = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert installed.exit_code == 0, installed.output
+    before = dst.read_bytes()
+
+    def fail_after_write(*_args: object, **_kwargs: object) -> None:
+        dst.write_text("partial revert\n", encoding="utf-8")
+        raise RuntimeError("revert interrupted")
+
+    monkeypatch.setattr("setforge.cli.revert._apply_revert", fail_after_write)
+
+    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
+
+    assert result.exit_code == 1
+    assert dst.read_bytes() == before
+    from setforge import operations
+
+    assert operations.active("vmh") is None
 
 
 def test_to_before_multi_step_revert_holds_lock_before_mutating(
@@ -164,6 +192,55 @@ def test_to_before_multi_step_revert_holds_lock_before_mutating(
     assert events.index("enter") < events.index("apply"), (
         f"lock must be held before mutating; observed order: {events}"
     )
+
+
+@pytest.mark.parametrize("multi_step", [False, True])
+def test_revert_locks_cross_profile_transition_state_before_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    multi_step: bool,
+) -> None:
+    """Migration-style state snapshots extend the revert lock envelope."""
+    cfg, _dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    installed = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert installed.exit_code == 0, installed.output
+    latest = transitions.load_latest("vmh")
+    assert latest is not None
+    foreign_state = transitions.StateSnapshotEntry(
+        store=transitions.SnapshotStore.BASE,
+        profile="actual",
+        key="file",
+        payload=None,
+    )
+    monkeypatch.setattr(
+        "setforge.cli.revert.transitions.load_state_snapshots",
+        lambda _transition: (foreign_state,),
+    )
+    captured: list[tuple[str, ...]] = []
+
+    @contextlib.contextmanager
+    def recording_lock(**scopes: object):
+        profiles = scopes["profiles"]
+        assert isinstance(profiles, tuple)
+        captured.append(profiles)
+        yield
+
+    monkeypatch.setattr("setforge.cli.revert.mutation_locks", recording_lock)
+    monkeypatch.setattr(
+        "setforge.cli.revert.operations.refuse_active",
+        lambda _profile: (_ for _ in ()).throw(RuntimeError("stop before apply")),
+    )
+    args = ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    if multi_step:
+        args.append(f"--to-before={latest.name}")
+
+    result = runner.invoke(app, args)
+
+    assert isinstance(result.exception, RuntimeError)
+    assert captured == [("actual", "vmh")]
 
 
 def test_single_revert_refuses_transition_added_during_confirmation(

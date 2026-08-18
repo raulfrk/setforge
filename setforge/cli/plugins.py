@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from setforge import binaries, reconcile_adapter
+from setforge import binaries, operations, reconcile_adapter
 from setforge import claude_marketplace_cache as claude_mp_cache_mod
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import claude_yaml_editor as claude_yaml_editor_mod
@@ -36,7 +36,7 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
-from setforge.locking import install_resources_lock
+from setforge.locking import mutation_locks
 
 # ---------------------------------------------------------------------------
 # plugin sub-app
@@ -119,10 +119,13 @@ def plugin_add(
     """Register a marketplace (if new), declare plugin in YAML, and install."""
     config = _resolve_config_arg(config)
     plugin_name, mp_name = _validate_plugin_add_args(name, marketplace)
-    load_config(config)
     source = _parse_marketplace_from(from_)
 
-    with install_resources_lock():
+    with mutation_locks(
+        resources=True, config_dir=config.resolve().parent, profile=profile
+    ):
+        operations.refuse_active(profile)
+        load_config(config)
         _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
         if not no_install:
             _execute_plugin_add(plugin_name, mp_name)
@@ -307,7 +310,10 @@ def plugin_remove(
     # so strip any trailing @marketplace for the YAML removal to keep it
     # symmetric with the corrected add path.
     bare_ref = name.split("@", 1)[0]
-    with install_resources_lock():
+    with mutation_locks(
+        resources=True, config_dir=config.resolve().parent, profile=profile
+    ):
+        operations.refuse_active(profile)
         cfg = load_config(config)
         changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
             config, profile, bare_ref
@@ -410,7 +416,10 @@ def _run_plugin_reconcile(
             auto=auto,
         )
         return policy, report
-    with install_resources_lock():
+    with mutation_locks(
+        resources=True, config_dir=config.resolve().parent, profile=profile
+    ):
+        operations.refuse_active(profile)
         # Re-resolve after serialization so a waiting PRUNE never applies
         # desired state older than the preceding writer.
         current_cfg = load_config(config)
@@ -484,7 +493,10 @@ def sync_cache(
     config = _resolve_config_arg(config)
     repo_root = config.resolve().parent
     try:
-        with install_resources_lock():
+        with mutation_locks(
+            resources=True, config_dir=config.resolve().parent, profile=profile
+        ):
+            operations.refuse_active(profile)
             cfg = load_config(config)
             resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
             refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)
@@ -531,7 +543,7 @@ def marketplace_add_cmd(
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    with install_resources_lock():
+    with mutation_locks(resources=True, config_dir=config.resolve().parent):
         yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
         if yaml_changed:
             typer.echo(f"added {name} to marketplaces in YAML")
@@ -570,7 +582,7 @@ def marketplace_remove_cmd(
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
-    with install_resources_lock():
+    with mutation_locks(resources=True, config_dir=config.resolve().parent):
         yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
         if yaml_changed:
             typer.echo(f"removed {name} from marketplaces in YAML")
@@ -597,7 +609,7 @@ def marketplace_update_cmd(
     # (it only shells to `claude`), and resolving would add a spurious
     # NoSourceConfigured failure mode for a command that needs no source.
     try:
-        with install_resources_lock():
+        with mutation_locks(resources=True):
             claude_plugins_mod.marketplace_update(name)
         typer.echo(f"updated marketplace: {name}")
     except PluginToolMissing as exc:

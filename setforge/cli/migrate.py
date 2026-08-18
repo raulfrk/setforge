@@ -34,12 +34,13 @@ from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Never
 
 import typer
+from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from setforge import atomicio, transitions
+from setforge import atomicio, operations, transitions
 from setforge import user_section_markers as sections
 from setforge._redact import redact_argv
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
@@ -47,6 +48,7 @@ from setforge.cli._help_examples import MIGRATE_EXAMPLES
 from setforge.compare import resolve_src
 from setforge.config import guard_minimum_version, load_config
 from setforge.errors import ConfirmRequiresInteractive
+from setforge.locking import mutation_locks, profile_lock
 from setforge.migrations import (
     MIGRATIONS,
     Migration,
@@ -147,11 +149,33 @@ def migrate(
     # detect_current_schema (not load_config), so enforce it here BEFORE any
     # read/mutation — a below-floor engine must not inspect or migrate the repo.
     guard_minimum_version(cfg_path)
+    # mutation_locks includes the user-global pre-publication gate. Do not add a
+    # synthetic outer profile lock here: chain cutovers acquire their concrete
+    # profiles later, and nesting equal-rank profile locks would invert the
+    # canonical order. The gate serializes this entire pre-journal interval.
     if pin is not None:
-        _dispatch_pin(cfg_path=cfg_path, pin=pin)
+        with mutation_locks(config_dir=cfg_path.resolve().parent):
+            _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return
     if finalize:
-        _dispatch_finalize(cfg_path=cfg_path, yes=yes)
+        with mutation_locks(config_dir=cfg_path.resolve().parent):
+            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+            _dispatch_finalize(cfg_path=cfg_path, yes=yes)
+        return
+
+    if apply_flag:
+        with mutation_locks(config_dir=cfg_path.resolve().parent):
+            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+            guard_minimum_version(cfg_path)
+            current = detect_current_schema(cfg_path)
+            target = _resolve_target(to=to)
+            if to is not None and parse_schema_version(current) == parse_schema_version(
+                target
+            ):
+                typer.echo(f"already at schema_version {target}; nothing to do.")
+                return
+            chain = find_migration_path(from_v=current, to_v=target)
+            _dispatch_apply(cfg_path=cfg_path, chain=chain, yes=yes)
         return
 
     current = detect_current_schema(cfg_path)
@@ -165,17 +189,13 @@ def migrate(
 
     chain = find_migration_path(from_v=current, to_v=target)
 
-    if check or not apply_flag:
-        _dispatch_check(
-            cfg_path=cfg_path,
-            current=current,
-            expected=target,
-            chain=chain,
-            bare=not check and not apply_flag,
-        )
-        return
-
-    _dispatch_apply(cfg_path=cfg_path, chain=chain, yes=yes)
+    _dispatch_check(
+        cfg_path=cfg_path,
+        current=current,
+        expected=target,
+        chain=chain,
+        bare=not check,
+    )
 
 
 def _resolve_target(*, to: str | None) -> str:
@@ -278,8 +298,30 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     if choice is MigrateChoice.ABORT:
         typer.echo("aborted: no migrations applied.")
         return
-    _execute_chain(chain=chain, roots=roots, choice=choice)
-    _run_post_apply_validate(cfg_path=cfg_path)
+    journal = operations.prepare(
+        command="migrate",
+        profile=transitions.MIGRATE_TRANSITION_PROFILE,
+        config_dir=cfg_path.resolve().parent,
+        resources_lock=False,
+        command_line=tuple(redact_argv(sys.argv[1:])),
+        paths=affected,
+        profiles=_migration_reserved_profiles(cfg_path),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="migration-chain",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore every migration-affected path",
+    )
+    try:
+        _execute_chain(chain=chain, roots=roots, choice=choice)
+        _run_post_apply_validate(cfg_path=cfg_path)
+    except BaseException as primary:
+        try:
+            _recover_migration_journal(journal)
+        except BaseException as recovery_error:
+            primary.add_note(f"automatic recovery failed: {recovery_error}")
+        raise
     # file_post AFTER the chain so the recorded patch covers the full forward
     # delta. (post-apply validate is read-only — it adds nothing to the delta;
     # it just gates here so a transition is only recorded for a valid result.)
@@ -293,6 +335,8 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     if not _chain_owns_transition(chain):
         file_post = transitions.snapshot_paths(affected)
         _write_migrate_transition(file_pre=file_pre, file_post=file_post)
+    journal = operations.finish_checkpoint(journal)
+    operations.complete(journal)
     _print_completion_report(cfg_path=cfg_path, chain=chain, roots=roots, choice=choice)
 
 
@@ -403,6 +447,20 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
 
     paths = [src for src, _, _ in plans]
     file_pre = transitions.snapshot_paths(paths)
+    journal = operations.prepare(
+        command="migrate-finalize",
+        profile=transitions.MIGRATE_TRANSITION_PROFILE,
+        config_dir=cfg_path.resolve().parent,
+        resources_lock=False,
+        command_line=tuple(redact_argv(sys.argv[1:])),
+        paths=tuple(paths),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="marker-finalize",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore every tracked source from the write-ahead snapshot",
+    )
     # The batch is recorded as ONE revertible transition only after every
     # write lands. atomic_write_text is per-file atomic, but the loop is not
     # transactional: a write failure on file N (disk full, EACCES, read-only
@@ -419,19 +477,74 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
             atomicio.atomic_write_text(src, after)
             written.append(src)
     except OSError as exc:
-        _rollback(snapshots)
-        typer.secho(
-            f"finalize FAILED writing {src} after "
-            f"{len(written)} file(s) written; rolled back the whole batch: "
-            f"{exc}",
-            err=True,
-            fg=typer.colors.RED,
+        _fail_finalize(
+            journal=journal,
+            snapshots=snapshots,
+            failed_path=src,
+            written_count=len(written),
+            error=exc,
         )
-        raise typer.Exit(code=1) from exc
     file_post = transitions.snapshot_paths(paths)
     _write_migrate_transition(file_pre=file_pre, file_post=file_post)
+    journal = operations.finish_checkpoint(journal)
+    operations.complete(journal)
     typer.echo(f"stripped host-local markers from {len(plans)} tracked file(s).")
     typer.echo("to undo: setforge revert --profile=migrate")
+
+
+def _migration_reserved_profiles(cfg_path: Path) -> tuple[str, ...]:
+    """Reserve every declared profile whose store a migration may rewrite."""
+    raw = YAML(typ="safe").load(cfg_path.read_text(encoding="utf-8"))
+    profiles = raw.get("profiles") if isinstance(raw, Mapping) else None
+    declared = (
+        {name for name in profiles if isinstance(name, str)}
+        if isinstance(profiles, Mapping)
+        else set()
+    )
+    return tuple(sorted({transitions.MIGRATE_TRANSITION_PROFILE, *declared}))
+
+
+def _recover_migration_journal(journal: operations.OperationJournal) -> None:
+    """Restore a migration journal while holding every reserved profile lock."""
+    with contextlib.ExitStack() as locks:
+        for profile in operations.locked_profiles(journal):
+            locks.enter_context(profile_lock(profile))
+        recovered = operations.recover_files(journal)
+        operations.complete(recovered)
+
+
+def _fail_finalize(
+    *,
+    journal: operations.OperationJournal,
+    snapshots: dict[Path, bytes | None],
+    failed_path: Path,
+    written_count: int,
+    error: OSError,
+) -> Never:
+    """Restore a partially written finalize batch and preserve its diagnostic."""
+    recovered = False
+    try:
+        _recover_migration_journal(journal)
+        recovered = True
+    except BaseException as recovery_error:
+        error.add_note(f"journal recovery failed: {recovery_error}")
+        try:
+            _rollback(snapshots)
+            recovered = True
+        except BaseException as rollback_error:
+            error.add_note(f"fallback rollback failed: {rollback_error}")
+    outcome = (
+        "rolled back the whole batch"
+        if recovered
+        else "recovery incomplete; journal retained"
+    )
+    typer.secho(
+        f"finalize FAILED writing {failed_path} after "
+        f"{written_count} file(s) written; {outcome}: {error}",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1) from error
 
 
 def _preview_finalize(plans: Sequence[tuple[Path, str, str]]) -> None:

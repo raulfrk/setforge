@@ -114,3 +114,46 @@ def test_install_revert_reinstall_repeats_first_run_verbatim(
     assert rc == 0, stderr
     assert c.read_text(_LIVE_FORKED) == _TRACKED_MD_BODY
     assert c.read_text(_BASE_FORKED) == base_v1
+
+    # Exercise a real writer failure after its first bootstrap write. The
+    # second bootstrap's parent is deliberately a regular file, so install
+    # must use its write-ahead journal to remove the first created path while
+    # preserving the pre-existing blocker and clearing the completed recovery.
+    recovery_config = "/tmp/setforge-recovery.yaml"
+    first_parent = "/home/tester/.setforge_recovery_created"
+    first_bootstrap = f"{first_parent}/first"
+    blocker = "/home/tester/.setforge_recovery/blocker"
+    c.write_text(
+        recovery_config,
+        "schema_version: '6.0'\n"
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "profiles:\n"
+        "  recovery-e2e:\n"
+        "    bootstrap:\n"
+        f"      - {first_bootstrap}\n"
+        f"      - {blocker}/child\n",
+    )
+    c.write_text(blocker, "keep\n")
+
+    rc, _stdout, stderr = _setforge(
+        c,
+        [
+            "install",
+            "--profile=recovery-e2e",
+            f"--config={recovery_config}",
+            "--no-fetch",
+            "--no-git-check",
+            "--no-secrets-scan",
+            "--yes",
+        ],
+    )
+
+    assert rc != 0, "the deliberately invalid second bootstrap must fail"
+    assert "automatic recovery failed" not in stderr
+    assert not _exists(c, first_bootstrap)
+    assert not _exists(c, first_parent)
+    assert c.read_text(blocker) == "keep\n"
+    rc, _stdout, stderr = _setforge(c, ["recover", "--profile=recovery-e2e"])
+    assert rc != 0
+    assert "no unfinished operation" in stderr
