@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from dataclasses import dataclass
 
 import typer
 
@@ -31,28 +32,57 @@ def _warn_skip_mcp(exc: PluginToolMissing) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class MCPInstallPlan:
+    """MCP plan wrapper that can represent an unavailable Claude tool."""
+
+    value: mcp_mod.McpPlan | None
+
+
+def plan_mcp_servers(cfg: Config, resolved: ResolvedProfile) -> MCPInstallPlan:
+    """Build the MCP portion of install without mutating registrations."""
+    if not resolved.mcp_servers:
+        return MCPInstallPlan(value=mcp_mod.McpPlan(entries=(), preconditions=()))
+    try:
+        return MCPInstallPlan(value=mcp_mod.plan_reconcile(cfg, resolved))
+    except PluginToolMissing as exc:
+        _warn_skip_mcp(exc)
+        return MCPInstallPlan(value=None)
+
+
 def reconcile_mcp_servers(
     cfg: Config,
     resolved: ResolvedProfile,
+    *,
+    plan: MCPInstallPlan | None = None,
 ) -> tuple[transitions.MCPDelta | None, list[tuple[str, str]]]:
     """Converge declared MCP servers; return ``(delta, failed)``.
 
     Returns ``(None, [])`` when the ``claude`` binary is missing
     (warn-and-skip; nothing landed). Otherwise returns the
     :class:`~transitions.MCPDelta` of what was registered / updated (built
-    from successfully-applied ops only) plus the report's ``failed`` list
-    so the caller can gate the exit code on it.
+    from mutations that need an inverse, including an update whose remove
+    succeeded but replacement add failed) plus the report's ``failed`` list so
+    the caller can gate the exit code on it.
     """
     try:
-        report = mcp_mod.reconcile(cfg, resolved)
+        if plan is not None and plan.value is None:
+            return None, []
+        report = (
+            mcp_mod.apply_plan(plan.value)
+            if plan is not None and plan.value is not None
+            else mcp_mod.reconcile(cfg, resolved)
+        )
     except PluginToolMissing as exc:
         _warn_skip_mcp(exc)
         return None, []
 
     for name, _command, _scope in report.added:
         typer.echo(f"mcp added     {name}")
+    failed_names = {name for name, _error in report.failed}
     for name, _prior_command, _prior_scope in report.updated:
-        typer.echo(f"mcp updated   {name}")
+        verb = "recovery recorded" if name in failed_names else "updated"
+        typer.echo(f"mcp {verb:<17} {name}")
     for name, err in report.failed:
         typer.secho(f"FAILED mcp  {name} — {err}", err=True, fg=typer.colors.YELLOW)
     if not report and not report.failed:

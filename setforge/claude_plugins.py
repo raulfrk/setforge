@@ -38,7 +38,7 @@ from setforge.config import (
     MarketplaceSourceKind,
     ReconcilePolicy,
 )
-from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
+from setforge.errors import MarketplaceCacheMiss, PluginToolMissing, SetforgeError
 from setforge.provision import driver
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.resolve.protocol import ResolvedPin
@@ -132,6 +132,163 @@ class ReconcileReport:
             or self.to_disable
             or self.marketplaces_added
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PluginPlan:
+    """A frozen plugin/marketplace inventory decision for install apply."""
+
+    cfg_json: str
+    install_mode: ClaudeInstallMode
+    policy: ReconcilePolicy
+    reconcile: driver.ReconcilePlan
+    to_install: tuple[str, ...]
+    to_enable: tuple[str, ...]
+    to_disable: tuple[str, ...]
+    marketplaces_added: tuple[str, ...]
+    marketplace_sources: tuple[tuple[str, _mp_cache.MarketplaceSourcePlan], ...]
+    auto: bool
+    pre_plugins_json: str
+    pre_marketplaces_json: str
+
+    @property
+    def cfg(self) -> Config:
+        """Return a detached config snapshot for adapter execution."""
+        return Config.model_validate_json(self.cfg_json)
+
+    @property
+    def pre_plugins(self) -> dict[str, dict[str, object]]:
+        """Return a detached copy of the planned plugin inventory."""
+        return json.loads(self.pre_plugins_json)
+
+    @property
+    def pre_marketplaces(self) -> dict[str, dict[str, object]]:
+        """Return a detached copy of the planned marketplace inventory."""
+        return json.loads(self.pre_marketplaces_json)
+
+
+def plan_reconcile(
+    cfg: Config,
+    *,
+    declared_plugin_ids: set[str],
+    policy: ReconcilePolicy,
+    pins: dict[str, ResolvedPin] | None = None,
+    auto: bool = False,
+) -> PluginPlan:
+    """Probe plugin state once and retain the selected operations."""
+    from setforge.provision.plugin import PluginProvisioner
+
+    install_mode = load_host_local_config().claude.install_mode
+    pre_plugins = list_installed()
+    pre_marketplaces = list_marketplaces()
+    marketplaces = tuple(
+        _marketplaces_to_add(
+            cfg,
+            install_mode,
+            _mp_cache.MARKETPLACE_CACHE_ROOT,
+            installed=pre_marketplaces,
+        )
+    )
+    marketplace_sources = tuple(
+        (
+            name,
+            _mp_cache.plan_marketplace_source(
+                cfg.marketplaces[name],
+                install_mode,
+                cache_root=_mp_cache.MARKETPLACE_CACHE_ROOT,
+                mp_name=name,
+                auto=auto,
+            ),
+        )
+        for name in marketplaces
+    )
+    items = [
+        ProvisionItem(type="plugin", identity=Identity(key=pid, display=pid))
+        for pid in sorted(declared_plugin_ids)
+    ]
+    effective_sources = {
+        name: source_plan.effective_source for name, source_plan in marketplace_sources
+    }
+    checkouts = _plugin_checkout_targets(
+        cfg,
+        declared_plugin_ids,
+        pins or {},
+        install_mode,
+        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        effective_sources=effective_sources,
+    )
+    reconcile_plan = driver.plan_reconcile(
+        PluginProvisioner(checkouts=checkouts, installed_snapshot=pre_plugins), items
+    )
+    return PluginPlan(
+        cfg_json=cfg.model_dump_json(),
+        install_mode=install_mode,
+        policy=policy,
+        reconcile=reconcile_plan,
+        to_install=tuple(item.display for item in reconcile_plan.delta.installed),
+        to_enable=tuple(item.display for item in reconcile_plan.delta.activated),
+        to_disable=tuple(
+            _plugin_state_diff(declared_plugin_ids, policy, installed=pre_plugins)
+        ),
+        marketplaces_added=marketplaces,
+        marketplace_sources=marketplace_sources,
+        auto=auto,
+        pre_plugins_json=json.dumps(pre_plugins, sort_keys=True),
+        pre_marketplaces_json=json.dumps(pre_marketplaces, sort_keys=True),
+    )
+
+
+def apply_plan(plan: PluginPlan) -> ReconcileReport:
+    """Validate then apply a plugin plan without recomputing its operations."""
+    if plan.policy is ReconcilePolicy.REPORT:
+        return _report_plan(plan)
+    validate_plan(plan)
+    failed: list[tuple[str, str]] = []
+    _add_declared_marketplaces(
+        plan.cfg,
+        list(plan.marketplaces_added),
+        plan.install_mode,
+        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        failed,
+        auto=plan.auto,
+        source_plans=dict(plan.marketplace_sources),
+    )
+    result = driver.apply_reconcile(plan.reconcile)
+    failed.extend(
+        (outcome.item.identity.display, outcome.detail)
+        for outcome in result.outcomes
+        if outcome.outcome is Outcome.HARD
+    )
+    _reconcile_remove(list(plan.to_disable), failed)
+    return _build_report(
+        list(plan.to_install),
+        list(plan.to_enable),
+        list(plan.to_disable),
+        list(plan.marketplaces_added),
+        dry_run=False,
+        failed=failed,
+    )
+
+
+def _report_plan(plan: PluginPlan) -> ReconcileReport:
+    """Render a precomputed plugin plan without applying it."""
+    return _read_only_report(
+        list(plan.to_install),
+        list(plan.to_enable),
+        list(plan.to_disable),
+        list(plan.marketplaces_added),
+    )
+
+
+def validate_plan(plan: PluginPlan) -> None:
+    """Fail if plugin or marketplace inventory changed after planning."""
+    if (
+        list_installed() != plan.pre_plugins
+        or list_marketplaces() != plan.pre_marketplaces
+    ):
+        raise SetforgeError("Claude plugin inventory changed after planning")
+    for _name, source_plan in plan.marketplace_sources:
+        _mp_cache.validate_marketplace_source_plan(source_plan)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +607,8 @@ def _marketplaces_to_add(
     cfg: Config,
     install_mode: ClaudeInstallMode = ClaudeInstallMode.REGULAR,
     cache_root: Path | None = None,
+    *,
+    installed: dict[str, dict[str, object]] | None = None,
 ) -> list[str]:
     """Declared marketplace YAML keys whose source is not yet registered.
 
@@ -464,7 +623,9 @@ def _marketplaces_to_add(
     identity mirrors the on-disk cache PATH a GITHUB source is registered
     under — keeping reconcile idempotent in local-clone mode too.
     """
-    registered = _registered_source_identities(list_marketplaces())
+    registered = _registered_source_identities(
+        list_marketplaces() if installed is None else installed
+    )
     return sorted(
         name
         for name, src in cfg.marketplaces.items()
@@ -480,6 +641,7 @@ def _add_declared_marketplaces(
     failed: list[tuple[str, str]],
     *,
     auto: bool = False,
+    source_plans: dict[str, _mp_cache.MarketplaceSourcePlan] | None = None,
 ) -> None:
     """Run install-mode dispatch + ``marketplace_add`` for each name in ``mps_to_add``.
 
@@ -498,12 +660,17 @@ def _add_declared_marketplaces(
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)
         try:
-            effective_source = resolve_marketplace_source(
-                cfg.marketplaces[mp_name],
-                install_mode,
-                cache_root=cache_root,
-                mp_name=mp_name,
-                auto=auto,
+            source_plan = None if source_plans is None else source_plans[mp_name]
+            effective_source = (
+                resolve_marketplace_source(
+                    cfg.marketplaces[mp_name],
+                    install_mode,
+                    cache_root=cache_root,
+                    mp_name=mp_name,
+                    auto=auto,
+                )
+                if source_plan is None
+                else _mp_cache.apply_marketplace_source_plan(source_plan)
             )
             marketplace_add(mp_name, effective_source)
         except MarketplaceCacheMiss as exc:
@@ -515,7 +682,12 @@ def _add_declared_marketplaces(
             failed.append((mp_name, msg))
 
 
-def _plugin_state_diff(declared: set[str], policy: ReconcilePolicy) -> list[str]:
+def _plugin_state_diff(
+    declared: set[str],
+    policy: ReconcilePolicy,
+    *,
+    installed: dict[str, dict[str, object]] | None = None,
+) -> list[str]:
     """Compute the ``to_disable`` set: enabled plugins not declared (PRUNE only).
 
     ``to_install`` / ``to_enable`` are NOT computed here — the report's
@@ -526,7 +698,7 @@ def _plugin_state_diff(declared: set[str], policy: ReconcilePolicy) -> list[str]
     """
     if policy is ReconcilePolicy.ADDITIVE:
         return []
-    installed = list_installed()
+    installed = list_installed() if installed is None else installed
     # A field-less entry is unknown-state, not enabled: default False so it is
     # never fed to a destructive prune-disable.
     enabled = {pid for pid, p in installed.items() if p.get("enabled", False)}
@@ -577,6 +749,8 @@ def _plugin_checkout_targets(
     pins: dict[str, ResolvedPin],
     install_mode: ClaudeInstallMode,
     cache_root: Path,
+    *,
+    effective_sources: dict[str, MarketplaceSource] | None = None,
 ) -> dict[str, tuple[Path, str]]:
     """Map each LOCKED declared plugin to its ``(cache_dir, pinned_sha)``.
 
@@ -593,8 +767,16 @@ def _plugin_checkout_targets(
         if pin is None:
             continue
         _name, _, mp_name = pid.partition("@")
-        src = cfg.marketplaces.get(mp_name)
-        if src is None or src.source is not MarketplaceSourceKind.GITHUB:
+        planned_source = (effective_sources or {}).get(mp_name)
+        src = planned_source or cfg.marketplaces.get(mp_name)
+        if src is None:
+            continue
+        if planned_source is None and src.source is not MarketplaceSourceKind.GITHUB:
+            continue
+        if planned_source is not None and src.source not in {
+            MarketplaceSourceKind.GITHUB,
+            MarketplaceSourceKind.PATH,
+        }:
             continue
         cache_dir = Path(_source_identity(src, install_mode, cache_root))
         targets[pid] = (cache_dir, pin.integrity)
@@ -609,6 +791,7 @@ def reconcile(
     dry_run: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
     auto: bool = False,
+    plan: PluginPlan | None = None,
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
 
@@ -649,6 +832,9 @@ def reconcile(
     the wizard's own non-TTY ``isatty()`` backstop (which raises rather
     than prompting under automation) to never hang.
     """
+    if plan is not None:
+        return _report_plan(plan) if dry_run else apply_plan(plan)
+
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
 

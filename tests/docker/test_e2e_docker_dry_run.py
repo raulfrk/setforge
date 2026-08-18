@@ -54,10 +54,13 @@ _EXPECTED_HEADERS: tuple[str, ...] = (
     "=== DRY-RUN MODE — NOTHING WILL BE MUTATED ===",
     "=== resolving profile + host overlay ===",
     "=== would-be drift gate ===",
+    "=== would-be secrets gate ===",
     "=== would-be deploy ===",
     "=== would-be host-local section inject ===",
     "=== would-be plugin reconcile ===",
     "=== would-be extension reconcile ===",
+    "=== would-be MCP server reconcile ===",
+    "=== would-be package provision ===",
     "=== would-be transition record ===",
     _FINAL_LINE,
 )
@@ -236,16 +239,14 @@ def test_would_prefix_only_on_mutating_verbs(
 
 
 # ---------------------------------------------------------------------------
-# E2E #3 — dry-run covers all 8 phases.
+# E2E #3 — dry-run covers every planned phase.
 # ---------------------------------------------------------------------------
 
 
 def test_dry_run_covers_all_phases(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """All 8 phases appear in dry-run stdout (profile / overlay / drift
-    gate / file deploys / host-local section inject / plugin reconcile / ext
-    reconcile / transition path) plus header + final-line marker.
+    """Every install-plan phase appears in dry-run stdout.
 
     Anchors the ``_EXPECTED_HEADERS`` tuple verbatim against the
     captured stdout. Order is not asserted (the headers may interleave
@@ -360,8 +361,9 @@ def test_dry_run_drift_gate_reports_no_apply(
     Pre-installs the minimal profile (real install) so the live file
     exists, then mutates the live file in-place to introduce drift,
     then runs the dry-run. The dry-run output MUST reflect the
-    drifted state (compare entry status DRIFTED → ``WOULD update``)
-    AND leave the mutated live file byte-identical post-dry-run.
+    drifted state at the gate, then reports the already-planned reconcile
+    outcome (bare install keeps the live edit → ``WOULD noop``), and leaves
+    the mutated live file byte-identical post-dry-run.
     """
     c = docker_container()
     live = "/home/tester/.setforge_e2e/minimal/text.txt"
@@ -388,10 +390,13 @@ def test_dry_run_drift_gate_reports_no_apply(
     assert result.returncode == 0, result.stderr or result.stdout
     post = _snapshot_home(c)
     assert pre == post, "filesystem mutated under --dry-run with drifted live file"
-    # The drifted file MUST be reported as WOULD update (not WOULD noop).
-    assert "WOULD update" in result.stdout, (
-        f"drifted file not reported as WOULD update:\n{result.stdout}"
+    assert "unexpected drift in 1 file(s)" in result.stdout
+    # Preview renders the immutable reconcile decision, not a second action
+    # guessed from the raw compare status.
+    assert "WOULD noop" in result.stdout, (
+        f"keep-live plan not reported as WOULD noop:\n{result.stdout}"
     )
+    assert "WOULD update" not in result.stdout
 
 
 # ---------------------------------------------------------------------------

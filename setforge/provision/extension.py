@@ -29,13 +29,25 @@ __all__ = ["ExtensionProvisioner"]
 class ExtensionProvisioner(Provisioner):
     type = "extension"
 
-    def __init__(self, *, pins: dict[str, ResolvedPin] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        pins: dict[str, ResolvedPin] | None = None,
+        installed_snapshot: set[str] | None = None,
+    ) -> None:
         # A pin routes apply_one through the byte-verified VSIX path.
-        self._pins: dict[str, ResolvedPin] = pins or {}
+        self._pins: dict[str, ResolvedPin] = dict(pins or {})
+        self._installed_snapshot = (
+            set(installed_snapshot) if installed_snapshot is not None else None
+        )
 
     def probe(self) -> set[Identity]:
         try:
-            installed = vscode_extensions.list_installed()
+            installed = (
+                self._installed_snapshot
+                if self._installed_snapshot is not None
+                else vscode_extensions.list_installed()
+            )
         except (ExtensionToolMissing, ExtensionInstallFailed):
             return set()
         return {Identity(key=e.casefold(), display=e) for e in installed}

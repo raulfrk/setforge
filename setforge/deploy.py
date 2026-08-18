@@ -13,6 +13,7 @@ import logging
 import os
 import stat
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -76,7 +77,7 @@ class ResolvedDeploy:
     src: Path
     real_dst: Path
     dst_existed: bool
-    effective_mode: int | None
+    effective_mode: int
     content: str
     new_base: str | None
     merge_conflicts: list[LineConflict | PathConflict]
@@ -139,9 +140,9 @@ def resolve_deploy(
 
     ``mode`` is the POSIX file-mode bits to apply to ``dst`` via
     ``os.fchmod`` on the temp fd BEFORE ``os.replace`` (closes the
-    TOCTOU symlink-swap window and bypasses umask). When ``None``,
-    the temp file inherits the source's mode via
-    :func:`stat.S_IMODE` (today's behavior, zero regression).
+    TOCTOU symlink-swap window and bypasses umask). When ``None``, the source
+    mode is captured now via :func:`stat.S_IMODE`; apply never stats mutable
+    source metadata after the plan boundary.
 
     Raises :class:`MissingTrackedFile` when ``src`` does not exist.
     """
@@ -160,7 +161,7 @@ def resolve_deploy(
         src=src,
         real_dst=real_dst,
         dst_existed=dst_existed,
-        effective_mode=mode,
+        effective_mode=(mode if mode is not None else stat.S_IMODE(src.stat().st_mode)),
         content=content,
         new_base=None,
         merge_conflicts=[],
@@ -337,6 +338,8 @@ def deploy_symlinked_file(
     tracked_file: TrackedFile,
     *,
     backup: bool = True,
+    source_content: str | None = None,
+    source_mode: int | None = None,
 ) -> DeployResult:
     """Deploy a tracked_file that declares ``symlink:``.
 
@@ -351,6 +354,10 @@ def deploy_symlinked_file(
        tempfile and ``os.replace``-d into place — the same atomic
        pattern :func:`_atomic_write` uses for regular files, closing
        the TOCTOU window between ``unlink`` and ``symlink``.
+
+    ``source_content`` and ``source_mode`` let a plan supply the immutable
+    source snapshot captured before the first write. Direct callers may omit
+    both to retain the legacy read-at-call behavior.
 
     Raises :class:`AssertionError` when ``tracked_file.symlink`` is None —
     a caller-contract violation (this function must only be called for a
@@ -378,19 +385,18 @@ def deploy_symlinked_file(
     swings the dst link onto its new target. Not exploitable in a
     security sense — the caller controls both paths — but worth
     knowing if a setforge install races with another tool reading the
-    same tracked symlinks. Same-host single-setforge-process model
-    serializes deploys, so this is theoretical for the canonical
-    install/sync/revert flow. The same model covers the resolve→write
-    staleness window on :func:`write_resolved_deploy` (an external live
-    edit between the read-only resolve pass and the write pass is
-    accepted, not re-checked).
+    same tracked symlinks. Same-host SetForge writers are serialized; install
+    additionally supplies frozen source content so checkout edits after its
+    plan boundary cannot change the deployed bytes.
     """
     if tracked_file.symlink is None:
         raise AssertionError(
             "deploy_symlinked_file called with tracked_file.symlink == None"
         )
-    if not src.exists():
+    if source_content is None and not src.exists():
         raise MissingTrackedFile(f"tracked source not found: {src}")
+    if (source_content is None) != (source_mode is None):
+        raise AssertionError("source_content and source_mode must be supplied together")
 
     target = Path(tracked_file.symlink).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -419,6 +425,8 @@ def deploy_symlinked_file(
         target,
         tracked_file,
         backup=backup,
+        source_content=source_content,
+        source_mode=source_mode,
     )
     action = _replace_symlink_atomic(dst, tracked_file.symlink)
     return DeployResult(dst=dst, action=action, backup_path=None)
@@ -430,6 +438,8 @@ def _deploy_target_content(
     tracked_file: TrackedFile,
     *,
     backup: bool,
+    source_content: str | None,
+    source_mode: int | None,
 ) -> None:
     """Write ``src`` content verbatim to ``target`` via :func:`_atomic_write`.
 
@@ -439,8 +449,13 @@ def _deploy_target_content(
     enhancement). ``mode`` rides through unchanged.
     """
     target_existed = target.exists()
-    content = src.read_text(encoding="utf-8")
-    _atomic_write(content, src, target, target_existed, backup, tracked_file.mode)
+    content = (
+        source_content
+        if source_content is not None
+        else src.read_text(encoding="utf-8")
+    )
+    mode = source_mode if source_mode is not None else tracked_file.mode
+    _atomic_write(content, src, target, target_existed, backup, mode)
 
 
 def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
@@ -490,7 +505,7 @@ def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
     return DeployAction.UPDATED if dst_was_link else DeployAction.CREATED
 
 
-def bootstrap_local(paths: list[Path]) -> None:
+def bootstrap_local(paths: Sequence[Path]) -> None:
     """Ensure each host-local file exists with parent directories.
 
     Used for ``~/.claude/header.md``, ``~/.claude/additional-content.md``,

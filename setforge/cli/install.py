@@ -7,26 +7,37 @@ module import time; ``setforge/cli/__init__.py`` imports this module at
 the bottom for the side effect.
 """
 
+from __future__ import annotations
+
+import stat
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import assert_never
+from types import MappingProxyType
 
 import typer
 
 from setforge import (
-    compare as compare_mod,
-)
-from setforge import (
+    binaries,
     deploy,
+    reconcile_adapter,
+    reconcile_apply,
     transitions,
+)
+from setforge import claude_plugins as claude_plugins_mod
+from setforge import (
+    compare as compare_mod,
 )
 from setforge import secrets as secrets_mod
 from setforge import source as source_mod
+from setforge import vscode_extensions as vscode_extensions_mod
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
     _resolve_config_arg,
     app,
 )
+from setforge.cli import _install_helpers as install_helpers_mod
 from setforge.cli._git_check import (
     resolve_source_for_git_check,
     run_git_check_or_raise,
@@ -38,16 +49,19 @@ from setforge.cli._helpers import (
     _parse_section_auto,
 )
 from setforge.cli._install_helpers import (
-    _deploy_all_tracked_files,
     _dry_run_pipeline,
     _install_recorded_nothing,
-    _load_validated_host_local_sections,
+    _PendingDeploy,
     _run_predeploy_gates,
     _want_interactive_reconcile,
     _write_install_transition,
 )
 from setforge.cli._lock_enumerate import enumerate_lock_items
-from setforge.cli._mcp_helpers import reconcile_mcp_servers
+from setforge.cli._mcp_helpers import (
+    MCPInstallPlan,
+    plan_mcp_servers,
+    reconcile_mcp_servers,
+)
 from setforge.cli._plugin_helpers import (
     _emit_reconcile_summary,
     _reconcile_extensions,
@@ -64,24 +78,419 @@ from setforge.cli._welcome import (
 )
 from setforge.config import (
     Config,
+    LocalOverlayResolution,
     ResolvedProfile,
+    TrackedFile,
     load_config,
     refuse_unmigrated_host_local_leak,
     resolve_effective_profile,
 )
-from setforge.errors import SetforgeError
+from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
-from setforge.locking import profile_lock
-from setforge.provision.dispatch import has_hard_failure
+from setforge.locking import install_resources_lock, lockfile_lock, profile_lock
+from setforge.provision.dispatch import (
+    ProvisioningPlan,
+    has_hard_failure,
+    plan_provisioning,
+    validate_provisioning,
+)
 from setforge.provision.lock_apply import extension_pins, plugin_pins
 from setforge.provision.protocol import Outcome, ReconcileResult
 from setforge.reconcile import host_local_record
-from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
+from setforge.secrets import SecretAction, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
     load_latest,
     load_reconcile_outcomes,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class InstallPlan:
+    """Read-only install decisions consumed by preview and apply."""
+
+    ctx: ProfileContext
+    host_local_sections: Mapping[
+        str, Mapping[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
+    ]
+    drift_report: compare_mod.CompareReport
+    deploys: tuple[_PendingDeploy, ...]
+    bootstrap: tuple[Path, ...]
+    dst_paths: tuple[Path, ...]
+    source_bytes: tuple[tuple[Path, bytes | None], ...]
+    tracked_entries: tuple[tuple[TrackedFile, str, Path, Path], ...]
+    live_paths: tuple[tuple[Path, _LivePathFingerprint], ...]
+    file_pre: Mapping[Path, str | None]
+    provisioning: ProvisioningPlan
+    mcp: MCPInstallPlan
+    extensions: vscode_extensions_mod.ExtensionPlan | None
+    plugins: claude_plugins_mod.PluginPlan | None
+
+
+@dataclass(frozen=True, slots=True)
+class _LivePathFingerprint:
+    """Identity, link topology, bytes, and mode for one planned live path."""
+
+    kind: int | None
+    mode: int | None
+    link_target: str | None
+    effective_kind: int | None
+    effective_mode: int | None
+    effective_bytes: bytes | None
+
+
+@dataclass(frozen=True, slots=True)
+class SecretPlan:
+    """Approved allowlist writes deferred until the install apply phase."""
+
+    hashes: tuple[str, ...]
+    allowlist_path: Path
+
+
+def _load_validated_host_local_sections(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> dict[str, dict[source_mod.HostLocalSectionName, source_mod.HostLocalSection]]:
+    """Compatibility seam delegating to the shared overlay loader."""
+    return install_helpers_mod._load_validated_host_local_sections(
+        cfg, resolved, repo_root, profile
+    )
+
+
+def _freeze_host_local_sections(
+    sections: dict[
+        str, dict[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
+    ],
+) -> Mapping[
+    str, Mapping[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
+]:
+    return MappingProxyType(
+        {name: MappingProxyType(dict(values)) for name, values in sections.items()}
+    )
+
+
+def _snapshot_inputs(paths: set[Path]) -> tuple[tuple[Path, bytes | None], ...]:
+    """Capture file bytes/absence in deterministic path order."""
+    return tuple(
+        (path, path.read_bytes() if path.is_file() else None) for path in sorted(paths)
+    )
+
+
+def _snapshot_live_paths(
+    paths: set[Path],
+) -> tuple[tuple[Path, _LivePathFingerprint], ...]:
+    """Capture path identity plus followed target state without mutation."""
+    snapshots: list[tuple[Path, _LivePathFingerprint]] = []
+    for path in sorted(paths):
+        try:
+            own = path.lstat()
+        except FileNotFoundError:
+            snapshots.append(
+                (
+                    path,
+                    _LivePathFingerprint(None, None, None, None, None, None),
+                )
+            )
+            continue
+        own_kind = stat.S_IFMT(own.st_mode)
+        link_target = None
+        if stat.S_ISLNK(own.st_mode):
+            try:
+                link_target = str(path.readlink())
+            except OSError as exc:
+                raise SetforgeError(
+                    f"live install path changed while snapshotting {path}; retry"
+                ) from exc
+        try:
+            effective = path.stat()
+            effective_kind = stat.S_IFMT(effective.st_mode)
+            effective_mode = stat.S_IMODE(effective.st_mode)
+        except FileNotFoundError:
+            effective_kind = None
+            effective_mode = None
+            effective_bytes = None
+        except OSError as exc:
+            raise SetforgeError(
+                f"live install path changed while snapshotting {path}; retry"
+            ) from exc
+        else:
+            try:
+                effective_bytes = (
+                    path.read_bytes() if stat.S_ISREG(effective.st_mode) else None
+                )
+            except OSError as exc:
+                raise SetforgeError(
+                    f"live install path changed while snapshotting {path}; retry"
+                ) from exc
+        snapshots.append(
+            (
+                path,
+                _LivePathFingerprint(
+                    kind=own_kind,
+                    mode=stat.S_IMODE(own.st_mode),
+                    link_target=link_target,
+                    effective_kind=effective_kind,
+                    effective_mode=effective_mode,
+                    effective_bytes=effective_bytes,
+                ),
+            )
+        )
+    return tuple(snapshots)
+
+
+def _load_install_context(
+    config: Path, profile: str, repo_root: Path, *, locked: bool
+) -> tuple[
+    ProfileContext,
+    LockFile | None,
+    LocalOverlayResolution,
+    tuple[tuple[Path, bytes | None], ...],
+]:
+    """Load config/overlay/lock from one stable byte snapshot."""
+    input_paths = {config.resolve(), binaries.LOCAL_CONFIG_PATH, lock_path(config)}
+    baseline = _snapshot_inputs(input_paths)
+    cfg = load_config(config)
+    refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    active_lock = _prepare_lock(config, cfg, effective.resolved, locked=locked)
+    if _snapshot_inputs(input_paths) != baseline:
+        raise SetforgeError("install configuration changed while loading; retry")
+    return (
+        ProfileContext(
+            cfg=cfg,
+            resolved=effective.resolved,
+            repo_root=repo_root,
+            profile=profile,
+        ),
+        active_lock,
+        effective.local_overlay,
+        baseline,
+    )
+
+
+def _build_install_plan(
+    ctx: ProfileContext,
+    *,
+    section_auto: reconcile_apply.ReconcileAuto | None,
+    interactive: bool,
+    lock: LockFile | None,
+    transition: bool,
+    input_baseline: tuple[tuple[Path, bytes | None], ...],
+    auto: bool,
+) -> InstallPlan:
+    """Compute every tracked-file decision before the first install write."""
+    tracked_entries = tuple(_iter_all_tracked_files(ctx))
+    source_paths = {path for path, _payload in input_baseline}
+    source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
+    source_bytes = _snapshot_inputs(source_paths)
+    source_map = dict(source_bytes)
+    if any(source_map.get(path) != payload for path, payload in input_baseline):
+        raise SetforgeError("install configuration changed before planning; retry")
+    dst_paths = tuple(
+        [
+            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
+            for tf, _, _, sub_dst in tracked_entries
+        ]
+        + [Path(str(path)).expanduser() for path in ctx.resolved.bootstrap]
+    )
+    live_paths = {
+        path
+        for tf, _, _, sub_dst in tracked_entries
+        for path in (
+            sub_dst,
+            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst,
+        )
+    }
+    live_paths.update(Path(str(path)).expanduser() for path in ctx.resolved.bootstrap)
+    live_path_snapshot = _snapshot_live_paths(live_paths)
+    file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
+    host_local = _load_validated_host_local_sections(
+        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
+    )
+    frozen_host_local = _freeze_host_local_sections(host_local)
+    deploy.validate_srcs_exist(ctx.cfg, ctx.resolved, ctx.repo_root)
+    if transition:
+        transitions.validate_state_dir_writable()
+    drift_report = compare_mod.compare_profile(
+        ctx.cfg,
+        ctx.profile,
+        ctx.repo_root,
+        host_local_sections=host_local,
+    )
+    deploys = install_helpers_mod._plan_tracked_files(
+        ctx,
+        host_local_sections_map=frozen_host_local,
+        section_auto=section_auto,
+        interactive=interactive,
+    )
+    extensions: vscode_extensions_mod.ExtensionPlan | None = None
+    extension_input = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
+    if extension_input.include or extension_input.exclude:
+        try:
+            extensions = vscode_extensions_mod.plan_reconcile(
+                extension_input, pins=extension_pins(lock)
+            )
+        except ExtensionToolMissing as exc:
+            typer.secho(
+                f"warning: skipping extension reconcile — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    plugins: claude_plugins_mod.PluginPlan | None = None
+    if reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved):
+        try:
+            plugins = claude_plugins_mod.plan_reconcile(
+                ctx.cfg,
+                declared_plugin_ids=reconcile_adapter.plugin_ids(ctx.cfg, ctx.resolved),
+                policy=reconcile_adapter.plugin_policy(ctx.resolved),
+                pins=plugin_pins(lock),
+                auto=auto,
+            )
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping Claude plugin reconcile — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    provisioning = plan_provisioning(ctx.cfg, ctx.resolved, lock=lock)
+    mcp = plan_mcp_servers(ctx.cfg, ctx.resolved)
+    planned_entries = tuple(
+        (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
+        for record in deploys
+    )
+    expected_names = tuple(sub_name for _, sub_name, _, _ in tracked_entries)
+    compared_names = tuple(entry.name for entry in drift_report.entries)
+    if (
+        planned_entries != tracked_entries
+        or tuple(_iter_all_tracked_files(ctx)) != tracked_entries
+        or compared_names != expected_names
+    ):
+        raise SetforgeError("tracked file inventory changed during planning; retry")
+    if _snapshot_inputs(source_paths) != source_bytes:
+        raise SetforgeError("install inputs changed during planning; retry")
+    _assert_live_paths_unchanged(live_path_snapshot)
+    if transitions.snapshot_paths(dst_paths) != dict(file_pre):
+        raise SetforgeError("live install targets changed during planning; retry")
+    return InstallPlan(
+        ctx=ctx,
+        host_local_sections=frozen_host_local,
+        drift_report=drift_report,
+        deploys=deploys,
+        bootstrap=tuple(
+            Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
+        ),
+        dst_paths=dst_paths,
+        source_bytes=source_bytes,
+        tracked_entries=tracked_entries,
+        live_paths=live_path_snapshot,
+        file_pre=file_pre,
+        provisioning=provisioning,
+        mcp=mcp,
+        extensions=extensions,
+        plugins=plugins,
+    )
+
+
+def _assert_plan_inputs_unchanged(plan: InstallPlan) -> None:
+    """Refuse if source or live inputs changed before the first write."""
+    if tuple(_iter_all_tracked_files(plan.ctx)) != plan.tracked_entries:
+        raise SetforgeError("tracked file inventory changed after planning; retry")
+    changed = [
+        path
+        for path, payload in plan.source_bytes
+        if (path.read_bytes() if path.is_file() else None) != payload
+    ]
+    if changed:
+        names = ", ".join(str(path) for path in changed)
+        raise SetforgeError(f"install inputs changed after planning: {names}; retry")
+    _assert_live_paths_unchanged(plan.live_paths)
+    if transitions.snapshot_paths(plan.dst_paths) != dict(plan.file_pre):
+        raise SetforgeError("live install targets changed after planning; retry")
+
+
+def _assert_live_paths_unchanged(
+    expected: tuple[tuple[Path, _LivePathFingerprint], ...],
+) -> None:
+    """Refuse link retargets, type swaps, content edits, and mode changes."""
+    if _snapshot_live_paths({path for path, _ in expected}) != expected:
+        raise SetforgeError(
+            "live install targets changed after planning: path topology changed; retry"
+        )
+
+
+def _validate_external_plan(plan: InstallPlan) -> None:
+    """Recheck adapter preconditions without changing the selected operations."""
+    validate_provisioning(plan.provisioning)
+    if plan.extensions is not None:
+        vscode_extensions_mod.validate_plan(plan.extensions)
+    if plan.plugins is not None:
+        claude_plugins_mod.validate_plan(plan.plugins)
+    if plan.mcp.value is not None:
+        from setforge import mcp_servers
+
+        mcp_servers.validate_plan(plan.mcp.value)
+
+
+def _apply_extension_plan(
+    plan: InstallPlan,
+    *,
+    retry_failed_ids: frozenset[str],
+    yes: bool,
+    lock: LockFile | None,
+) -> tuple[
+    transitions.ExtensionDelta | None,
+    tuple[transitions.ReconcileOutcome, ...],
+]:
+    if plan.extensions is None:
+        return None, ()
+    return _reconcile_extensions(
+        plan.ctx.cfg,
+        plan.ctx.resolved,
+        retry_failed_ids=retry_failed_ids,
+        yes=yes,
+        pins=extension_pins(lock),
+        plan=plan.extensions,
+    )
+
+
+def _apply_plugin_plan(
+    plan: InstallPlan,
+    *,
+    retry_failed_ids: frozenset[str],
+    yes: bool,
+    lock: LockFile | None,
+) -> tuple[
+    transitions.PluginDelta | None,
+    tuple[transitions.ReconcileOutcome, ...],
+]:
+    if plan.plugins is None:
+        return None, ()
+    return _reconcile_plugins(
+        plan.ctx.cfg,
+        plan.ctx.resolved,
+        retry_failed_ids=retry_failed_ids,
+        yes=yes,
+        pins=plugin_pins(lock),
+        plan=plan.plugins,
+    )
+
+
+def _render_install_plan(plan: InstallPlan, scan_result: SecretsScanResult) -> None:
+    """Render the same immutable plan the real install path consumes."""
+    _dry_run_pipeline(
+        ctx=plan.ctx,
+        drift_report=plan.drift_report,
+        deploys=plan.deploys,
+        provisioning=plan.provisioning,
+        mcp=plan.mcp,
+        extensions=plan.extensions,
+        plugins=plan.plugins,
+        immutable_plan=True,
+        secrets_scan=scan_result,
+        host_local_sections_map=plan.host_local_sections,
+    )
 
 
 def _fetch_upstream(
@@ -262,7 +671,9 @@ def install(
     ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
-    config = _resolve_config_arg(config)
+    # Canonicalize once so a symlink retarget cannot split source discovery,
+    # locking, config loading, and input snapshots across two repositories.
+    config = _resolve_config_arg(config).resolve()
     # Mutual-exclusivity guard for the legacy unexpected-drift flags.
     if auto_accept_tracked and auto_accept_live:
         typer.secho(
@@ -276,89 +687,78 @@ def install(
     # Mutual-exclusivity guard for the new section-reconcile flags.
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
-    cfg = load_config(config)
-    # Refuse before mutation: unmigrated host-local content could leak.
-    refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
-    repo_root = config.resolve().parent
-    # Must expand bundle file components BEFORE the revert snapshot below, so
-    # the synthetic entry is in `_iter_all_tracked_files` ahead of capture.
-    effective = resolve_effective_profile(cfg, profile, repo_root)
-    resolved = effective.resolved
-    active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-
-    # Fires BEFORE git-check so a dirty fresh-host source can't raise first.
-    fresh = is_fresh_host()
-    if fresh and not dry_run:
-        reject_auto_on_fresh_host(auto=auto)
-        inventory = build_welcome_inventory(ctx, local_overlay=effective.local_overlay)
-
-        def _welcome_dry_run() -> None:
-            _dry_run_pipeline(ctx=ctx)
-
-        welcome_choice = prompt_welcome(
-            inventory=inventory,
-            yes=yes,
-            run_dry_run=_welcome_dry_run,
-        )
-        if welcome_choice is not WelcomeChoice.PROCEED:
-            return
-
-    # Pre-deploy git-status check. Fires BEFORE the drift
-    # gate so a dirty / stale source is surfaced before any other slow
-    # work (compare, secrets-scan, deploy). When the source-layer is
-    # configured (--source / SETFORGE_SOURCE / local.yaml), use it so a
-    # git-source's CACHE dir is inspected for staleness; otherwise fall
-    # back to ``repo_root`` (the dir holding the resolved setforge.yaml)
-    # which is the right answer for the legacy explicit-``--config``
-    # invocations the test suite relies on.
-    # A0 fetch-upstream. Pull the git config source FIRST so the freshly
-    # checked-out content is what gets reconciled below (and what the
-    # git-check then judges for staleness).
-    install_source = resolve_source_for_git_check(repo_root)
-    _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=dry_run)
-
-    run_git_check_or_raise(
-        source=install_source,
-        no_git_check=no_git_check,
-    )
-
-    # Boundary-not-leaf dispatch. When `--dry-run` is set,
-    # route through `_dry_run_pipeline` which calls only the read-only
-    # shared helpers (compare_profile, vscode_extensions.reconcile(dry_run=True),
-    # claude_plugins.reconcile(dry_run=True)). The real pipeline below is
-    # provably unreachable: zero mutating subprocess calls, zero file
-    # writes, zero transition record. The boolean is NOT threaded into
-    # deploy / transitions / compare / merge — those modules stay
-    # leaf-pure and the dry-run path bypasses them entirely.
+    repo_root = config.parent
+    # Source acquisition precedes config loading so this invocation plans the
+    # checkout it just fetched, rather than a stale in-memory model.
+    # Dry-run builds the same plan as apply and renders it without entering the
+    # mutation phase. The flag stays at this orchestration boundary.
     if dry_run:
-        _dry_run_pipeline(ctx=ctx)
+        install_source = resolve_source_for_git_check(repo_root)
+        _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=True)
+        run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
+        ctx, active_lock, _local_overlay, input_baseline = _load_install_context(
+            config, profile, repo_root, locked=locked
+        )
+        plan = _build_install_plan(
+            ctx,
+            section_auto=section_auto,
+            interactive=False,
+            lock=active_lock,
+            transition=not no_transition,
+            input_baseline=input_baseline,
+            auto=True,
+        )
+        scan_result = secrets_mod.run_pre_deploy_scan(
+            tracked_root=config.parent / "tracked",
+            skip=no_secrets_scan,
+        )
+        _render_install_plan(plan, scan_result)
         return
 
-    with profile_lock(profile):
-        if not no_transition:
-            transitions.ensure_state_dir_writable()
-        # Read INSIDE the lock: a concurrent install/sync could tear the overlay reads.
-        host_local_sections_map = _load_validated_host_local_sections(
-            cfg, resolved, repo_root, profile
+    with (
+        install_resources_lock(),
+        profile_lock(profile),
+        lockfile_lock(config.parent),
+    ):
+        install_source = resolve_source_for_git_check(repo_root)
+        _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
+        run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
+        ctx, active_lock, local_overlay, input_baseline = _load_install_context(
+            config, profile, repo_root, locked=locked
         )
-        deploy.validate_srcs_exist(cfg, resolved, repo_root)
-        deploy.bootstrap_local(resolved.bootstrap)
-        # SOFT failures warn but never gate; HARD gates. No revert tracking.
-        provision_results = reconcile_packages(cfg, resolved, lock=active_lock)
-
-        # P4.3: check for unexpected drift before deploying.
-        # Only DRIFTED entries (existing live files that diverge from tracked
-        # in unexpected ways) gate install. MISSING entries are expected on
-        # first install and are handled by deploy below.
-        drift_report = compare_mod.compare_profile(
-            cfg, profile, repo_root, host_local_sections=host_local_sections_map
+        cfg = ctx.cfg
+        resolved = ctx.resolved
+        fresh = is_fresh_host()
+        interactive = _want_interactive_reconcile(
+            reconcile_user_sections=reconcile_user_sections,
+            section_auto=section_auto,
         )
+        plan = _build_install_plan(
+            ctx,
+            section_auto=section_auto,
+            interactive=interactive,
+            lock=active_lock,
+            transition=not no_transition,
+            input_baseline=input_baseline,
+            auto=yes,
+        )
+        scan_result = secrets_mod.run_pre_deploy_scan(
+            tracked_root=config.parent / "tracked",
+            skip=no_secrets_scan,
+        )
+        if fresh:
+            reject_auto_on_fresh_host(auto=auto)
+            inventory = build_welcome_inventory(ctx, local_overlay=local_overlay)
+            welcome_choice = prompt_welcome(
+                inventory=inventory,
+                yes=yes,
+                run_dry_run=lambda: _render_install_plan(plan, scan_result),
+            )
+            if welcome_choice is not WelcomeChoice.PROCEED:
+                return
 
         _run_predeploy_gates(
-            drift_report=drift_report,
+            drift_report=plan.drift_report,
             ctx=ctx,
             auto_accept_tracked=auto_accept_tracked,
             auto_accept_live=auto_accept_live,
@@ -375,49 +775,46 @@ def install(
         # or deploy), keeps the install all-or-nothing.
         _refuse_on_symlink_dst_conflicts(ctx)
 
-        tracked_root = config.resolve().parent / "tracked"
-        scan_result = secrets_mod.run_pre_deploy_scan(
-            tracked_root=tracked_root,
-            skip=no_secrets_scan,
-        )
-        if scan_result.findings and not _handle_secret_findings(scan_result, yes=yes):
+        secret_plan = _plan_secret_findings(scan_result, yes=yes)
+        if secret_plan is None:
             typer.secho(
                 "install aborted by secrets scan", err=True, fg=typer.colors.RED
             )
             raise typer.Exit(code=1)
 
+        # This is the first mutation boundary. Every refusal and confirmation
+        # above has completed, and apply consumes the frozen plan below.
+        _assert_plan_inputs_unchanged(plan)
+        _validate_external_plan(plan)
+        if not no_transition:
+            transitions.ensure_state_dir_writable()
+        _apply_secret_plan(secret_plan)
+        deploy.bootstrap_local(plan.bootstrap)
+        # SOFT failures warn but never gate; HARD gates after the transition.
+        provision_results = reconcile_packages(
+            cfg, resolved, lock=active_lock, plan=plan.provisioning
+        )
+
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
         # path itself: GNU patch refuses to patch a symlink as a regular
         # file, so a transition recording the link path would brick revert.
-        dst_paths: list[Path] = [
-            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
-            for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
-        ]
-        dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
+        dst_paths = list(plan.dst_paths)
         # Store files (byte bases, spans sidecars, scalar-base manifests) do
         # NOT ride this patch snapshot: their pre-install state is captured
         # at the pass-2 barrier (state_snapshots below) and revert restores
         # them through that mechanism — recording them here too would
         # double-restore (Invariant I5 now lives in the snapshot path).
 
-        file_pre = transitions.snapshot_paths(dst_paths)
+        file_pre = dict(plan.file_pre)
 
         # Interactive reconcile: resolve conflicts through the reconcile
         # engine's per-region wizard ONLY when this install is in
         # interactive-reconcile mode AND stdout is a tty (the same gate the
         # shared user-section wizard uses). Non-tty / --auto ⇒ False, so the
         # driver keeps the bare warn-and-defer / auto behavior.
-        interactive = _want_interactive_reconcile(
-            reconcile_user_sections=reconcile_user_sections,
-            section_auto=section_auto,
-        )
-
-        deploy_outcome = _deploy_all_tracked_files(
-            ctx,
-            host_local_sections_map=host_local_sections_map,
-            section_auto=section_auto,
-            interactive=interactive,
+        deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
+            profile, plan.deploys
         )
 
         # Seed AFTER deploy so its pre-install snapshot is the revert baseline.
@@ -434,21 +831,19 @@ def install(
         retry_failed_ids = (
             _collect_retry_failed_ids(profile) if retry_failed else frozenset()
         )
-        ext_delta, ext_outcomes = _reconcile_extensions(
-            cfg,
-            resolved,
+        ext_delta, ext_outcomes = _apply_extension_plan(
+            plan,
             retry_failed_ids=retry_failed_ids,
             yes=yes,
-            pins=extension_pins(active_lock),
+            lock=active_lock,
         )
-        plugin_delta, plugin_outcomes = _reconcile_plugins(
-            cfg,
-            resolved,
+        plugin_delta, plugin_outcomes = _apply_plugin_plan(
+            plan,
             retry_failed_ids=retry_failed_ids,
             yes=yes,
-            pins=plugin_pins(active_lock),
+            lock=active_lock,
         )
-        mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved)
+        mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
 
         file_post = transitions.snapshot_paths(dst_paths)
 
@@ -576,55 +971,37 @@ def _gate_on_provisioning_failures(results: list[ReconcileResult]) -> None:
     raise typer.Exit(code=1)
 
 
-def _handle_secret_findings(
+def _plan_secret_findings(
     scan_result: SecretsScanResult,
     *,
     yes: bool,
     allowlist_path: Path | None = None,
-) -> bool:
-    """Prompt the user once per unique snippet-hash; return ``True`` to proceed.
-
-    Returns ``False`` as soon as any finding resolves to
-    :data:`SecretAction.ABORT` so the install loop short-circuits before
-    mutating live state. :data:`SecretAction.ALLOWLIST` appends the
-    finding's ``snippet_hash`` to the allowlist file via
-    :func:`secrets_mod.append_to_allowlist`;
-    :data:`SecretAction.SILENCE_ONE_SHOT` skips this finding for the
-    current install only.
-    """
-    if allowlist_path is None:
-        allowlist_path = Path.home() / ".config" / "setforge" / "secrets-allowlist"
-    seen_hashes: set[str] = set()
+) -> SecretPlan | None:
+    """Collect secret decisions without writing the allowlist."""
+    target = allowlist_path or (
+        Path.home() / ".config" / "setforge" / "secrets-allowlist"
+    )
+    seen: set[str] = set()
+    approved: list[str] = []
     for finding in scan_result.findings:
-        if finding.snippet_hash in seen_hashes:
+        if finding.snippet_hash in seen:
             continue
-        seen_hashes.add(finding.snippet_hash)
-        if not _resolve_one_finding(finding, yes=yes, allowlist_path=allowlist_path):
-            return False
-    return True
+        seen.add(finding.snippet_hash)
+        action = prompt_secret_action(finding, yes=yes)
+        if action is SecretAction.ABORT:
+            return None
+        if action is SecretAction.ALLOWLIST:
+            approved.append(finding.snippet_hash)
+    return SecretPlan(hashes=tuple(approved), allowlist_path=target)
 
 
-def _resolve_one_finding(
-    finding: SecretFinding,
-    *,
-    yes: bool,
-    allowlist_path: Path,
-) -> bool:
-    """Prompt for one finding's action; return ``False`` on ABORT."""
-    action = prompt_secret_action(finding, yes=yes)
-    match action:
-        case SecretAction.ABORT:
-            return False
-        case SecretAction.ALLOWLIST:
-            secrets_mod.append_to_allowlist(
-                snippet_hash=finding.snippet_hash,
-                allowlist_path=allowlist_path,
-            )
-            return True
-        case SecretAction.SILENCE_ONE_SHOT:
-            return True
-        case _:
-            assert_never(action)
+def _apply_secret_plan(plan: SecretPlan) -> None:
+    """Persist the allowlist choices already approved during planning."""
+    for snippet_hash in plan.hashes:
+        secrets_mod.append_to_allowlist(
+            snippet_hash=snippet_hash,
+            allowlist_path=plan.allowlist_path,
+        )
 
 
 def _collect_retry_failed_ids(profile: str) -> frozenset[str]:

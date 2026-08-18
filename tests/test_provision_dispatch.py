@@ -15,6 +15,7 @@ Two layers:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import ClassVar
 
@@ -40,6 +41,7 @@ from setforge.config import (
 from setforge.errors import ConfigError, UnknownProvisionerType
 from setforge.provision.dispatch import (
     has_hard_failure,
+    plan_provisioning,
     resolve_provision_items,
     run_provisioning,
 )
@@ -140,6 +142,64 @@ def test_resolves_multiple_cargo_packages_to_items() -> None:
     items = resolve_provision_items(cfg, resolved)
     assert {i.identity.key for i in items} == {"ast-grep", "just"}
     assert all(i.type == "cargo" for i in items)
+
+
+def test_provisioning_plan_detaches_mutable_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
+    plan = plan_provisioning(cfg, ResolvedProfile(packages=["rg"]))
+
+    cfg.packages.clear()
+
+    frozen = Config.model_validate_json(plan.cfg_json)
+    assert "rg" in frozen.packages
+
+
+def test_provisioning_plan_detaches_selected_item_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    applied: list[str] = []
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+
+    def apply_one(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        assert isinstance(item.config, CargoPackage)
+        applied.append(item.config.crate)
+        return ProvisionOutcome(item=item, outcome=Outcome.OK)
+
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "apply_one",
+        apply_one,
+    )
+    cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
+    plan = plan_provisioning(cfg, ResolvedProfile(packages=["rg"]))
+
+    assert isinstance(cfg.packages["rg"], CargoPackage)
+    cfg.packages["rg"].crate = "mutated-crate"
+    from setforge.provision.dispatch import apply_provisioning
+
+    apply_provisioning(plan)
+
+    assert applied == ["ripgrep"]
+
+
+def test_provisioning_plan_executor_selection_is_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
+    batch = plan_provisioning(cfg, ResolvedProfile(packages=["rg"])).batches[0]
+
+    with pytest.raises(FrozenInstanceError):
+        batch._executor.items = ()  # type: ignore[misc]
 
 
 def test_dedup_same_crate_across_two_package_refs() -> None:
@@ -500,6 +560,7 @@ def test_install_hard_failure_gates_exit_one(
         resolved: ResolvedProfile,
         *,
         lock: object = None,
+        plan: object = None,
     ) -> list[ReconcileResult]:
         items = [
             ProvisionItem(

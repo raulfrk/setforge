@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 
 from setforge import transitions
 from setforge.cli import app
+from setforge.secrets import SecretsScanResult
 
 _PROFILE = "test-preflight"
 
@@ -165,3 +166,80 @@ def test_preflight_allows_pre_existing_symlink_at_dst(repo: Path) -> None:
     assert (_live_dir() / "a.md").read_text(encoding="utf-8") == _DOC_A
     assert z_dst.is_symlink()
     assert _transition_count() == 1
+
+
+def test_source_change_after_plan_refuses_before_first_write(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_tracked(repo, "a", _DOC_A)
+    _write_tracked(repo, "z", _DOC_Z)
+    config = _write_config(repo, link_target=_live_dir() / "z-target")
+
+    def _mutate_after_plan(**_kwargs: object) -> SecretsScanResult:
+        (repo / "tracked" / "a.md").write_text("changed after plan\n", encoding="utf-8")
+        return SecretsScanResult(findings=(), files_scanned=2)
+
+    monkeypatch.setattr(
+        "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _mutate_after_plan
+    )
+
+    result = _install(config, transition=True)
+
+    assert result.exit_code != 0
+    assert "inputs changed after planning" in str(result.exception)
+    assert not (_live_dir() / "a.md").exists()
+    assert _transition_count() == 0
+
+
+def test_directory_entry_added_after_plan_refuses_before_first_write(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_tracked(repo, "z", _DOC_Z)
+    docs = repo / "tracked" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "existing.md").write_text("existing\n", encoding="utf-8")
+    config = _write_config(repo, link_target=_live_dir() / "z-target")
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("src: a.md", "src: docs"),
+        encoding="utf-8",
+    )
+
+    def _add_after_plan(**_kwargs: object) -> SecretsScanResult:
+        (docs / "late.md").write_text("late\n", encoding="utf-8")
+        return SecretsScanResult(findings=(), files_scanned=2)
+
+    monkeypatch.setattr(
+        "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _add_after_plan
+    )
+
+    result = _install(config, transition=True)
+
+    assert result.exit_code != 0
+    assert "tracked file inventory changed after planning" in str(result.exception)
+    assert not _live_dir().exists()
+    assert _transition_count() == 0
+
+
+def test_live_change_after_plan_refuses_before_first_write(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_tracked(repo, "a", _DOC_A)
+    _write_tracked(repo, "z", _DOC_Z)
+    config = _write_config(repo, link_target=_live_dir() / "z-target")
+    a_live = _live_dir() / "a.md"
+
+    def _mutate_after_plan(**_kwargs: object) -> SecretsScanResult:
+        a_live.parent.mkdir(parents=True, exist_ok=True)
+        a_live.write_text("external edit\n", encoding="utf-8")
+        return SecretsScanResult(findings=(), files_scanned=2)
+
+    monkeypatch.setattr(
+        "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _mutate_after_plan
+    )
+
+    result = _install(config, transition=True)
+
+    assert result.exit_code != 0
+    assert "live install targets changed" in str(result.exception)
+    assert a_live.read_text(encoding="utf-8") == "external edit\n"
+    assert _transition_count() == 0

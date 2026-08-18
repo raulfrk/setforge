@@ -2071,6 +2071,59 @@ def test_reconcile_plugins_skips_global_marketplaces_without_profile_plugins(
     assert ph._reconcile_plugins(cfg, profile) == (None, ())
 
 
+@pytest.mark.parametrize(
+    ("policy", "dry_run"),
+    [
+        (ReconcilePolicy.REPORT, False),
+        (ReconcilePolicy.ADDITIVE, True),
+    ],
+)
+def test_precomputed_report_or_dry_run_never_applies_plugins(
+    fake_claude,
+    policy: ReconcilePolicy,
+    dry_run: bool,
+) -> None:
+    """A supplied plan retains the same structural no-write policy gate."""
+    fake = fake_claude()
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
+    profile = _make_resolved(claude_plugins=["a"], plugins_reconcile=policy)
+    plan = cp.plan_reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=policy,
+    )
+    calls_before = len(fake.calls)
+
+    report = cp.reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=policy,
+        dry_run=dry_run,
+        plan=plan,
+    )
+
+    assert report.to_install == [("a", "m1")]
+    mutating = {"install", "enable", "disable", "add"}
+    assert not any(mutating.intersection(call) for call in fake.calls[calls_before:])
+
+
+def test_plugin_plan_detaches_mutable_config_and_inventory(fake_claude) -> None:
+    """Mutating returned snapshots cannot change the value consumed by apply."""
+    fake_claude()
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
+    plan = cp.plan_reconcile(
+        cfg,
+        declared_plugin_ids={"a@m1"},
+        policy=ReconcilePolicy.REPORT,
+    )
+
+    plan.cfg.profiles.clear()
+    plan.pre_plugins["injected"] = {"enabled": True}
+
+    assert plan.cfg.profiles
+    assert "injected" not in plan.pre_plugins
+
+
 # ---------------------------------------------------------------------------
 # _plugin_state_diff narrowed to to_disable only
 # ---------------------------------------------------------------------------

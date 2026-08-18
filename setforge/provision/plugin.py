@@ -30,15 +30,29 @@ __all__ = ["PluginProvisioner"]
 class PluginProvisioner(Provisioner):
     type = "plugin"
 
-    def __init__(self, *, checkouts: dict[str, tuple[Path, str]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        checkouts: dict[str, tuple[Path, str]] | None = None,
+        installed_snapshot: dict[str, dict[str, object]] | None = None,
+    ) -> None:
         # checkouts: plugin id -> (cache_dir, sha), for LOCKED LOCAL_CLONE plugins.
         self._enabled: set[Identity] = set()
         self._disabled: set[Identity] = set()
-        self._checkouts: dict[str, tuple[Path, str]] = checkouts or {}
+        self._checkouts: dict[str, tuple[Path, str]] = dict(checkouts or {})
+        self._installed_snapshot = (
+            {name: dict(entry) for name, entry in installed_snapshot.items()}
+            if installed_snapshot is not None
+            else None
+        )
 
     def probe(self) -> set[Identity]:
         try:
-            installed = claude_plugins.list_installed()
+            installed = (
+                self._installed_snapshot
+                if self._installed_snapshot is not None
+                else claude_plugins.list_installed()
+            )
         except PluginToolMissing:
             self._enabled = set()
             self._disabled = set()

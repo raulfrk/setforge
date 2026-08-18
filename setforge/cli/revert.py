@@ -62,7 +62,7 @@ from setforge.errors import (
     RevertFailed,
     SetforgeError,
 )
-from setforge.locking import profile_lock
+from setforge.locking import install_resources_lock, profile_lock
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -663,7 +663,13 @@ def revert(
     # staleness and symlink-ordering windows are only safe under this lock);
     # acquiring it here — after the confirm wizard, before any patch-reverse
     # or store restore — keeps revert inside that contract.
-    with profile_lock(profile):
+    # Canonical order shared with install: global adapters, then profile files.
+    with install_resources_lock(), profile_lock(profile):
+        current = transitions.load_latest(profile)
+        if current != transition:
+            raise SetforgeError(
+                "transition history changed after confirmation; retry revert"
+            )
         _apply_revert(transition, profile, config)
 
 
@@ -751,7 +757,14 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     # reverse chain cannot interleave with a concurrent install/sync/revert
     # (each step's reverse patch is defined against the state the previous
     # step produced; an interleaving deploy would invalidate that chain).
-    with profile_lock(profile):
+    with install_resources_lock(), profile_lock(profile):
+        refreshed = _resolve_to_before_chain(profile, to_before)
+        if tuple(entry.directory for entry in refreshed) != tuple(
+            entry.directory for entry in chain
+        ):
+            raise SetforgeError(
+                "transition history changed after confirmation; retry revert"
+            )
         for index, entry in enumerate(chain, start=1):
             try:
                 _apply_revert(entry.directory, profile, config)

@@ -159,6 +159,7 @@ def _reconcile_extensions(
     retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
+    plan: vscode_extensions.ExtensionPlan | None = None,
 ) -> tuple[transitions.ExtensionDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
     """Reconcile VSCode extensions with per-item skip / retry / abort UX.
 
@@ -193,7 +194,7 @@ def _reconcile_extensions(
     pins = pins or {}
     try:
         report = vscode_extensions.reconcile(
-            reconcile_adapter.extensions_input(cfg, resolved), pins=pins
+            reconcile_adapter.extensions_input(cfg, resolved), pins=pins, plan=plan
         )
     except ExtensionToolMissing as exc:
         typer.secho(
@@ -202,6 +203,10 @@ def _reconcile_extensions(
             fg=typer.colors.YELLOW,
         )
         return None, ()
+
+    if report.dry_run:
+        _emit_extension_report(report)
+        return transitions.ExtensionDelta(added=[], removed=[]), ()
 
     initial_failed: dict[str, str] = dict(report.failed)
     successful_install = [i for i in report.to_install if i not in initial_failed]
@@ -376,20 +381,35 @@ def _emit_plugin_report(
     line when the report is empty.
     """
     failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
+    verbs = (
+        ("would install", "would enable", "would disable")
+        if plugin_report.dry_run
+        else ("installed", "enabled", "disabled")
+    )
     for name, mp in plugin_report.to_install:
         pid = f"{name}@{mp}"
         if pid not in failed_plugin_ids:
-            typer.echo(f"plugin installed  {pid}")
+            typer.echo(f"plugin {verbs[0]:<13} {pid}")
     for pid in plugin_report.to_enable:
         if pid not in failed_plugin_ids:
-            typer.echo(f"plugin enabled    {pid}")
+            typer.echo(f"plugin {verbs[1]:<13} {pid}")
     for pid in plugin_report.to_disable:
         if pid not in failed_plugin_ids:
-            typer.echo(f"plugin disabled   {pid}")
+            typer.echo(f"plugin {verbs[2]:<13} {pid}")
     for pid, err in plugin_report.failed:
         typer.secho(f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW)
     if not plugin_report:
         typer.echo("plugins: nothing to reconcile")
+
+
+def _emit_extension_report(report: vscode_extensions.ReconcileReport) -> None:
+    """Render REPORT-mode extension drift without claiming writes landed."""
+    for ext_id in report.to_install:
+        typer.echo(f"extension would install   {ext_id}")
+    for ext_id in report.to_uninstall:
+        typer.echo(f"extension would uninstall {ext_id}")
+    if not report:
+        typer.echo("extensions: nothing to reconcile")
 
 
 def _warn_skip_reconcile(exc: PluginToolMissing) -> None:
@@ -492,6 +512,58 @@ def _append_plugin_success_outcomes(
             )
 
 
+def _apply_planned_plugins(
+    cfg: Config,
+    plan: claude_plugins_mod.PluginPlan,
+    *,
+    retry_failed_ids: frozenset[str],
+    yes: bool,
+    pins: dict[str, ResolvedPin] | None,
+) -> tuple[transitions.PluginDelta, tuple[transitions.ReconcileOutcome, ...]]:
+    plugin_report = claude_plugins_mod.apply_plan(plan)
+    _emit_plugin_report(plugin_report)
+    if plugin_report.dry_run:
+        return transitions.PluginDelta(
+            installed=(),
+            enabled=(),
+            disabled=(),
+            marketplaces_added=(),
+            marketplaces_removed=(),
+        ), ()
+    try:
+        post_plugins = claude_plugins_mod.list_installed()
+        post_marketplaces = claude_plugins_mod.list_marketplaces()
+    except PluginToolMissing as exc:
+        _warn_skip_reconcile(exc)
+        delta_first = _delta_from_report(plugin_report)
+    else:
+        delta_first = _compute_plugin_delta(
+            plan.pre_plugins,
+            plan.pre_marketplaces,
+            post_plugins,
+            post_marketplaces,
+        )
+    planned_outcomes: list[transitions.ReconcileOutcome] = []
+    _append_plugin_success_outcomes(planned_outcomes, delta_first)
+    retried = _PluginRetriedPieces()
+    for failed_id, err in plugin_report.failed:
+        if retry_failed_ids and failed_id not in retry_failed_ids:
+            continue
+        planned_outcomes.append(
+            _handle_plugin_failure(
+                cfg=cfg,
+                failed_id=failed_id,
+                error_summary=err,
+                op_kind=_classify_plugin_failure(plugin_report, failed_id),
+                yes=yes,
+                pins=pins or {},
+                delta_so_far=delta_first,
+                retried=retried,
+            )
+        )
+    return _merge_retried_plugin_delta(delta_first, retried), tuple(planned_outcomes)
+
+
 def _reconcile_plugins(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -499,6 +571,7 @@ def _reconcile_plugins(
     retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
+    plan: claude_plugins_mod.PluginPlan | None = None,
 ) -> tuple[transitions.PluginDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
     """Reconcile Claude plugins with per-item skip / retry / abort UX.
 
@@ -537,6 +610,14 @@ def _reconcile_plugins(
     # Marketplaces are registries, not install intent for every profile.
     if not reconcile_adapter.plugin_bare_names(cfg, resolved):
         return None, ()
+    if plan is not None:
+        return _apply_planned_plugins(
+            cfg,
+            plan,
+            retry_failed_ids=retry_failed_ids,
+            yes=yes,
+            pins=pins,
+        )
     try:
         pre_plugins = claude_plugins_mod.list_installed()
         pre_marketplaces = claude_plugins_mod.list_marketplaces()

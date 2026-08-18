@@ -117,6 +117,18 @@ def ensure_state_dir_writable() -> None:
         ) from exc
 
 
+def validate_state_dir_writable() -> None:
+    """Read-only preflight for the nearest existing transition-state parent."""
+    candidate = transitions_root()
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    if not candidate.is_dir() or not os.access(candidate, os.W_OK | os.X_OK):
+        raise SetforgeError(
+            f"transition state dir not writable: {transitions_root()} "
+            f"(nearest existing parent {candidate})"
+        )
+
+
 def now_utc() -> datetime:
     """Single source of truth for transition timestamps."""
     return datetime.now(UTC)

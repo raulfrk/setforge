@@ -6,7 +6,12 @@ import typer
 
 from setforge.config import Config, ResolvedProfile
 from setforge.lockfile import LockFile
-from setforge.provision.dispatch import run_provisioning
+from setforge.provision.dispatch import (
+    ProvisioningPlan,
+    apply_provisioning,
+    report_provisioning,
+    run_provisioning,
+)
 from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResult
 
 
@@ -15,8 +20,13 @@ def reconcile_packages(
     resolved: ResolvedProfile,
     *,
     lock: LockFile | None = None,
+    plan: ProvisioningPlan | None = None,
 ) -> list[ReconcileResult]:
-    results = run_provisioning(cfg, resolved, lock=lock)
+    results = (
+        apply_provisioning(plan)
+        if plan is not None
+        else run_provisioning(cfg, resolved, lock=lock)
+    )
     for result in results:
         for outcome in result.outcomes:
             _echo_outcome(outcome)
@@ -44,9 +54,15 @@ def _echo_outcome(outcome: ProvisionOutcome) -> None:
 def dry_run_packages(
     cfg: Config,
     resolved: ResolvedProfile,
+    *,
+    plan: ProvisioningPlan | None = None,
 ) -> None:
     typer.echo("=== would-be package provision ===")
-    results = run_provisioning(cfg, resolved, report_only=True)
+    results = (
+        report_provisioning(plan)
+        if plan is not None
+        else run_provisioning(cfg, resolved, report_only=True)
+    )
     planned = [
         identity
         for result in results

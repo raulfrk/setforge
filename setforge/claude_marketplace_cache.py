@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
@@ -63,11 +64,49 @@ MARKETPLACE_ALIAS_SIDECAR: Final[str] = ".aliases.json"
 __all__ = [
     "MARKETPLACE_ALIAS_SIDECAR",
     "MARKETPLACE_CACHE_ROOT",
+    "MarketplaceSourcePlan",
+    "apply_marketplace_source_plan",
     "checkout_marketplace_at",
+    "plan_marketplace_source",
     "read_cache_aliases",
     "resolve_marketplace_source",
     "sync_marketplace_cache",
+    "validate_marketplace_source_plan",
 ]
+
+
+class MarketplaceSourceAction(StrEnum):
+    """Closed set of mutations selected while resolving a marketplace source."""
+
+    NONE = "none"
+    CLONE = "clone"
+    UPDATE = "update"
+    BOTH = "both"
+
+
+@dataclass(frozen=True, slots=True)
+class MarketplaceSourcePlan:
+    """Read-only marketplace source decision consumed by install apply."""
+
+    source_json: str
+    effective_source_json: str
+    action: MarketplaceSourceAction
+    cache_root: Path
+    cache_dir: Path | None = None
+    expected_cache_exists: bool = False
+    expected_origin: str | None = None
+    both_dir: Path | None = None
+    expected_both_exists: bool = False
+
+    @property
+    def source(self) -> MarketplaceSource:
+        """Return a detached copy of the declared source snapshot."""
+        return MarketplaceSource.model_validate_json(self.source_json)
+
+    @property
+    def effective_source(self) -> MarketplaceSource:
+        """Return a detached copy of the selected effective source."""
+        return MarketplaceSource.model_validate_json(self.effective_source_json)
 
 
 def _resolve_git_or_raise() -> Path:
@@ -228,14 +267,10 @@ def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
 
     Read-modify-write of the JSON map: each individual *write* is torn-free
     (:func:`setforge.atomicio.atomic_write_text` swaps the whole file into
-    place), but the read-modify-write as a whole is NOT serialized across
-    concurrent setforge processes sharing the same ``cache_root`` — there is
-    no lockfile. Two processes can interleave (A reads, B reads, A writes, B
-    writes) so the last writer's map wins and a freshly-added alias from the
-    other process is lost. That failure is bounded and self-healing: a lost
-    alias is not corruption — it merely re-fires the collision wizard on the
-    next reconcile, which rewrites the sidecar (same worst case as a missing
-    sidecar entry). The subdir *name* (not the absolute path) is stored so
+    place). SetForge CLI writers hold :func:`setforge.locking.install_resources_lock`
+    across this read-modify-write and related cache mutations. Direct helper
+    callers must provide equivalent serialization. The subdir *name* (not the
+    absolute path) is stored so
     the sidecar stays portable if the cache root moves; the declared-identity
     computation rejoins it onto its own ``cache_root``.
     """
@@ -538,125 +573,146 @@ def resolve_marketplace_source(
     on-disk cache for the GitHub source (basename of ``source.repo``),
     lazily cloning if the cache is absent. PATH sources passthrough
     regardless of mode. ``mp_name`` and ``auto`` thread through to the
-    cache-collision path — see :func:`_resolve_existing_cache` for the
-    URL-drift dispatch and the ``auto=True`` non-interactive contract.
+    cache-collision path — planning records the wizard choice before apply
+    and preserves the ``auto=True`` non-interactive contract.
     """
+    if mode is ClaudeInstallMode.REGULAR or source.source is MarketplaceSourceKind.PATH:
+        return source
+    plan = plan_marketplace_source(
+        source,
+        mode,
+        cache_root=cache_root,
+        mp_name=mp_name,
+        auto=auto,
+    )
+    return apply_marketplace_source_plan(plan)
+
+
+def plan_marketplace_source(
+    source: MarketplaceSource,
+    mode: ClaudeInstallMode,
+    *,
+    cache_root: Path | None = None,
+    mp_name: str | None = None,
+    auto: bool = False,
+) -> MarketplaceSourcePlan:
+    """Select source/cache actions without mutating the marketplace cache."""
     root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
-    if mode is ClaudeInstallMode.REGULAR:
-        return source
-    if source.source is MarketplaceSourceKind.PATH:
-        return source
+    frozen_source = source.model_copy(deep=True)
+    if mode is ClaudeInstallMode.REGULAR or source.source is MarketplaceSourceKind.PATH:
+        return MarketplaceSourcePlan(
+            source_json=frozen_source.model_dump_json(),
+            effective_source_json=frozen_source.model_dump_json(),
+            action=MarketplaceSourceAction.NONE,
+            cache_root=root,
+        )
     if not source.repo:
         raise MarketplaceCacheMiss(
             "GITHUB marketplace source missing 'repo' field; cannot resolve "
             "local-clone path"
         )
     cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
-    if cache_dir.exists():
-        return _resolve_existing_cache(
-            source, cache_dir, root, mp_name=mp_name, auto=auto
-        )
-    _clone_marketplace(source, cache_dir)
-    return MarketplaceSource(source=MarketplaceSourceKind.PATH, path=cache_dir)
-
-
-def _resolve_existing_cache(
-    source: MarketplaceSource,
-    cache_dir: Path,
-    cache_root: Path,
-    *,
-    mp_name: str | None,
-    auto: bool,
-) -> MarketplaceSource:
-    """Return the PATH source for a cache hit, dispatching URL drift.
-
-    Probes the cache's ``origin`` remote; when it drifted from
-    ``source.repo`` (modulo :func:`_urls_equivalent` normalization)
-    the collision wizard decides via :func:`_resolve_cache_collision`.
-    A failed probe (``None``) or a matching origin reuses ``cache_dir``
-    as-is. ``mp_name`` (the YAML-side marketplace key) is threaded only
-    for the wizard's prompt text; when ``None`` we fall back to
-    ``source.repo`` for the prompt label — callers in reconcile / sync
-    paths supply it explicitly. ``auto=True`` (e.g. from a ``--auto``
-    CLI flag) suppresses the interactive wizard and raises
-    :class:`MarketplaceCacheMiss` instead, per
-    :mod:`setforge.marketplace_cache_wizard`'s spec-locked safe
-    default.
-    """
-    # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-    # by resolve_marketplace_source for GITHUB sources
-    repo = source.repo or ""
-    current = _cache_origin_url(cache_dir)
-    if current is not None and current != repo and not _urls_equivalent(current, repo):
-        return _resolve_cache_collision(
-            source=source,
+    effective = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=cache_dir)
+    if not cache_dir.exists():
+        return MarketplaceSourcePlan(
+            source_json=frozen_source.model_dump_json(),
+            effective_source_json=effective.model_dump_json(),
+            action=MarketplaceSourceAction.CLONE,
+            cache_root=root,
             cache_dir=cache_dir,
-            cache_root=cache_root,
-            existing_origin=current,
-            mp_name=mp_name or repo,
-            auto=auto,
         )
-    return MarketplaceSource(
-        source=MarketplaceSourceKind.PATH,
-        path=cache_dir,
-    )
 
+    origin = _cache_origin_url(cache_dir)
+    if origin is None or origin == source.repo or _urls_equivalent(origin, source.repo):
+        return MarketplaceSourcePlan(
+            source_json=frozen_source.model_dump_json(),
+            effective_source_json=effective.model_dump_json(),
+            action=MarketplaceSourceAction.NONE,
+            cache_root=root,
+            cache_dir=cache_dir,
+            expected_cache_exists=True,
+            expected_origin=origin,
+        )
 
-def _resolve_cache_collision(
-    *,
-    source: MarketplaceSource,
-    cache_dir: Path,
-    cache_root: Path,
-    existing_origin: str,
-    mp_name: str,
-    auto: bool,
-) -> MarketplaceSource:
-    """Dispatch a URL-drift collision to the wizard and apply the choice.
-
-    Pulled out of :func:`resolve_marketplace_source` so the swap-site
-    keeps its single-screen shape. The wizard returns a closed-set
-    :class:`CollisionAction`; each action maps to its own
-    ``_collision_*`` helper below. ``ABORT`` raises
-    :class:`typer.Abort` inside the wizard and never reaches here.
-    The wizard call stays module-qualified so tests can monkeypatch
-    ``setforge.marketplace_cache_wizard.resolve_collision``.
-    """
     resolution = marketplace_cache_wizard.resolve_collision(
-        mp_name=mp_name,
+        mp_name=mp_name or source.repo,
         cache_dir=cache_dir,
-        cache_root=cache_root,
-        existing_origin=existing_origin,
-        # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-        # by resolve_marketplace_source for GITHUB sources
-        new_repo=source.repo or "",
+        cache_root=root,
+        existing_origin=origin,
+        new_repo=source.repo,
         auto=auto,
     )
     if resolution.action is CollisionAction.KEEP:
-        return _collision_keep(source, cache_dir, mp_name)
-    if resolution.action is CollisionAction.UPDATE:
-        return _collision_update(source, cache_dir)
-    return _collision_both(source, cache_dir, resolution.new_cache_dir, cache_root)
-
-
-def _collision_keep(
-    source: MarketplaceSource, cache_dir: Path, mp_name: str
-) -> MarketplaceSource:
-    """``KEEP``: return the existing cache_dir as-is.
-
-    Emits a clear info log noting the new ``source.repo`` was NOT
-    applied.
-    """
-    LOGGER.info(
-        "cache-collision: using existing cache %r for marketplace %r; "
-        "new source.repo %r NOT applied",
-        cache_dir,
-        mp_name,
-        source.repo,
+        LOGGER.info(
+            "cache-collision: using existing cache %r for marketplace %r; "
+            "new source.repo %r NOT applied",
+            cache_dir,
+            mp_name or source.repo,
+            source.repo,
+        )
+        action = MarketplaceSourceAction.NONE
+        both_dir = None
+    elif resolution.action is CollisionAction.UPDATE:
+        action = MarketplaceSourceAction.UPDATE
+        both_dir = None
+    else:
+        action = MarketplaceSourceAction.BOTH
+        both_dir = resolution.new_cache_dir
+        assert both_dir is not None, "wizard contract: BOTH carries new_cache_dir"
+        effective = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=both_dir)
+    return MarketplaceSourcePlan(
+        source_json=frozen_source.model_dump_json(),
+        effective_source_json=effective.model_dump_json(),
+        action=action,
+        cache_root=root,
+        cache_dir=cache_dir,
+        expected_cache_exists=True,
+        expected_origin=origin,
+        both_dir=both_dir,
+        expected_both_exists=both_dir.exists() if both_dir is not None else False,
     )
-    return MarketplaceSource(
-        source=MarketplaceSourceKind.PATH,
-        path=cache_dir,
-    )
+
+
+def validate_marketplace_source_plan(plan: MarketplaceSourcePlan) -> None:
+    """Refuse when cache inputs changed after marketplace planning."""
+    if plan.cache_dir is None:
+        return
+    if plan.cache_dir.exists() is not plan.expected_cache_exists:
+        raise MarketplaceCacheMiss("marketplace cache changed after planning; retry")
+    if (
+        plan.expected_cache_exists
+        and _cache_origin_url(plan.cache_dir) != plan.expected_origin
+    ):
+        raise MarketplaceCacheMiss(
+            "marketplace cache origin changed after planning; retry"
+        )
+    if (
+        plan.both_dir is not None
+        and plan.both_dir.exists() is not plan.expected_both_exists
+    ):
+        raise MarketplaceCacheMiss(
+            "marketplace cache target changed after planning; retry"
+        )
+
+
+def apply_marketplace_source_plan(plan: MarketplaceSourcePlan) -> MarketplaceSource:
+    """Validate and apply exactly the cache action selected by ``plan``."""
+    validate_marketplace_source_plan(plan)
+    if plan.action is MarketplaceSourceAction.CLONE:
+        assert plan.cache_dir is not None
+        _clone_marketplace(plan.source, plan.cache_dir)
+    elif plan.action is MarketplaceSourceAction.UPDATE:
+        assert plan.cache_dir is not None
+        _collision_update(plan.source, plan.cache_dir)
+    elif plan.action is MarketplaceSourceAction.BOTH:
+        assert plan.cache_dir is not None
+        _collision_both(
+            plan.source,
+            plan.cache_dir,
+            plan.both_dir,
+            plan.cache_root,
+        )
+    return plan.effective_source
 
 
 def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
@@ -834,14 +890,9 @@ def sync_marketplace_cache(
         alias = read_cache_aliases(root).get(source.repo)
         subdir = alias if alias is not None else source.repo.rsplit("/", 1)[-1]
         cache_dir = _safe_cache_dir(root, subdir)
-        # This exists()-then-act is check-then-use and is NOT safe against a
-        # concurrent setforge process mutating the same cache dir — there is
-        # no lockfile; single-invocation-per-cache-root is the supported
-        # model. If a concurrent _collision_update (rmtree + rename swap)
-        # lands between this check and the origin read / fetch below, the
-        # losing process reads a wrong/absent origin or fetches a
-        # half-removed dir, surfacing as a MarketplaceCacheMiss or a
-        # stale-origin read — not corruption of the winning process's cache.
+        # This exists()-then-act is protected by the caller-held global resource
+        # lock in every CLI mutation path. Direct helper callers must provide
+        # equivalent serialization around cache discovery and mutation.
         if cache_dir.exists():
             # The cache dir is keyed by repo basename, so two marketplaces
             # from different owners sharing a repo name (alice/tools vs

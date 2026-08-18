@@ -58,6 +58,28 @@ def test_deploy_symlink_creates_both(tmp_path: Path) -> None:
     assert result.dst == dst
 
 
+def test_deploy_symlink_consumes_frozen_source_snapshot(tmp_path: Path) -> None:
+    """Planned bytes and mode win over a checkout edit before pass 2."""
+    src = tmp_path / "tracked-source"
+    src.write_text("planned\n")
+    target = tmp_path / "real-target"
+    dst = tmp_path / "link"
+    tf = _make(src, dst, symlink=str(target))
+    frozen_mode = src.stat().st_mode & 0o777
+    src.write_text("raced\n")
+
+    deploy.deploy_symlinked_file(
+        src,
+        dst,
+        tf,
+        source_content="planned\n",
+        source_mode=frozen_mode,
+    )
+
+    assert target.read_text() == "planned\n"
+    assert target.stat().st_mode & 0o777 == frozen_mode
+
+
 def test_deploy_symlink_preserves_raw_string_in_readlink(tmp_path: Path) -> None:
     """The raw user string survives ``os.symlink`` verbatim — no expansion.
 

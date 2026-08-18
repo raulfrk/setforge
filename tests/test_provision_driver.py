@@ -7,8 +7,18 @@ contained (others still applied), and exit_code is a terminal any(HARD).
 
 from collections.abc import Sequence
 
-from setforge.errors import ProvisionItemFailed
-from setforge.provision.driver import exit_code, reconcile
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
+from setforge.errors import ProvisionItemFailed, SetforgeError
+from setforge.provision.driver import (
+    apply_reconcile,
+    exit_code,
+    plan_reconcile,
+    reconcile,
+    validate_reconcile,
+)
 from setforge.provision.protocol import (
     DesiredState,
     Identity,
@@ -46,13 +56,17 @@ class _FakeProvisioner(Provisioner):
         self._outcomes = outcomes or {}
         self._raises = raises or {}
         self.apply_calls: list[str] = []
+        self.probe_calls = 0
+        self.plan_calls = 0
 
     def probe(self) -> set[Identity]:
+        self.probe_calls += 1
         return self._installed
 
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
     ) -> ProvisionDelta:
+        self.plan_calls += 1
         return ProvisionDelta(installed=self._to_install)
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
@@ -79,6 +93,53 @@ def test_report_policy_gates_before_apply() -> None:
     assert result.reported is True
     assert prov.apply_calls == []
     assert result.outcomes == ()
+
+
+def test_apply_consumes_plan_without_reprobe_or_replan() -> None:
+    identities = tuple(Identity(key=key, display=key) for key in ("a", "b"))
+    provisioner = _FakeProvisioner(
+        to_install=identities,
+        outcomes={"a": Outcome.OK, "b": Outcome.OK},
+    )
+    plan = plan_reconcile(provisioner, [_item("a"), _item("b")])
+
+    provisioner._to_install = ()
+    result = apply_reconcile(plan)
+
+    assert provisioner.probe_calls == 1
+    assert provisioner.plan_calls == 1
+    assert provisioner.apply_calls == ["a", "b"]
+    assert result.delta.installed == identities
+
+
+def test_validate_reconcile_refuses_inventory_drift() -> None:
+    provisioner = _FakeProvisioner(to_install=(Identity(key="a", display="a"),))
+    plan = plan_reconcile(provisioner, [_item("a")])
+    provisioner._installed = {Identity(key="other", display="other")}
+
+    with pytest.raises(SetforgeError, match="inventory changed"):
+        validate_reconcile(plan)
+
+    assert provisioner.apply_calls == []
+
+
+@given(st.lists(st.text(min_size=1), min_size=1, max_size=20, unique=True))
+def test_planned_selection_is_stable_for_arbitrary_item_sets(keys: list[str]) -> None:
+    identities = tuple(Identity(key=key, display=key) for key in keys[::2])
+    provisioner = _FakeProvisioner(
+        to_install=identities,
+        outcomes={key: Outcome.OK for key in keys},
+    )
+    plan = plan_reconcile(provisioner, [_item(key) for key in keys])
+    provisioner._to_install = tuple(
+        Identity(key=key, display=key) for key in keys[1::2]
+    )
+
+    apply_reconcile(plan)
+
+    assert provisioner.apply_calls == keys[::2]
+    assert provisioner.probe_calls == 1
+    assert provisioner.plan_calls == 1
 
 
 def test_report_only_flag_gates_before_apply() -> None:

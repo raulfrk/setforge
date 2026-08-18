@@ -26,7 +26,7 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
 )
-from setforge.errors import ConfigError, PluginToolMissing
+from setforge.errors import ConfigError, PluginToolMissing, SetforgeError
 
 
 class FakeMcpCli:
@@ -184,6 +184,89 @@ def test_converge_adds_absent_server(fake_mcp) -> None:
     assert cli.registry["serena"] == (["serena", "start"], "user")
 
 
+def test_apply_plan_validates_without_replanning(fake_mcp) -> None:
+    cli = fake_mcp(registry={})
+    cfg = _cfg({"serena": McpServerRef(command=["serena", "start"])})
+    plan = mcp.plan_reconcile(cfg, _resolved(["serena"]))
+    get_calls = sum(call[2] == "get" for call in cli.calls)
+
+    mcp.apply_plan(plan)
+
+    assert sum(call[2] == "get" for call in cli.calls) == get_calls + 1
+    assert cli.registry["serena"] == (["serena", "start"], "user")
+
+
+def test_apply_plan_refuses_changed_update_precondition(fake_mcp) -> None:
+    cli = fake_mcp(registry={"serena": (["old", "command"], "user")})
+    cfg = _cfg({"serena": McpServerRef(command=["new", "command"])})
+    plan = mcp.plan_reconcile(cfg, _resolved(["serena"]))
+    cli.registry["serena"] = (["changed", "after-plan"], "user")
+
+    report = mcp.apply_plan(plan)
+
+    assert report.updated == []
+    assert report.failed == [("serena", "MCP inventory changed after planning")]
+    assert cli.registry["serena"] == (["changed", "after-plan"], "user")
+
+
+def test_apply_plan_replays_unchanged_update(fake_mcp) -> None:
+    cli = fake_mcp(registry={"serena": (["old", "command"], "user")})
+    cfg = _cfg({"serena": McpServerRef(command=["new", "command"])})
+    plan = mcp.plan_reconcile(cfg, _resolved(["serena"]))
+
+    report = mcp.apply_plan(plan)
+
+    assert report.updated == [("serena", ["old", "command"], "user")]
+    assert cli.registry["serena"] == (["new", "command"], "user")
+
+
+def test_validate_plan_covers_declarations_that_were_initially_noops(fake_mcp) -> None:
+    cli = fake_mcp(registry={"serena": (["same"], "user")})
+    cfg = _cfg({"serena": McpServerRef(command=["same"])})
+    plan = mcp.plan_reconcile(cfg, _resolved(["serena"]))
+    assert plan.entries == ()
+    del cli.registry["serena"]
+
+    with pytest.raises(SetforgeError, match="serena"):
+        mcp.validate_plan(plan)
+
+
+def test_apply_plan_rechecks_declarations_that_were_initially_noops(fake_mcp) -> None:
+    cli = fake_mcp(registry={"serena": (["same"], "user")})
+    cfg = _cfg({"serena": McpServerRef(command=["same"])})
+    plan = mcp.plan_reconcile(cfg, _resolved(["serena"]))
+    del cli.registry["serena"]
+
+    report = mcp.apply_plan(plan)
+
+    assert report.failed == [("serena", "MCP inventory changed after planning")]
+    assert "serena" not in cli.registry
+
+
+def test_failed_update_add_still_records_revertible_prior(fake_mcp) -> None:
+    cli = fake_mcp(
+        registry={"serena": (["old"], "user")},
+        add_errors={"serena": "replacement failed"},
+    )
+    cfg = _cfg({"serena": McpServerRef(command=["new"])})
+
+    report = mcp.apply_plan(mcp.plan_reconcile(cfg, _resolved(["serena"])))
+
+    assert report.updated == [("serena", ["old"], "user")]
+    assert report.failed == [("serena", "replacement failed")]
+    assert "serena" not in cli.registry
+
+
+def test_mcp_plan_detaches_mutable_command(fake_mcp) -> None:
+    fake_mcp(registry={})
+    ref = McpServerRef(command=["before"])
+    plan = mcp.plan_reconcile(_cfg({"serena": ref}), _resolved(["serena"]))
+
+    ref.command.append("after")
+
+    assert plan.entries[0].command == ("before",)
+
+
 def test_add_argv_has_flags_before_name_and_double_dash(fake_mcp) -> None:
     cli = fake_mcp(registry={})
     cfg = _cfg(
@@ -223,8 +306,8 @@ def test_converge_noop_when_command_matches(fake_mcp) -> None:
     assert report.added == []
     assert report.updated == []
     assert report.failed == []
-    # Only the `get` probe ran — no add/remove.
-    assert [c[2] for c in cli.calls] == ["get"]
+    # Planning and apply-time validation each probe; neither mutates.
+    assert [c[2] for c in cli.calls] == ["get", "get"]
 
 
 def test_converge_ignores_undeclared_servers(fake_mcp) -> None:

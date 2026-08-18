@@ -6,7 +6,7 @@ The contract:
   ``os.replace`` so the final perm bits are applied atomically with
   the content swap (closes TOCTOU symlink-swap window, bypasses umask).
 - When ``mode`` is None, the temp file inherits the source's mode via
-  :func:`stat.S_IMODE` — today's behavior, zero regression.
+  :func:`stat.S_IMODE`, captured during the read-only resolve phase.
 - Setting a tighter mode (e.g. ``0o600`` over a previously-``0o644``
   live file) is honored on UPDATE, not just CREATE.
 - fchmod failure is contractual — propagates rather than being
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 import setforge.deploy as deploy_mod
-from setforge.deploy import copy_atomic
+from setforge.deploy import copy_atomic, resolve_deploy, write_resolved_deploy
 
 
 def test_mode_kwarg_applied_to_fresh_dst(tmp_path: Path) -> None:
@@ -38,6 +38,19 @@ def test_mode_kwarg_applied_to_fresh_dst(tmp_path: Path) -> None:
     copy_atomic(src, dst, mode=0o755)
 
     assert stat.S_IMODE(dst.stat().st_mode) == 0o755
+
+
+def test_resolved_deploy_freezes_implicit_source_mode(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.write_text("data\n")
+    src.chmod(0o600)
+    dst = tmp_path / "dst"
+    resolved = resolve_deploy(src, dst)
+    src.chmod(0o777)
+
+    write_resolved_deploy(resolved)
+
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o600
 
 
 def test_mode_kwarg_overrides_source_mode(tmp_path: Path) -> None:

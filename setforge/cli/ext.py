@@ -17,8 +17,14 @@ from setforge.cli._help_examples import (
     EXT_RECONCILE_EXAMPLES,
     EXT_REMOVE_EXAMPLES,
 )
-from setforge.config import ReconcilePolicy, load_config, resolve_effective_profile
+from setforge.config import (
+    Extensions,
+    ReconcilePolicy,
+    load_config,
+    resolve_effective_profile,
+)
 from setforge.errors import ExtensionInstallFailed, ExtensionToolMissing
+from setforge.locking import install_resources_lock
 
 ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
@@ -85,24 +91,27 @@ def ext_add(
     """Declare an extension ID on the profile via the packages surface."""
     config = _resolve_config_arg(config)
     key = name or extension_id
-    added = vscode_extensions.add_to_include(config, profile, extension_id, key=key)
-    if added:
-        typer.echo(f"added to {profile}.packages: {key} (extension {extension_id})")
-    else:
-        typer.echo(f"already in {profile}.packages: {key} (extension {extension_id})")
-    if install:
-        try:
-            vscode_extensions.install_one(extension_id)
-            typer.echo(f"installed  {extension_id}")
-        except ExtensionToolMissing as exc:
-            typer.secho(
-                f"warning: skipping install — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
+    with install_resources_lock():
+        added = vscode_extensions.add_to_include(config, profile, extension_id, key=key)
+        if added:
+            typer.echo(f"added to {profile}.packages: {key} (extension {extension_id})")
+        else:
+            typer.echo(
+                f"already in {profile}.packages: {key} (extension {extension_id})"
             )
-        except ExtensionInstallFailed as exc:
-            typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
-            raise typer.Exit(code=1) from exc
+        if install:
+            try:
+                vscode_extensions.install_one(extension_id)
+                typer.echo(f"installed  {extension_id}")
+            except ExtensionToolMissing as exc:
+                typer.secho(
+                    f"warning: skipping install — {exc}",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+            except ExtensionInstallFailed as exc:
+                typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+                raise typer.Exit(code=1) from exc
 
 
 @ext_app.command("remove", epilog=EXT_REMOVE_EXAMPLES)
@@ -118,9 +127,10 @@ def ext_remove(
 ) -> None:
     """Remove an extension ID from the profile's declared packages."""
     config = _resolve_config_arg(config)
-    changed = vscode_extensions.remove_from_include(
-        config, profile, extension_id, add_to_exclude_list=exclude
-    )
+    with install_resources_lock():
+        changed = vscode_extensions.remove_from_include(
+            config, profile, extension_id, add_to_exclude_list=exclude
+        )
     if changed:
         target = "packages + reconcile.extensions.exclude" if exclude else "packages"
         typer.echo(f"updated {profile}.{target}: {extension_id}")
@@ -149,7 +159,9 @@ def ext_reconcile(
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     ext = reconcile_adapter.extensions_input(cfg, resolved)
     try:
-        report = vscode_extensions.reconcile(ext, dry_run=dry_run)
+        ext, report = _run_ext_reconcile(
+            config, profile, repo_root, ext, dry_run=dry_run
+        )
     except ExtensionToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -173,3 +185,24 @@ def ext_reconcile(
         raise typer.Exit(code=1)
     elif report.failed:
         raise typer.Exit(code=1)
+
+
+def _run_ext_reconcile(
+    config: Path,
+    profile: str,
+    repo_root: Path,
+    ext: Extensions,
+    *,
+    dry_run: bool,
+) -> tuple[Extensions, vscode_extensions.ReconcileReport]:
+    """Run read-only directly; reload live desired state inside serialization."""
+    if ext.reconcile is ReconcilePolicy.REPORT or dry_run:
+        return ext, vscode_extensions.reconcile(ext, dry_run=dry_run)
+    with install_resources_lock():
+        # Desired state is reloaded after serialization; otherwise a waiting
+        # PRUNE could apply a profile older than the writer that just released
+        # the global adapter lock.
+        cfg = load_config(config)
+        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+        current = reconcile_adapter.extensions_input(cfg, resolved)
+        return current, vscode_extensions.reconcile(current, dry_run=False)

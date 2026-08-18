@@ -25,6 +25,7 @@ Blocking vs. timeout:
 """
 
 import fcntl
+import hashlib
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -34,6 +35,11 @@ from setforge.errors import SetforgeError
 from setforge.transitions import state_root
 
 _POLL_INTERVAL: float = 0.05  # seconds between LOCK_NB retries
+
+
+def _user_global_locks_dir() -> Path:
+    """Return the lock namespace shared by one user's external resources."""
+    return Path("~/.cache/setforge/locks").expanduser()
 
 
 @contextmanager
@@ -88,6 +94,43 @@ def profile_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
 
 
 @contextmanager
+def install_resources_lock(timeout: float | None = None) -> Iterator[None]:
+    """Serialize global package and adapter planning/apply across commands.
+
+    When a command also needs a profile lock, acquire this global lock first.
+    Its path follows the user's global Claude/VSCode/cache namespace rather
+    than ``SETFORGE_STATE_DIR``; alternate transition roots must not split the
+    lock protecting the same external inventories.
+    """
+    locks_dir = _user_global_locks_dir()
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = locks_dir / "install-resources.lock"
+    fd = lock_path.open("a")
+    try:
+        if timeout is None:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SetforgeError(
+                            "another setforge command holds the global resource lock; "
+                            "retry shortly"
+                        ) from None
+                    time.sleep(_POLL_INTERVAL)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+    finally:
+        fd.close()
+
+
+@contextmanager
 def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[None]:
     """Acquire an exclusive advisory lock scoped to a config dir's ``setforge.lock``.
 
@@ -103,9 +146,10 @@ def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[No
     profile name — a profile-scoped lock would not serialize A vs B against the
     profile-independent lockfile.
 
-    Creates ``<config-dir>/setforge.lock.lock`` (a sidecar; never the lockfile
-    itself, which is atomically replaced) and calls ``fcntl.flock(LOCK_EX)`` on
-    the open fd, released on normal exit or exception.
+    Creates a path-keyed sidecar in the user-global lock namespace (never
+    inside the config repository, never under operator-variable transition
+    state, and never the lockfile itself, which is atomically replaced) and
+    calls ``fcntl.flock(LOCK_EX)`` on the open fd.
 
     Args:
         config_dir: Directory holding ``setforge.lock``; determines the sidecar
@@ -118,8 +162,10 @@ def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[No
         SetforgeError: When ``timeout`` is set and the lock cannot be acquired
             within the deadline.
     """
-    config_dir.mkdir(parents=True, exist_ok=True)
-    lock_path: Path = config_dir / "setforge.lock.lock"
+    locks_dir = _user_global_locks_dir()
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(str(config_dir.resolve()).encode()).hexdigest()[:24]
+    lock_path = locks_dir / f"config-{key}.lock"
 
     fd = lock_path.open("a")
     try:

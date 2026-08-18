@@ -31,10 +31,12 @@ from setforge.config import (
     Config,
     MarketplaceSource,
     ReconcilePolicy,
+    ResolvedProfile,
     load_config,
     resolve_effective_profile,
 )
 from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
+from setforge.locking import install_resources_lock
 
 # ---------------------------------------------------------------------------
 # plugin sub-app
@@ -120,9 +122,10 @@ def plugin_add(
     load_config(config)
     source = _parse_marketplace_from(from_)
 
-    _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
-    if not no_install:
-        _execute_plugin_add(plugin_name, mp_name)
+    with install_resources_lock():
+        _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
+        if not no_install:
+            _execute_plugin_add(plugin_name, mp_name)
 
 
 def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:
@@ -300,34 +303,37 @@ def plugin_remove(
 ) -> None:
     """Remove a plugin from the profile's packages list."""
     config = _resolve_config_arg(config)
-    cfg = load_config(config)
     # Profile bindings are stored under the BARE plugin name (see plugin_add),
     # so strip any trailing @marketplace for the YAML removal to keep it
     # symmetric with the corrected add path.
     bare_ref = name.split("@", 1)[0]
-    changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
-        config, profile, bare_ref
-    )
-    if changed:
-        typer.echo(f"removed from {profile}.packages: {bare_ref} (plugin)")
-    else:
-        typer.echo(f"not in {profile}.packages: {bare_ref} (plugin)")
-    if disable:
-        # The claude `plugin disable` binary requires the full
-        # <name>@<marketplace> id. When the user passed the bare form,
-        # reconstruct it from the top-level registry; a pass-through bare id
-        # would be rejected by claude and the disable would silently never run.
-        disable_id = _resolve_disable_id(cfg, name)
-        try:
-            claude_plugins_mod.plugin_disable(disable_id)
-            typer.echo(f"disabled plugin: {disable_id}")
-        except PluginToolMissing as exc:
-            typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            typer.secho(
-                f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
-            )
-            raise typer.Exit(code=1) from exc
+    with install_resources_lock():
+        cfg = load_config(config)
+        changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
+            config, profile, bare_ref
+        )
+        if changed:
+            typer.echo(f"removed from {profile}.packages: {bare_ref} (plugin)")
+        else:
+            typer.echo(f"not in {profile}.packages: {bare_ref} (plugin)")
+        if disable:
+            # The claude `plugin disable` binary requires the full
+            # <name>@<marketplace> id. When the user passed the bare form,
+            # reconstruct it from the top-level registry; a pass-through bare id
+            # would be rejected by claude and the disable would silently never run.
+            disable_id = _resolve_disable_id(cfg, name)
+            try:
+                claude_plugins_mod.plugin_disable(disable_id)
+                typer.echo(f"disabled plugin: {disable_id}")
+            except PluginToolMissing as exc:
+                typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                typer.secho(
+                    f"error: {binaries.stderr_of(exc)}",
+                    err=True,
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1) from exc
 
 
 @plugin_app.command("reconcile", epilog=PLUGIN_RECONCILE_EXAMPLES)
@@ -359,13 +365,14 @@ def plugin_reconcile(
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     policy = reconcile_adapter.plugin_policy(resolved)
     try:
-        report = claude_plugins_mod.reconcile(
+        policy, report = _run_plugin_reconcile(
+            config,
+            profile,
+            repo_root,
             cfg,
-            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
-            policy=policy,
+            resolved,
+            policy,
             dry_run=dry_run,
-            # ``--yes`` (non-interactive) ⇒ ``auto``: the cache-collision
-            # wizard safe-fails instead of prompting. Defaults False.
             auto=yes,
         )
     except PluginToolMissing as exc:
@@ -380,6 +387,43 @@ def plugin_reconcile(
         raise typer.Exit(code=1)
     elif report.failed:
         raise typer.Exit(code=1)
+
+
+def _run_plugin_reconcile(
+    config: Path,
+    profile: str,
+    repo_root: Path,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    policy: ReconcilePolicy,
+    *,
+    dry_run: bool,
+    auto: bool,
+) -> tuple[ReconcilePolicy, claude_plugins_mod.ReconcileReport]:
+    """Run read-only directly; reload live desired state inside serialization."""
+    if policy is ReconcilePolicy.REPORT or dry_run:
+        report = claude_plugins_mod.reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
+            policy=policy,
+            dry_run=dry_run,
+            auto=auto,
+        )
+        return policy, report
+    with install_resources_lock():
+        # Re-resolve after serialization so a waiting PRUNE never applies
+        # desired state older than the preceding writer.
+        current_cfg = load_config(config)
+        current = resolve_effective_profile(current_cfg, profile, repo_root).resolved
+        current_policy = reconcile_adapter.plugin_policy(current)
+        report = claude_plugins_mod.reconcile(
+            current_cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(current_cfg, current),
+            policy=current_policy,
+            dry_run=False,
+            auto=auto,
+        )
+        return current_policy, report
 
 
 def _render_reconcile_report(
@@ -438,11 +482,12 @@ def sync_cache(
         return
 
     config = _resolve_config_arg(config)
-    cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     try:
-        refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)
+        with install_resources_lock():
+            cfg = load_config(config)
+            resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+            refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)
     except MarketplaceCacheMiss as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -486,28 +531,31 @@ def marketplace_add_cmd(
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
-    if yaml_changed:
-        typer.echo(f"added {name} to marketplaces in YAML")
-    else:
-        typer.echo(f"marketplace already declared: {name}")
-
-    try:
-        claude_plugins_mod.marketplace_add(name, _resolve_add_source(source, name))
-        typer.echo(f"registered marketplace: {name}")
-    except (
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        MarketplaceCacheMiss,
-    ) as exc:
-        # Atomicity: the YAML entry is written before the binary call. If the
-        # binary fails we must roll the entry back, or the config repo is left
-        # with an orphaned marketplace declaration that diverges from claude's
-        # state. Only revert the entry we just added (yaml_changed).
+    with install_resources_lock():
+        yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
         if yaml_changed:
-            claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
-        typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
+            typer.echo(f"added {name} to marketplaces in YAML")
+        else:
+            typer.echo(f"marketplace already declared: {name}")
+
+        try:
+            claude_plugins_mod.marketplace_add(name, _resolve_add_source(source, name))
+            typer.echo(f"registered marketplace: {name}")
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            MarketplaceCacheMiss,
+        ) as exc:
+            # Atomicity: the YAML entry is written before the binary call. If the
+            # binary fails we must roll the entry back, or the config repo is left
+            # with an orphaned marketplace declaration that diverges from claude's
+            # state. Only revert the entry we just added (yaml_changed).
+            if yaml_changed:
+                claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
+            typer.secho(
+                f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1) from exc
 
 
 @marketplace_app.command("remove", epilog=MARKETPLACE_REMOVE_EXAMPLES)
@@ -522,18 +570,21 @@ def marketplace_remove_cmd(
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
-    yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
-    if yaml_changed:
-        typer.echo(f"removed {name} from marketplaces in YAML")
-    else:
-        typer.echo(f"marketplace not found in YAML: {name}")
+    with install_resources_lock():
+        yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
+        if yaml_changed:
+            typer.echo(f"removed {name} from marketplaces in YAML")
+        else:
+            typer.echo(f"marketplace not found in YAML: {name}")
 
-    try:
-        claude_plugins_mod.marketplace_remove(name)
-        typer.echo(f"removed marketplace: {name}")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
+        try:
+            claude_plugins_mod.marketplace_remove(name)
+            typer.echo(f"removed marketplace: {name}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            typer.secho(
+                f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1) from exc
 
 
 @marketplace_app.command("update", epilog=MARKETPLACE_UPDATE_EXAMPLES)
@@ -546,7 +597,8 @@ def marketplace_update_cmd(
     # (it only shells to `claude`), and resolving would add a spurious
     # NoSourceConfigured failure mode for a command that needs no source.
     try:
-        claude_plugins_mod.marketplace_update(name)
+        with install_resources_lock():
+            claude_plugins_mod.marketplace_update(name)
         typer.echo(f"updated marketplace: {name}")
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)

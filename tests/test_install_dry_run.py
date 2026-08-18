@@ -5,8 +5,8 @@ One test per acceptance criterion from SPEC 4:
 - ``test_no_write_transition`` — dry-run never calls
   :func:`transitions.write_transition`.
 - ``test_no_allowlist_mutation`` — dry-run never calls
-  :func:`secrets.append_to_allowlist` (the secrets scan path is
-  unreachable under dry-run).
+  :func:`secrets.append_to_allowlist`; scanning is read-only and findings
+  are reported without prompting or persisting a decision.
 - ``test_no_bootstrap_local`` — dry-run never calls
   :func:`deploy.bootstrap_local`.
 - ``test_no_ensure_state_dir`` — dry-run never calls
@@ -151,6 +151,32 @@ def test_profile_without_plugins_skips_global_claude_marketplace_reconcile(
     assert "WOULD add-marketplace" not in result.output
 
 
+def test_preview_uses_planned_keep_live_action(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """A first-host keep-live plan renders NOOP, not raw drift's UPDATE."""
+    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
+    live.parent.mkdir(parents=True)
+    live.write_text("host-owned first-install content\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-git-check",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"WOULD noop      {live}" in result.output
+    assert f"WOULD update    {live}" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # Tripwire tests — each asserts a specific mutating leaf is unreachable.
 # ---------------------------------------------------------------------------
@@ -184,10 +210,8 @@ def test_no_allowlist_mutation(
 ) -> None:
     """``--dry-run`` never calls :func:`secrets.append_to_allowlist`.
 
-    The secrets scan path itself (``run_pre_deploy_scan``) is
-    unreachable under dry-run — the dry-run pipeline never invokes it.
-    The tripwire here is a belt-and-suspenders check on the mutating
-    sink that the scan path would otherwise hit.
+    Dry-run executes the read-only scan but never resolves findings through
+    the mutating allowlist sink. The tripwire pins that boundary.
     """
     calls: list[tuple[str, Path]] = []
 
@@ -382,3 +406,28 @@ def test_profile_summary_emits_renamed_provisioning_labels(
     assert "  cargo:          0" in result.output
     assert "claude_plugins:" not in result.output
     assert "cargo_binaries:" not in result.output
+
+
+def test_immutable_preview_does_not_reload_host_local_store(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendering consumes the store projection captured while planning."""
+    calls = 0
+
+    def once(_profile: str) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("immutable preview re-read host-local state")
+        return {}
+
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.host_local_sections_from_store", once
+    )
+
+    _invoke_dry_run(fixture_repo)
+
+    assert calls == 1

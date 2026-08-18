@@ -21,7 +21,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.reconcile.host_local_view import host_local_sections_from_store
-from setforge.secrets import SecretFinding, SecretsScanResult
+from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 
 _PROFILE = "seed-test"
 
@@ -65,6 +65,8 @@ def _write_config(repo: Path, *, src: str = "doc.md") -> Path:
         f"  {_PROFILE}:\n"
         "    tracked_files:\n"
         "      - doc\n"
+        "    bootstrap:\n"
+        "      - ~/.setforge_seed/bootstrap.txt\n"
         "    section_slots:\n"
         "      python-conventions: py-conv\n",
         encoding="utf-8",
@@ -115,14 +117,75 @@ def test_secrets_abort_leaves_store_unseeded(
         lambda **_kw: SecretsScanResult(findings=(_finding(),), files_scanned=1),
     )
     monkeypatch.setattr(
-        "setforge.cli.install._handle_secret_findings",
-        lambda *_a, **_kw: False,
+        "setforge.cli.install._plan_secret_findings", lambda *_a, **_kw: None
+    )
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        "setforge.cli.install.deploy.bootstrap_local",
+        lambda _paths: mutations.append("bootstrap"),
+    )
+    monkeypatch.setattr(
+        "setforge.cli.install.reconcile_packages",
+        lambda *_args, **_kwargs: mutations.append("packages"),
     )
 
     result = _invoke(config)
     assert result.exit_code != 0, result.output
     assert "aborted by secrets scan" in result.output
     assert not _seeded_in_store(), "a secrets abort must not seed the store"
+    assert mutations == []
+
+
+def test_secret_allowlist_decision_is_deferred_and_deduplicated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Planning prompts once per hash; only apply reaches the write sink."""
+    from setforge.cli import install as install_mod
+
+    finding = _finding()
+    scan = SecretsScanResult(findings=(finding, finding), files_scanned=1)
+    allowlist = tmp_path / "allowlist"
+    writes: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        install_mod,
+        "prompt_secret_action",
+        lambda *_args, **_kwargs: SecretAction.ALLOWLIST,
+    )
+    monkeypatch.setattr(
+        install_mod.secrets_mod,
+        "append_to_allowlist",
+        lambda *, snippet_hash, allowlist_path: writes.append(
+            (snippet_hash, allowlist_path)
+        ),
+    )
+
+    plan = install_mod._plan_secret_findings(scan, yes=True, allowlist_path=allowlist)
+
+    assert plan is not None
+    assert plan.hashes == (finding.snippet_hash,)
+    assert writes == []
+    install_mod._apply_secret_plan(plan)
+    assert writes == [(finding.snippet_hash, allowlist)]
+
+
+def test_secret_silence_decision_plans_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli import install as install_mod
+
+    monkeypatch.setattr(
+        install_mod,
+        "prompt_secret_action",
+        lambda *_args, **_kwargs: SecretAction.SILENCE_ONE_SHOT,
+    )
+    plan = install_mod._plan_secret_findings(
+        SecretsScanResult(findings=(_finding(),), files_scanned=1),
+        yes=True,
+        allowlist_path=tmp_path / "allowlist",
+    )
+
+    assert plan is not None
+    assert plan.hashes == ()
 
 
 def test_drift_gate_abort_leaves_store_unseeded(

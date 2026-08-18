@@ -14,7 +14,9 @@ import pytest
 
 from setforge.config import Extensions, ReconcilePolicy
 from setforge.lockfile import LockFile
+from setforge.provision.extension import ExtensionProvisioner
 from setforge.provision.lock_apply import extension_pins
+from setforge.provision.protocol import Identity, ProvisionItem
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType, ResolvedPin
 from setforge.vscode_extensions import reconcile
 
@@ -59,6 +61,27 @@ def test_extension_pins_filters_and_casefolds() -> None:
 
 def test_extension_pins_none_is_empty() -> None:
     assert extension_pins(None) == {}
+
+
+def test_provisioner_detaches_pin_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    pin = _pin("pub.ext", "1.2.3")
+    pins = {"pub.ext": pin}
+    provisioner = ExtensionProvisioner(pins=pins, installed_snapshot=set())
+    pins.clear()
+    seen: list[object] = []
+    monkeypatch.setattr(
+        "setforge.provision.extension.vscode_extensions.install_one",
+        lambda _ext_id, *, pin=None: seen.append(pin),
+    )
+
+    provisioner.apply_one(
+        ProvisionItem(
+            type="extension",
+            identity=Identity(key="pub.ext", display="pub.ext"),
+        )
+    )
+
+    assert seen == [pin]
 
 
 class _FakeCode:

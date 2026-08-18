@@ -102,6 +102,113 @@ class ReconcileReport:
         return bool(self.to_install or self.to_uninstall)
 
 
+@dataclass(frozen=True, slots=True)
+class ExtensionPlan:
+    """A frozen extension inventory decision and its exact driver plan."""
+
+    code: str
+    policy: ReconcilePolicy
+    reconcile: driver.ReconcilePlan
+    to_install: tuple[str, ...]
+    to_uninstall: tuple[str, ...]
+    installed: frozenset[str]
+
+
+def plan_reconcile(
+    ext: Extensions, *, pins: dict[str, ResolvedPin] | None = None
+) -> ExtensionPlan:
+    """Probe extension state once and return the exact operations to apply."""
+    from setforge.provision.extension import ExtensionProvisioner
+
+    code = _ensure_code()
+    exclude_keys = {item.casefold() for item in ext.exclude}
+    effective: dict[str, str] = {}
+    for item in ext.include:
+        key = item.casefold()
+        if key not in exclude_keys:
+            effective.setdefault(key, item)
+    items = [
+        ProvisionItem(type="extension", identity=Identity(key=key, display=display))
+        for key, display in effective.items()
+    ]
+    installed = list_installed()
+    reconcile_plan = driver.plan_reconcile(
+        ExtensionProvisioner(pins=pins, installed_snapshot=installed), items
+    )
+    to_install = tuple(sorted(item.display for item in reconcile_plan.delta.installed))
+    if ext.reconcile is ReconcilePolicy.ADDITIVE:
+        to_uninstall: tuple[str, ...] = ()
+    else:
+        installed_by_key = {item.casefold(): item for item in installed}
+        to_uninstall = tuple(
+            sorted(
+                display
+                for key, display in installed_by_key.items()
+                if key not in effective
+            )
+        )
+    return ExtensionPlan(
+        code=code,
+        policy=ext.reconcile,
+        reconcile=reconcile_plan,
+        to_install=to_install,
+        to_uninstall=to_uninstall,
+        installed=frozenset(installed),
+    )
+
+
+def validate_plan(plan: ExtensionPlan) -> None:
+    """Fail if extension inventory changed after the plan was built."""
+    if frozenset(list_installed()) != plan.installed:
+        raise ExtensionInstallFailed("extension inventory changed after planning")
+
+
+def apply_plan(plan: ExtensionPlan) -> ReconcileReport:
+    """Validate then apply a frozen plan without recomputing its operations."""
+    if plan.policy is ReconcilePolicy.REPORT:
+        return _report_plan(plan, dry_run=True)
+    validate_plan(plan)
+    result = driver.apply_reconcile(plan.reconcile)
+    failed = [
+        (outcome.item.identity.display, outcome.detail)
+        for outcome in result.outcomes
+        if outcome.outcome is Outcome.HARD
+    ]
+    if plan.policy is ReconcilePolicy.PRUNE:
+        for name in plan.to_uninstall:
+            try:
+                subprocess.run(
+                    [plan.code, "--uninstall-extension", name],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=_TIMEOUT_S,
+                )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                OSError,
+            ) as exc:
+                failed.append((name, stderr_of(exc)))
+    return ReconcileReport(
+        policy=plan.policy,
+        to_install=list(plan.to_install),
+        to_uninstall=list(plan.to_uninstall),
+        dry_run=False,
+        failed=failed,
+    )
+
+
+def _report_plan(plan: ExtensionPlan, *, dry_run: bool) -> ReconcileReport:
+    """Render a precomputed extension plan without applying it."""
+    return ReconcileReport(
+        policy=plan.policy,
+        to_install=list(plan.to_install),
+        to_uninstall=list(plan.to_uninstall),
+        dry_run=dry_run,
+    )
+
+
 def _ensure_code() -> str:
     """Resolve the ``code`` binary via :func:`resolve_binary` or raise."""
     path = resolve_binary(_CODE_BIN)
@@ -157,6 +264,7 @@ def reconcile(
     *,
     dry_run: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
+    plan: ExtensionPlan | None = None,
 ) -> ReconcileReport:
     """Reconcile installed VSCode extensions to the declared set.
 
@@ -175,6 +283,9 @@ def reconcile(
     Raises :class:`ExtensionToolMissing` when the ``code`` CLI can't be
     resolved on PATH or via the binary-override config.
     """
+    if plan is not None:
+        return _report_plan(plan, dry_run=True) if dry_run else apply_plan(plan)
+
     from setforge.provision.extension import ExtensionProvisioner
 
     code = _ensure_code()

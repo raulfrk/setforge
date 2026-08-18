@@ -34,6 +34,7 @@ from setforge.transitions import (
     summarize_transition,
     transition_dirname,
     transitions_root,
+    validate_state_dir_writable,
     write_meta,
     write_transition,
 )
@@ -111,6 +112,17 @@ def test_ensure_state_dir_writable_creates_dir(
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "fresh"))
     ensure_state_dir_writable()
     assert (tmp_path / "fresh" / "transitions").is_dir()
+
+
+def test_validate_state_dir_writable_does_not_create_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "fresh"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(target))
+
+    validate_state_dir_writable()
+
+    assert not target.exists()
     # No probe file should be left.
     assert not (tmp_path / "fresh" / "transitions" / ".setforge-write-probe").exists()
 

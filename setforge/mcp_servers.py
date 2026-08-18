@@ -38,8 +38,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from setforge.binaries import resolve_binary, stderr_of
-from setforge.config import Config, McpServerRef, ResolvedProfile
-from setforge.errors import ConfigError, PluginToolMissing
+from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
+from setforge.errors import ConfigError, PluginToolMissing, SetforgeError
 
 __all__ = [
     "McpReconcileReport",
@@ -96,10 +96,10 @@ class McpReconcileReport:
     ``added`` lists ``(name, command, scope)`` triples registered for the
     first time this pass — the command/scope ride along so the transition
     delta can re-add the exact registration on a redo.
-    ``updated`` lists ``(name, prior_command, prior_scope)`` triples for
-    servers whose declared command differed from the live one and were
-    therefore removed + re-added — the prior command/scope is captured so
-    revert can re-add the original. ``failed`` lists ``(name, stderr)``
+    ``updated`` lists ``(name, prior_command, prior_scope)`` triples once the
+    prior registration has been removed. The prior command/scope is captured
+    immediately so revert can restore it even when replacement registration
+    later fails. ``failed`` lists ``(name, stderr)``
     for per-server subprocess errors; it is the authoritative failure
     signal the CLI gates the exit code on.
     """
@@ -112,6 +112,108 @@ class McpReconcileReport:
         # Planned/executed work only; ``failed`` is excluded so the
         # "nothing to reconcile" branch in the CLI stays meaningful.
         return bool(self.added or self.updated)
+
+
+@dataclass(frozen=True, slots=True)
+class McpPlanEntry:
+    """One MCP registration decision computed from the live registry."""
+
+    name: str
+    command: tuple[str, ...]
+    scope: McpScope
+    prior: tuple[tuple[str, ...], str] | None
+
+    @property
+    def ref(self) -> McpServerRef:
+        """Build a detached validated registration from immutable primitives."""
+        return McpServerRef(command=list(self.command), scope=self.scope)
+
+
+@dataclass(frozen=True, slots=True)
+class McpPlan:
+    """The exact MCP operations selected by a read-only probe."""
+
+    entries: tuple[McpPlanEntry, ...]
+    preconditions: tuple[tuple[str, tuple[tuple[str, ...], str] | None], ...]
+
+
+def plan_reconcile(cfg: Config, profile: ResolvedProfile) -> McpPlan:
+    """Probe declared servers and retain only absent or drifted entries."""
+    entries: list[McpPlanEntry] = []
+    preconditions: list[tuple[str, tuple[tuple[str, ...], str] | None]] = []
+    for name, ref in _declared_refs(cfg, profile):
+        current = mcp_get_command(name)
+        frozen_current = None if current is None else (tuple(current[0]), current[1])
+        preconditions.append((name, frozen_current))
+        if current is None:
+            entries.append(
+                McpPlanEntry(
+                    name=name,
+                    command=tuple(ref.command),
+                    scope=ref.scope,
+                    prior=None,
+                )
+            )
+            continue
+        prior_command, prior_scope = current
+        if prior_command == ref.command and prior_scope == ref.scope:
+            continue
+        entries.append(
+            McpPlanEntry(
+                name=name,
+                command=tuple(ref.command),
+                scope=ref.scope,
+                prior=(tuple(prior_command), prior_scope),
+            )
+        )
+    return McpPlan(entries=tuple(entries), preconditions=tuple(preconditions))
+
+
+def apply_plan(plan: McpPlan) -> McpReconcileReport:
+    """Apply a plan after validating that each probed precondition still holds."""
+    added: list[tuple[str, list[str], str]] = []
+    updated: list[tuple[str, list[str], str]] = []
+    failed: list[tuple[str, str]] = []
+    actions = {entry.name: entry for entry in plan.entries}
+    for name, frozen_expected in plan.preconditions:
+        current = mcp_get_command(name)
+        expected = (
+            None
+            if frozen_expected is None
+            else (list(frozen_expected[0]), frozen_expected[1])
+        )
+        if current != expected:
+            failed.append((name, "MCP inventory changed after planning"))
+            continue
+        entry = actions.get(name)
+        if entry is None:
+            continue
+        if entry.prior is None:
+            _converge_add(entry.name, entry.ref, added=added, failed=failed)
+            continue
+        prior_command, prior_scope = entry.prior
+        _converge_update(
+            entry.name,
+            entry.ref,
+            prior_command=list(prior_command),
+            prior_scope=prior_scope,
+            updated=updated,
+            failed=failed,
+        )
+    return McpReconcileReport(added=added, updated=updated, failed=failed)
+
+
+def validate_plan(plan: McpPlan) -> None:
+    """Fail if an MCP registration no longer matches its planned precondition."""
+    for name, frozen_expected in plan.preconditions:
+        current = mcp_get_command(name)
+        expected = (
+            None
+            if frozen_expected is None
+            else (list(frozen_expected[0]), frozen_expected[1])
+        )
+        if current != expected:
+            raise SetforgeError(f"MCP inventory changed after planning: {name}")
 
 
 def mcp_get_command(name: str) -> tuple[list[str], str] | None:
@@ -239,35 +341,7 @@ def reconcile(
         PluginToolMissing: the ``claude`` binary cannot be resolved (from
             the first ``claude mcp`` subprocess via :func:`_get_claude_bin`).
     """
-    declared = _declared_refs(cfg, profile)
-    added: list[tuple[str, list[str], str]] = []
-    updated: list[tuple[str, list[str], str]] = []
-    failed: list[tuple[str, str]] = []
-
-    for name, ref in declared:
-        # ``mcp_get_command`` swallows a missing server / unsupported
-        # ``get`` into ``None``, so a ``None`` here unambiguously means
-        # "treat as absent → add" (the add path itself swallows an
-        # "already exists" stderr, so a stale-but-present server is still
-        # a benign no-op).
-        current = mcp_get_command(name)
-        if current is not None:
-            prior_command, prior_scope = current
-            if prior_command == ref.command and prior_scope == ref.scope:
-                LOGGER.info("mcp server up-to-date: %s", name)
-                continue
-            _converge_update(
-                name,
-                ref,
-                prior_command=prior_command,
-                prior_scope=prior_scope,
-                updated=updated,
-                failed=failed,
-            )
-            continue
-        _converge_add(name, ref, added=added, failed=failed)
-
-    return McpReconcileReport(added=added, updated=updated, failed=failed)
+    return apply_plan(plan_reconcile(cfg, profile))
 
 
 def _converge_add(
@@ -303,14 +377,24 @@ def _converge_update(
     """Update a drifted server (remove + re-add), recording the prior command.
 
     The ``updated`` entry stores the PRIOR command + scope so revert can
-    re-add the original registration — a flat name alone is not
-    invertible. Only recorded on a fully-successful remove + re-add.
+    re-add the original registration — a flat name alone is not invertible.
+    It is recorded immediately after a successful remove because that is the
+    destructive point; replacement failure must not erase the inverse.
     """
     LOGGER.info("updating mcp server: %s", name)
     try:
         mcp_remove(name, scope=prior_scope)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        msg = stderr_of(exc)
+        LOGGER.warning("mcp update failed for %s: %s", name, msg)
+        failed.append((name, msg))
+        return
+    # Removal is already a successful destructive mutation. Record its inverse
+    # immediately so the transition remains revertible even when replacement
+    # registration fails below.
+    updated.append((name, list(prior_command), prior_scope))
+    try:
         mcp_add(name, ref)
-        updated.append((name, list(prior_command), prior_scope))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         msg = stderr_of(exc)
         LOGGER.warning("mcp update failed for %s: %s", name, msg)

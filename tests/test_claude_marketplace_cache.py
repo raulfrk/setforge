@@ -68,6 +68,127 @@ def testresolve_marketplace_source_local_clone_clones_on_cache_miss(
     assert fake.clone_count() == 1
 
 
+def test_marketplace_source_plan_defers_clone_until_apply(
+    fake_git, tmp_path: Path
+) -> None:
+    """Install planning fixes the cache target without creating it."""
+    from setforge.claude_marketplace_cache import (
+        apply_marketplace_source_plan,
+        plan_marketplace_source,
+    )
+
+    fake = fake_git(known_repos={"anthropic/plug"})
+    cache_root = tmp_path / "cache"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
+
+    plan = plan_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+    )
+
+    assert fake.clone_count() == 0
+    assert not cache_root.exists()
+    assert apply_marketplace_source_plan(plan).path == cache_root / "plug"
+    assert fake.clone_count() == 1
+
+
+def test_marketplace_source_plan_refuses_cache_created_after_planning(
+    fake_git, tmp_path: Path
+) -> None:
+    """A stale clone decision cannot overwrite a cache created concurrently."""
+    from setforge.claude_marketplace_cache import (
+        apply_marketplace_source_plan,
+        plan_marketplace_source,
+    )
+    from setforge.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos={"anthropic/plug"})
+    cache_root = tmp_path / "cache"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
+    plan = plan_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+    )
+    (cache_root / "plug").mkdir(parents=True)
+
+    with pytest.raises(MarketplaceCacheMiss, match="changed after planning"):
+        apply_marketplace_source_plan(plan)
+    assert fake.clone_count() == 0
+
+
+def test_marketplace_source_plan_refuses_origin_changed_after_planning(
+    fake_git, tmp_path: Path
+) -> None:
+    """An existing cache must retain the origin observed by the plan."""
+    from setforge.claude_marketplace_cache import (
+        plan_marketplace_source,
+        validate_marketplace_source_plan,
+    )
+    from setforge.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos={"anthropic/plug"})
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "plug"
+    cache_dir.mkdir(parents=True)
+    fake.cloned[cache_dir] = "anthropic/plug"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
+    plan = plan_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+    )
+    fake.cloned[cache_dir] = "other/plug"
+
+    with pytest.raises(MarketplaceCacheMiss, match="origin changed"):
+        validate_marketplace_source_plan(plan)
+
+
+def test_marketplace_source_plan_refuses_both_target_created_after_choice(
+    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BOTH collision choice cannot clone onto a later-created target."""
+    from setforge.claude_marketplace_cache import (
+        plan_marketplace_source,
+        validate_marketplace_source_plan,
+    )
+    from setforge.errors import MarketplaceCacheMiss
+    from setforge.marketplace_cache_wizard import (
+        CollisionAction,
+        CollisionResolution,
+    )
+
+    fake = fake_git(known_repos={"new/plug"})
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "plug"
+    cache_dir.mkdir(parents=True)
+    fake.cloned[cache_dir] = "old/plug"
+    both_dir = cache_root / "plug-new"
+    monkeypatch.setattr(
+        "setforge.marketplace_cache_wizard.resolve_collision",
+        lambda **_kwargs: CollisionResolution(CollisionAction.BOTH, both_dir),
+    )
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="new/plug")
+    plan = plan_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root, mp_name="new"
+    )
+    both_dir.mkdir()
+
+    with pytest.raises(MarketplaceCacheMiss, match="target changed"):
+        validate_marketplace_source_plan(plan)
+
+
+def test_marketplace_plan_source_snapshots_are_detached(tmp_path: Path) -> None:
+    from setforge.claude_marketplace_cache import plan_marketplace_source
+
+    source = MarketplaceSource(
+        source=MarketplaceSourceKind.PATH, path=tmp_path / "before"
+    )
+    plan = plan_marketplace_source(source, ClaudeInstallMode.LOCAL_CLONE)
+
+    source.path = tmp_path / "after"
+    detached = plan.effective_source
+    detached.path = tmp_path / "also-after"
+
+    assert plan.source.path == tmp_path / "before"
+    assert plan.effective_source.path == tmp_path / "before"
+
+
 def testresolve_marketplace_source_local_clone_offline_raises(
     fake_git, tmp_path: Path
 ) -> None:

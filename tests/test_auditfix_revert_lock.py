@@ -164,3 +164,89 @@ def test_to_before_multi_step_revert_holds_lock_before_mutating(
     assert events.index("enter") < events.index("apply"), (
         f"lock must be held before mutating; observed order: {events}"
     )
+
+
+def test_single_revert_refuses_transition_added_during_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newer transition appearing before lock acquisition forces a retry."""
+    cfg, _dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    installed = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert installed.exit_code == 0, installed.output
+
+    import setforge.cli.revert as revert_mod
+
+    selected = revert_mod.transitions.load_latest("vmh")
+    assert selected is not None
+    calls = 0
+
+    def changing_latest(_profile: str):
+        nonlocal calls
+        calls += 1
+        return selected if calls == 1 else None
+
+    monkeypatch.setattr(revert_mod.transitions, "load_latest", changing_latest)
+    monkeypatch.setattr(
+        revert_mod,
+        "_apply_revert",
+        lambda *_args: pytest.fail("stale confirmed transition was applied"),
+    )
+
+    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "transition history changed after confirmation" in str(result.exception)
+
+
+def test_multi_revert_refuses_chain_changed_during_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirmed multi-step chain is re-resolved under both locks."""
+    cfg, _dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    installed = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert installed.exit_code == 0, installed.output
+
+    import setforge.cli.revert as revert_mod
+
+    listings = revert_mod.transitions.list_transitions(
+        profile_filter=["vmh"], reverse=True
+    )
+    assert listings
+    selected = listings[0].directory.name
+    real_resolve = revert_mod._resolve_to_before_chain
+    chain = real_resolve("vmh", selected)
+    calls = 0
+
+    def changing_chain(_profile: str, _target: str):
+        nonlocal calls
+        calls += 1
+        return chain if calls == 1 else []
+
+    monkeypatch.setattr(revert_mod, "_resolve_to_before_chain", changing_chain)
+    monkeypatch.setattr(
+        revert_mod,
+        "_apply_revert",
+        lambda *_args: pytest.fail("stale confirmed chain was applied"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={selected}",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "transition history changed after confirmation" in str(result.exception)

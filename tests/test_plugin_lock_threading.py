@@ -136,6 +136,22 @@ def test_apply_one_pins_cache_before_install(tmp_path: Path) -> None:
     assert order == [f"checkout:{_SHA}", "install"]
 
 
+def test_provisioner_detaches_checkout_mapping(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "mp"
+    checkouts = {"revdiff@revdiff": (cache_dir, _SHA)}
+    prov = _provisioner(checkouts=checkouts)
+    checkouts.clear()
+
+    with (
+        patch(_CHECKOUT) as checkout,
+        patch(_PLUGIN_INSTALL),
+        patch(_PLUGIN_ENABLE),
+    ):
+        prov.apply_one(_item("revdiff@revdiff"))
+
+    checkout.assert_called_once_with(cache_dir, _SHA)
+
+
 def test_apply_one_no_checkout_target_installs_unchanged() -> None:
     prov = _provisioner(checkouts={})
     with (
@@ -273,6 +289,32 @@ def test_checkout_targets_skip_path_marketplace(tmp_path: Path) -> None:
         )
         == {}
     )
+
+
+def test_checkout_targets_use_planned_both_collision_path(tmp_path: Path) -> None:
+    cfg = _make_config(
+        marketplaces={
+            "revdiff": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="new/revdiff"
+            )
+        },
+        claude_plugins={"revdiff": ClaudePluginRef(marketplace="revdiff")},
+    )
+    selected = tmp_path / "cache" / "revdiff-new"
+    targets = _plugin_checkout_targets(
+        cfg,
+        {"revdiff@revdiff"},
+        {"revdiff@revdiff": _plugin_pin("revdiff@revdiff")},
+        ClaudeInstallMode.LOCAL_CLONE,
+        tmp_path / "cache",
+        effective_sources={
+            "revdiff": MarketplaceSource(
+                source=MarketplaceSourceKind.PATH, path=selected
+            )
+        },
+    )
+
+    assert targets["revdiff@revdiff"][0] == selected
 
 
 def test_reconcile_threads_pins_into_checkout(monkeypatch, tmp_path: Path) -> None:

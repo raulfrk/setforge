@@ -15,7 +15,11 @@ import pytest
 
 from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
-from setforge.errors import ExtensionToolMissing, ProfileNotFound
+from setforge.errors import (
+    ExtensionInstallFailed,
+    ExtensionToolMissing,
+    ProfileNotFound,
+)
 from setforge.overlay_provenance import OverlayOrigin, ResolvedExtension
 from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.vscode_extensions import (
@@ -105,6 +109,74 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], FakeCode
 def test_list_installed_parses_lines(fake_code) -> None:
     fake_code(["a.x", "b.y", "c.z"])
     assert list_installed() == {"a.x", "b.y", "c.z"}
+
+
+def test_apply_plan_does_not_relist_or_replan(fake_code) -> None:
+    fake = fake_code([])
+    plan = vscode_extensions.plan_reconcile(
+        Extensions(include=["a.x"], reconcile=ReconcilePolicy.ADDITIVE)
+    )
+    list_calls = sum(call[1] == "--list-extensions" for call in fake.calls)
+
+    vscode_extensions.apply_plan(plan)
+
+    assert sum(call[1] == "--list-extensions" for call in fake.calls) == list_calls + 1
+    assert fake.install_args == ["a.x"]
+
+
+@pytest.mark.parametrize(
+    ("policy", "dry_run"),
+    [
+        (ReconcilePolicy.REPORT, False),
+        (ReconcilePolicy.ADDITIVE, True),
+    ],
+)
+def test_precomputed_report_or_dry_run_never_applies(
+    fake_code, policy: ReconcilePolicy, dry_run: bool
+) -> None:
+    fake = fake_code([])
+    ext = Extensions(include=["a.x"], reconcile=policy)
+    plan = vscode_extensions.plan_reconcile(ext)
+
+    report = vscode_extensions.reconcile(ext, dry_run=dry_run, plan=plan)
+
+    assert report.to_install == ["a.x"]
+    assert fake.install_args == []
+
+
+def test_apply_prune_plan_refuses_inventory_drift(fake_code) -> None:
+    fake = fake_code(["old.x"])
+    plan = vscode_extensions.plan_reconcile(
+        Extensions(include=["new.x"], reconcile=ReconcilePolicy.PRUNE)
+    )
+    fake.installed.append("appeared.later")
+
+    with pytest.raises(ExtensionInstallFailed, match="inventory changed"):
+        vscode_extensions.apply_plan(plan)
+
+    assert fake.uninstall_args == []
+    assert "appeared.later" in fake.installed
+
+
+def test_apply_prune_plan_records_uninstall_failure(
+    fake_code, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = fake_code(["old.x"])
+    plan = vscode_extensions.plan_reconcile(
+        Extensions(include=[], reconcile=ReconcilePolicy.PRUNE)
+    )
+    original_run = fake.run
+
+    def _fail_uninstall(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if args[1] == "--uninstall-extension":
+            raise subprocess.CalledProcessError(1, args, stderr="busy")
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(vscode_extensions.subprocess, "run", _fail_uninstall)
+
+    report = vscode_extensions.apply_plan(plan)
+
+    assert report.failed == [("old.x", "busy")]
 
 
 def test_list_installed_skips_blank_lines(fake_code) -> None:

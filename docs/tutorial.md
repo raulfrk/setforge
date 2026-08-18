@@ -195,12 +195,25 @@ $ setforge install --profile=default --dry-run
 profile default
   tracked_files:  2
   extensions:     0 declared (0 excluded)
-  claude_plugins: 0
+  plugins:        0
+  mcp_servers:    0
 === would-be drift gate ===
 unexpected drift in 0 file(s)
+=== would-be secrets gate ===
+  scanned 2 file(s); 0 finding(s) require a decision
 === would-be deploy ===
   WOULD install   ~/.config/sample/gitconfig
   WOULD install   ~/.config/sample/notes.md
+=== would-be host-local section inject ===
+  no host-local sections to inject
+=== would-be plugin reconcile ===
+  nothing declared
+=== would-be extension reconcile ===
+  nothing declared
+=== would-be MCP server reconcile ===
+  nothing to reconcile
+=== would-be package provision ===
+  nothing to provision
 === would-be transition record ===
   WOULD record  ~/.local/state/setforge/transitions/20260615T083757Z-install-default
 === rerun without --dry-run to apply for real ===

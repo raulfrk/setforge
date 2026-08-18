@@ -20,6 +20,7 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
+import stat
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -59,6 +60,7 @@ from setforge.cli._helpers import (
     _refuse_duplicate_section_names,
     _resolve_drift_paths,
 )
+from setforge.cli._mcp_helpers import MCPInstallPlan
 from setforge.cli._provision_helpers import dry_run_packages
 from setforge.compare import (
     CompareStatus,
@@ -79,6 +81,7 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
+from setforge.provision.dispatch import ProvisioningPlan
 from setforge.reconcile import FileId
 from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
@@ -86,6 +89,7 @@ from setforge.reconcile.conflict_choices import (
 )
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
+from setforge.secrets import SecretsScanResult
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -193,7 +197,9 @@ def _want_interactive_reconcile(
 def _deploy_all_tracked_files(
     ctx: ProfileContext,
     *,
-    host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
+    host_local_sections_map: Mapping[
+        str, Mapping[HostLocalSectionName, HostLocalSection]
+    ],
     section_auto: reconcile_apply.ReconcileAuto | None = None,
     interactive: bool = False,
 ) -> DeployOutcome:
@@ -244,7 +250,25 @@ def _deploy_all_tracked_files(
     write. False (non-interactive / non-tty / ``--auto``) leaves the bare
     warn-and-defer behavior unchanged.
     """
-    profile = ctx.profile
+    pending = _plan_tracked_files(
+        ctx,
+        host_local_sections_map=host_local_sections_map,
+        section_auto=section_auto,
+        interactive=interactive,
+    )
+    return _apply_tracked_file_plan(ctx.profile, pending)
+
+
+def _plan_tracked_files(
+    ctx: ProfileContext,
+    *,
+    host_local_sections_map: Mapping[
+        str, Mapping[HostLocalSectionName, HostLocalSection]
+    ],
+    section_auto: reconcile_apply.ReconcileAuto | None = None,
+    interactive: bool = False,
+) -> tuple[_PendingDeploy, ...]:
+    """Resolve the complete tracked-file write set without mutating it."""
     pending: list[_PendingDeploy] = []
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
@@ -253,18 +277,52 @@ def _deploy_all_tracked_files(
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             warn_if_dst_outside_home(tracked_file, sub_dst)
-            pending.append(
-                _resolve_one_pending(
-                    profile,
-                    sub_name,
-                    sub_src,
-                    sub_dst,
-                    tracked_file,
-                    host_local=host_local,
-                    section_auto=section_auto,
-                    interactive=interactive,
-                )
+            record = _resolve_one_pending(
+                ctx.profile,
+                sub_name,
+                sub_src,
+                sub_dst,
+                tracked_file,
+                host_local=host_local,
+                section_auto=section_auto,
+                interactive=interactive,
             )
+            pending.append(
+                replace(record, preview_action=_planned_deploy_action(record))
+            )
+    return tuple(pending)
+
+
+def _planned_deploy_action(record: _PendingDeploy) -> deploy.DeployAction | None:
+    """Classify a regular-file plan exactly once; symlinks use compare fallback."""
+    if record.tracked_file.symlink is not None:
+        return None
+    assert record.resolved is not None
+    if (
+        record.reconcile is not None
+        and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
+    ):
+        return deploy.DeployAction.REMOVED
+    if not record.resolved.dst_existed:
+        if (
+            record.reconcile is not None
+            and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
+        ):
+            return deploy.DeployAction.NOOP
+        return deploy.DeployAction.CREATED
+    if record.resolved.real_dst.read_text(encoding="utf-8") != record.resolved.content:
+        return deploy.DeployAction.UPDATED
+    live_mode = stat.S_IMODE(record.resolved.real_dst.stat().st_mode)
+    expected_mode = record.resolved.effective_mode
+    if expected_mode is not None and live_mode != expected_mode:
+        return deploy.DeployAction.UPDATED
+    return deploy.DeployAction.NOOP
+
+
+def _apply_tracked_file_plan(
+    profile: str, pending: tuple[_PendingDeploy, ...]
+) -> DeployOutcome:
+    """Apply the exact records returned by :func:`_plan_tracked_files`."""
     return _execute_pending_deploys(profile, pending)
 
 
@@ -494,7 +552,7 @@ def _resolve_one_pending(
     sub_dst: Path,
     tracked_file: TrackedFile,
     *,
-    host_local: dict[HostLocalSectionName, HostLocalSection] | None,
+    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
 ) -> _PendingDeploy:
@@ -507,9 +565,9 @@ def _resolve_one_pending(
     classify falls back to a verbatim tracked deploy.
     """
     if tracked_file.symlink is not None:
-        # Symlink-deployed: deferred wholesale to pass 2
-        # (resolved=None). The link lands at ``sub_dst`` and the
-        # tracked content lands at
+        # Symlink-deployed: freeze content/mode now and defer only the writes
+        # to pass 2 (resolved=None). The link lands at ``sub_dst`` and the
+        # frozen tracked content lands at
         # ``Path(tracked_file.symlink).expanduser()``. The stored base
         # lifecycle is regular-file-only — never wired here.
         return _PendingDeploy(
@@ -519,6 +577,12 @@ def _resolve_one_pending(
             tracked_file=tracked_file,
             host_local=host_local,
             resolved=None,
+            symlink_content=sub_src.read_text(encoding="utf-8"),
+            symlink_mode=(
+                tracked_file.mode
+                if tracked_file.mode is not None
+                else stat.S_IMODE(sub_src.stat().st_mode)
+            ),
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
     # (a local edit merges against the recorded base rather than being silently
@@ -569,23 +633,25 @@ class _PendingDeploy:
     """One pass-1 resolution awaiting its pass-2 write.
 
     ``resolved`` is the in-memory :class:`deploy.ResolvedDeploy` for a
-    regular-file deploy, or ``None`` for a symlink-declared tracked_file
-    (deferred wholesale — pass 2 runs :func:`deploy.deploy_symlinked_file`
-    end to end).
+    regular-file deploy. Symlink records instead retain the planned source
+    text and effective mode, so pass 2 never rereads a mutable checkout.
     """
 
     sub_name: str
     sub_src: Path
     sub_dst: Path
     tracked_file: TrackedFile
-    host_local: dict[HostLocalSectionName, HostLocalSection] | None
+    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None
     resolved: deploy.ResolvedDeploy | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
+    preview_action: deploy.DeployAction | None = None
+    symlink_content: str | None = None
+    symlink_mode: int | None = None
 
 
 def _capture_store_snapshots(
     profile: str,
-    pending: list[_PendingDeploy],
+    pending: tuple[_PendingDeploy, ...],
 ) -> tuple[transitions.StateSnapshotEntry, ...]:
     """Snapshot the pre-install state of every store entry pass 2 can touch.
 
@@ -661,7 +727,7 @@ class DeployOutcome:
 
 def _execute_pending_deploys(
     profile: str,
-    pending: list[_PendingDeploy],
+    pending: tuple[_PendingDeploy, ...],
 ) -> DeployOutcome:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
@@ -672,7 +738,8 @@ def _execute_pending_deploys(
     record: apply the deferred base-migration writes (seed-first order +
     the one-time warning) → write the resolved content via
     :func:`deploy.write_resolved_deploy` (or run
-    :func:`deploy.deploy_symlinked_file` for a symlink record) → echo the
+    :func:`deploy.deploy_symlinked_file` with its frozen source snapshot for a
+    symlink record) → echo the
     action → advance the disposition byte base → advance the spans sidecar,
     in lockstep per file. Each write whose :class:`deploy.DeployResult`
     reports a ``prior_mode`` (the live mode it overwrote) records that mode
@@ -694,11 +761,7 @@ def _execute_pending_deploys(
     for record in pending:
         tracked_file = record.tracked_file
         if tracked_file.symlink is not None:
-            result = deploy.deploy_symlinked_file(
-                record.sub_src,
-                record.sub_dst,
-                tracked_file,
-            )
+            result = _deploy_pending_symlink(record)
             typer.echo(
                 f"{result.action.value:>8}  {record.sub_dst} -> {tracked_file.symlink}"
             )
@@ -757,6 +820,19 @@ def _execute_pending_deploys(
     )
 
 
+def _deploy_pending_symlink(record: _PendingDeploy) -> deploy.DeployResult:
+    """Apply one symlink record exclusively from its frozen source snapshot."""
+    if record.symlink_content is None or record.symlink_mode is None:
+        raise AssertionError("symlink pending deploy lacks frozen source")
+    return deploy.deploy_symlinked_file(
+        record.sub_src,
+        record.sub_dst,
+        record.tracked_file,
+        source_content=record.symlink_content,
+        source_mode=record.symlink_mode,
+    )
+
+
 def _prune_bases_removed_any(profile: str, base_keep_ids: set[str]) -> bool:
     """Prune outside ``base_keep_ids``; read ids first so a real drop is known."""
     before = base_store.list_base_ids(profile)
@@ -803,7 +879,7 @@ def _honor_reconcile_removal(record: _PendingDeploy) -> None:
 
 
 def _echo_host_local_sections_provenance(
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
+    host_local_sections: Mapping[HostLocalSectionName, HostLocalSection] | None,
 ) -> None:
     """Print a per-section ``injected ... <HOST_LOCAL_PROVENANCE_TAG>`` line.
 
@@ -1073,12 +1149,9 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 # ---------------------------------------------------------------------------
 # Dry-run pipeline.
 #
-# ``_dry_run_pipeline`` is the orchestrator-level branch entered when
-# ``setforge install --dry-run`` is invoked. It reuses every read-only
-# helper the real pipeline calls (``compare_mod.compare_profile``,
-# ``claude_plugins.reconcile(dry_run=True)``,
-# ``vscode_extensions.reconcile(dry_run=True)``) and emits ``WOULD ``-
-# prefixed lines for every mutating verb the real pipeline would invoke.
+# ``_dry_run_pipeline`` renders the immutable plan built by install. Optional
+# arguments preserve the internal compatibility seam used by the welcome flow
+# and focused helper tests; normal CLI dry-runs supply every planned component.
 #
 # Anti-pattern guards (per spec SPEC 4):
 #
@@ -1089,10 +1162,8 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 #   (``deploy.bootstrap_local`` / ``transitions.ensure_state_dir_writable`` /
 #   ``transitions.write_transition`` / ``secrets_mod.append_to_allowlist``
 #   are all unreachable).
-# - No new ``_simulate_*`` / ``_dry_*`` diff-or-merge function: every
-#   compute step here delegates to the same shared helpers the real
-#   pipeline uses, so a future change to the diff algorithm reflects
-#   in dry-run output automatically.
+# - No parallel diff or merge implementation: planned deploy records and the
+#   shared compare report are the preview inputs.
 # - WOULD only on mutating verbs (``deploy`` / ``inject`` / ``install`` /
 #   ``uninstall`` / ``enable`` / ``disable``); section headers and read
 #   counts go unprefixed.
@@ -1115,37 +1186,71 @@ updating the spec + every consumer."""
 def _dry_run_pipeline(
     *,
     ctx: ProfileContext,
+    drift_report: compare_mod.CompareReport | None = None,
+    deploys: tuple[_PendingDeploy, ...] | None = None,
+    provisioning: ProvisioningPlan | None = None,
+    mcp: MCPInstallPlan | None = None,
+    extensions: vscode_extensions_mod.ExtensionPlan | None = None,
+    plugins: claude_plugins_mod.PluginPlan | None = None,
+    immutable_plan: bool = False,
+    secrets_scan: SecretsScanResult | None = None,
+    host_local_sections_map: Mapping[
+        str, Mapping[HostLocalSectionName, HostLocalSection]
+    ]
+    | None = None,
 ) -> None:
     """Simulate every install phase without mutating filesystem or state.
 
     Called from :func:`setforge.cli.install.install` when ``--dry-run``
-    is set. Walks the install phases the real pipeline performs (profile
-    resolve, host overlay, drift gate, file deploys, plugin reconcile,
-    extension reconcile, transition record) and prints a ``WOULD
-    ``-prefixed action line per mutating verb. Calls only read-only
-    helpers; never writes files, never touches the transition state dir,
-    never invokes the auto-confirm confirm wizard, never runs git fetch
-    (the source-layer git check runs BEFORE this function but is itself
-    read-only).
+    is set. It prints every planned phase and a ``WOULD`` line per mutating
+    action. It never writes files, touches transition state, or invokes a
+    confirmation wizard. Source acquisition is owned by the caller; dry-run
+    announces a Git fetch but does not perform it.
     """
     typer.echo(_DRY_RUN_HEADER)
     _dry_run_emit_profile_summary(ctx)
     # NOT profile_lock'd: acquiring it would create the lock file, a dry-run mutation.
-    host_local_sections_map = _load_validated_host_local_sections(
-        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
-    )
-    drift_report = compare_mod.compare_profile(
-        ctx.cfg,
-        ctx.profile,
-        ctx.repo_root,
-        host_local_sections=host_local_sections_map,
-    )
+    if host_local_sections_map is None:
+        host_local_sections_map = _load_validated_host_local_sections(
+            ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
+        )
+    if drift_report is None:
+        drift_report = compare_mod.compare_profile(
+            ctx.cfg,
+            ctx.profile,
+            ctx.repo_root,
+            host_local_sections={
+                name: dict(sections)
+                for name, sections in host_local_sections_map.items()
+            },
+        )
+    if deploys is not None and len(deploys) != len(drift_report.entries):
+        raise SetforgeError(
+            "dry-run: immutable deploy plan does not match the drift report"
+        )
     _dry_run_emit_drift_gate(drift_report)
-    _dry_run_emit_deploys(ctx, drift_report)
-    _dry_run_emit_host_local_inject(ctx)
-    _dry_run_emit_plugin_reconcile(ctx)
-    _dry_run_emit_extension_reconcile(ctx)
-    dry_run_packages(ctx.cfg, ctx.resolved)
+    typer.echo("=== would-be secrets gate ===")
+    if secrets_scan is None:
+        typer.echo("  not scanned")
+    else:
+        typer.echo(
+            f"  scanned {secrets_scan.files_scanned} file(s); "
+            f"{len(secrets_scan.findings)} finding(s) require a decision"
+        )
+    _dry_run_emit_deploys(ctx, drift_report, deploys=deploys)
+    _dry_run_emit_host_local_inject(ctx, overlay=host_local_sections_map)
+    _dry_run_emit_plugin_reconcile(ctx, plan=plugins, planned=immutable_plan)
+    _dry_run_emit_extension_reconcile(ctx, plan=extensions, planned=immutable_plan)
+    typer.echo("=== would-be MCP server reconcile ===")
+    if mcp is None or mcp.value is None:
+        typer.echo("  skipped (MCP tool unavailable)")
+    elif not mcp.value.entries:
+        typer.echo("  nothing to reconcile")
+    else:
+        for entry in mcp.value.entries:
+            verb = "add" if entry.prior is None else "update"
+            typer.echo(f"  WOULD {verb:<7} {entry.name}")
+    dry_run_packages(ctx.cfg, ctx.resolved, plan=provisioning)
     _dry_run_emit_transition_path(ctx)
     typer.echo(_DRY_RUN_FINAL_LINE)
 
@@ -1207,7 +1312,10 @@ def _dry_run_emit_drift_gate(
 
 
 def _dry_run_emit_deploys(
-    ctx: ProfileContext, drift_report: compare_mod.CompareReport
+    ctx: ProfileContext,
+    drift_report: compare_mod.CompareReport,
+    *,
+    deploys: tuple[_PendingDeploy, ...] | None = None,
 ) -> None:
     """Emit the ``=== would-be deploy ===`` block.
 
@@ -1234,9 +1342,19 @@ def _dry_run_emit_deploys(
             f"compare report length ({len(drift_report.entries)}); refusing "
             f"to render a deploy preview against an inconsistent join"
         )
-    for (_tracked, _sub_name, _sub_src, sub_dst), entry in zip(
-        walk, drift_report.entries, strict=True
+    planned = deploys if deploys is not None else (None,) * len(walk)
+    for (_tracked, _sub_name, _sub_src, sub_dst), entry, record in zip(
+        walk, drift_report.entries, planned, strict=True
     ):
+        if record is not None and record.preview_action is not None:
+            verb = {
+                deploy.DeployAction.CREATED: "install",
+                deploy.DeployAction.UPDATED: "update",
+                deploy.DeployAction.NOOP: "noop",
+                deploy.DeployAction.REMOVED: "remove",
+            }[record.preview_action]
+            typer.echo(f"  WOULD {verb:<9} {sub_dst}")
+            continue
         match entry.status:
             case CompareStatus.MISSING:
                 typer.echo(f"  WOULD install   {sub_dst}")
@@ -1252,7 +1370,12 @@ def _dry_run_emit_deploys(
             typer.echo(f"  WOULD bootstrap {path}")
 
 
-def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
+def _dry_run_emit_host_local_inject(
+    ctx: ProfileContext,
+    *,
+    overlay: Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]]
+    | None = None,
+) -> None:
     """Emit the ``=== would-be host-local section inject ===`` block.
 
     Per SPEC 1's mockup, each ``WOULD inject`` line carries
@@ -1261,7 +1384,8 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     declares no host-local sections for tracked_files in this profile.
     """
     typer.echo("=== would-be host-local section inject ===")
-    overlay = host_local_sections_from_store(ctx.profile)
+    if overlay is None:
+        overlay = host_local_sections_from_store(ctx.profile)
     profile_ids = set(ctx.resolved.tracked_files)
     matched: list[tuple[str, HostLocalSectionName, Path]] = []
     for tf_id, sections_map in overlay.items():
@@ -1280,7 +1404,12 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
         )
 
 
-def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
+def _dry_run_emit_plugin_reconcile(
+    ctx: ProfileContext,
+    *,
+    plan: claude_plugins_mod.PluginPlan | None = None,
+    planned: bool = False,
+) -> None:
     """Emit the ``=== would-be plugin reconcile ===`` block.
 
     Reuses :func:`setforge.claude_plugins.reconcile` with
@@ -1300,12 +1429,28 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     if not reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved):
         typer.echo("  nothing declared")
         return
+    if planned and plan is None:
+        typer.echo("  skipped (plugin tool unavailable)")
+        return
     try:
-        report = claude_plugins_mod.reconcile(
-            ctx.cfg,
-            declared_plugin_ids=reconcile_adapter.plugin_ids(ctx.cfg, ctx.resolved),
-            policy=reconcile_adapter.plugin_policy(ctx.resolved),
-            dry_run=True,
+        report = (
+            claude_plugins_mod.ReconcileReport(
+                to_install=[
+                    (pid.partition("@")[0], pid.partition("@")[2])
+                    for pid in plan.to_install
+                ],
+                to_enable=list(plan.to_enable),
+                to_disable=list(plan.to_disable),
+                marketplaces_added=list(plan.marketplaces_added),
+                dry_run=True,
+            )
+            if plan is not None
+            else claude_plugins_mod.reconcile(
+                ctx.cfg,
+                declared_plugin_ids=reconcile_adapter.plugin_ids(ctx.cfg, ctx.resolved),
+                policy=reconcile_adapter.plugin_policy(ctx.resolved),
+                dry_run=True,
+            )
         )
     except PluginToolMissing as exc:
         typer.echo(f"  skipped (plugin tool unavailable: {exc})")
@@ -1327,7 +1472,12 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
         typer.echo("  nothing to reconcile")
 
 
-def _dry_run_emit_extension_reconcile(ctx: ProfileContext) -> None:
+def _dry_run_emit_extension_reconcile(
+    ctx: ProfileContext,
+    *,
+    plan: vscode_extensions_mod.ExtensionPlan | None = None,
+    planned: bool = False,
+) -> None:
     """Emit the ``=== would-be extension reconcile ===`` block.
 
     Reuses :func:`setforge.vscode_extensions.reconcile` with
@@ -1345,8 +1495,20 @@ def _dry_run_emit_extension_reconcile(ctx: ProfileContext) -> None:
     if not (ext.include or ext.exclude):
         typer.echo("  nothing declared")
         return
+    if planned and plan is None:
+        typer.echo("  skipped (extension tool unavailable)")
+        return
     try:
-        report = vscode_extensions_mod.reconcile(ext, dry_run=True)
+        report = (
+            vscode_extensions_mod.ReconcileReport(
+                policy=plan.policy,
+                to_install=list(plan.to_install),
+                to_uninstall=list(plan.to_uninstall),
+                dry_run=True,
+            )
+            if plan is not None
+            else vscode_extensions_mod.reconcile(ext, dry_run=True)
+        )
     except ExtensionToolMissing as exc:
         typer.echo(f"  skipped (extension tool unavailable: {exc})")
         return
