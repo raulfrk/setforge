@@ -48,11 +48,11 @@ def test_config_completion_path_works(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY: shell tab-completion on ``setforge config add --local <TAB>``.
+    """PTY: shell tab-completion on ``setforge config add --local <TAB><TAB>``.
 
     Spawns an interactive zsh inside the container, sources the
     ``setforge --show-completion zsh`` script, types
-    ``setforge config add --local `` and presses TAB, then asserts a
+    ``setforge config add --local `` and presses TAB twice, then asserts a
     known schema-derived dotted-path candidate (``source.kind``)
     appears in the rendered completion menu. Exercises the END-TO-END
     shell-completion path (typer's completion machinery → setforge's
@@ -92,7 +92,9 @@ def test_config_completion_path_works(
         'eval "$(setforge --show-completion zsh)" 2>/dev/null && echo DONE_EVAL\r'
     )
     session.expect_in_display("DONE_EVAL", timeout=30)
-    session.send_keys("setforge config add --local \t")
+    # zsh's first TAB may only recognize an ambiguous completion; the second
+    # requests the candidate list deterministically across interactive hosts.
+    session.send_keys("setforge config add --local \t\t")
     session.expect_in_display("source.kind", timeout=15)
     # Multi-candidate: a second schema-derived dotted path must also render,
     # proving the completion menu actually enumerated the schema rather than a
