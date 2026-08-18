@@ -120,8 +120,7 @@ def test_install_applies_host_local_mode_chmod(
 def test_install_applies_host_local_dst_retarget(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``local.yaml`` declares ``dst: /home/tester/.overlay-fields-alt/hook.sh``;
-    install lands content there instead of the profile-side dst."""
+    """Install and downstream command families share the retargeted path."""
     c = docker_container()
     _bootstrap(c)
     retarget_dst = "/home/tester/.overlay-fields-alt/hook.sh"
@@ -139,6 +138,79 @@ def test_install_applies_host_local_dst_retarget(
     assert body.startswith("#!/bin/sh")
     missing = c.exec(["test", "-e", _DEFAULT_DST], check=False)
     assert missing.returncode != 0, "profile-side dst should not have been written"
+
+    inspect = _setforge(
+        c,
+        [
+            "inspect",
+            retarget_dst,
+            "--profile=test-overlay-fields",
+            f"--config={_CFG}",
+        ],
+    )
+    assert inspect.returncode == 0, inspect.stdout + inspect.stderr
+    assert retarget_dst in inspect.stdout.replace("\n", "")
+
+    status = _setforge(
+        c,
+        [
+            "--source",
+            _WORKDIR,
+            "status",
+            "--profile=test-overlay-fields",
+            f"--config={_CFG}",
+        ],
+    )
+    assert status.returncode == 0, status.stdout + status.stderr
+    assert "drift:          0 drifted" in status.stdout
+
+    stage = _setforge(
+        c,
+        ["stage", "--list", "--profile=test-overlay-fields", f"--config={_CFG}"],
+    )
+    assert stage.returncode == 0, stage.stdout + stage.stderr
+    assert "hook_script" in stage.stdout
+
+    snapshot = _setforge(
+        c,
+        [
+            "snapshot",
+            "create",
+            "effective-path",
+            "--profile=test-overlay-fields",
+            f"--config={_CFG}",
+        ],
+    )
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    mirrored = c.exec(
+        [
+            "find",
+            "/home/tester/.local/share/setforge/snapshots",
+            "-path",
+            "*/home/tester/.overlay-fields-alt/hook.sh",
+            "-type",
+            "f",
+        ],
+        check=True,
+    )
+    assert mirrored.stdout.strip(), "snapshot omitted the host-local destination"
+
+    cleanup = _setforge(
+        c,
+        [
+            "cleanup-orphans",
+            "--profile=test-overlay-fields",
+            f"--config={_CFG}",
+            "--apply",
+            "--yes",
+        ],
+    )
+    assert cleanup.returncode == 0, cleanup.stdout + cleanup.stderr
+    assert "=== no orphans ===" in cleanup.stderr
+    still_active = c.exec(["test", "-f", retarget_dst], check=False)
+    assert still_active.returncode == 0, (
+        "cleanup-orphans deleted the effective host-local destination"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -85,11 +85,54 @@ def test_read_only_commands_do_not_bootstrap_local_config(
     result = env.run_verb(
         argv, inject_config=inject_config, inject_profile=inject_profile
     )
-
     assert result.exit_code == expected_exit, result.output
     assert not env.local_config.parent.exists(), (
         f"read-only command created {env.local_config.parent}: {' '.join(argv)}"
     )
+
+
+def test_command_families_share_host_local_destination(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Install, inspect, status, stage, and snapshot see the same live path."""
+    from setforge import snapshots
+    from setforge.cli import status as status_cli
+
+    env = integration_env(tracked={"note": ("text/note.txt", "hello\n")})
+    alternate = env.home / "host-local" / "note.txt"
+    env.local_config.parent.mkdir(parents=True)
+    env.local_config.write_text(
+        f"tracked_files:\n  note:\n    dst: {alternate}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SETFORGE_SOURCE", str(env.repo))
+    monkeypatch.setattr(snapshots, "LOCAL_CONFIG_PATH", env.local_config)
+    monkeypatch.setattr(status_cli, "LOCAL_CONFIG_PATH", env.local_config)
+
+    install = env.run_verb(["install", "--yes", "--no-git-check", "--no-secrets-scan"])
+    assert install.exit_code == 0, install.output
+    assert alternate.read_text(encoding="utf-8") == "hello\n"
+    assert not env.live(".setforge_it/text/note.txt").exists()
+
+    inspect = env.run_verb(["inspect", str(alternate)])
+    assert inspect.exit_code == 0, inspect.output
+    assert str(alternate) in inspect.output.replace("\n", "")
+
+    status = env.run_verb(["status"])
+    assert status.exit_code == 0, status.output
+    assert "drift:          0 drifted" in status.output
+
+    stage = env.run_verb(["stage", "--list"])
+    assert stage.exit_code == 0, stage.output
+    assert "note" in stage.output
+
+    snapshot = env.run_verb(["snapshot", "create", "effective-path"])
+    assert snapshot.exit_code == 0, snapshot.output
+    metas = snapshots.list_snapshots()
+    assert len(metas) == 1
+    assert alternate in metas[0].files
 
 
 class TestInstall:
@@ -311,6 +354,45 @@ class TestPlugin:
         # Absence of per-row tokens pins the empty-union branch, not the table branch.
         for status_token in ("enabled", "missing-from-install", "missing-from-decl"):
             assert status_token not in result.output, result.output
+
+    def test_plugin_and_extension_lists_include_host_overlay(
+        self,
+        integration_env: Callable[..., IntegrationEnv],
+        integration_subprocess,
+    ) -> None:
+        """Direct adapter commands consume the same host-local package set."""
+        env = integration_env()
+        env.local_config.parent.mkdir(parents=True)
+        env.local_config.write_text(
+            """\
+marketplaces:
+  add:
+    local-tools:
+      source: github
+      repo: example/tools
+plugins:
+  add: [helper@local-tools]
+extensions:
+  add: [example.helper]
+""",
+            encoding="utf-8",
+        )
+
+        plugins = env.run_verb(["plugin", "list"])
+        assert plugins.exit_code == 0, plugins.output
+        assert "helper" in plugins.output
+        assert "missing-from-install" in plugins.output
+
+        extensions = env.run_verb(["ext", "list"])
+        assert extensions.exit_code == 0, extensions.output
+        assert "example.helper" in extensions.output
+        assert "include" in extensions.output
+
+        profile = env.run_verb(["profile", "show", env.profile], inject_profile=False)
+        assert profile.exit_code == 0, profile.output
+        for effective_value in ("helper", "example.helper", "local-tools"):
+            assert effective_value in profile.output
+        assert profile.output.count("[from local.yaml]") == 3
 
 
 class TestFetch:

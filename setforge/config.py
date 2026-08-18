@@ -1716,6 +1716,24 @@ class LocalOverlayResolution:
     marketplaces: list["ResolvedMarketplace"]
 
 
+@dataclass(frozen=True, slots=True)
+class EffectiveProfileResolution:
+    """One command's fully resolved shared + host-local profile state.
+
+    ``resolved`` includes profile inheritance and expanded bundle-file
+    components. ``tracked_file_overrides`` records the host-local path/mode/
+    symlink overlays applied to :class:`Config.tracked_files`, while
+    ``local_overlay`` records the plugin/extension/marketplace overlays applied
+    to both ``config`` and ``resolved``. Keeping these outputs together makes
+    command entry points consume one resolution order instead of independently
+    assembling subtly different effective profiles.
+    """
+
+    resolved: ResolvedProfile
+    tracked_file_overrides: dict[str, HostLocalTrackedFileOverride]
+    local_overlay: LocalOverlayResolution
+
+
 def _load_overlay_blocks(
     local_config_path: Path | None,
 ) -> tuple["PluginOverlay", "ExtensionOverlay", "MarketplaceOverlay"]:
@@ -1723,8 +1741,8 @@ def _load_overlay_blocks(
 
     Lazy-imports :mod:`setforge.source` to dodge the config <-> source
     cycle and keep this path off the import-time graph for every
-    command (compare / install / sync etc. each import
-    :mod:`setforge.config` at boot). Returns the three overlay structs
+    command (all profile-aware commands import :mod:`setforge.config` at
+    boot). Returns the three overlay structs
     (plugins, extensions, marketplaces) — each is a typed Pydantic
     model with ``.add`` / ``.remove`` lists or mappings.
 
@@ -1832,6 +1850,44 @@ def apply_local_overlay(
         plugins=resolved_plugins,
         extensions=resolved_extensions,
         marketplaces=resolved_marketplaces,
+    )
+
+
+def resolve_effective_profile(
+    config: Config,
+    profile_name: str,
+    repo_root: Path,
+    *,
+    local_config_path: Path | None = None,
+) -> EffectiveProfileResolution:
+    """Resolve the single effective profile every normal command consumes.
+
+    Resolution order is load-bearing:
+
+    1. merge profile inheritance and expand bundle-file components;
+    2. apply host-local tracked-file ``dst`` / ``mode`` / symlink overrides;
+    3. apply host-local plugin / extension / marketplace overlays.
+
+    Bundle expansion must precede tracked-file overlays so a host may override a
+    synthetic bundle-file id. All operations mutate ``config`` and ``resolved``
+    exactly once and return their provenance alongside the resolved profile.
+    Validation keeps its report-all resolver because it must aggregate malformed
+    overlay diagnostics instead of failing at the first error.
+    """
+    resolved = resolve_and_expand(config, profile_name, repo_root)
+    tracked_file_overrides = apply_host_local_tracked_file_overrides(
+        config, local_config_path=local_config_path
+    )
+    local_overlay = apply_local_overlay(
+        config,
+        resolved,
+        profile_name,
+        local_config_path=local_config_path,
+    )
+    return EffectiveProfileResolution(
+        resolved=resolved,
+        tracked_file_overrides=tracked_file_overrides,
+        local_overlay=local_overlay,
     )
 
 

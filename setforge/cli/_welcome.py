@@ -37,7 +37,9 @@ from rich.table import Table
 
 from setforge import reconcile_adapter, transitions
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
+from setforge.config import LocalOverlayResolution
 from setforge.errors import InvalidTransitionRecord, WelcomeRequiresInteractive
+from setforge.overlay_provenance import OverlayOrigin
 
 __all__ = [
     "OverlayDelta",
@@ -72,13 +74,9 @@ class OverlayDelta:
     """Counts the local.yaml host-overlay deltas for a profile.
 
     Mockup G calls out six welcome categories — the sixth is "applied
-    local.yaml overlays". Today the host-overlay schema (spec B,
-    preserve_user_keys overlay) is not yet implemented,
-    so every field on a fresh host is zero. The struct is kept distinct
-    from :class:`WelcomeInventory` so the implementation of spec B can
-    populate it without rewriting the inventory contract — only
-    :func:`build_welcome_inventory` would need to learn the overlay
-    accessor at that point.
+    local.yaml overlays". Plugin and extension add/remove counts come from the
+    same effective-profile resolution used by the install. Marker-section
+    overlays are retired, so ``host_local_sections`` remains zero.
     """
 
     plugin_add: int = 0
@@ -161,7 +159,11 @@ def is_fresh_host() -> bool:
     return True
 
 
-def build_welcome_inventory(ctx: ProfileContext) -> WelcomeInventory:
+def build_welcome_inventory(
+    ctx: ProfileContext,
+    *,
+    local_overlay: LocalOverlayResolution | None = None,
+) -> WelcomeInventory:
     """Build the :class:`WelcomeInventory` for ``ctx``'s profile.
 
     Walks ``ctx.resolved.tracked_files`` via
@@ -187,23 +189,32 @@ def build_welcome_inventory(ctx: ProfileContext) -> WelcomeInventory:
             reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved).include
         ),
         bootstrap_count=len(ctx.resolved.bootstrap),
-        overlay_delta=_compute_overlay_delta(ctx),
+        overlay_delta=_compute_overlay_delta(local_overlay),
         profile=ctx.profile,
     )
 
 
-def _compute_overlay_delta(ctx: ProfileContext) -> OverlayDelta:
-    """Return the host-overlay delta for ``ctx``.
-
-    The local.yaml host-overlay schema (spec B: ``preserve_user_keys``
-    add/remove, plugin add/remove, host-local section overrides) is not
-    yet implemented in setforge; every load returns a zero delta. When
-    spec B lands, this helper grows the accessor to the parsed overlay
-    block — the welcome surface contract (a zero-shaped
-    :class:`OverlayDelta`) stays the same.
-    """
-    del ctx  # placeholder until spec B's local.yaml overlay schema lands.
-    return OverlayDelta()
+def _compute_overlay_delta(
+    local_overlay: LocalOverlayResolution | None,
+) -> OverlayDelta:
+    """Return plugin/extension deltas from the effective resolution."""
+    if local_overlay is None:
+        return OverlayDelta()
+    return OverlayDelta(
+        plugin_add=sum(
+            item.origin is OverlayOrigin.LOCAL_ADD for item in local_overlay.plugins
+        ),
+        plugin_remove=sum(
+            item.origin is OverlayOrigin.LOCAL_REMOVE for item in local_overlay.plugins
+        ),
+        extension_add=sum(
+            item.origin is OverlayOrigin.LOCAL_ADD for item in local_overlay.extensions
+        ),
+        extension_remove=sum(
+            item.origin is OverlayOrigin.LOCAL_REMOVE
+            for item in local_overlay.extensions
+        ),
+    )
 
 
 _DOCS_HINT: str = (

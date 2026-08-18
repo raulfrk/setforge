@@ -16,6 +16,7 @@ import pytest
 from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
 from setforge.errors import ExtensionToolMissing, ProfileNotFound
+from setforge.overlay_provenance import OverlayOrigin, ResolvedExtension
 from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.vscode_extensions import (
     ReconcileReport,
@@ -679,6 +680,26 @@ profiles:
     includes = _profile_ext_includes(p, "child")
     assert "keep.me" in includes
     assert "drop.me" not in includes
+
+
+def test_capture_extensions_does_not_leak_host_overlay(
+    tmp_path: Path, fake_code
+) -> None:
+    """Sync reverses local add/remove intent before writing shared includes."""
+    cfg = _write_fixture(tmp_path)
+    fake_code(["a.x", "host.only"])
+    overlay = [
+        ResolvedExtension("host.only", OverlayOrigin.LOCAL_ADD),
+        ResolvedExtension("keep.me", OverlayOrigin.LOCAL_REMOVE),
+    ]
+
+    changed = capture_extensions(cfg, "base", overlay_extensions=overlay)
+
+    assert changed is True
+    includes = _profile_ext_includes(cfg, "base")
+    assert "host.only" not in includes
+    assert "keep.me" in includes
+    assert "a.x" in includes
 
 
 def test_capture_extensions_does_not_touch_exclude(tmp_path: Path, fake_code) -> None:

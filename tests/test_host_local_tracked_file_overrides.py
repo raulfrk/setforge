@@ -3,7 +3,7 @@ overlay resolver.
 
 Validates the semantics of
 :func:`setforge.config.apply_host_local_tracked_file_overrides` — the
-contract that ``compare`` / ``install`` rely on to surface per-host
+contract that every effective-profile command relies on to surface per-host
 chmod / install-path / symlink overrides without rewriting the shared
 ``setforge.yaml``. Companion to the pydantic-shape validator tests in
 :mod:`tests.test_source` (which lock down the parse-time invariants).

@@ -31,7 +31,7 @@ from setforge.cli._help_examples import (
     SNAPSHOT_RESTORE_EXAMPLES,
 )
 from setforge.cli._helpers import ProfileContext
-from setforge.config import load_config, resolve_profile
+from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import SetforgeError
 from setforge.transitions import now_utc as _now_utc
 
@@ -77,7 +77,7 @@ def _build_profile_ctx(profile: str, config: Path) -> ProfileContext:
     resolved_config = _resolve_config_arg(config)
     cfg = load_config(resolved_config)
     repo_root = resolved_config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     return ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

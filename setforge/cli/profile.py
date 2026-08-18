@@ -10,10 +10,9 @@ did this item come from?".
 Read-only: no live mutation, no subprocess, no network.
 :class:`SetforgeError` propagates to ``main()`` for ``exit 1``.
 
-``local.yaml`` overlay surfaces (plugin / marketplaces / extensions
-overrides, host_local_sections, preserve_user_keys overlay diff) are
-not yet implemented; until then the affected blocks print
-:data:`_OVERLAY_PENDING_NOTE` instead of forging false provenance.
+``local.yaml`` tracked-file, plugin, marketplace, and extension overlays are
+included in the effective view. The retired marker-section surface retains a
+placeholder only for compatibility with the existing output shape.
 """
 
 from __future__ import annotations
@@ -32,15 +31,18 @@ from setforge.cli._helpers import ProfileContext
 from setforge.cli._output import OutputContext, render
 from setforge.config import (
     Config,
+    HostLocalTrackedFileOverride,
+    LocalOverlayResolution,
     Profile,
     load_config,
     resolve_chain,
+    resolve_effective_profile,
     resolve_profile,
 )
 from setforge.errors import SetforgeError
+from setforge.overlay_provenance import OverlayOrigin
 
-# Provenance placeholder for surfaces whose overlay machinery has not
-# shipped yet.
+# Compatibility placeholder for the retired marker-section output block.
 _OVERLAY_PENDING_NOTE: str = "(overlay surface not yet implemented)"
 
 
@@ -122,8 +124,9 @@ def _run_profile_show(
         raise SetforgeError(
             f"profile {name!r} not defined in {config}; defined profiles: {defined}"
         )
-    resolved = resolve_profile(cfg, name)
     repo_root = config.resolve().parent
+    effective = resolve_effective_profile(cfg, name, repo_root)
+    resolved = effective.resolved
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=name
     )
@@ -132,12 +135,14 @@ def _run_profile_show(
     def _human() -> None:
         header = _format_show_header(cfg, name)
         console.print(header)
-        _render_tracked_files(profile_ctx, console)
-        _render_plugins(profile_ctx, console)
-        _render_marketplaces(profile_ctx, console)
+        _render_tracked_files(
+            profile_ctx, console, overrides=effective.tracked_file_overrides
+        )
+        _render_plugins(profile_ctx, console, overlay=effective.local_overlay)
+        _render_marketplaces(profile_ctx, console, overlay=effective.local_overlay)
         _render_host_local_sections(profile_ctx, console)
         _render_bootstrap(profile_ctx, console)
-        _render_extensions(profile_ctx, console)
+        _render_extensions(profile_ctx, console, overlay=effective.local_overlay)
 
     render(
         ctx_obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
@@ -152,7 +157,8 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
     extensions, preserve_user_keys) as plain dict/list shapes. Names
     only — provenance tags belong to the human-readable Rich table view
     and are intentionally not part of the v1 JSON envelope; tooling
-    that needs provenance should parse ``setforge.yaml`` directly.
+    that needs provenance should call :func:`resolve_effective_profile` and
+    inspect its shared plus host-local provenance outputs.
     """
     resolved = profile_ctx.resolved
     # The legacy preserve_user_keys model was retired at schema 2.0 (sub-file
@@ -305,7 +311,12 @@ def _chain_resolved_by_name_field(
 # ---------------------------------------------------------------------------
 
 
-def _render_tracked_files(ctx: ProfileContext, console: Console) -> None:
+def _render_tracked_files(
+    ctx: ProfileContext,
+    console: Console,
+    *,
+    overrides: dict[str, HostLocalTrackedFileOverride] | None = None,
+) -> None:
     """Render the ``tracked_files`` table with provenance tags."""
     items = ctx.resolved.tracked_files
     console.print(f"tracked_files ({len(items)} effective):")
@@ -318,13 +329,24 @@ def _render_tracked_files(ctx: ProfileContext, console: Console) -> None:
     table = Table.grid(padding=(0, 2))
     table.add_column(no_wrap=True)
     table.add_column()
+    table.add_column()
     for tf_name in items:
         tag = _tag_provenance(
             tf_name,
             chain_resolved_by_name=chain_by_name,
             leaf_name=ctx.profile,
         )
-        table.add_row(tf_name, tag)
+        override = (overrides or {}).get(tf_name)
+        host_fields: list[str] = []
+        if override is not None:
+            if override.dst is not None:
+                host_fields.append(f"dst={override.dst}")
+            if override.mode is not None:
+                host_fields.append(f"mode={override.mode:#o}")
+            if override.symlink_target is not None:
+                host_fields.append(f"symlink→{override.symlink_target}")
+        host_tag = f"[host-local {' '.join(host_fields)}]" if host_fields else ""
+        table.add_row(tf_name, tag, host_tag)
     console.print(table)
 
 
@@ -349,7 +371,12 @@ def _plugins_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str]]]
     return out
 
 
-def _render_plugins(ctx: ProfileContext, console: Console) -> None:
+def _render_plugins(
+    ctx: ProfileContext,
+    console: Console,
+    *,
+    overlay: LocalOverlayResolution | None = None,
+) -> None:
     """Render the resolved ``claude_plugins`` list with provenance."""
     items = reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
     console.print(f"claude_plugins ({len(items)} effective):")
@@ -357,6 +384,11 @@ def _render_plugins(ctx: ProfileContext, console: Console) -> None:
         console.print("  (none)")
         return
     chain_by_name = _plugins_chain_by_name(ctx.cfg, ctx.profile)
+    local_add = {
+        item.value.split("@", 1)[0]
+        for item in (overlay.plugins if overlay is not None else [])
+        if item.origin is OverlayOrigin.LOCAL_ADD
+    }
     table = Table.grid(padding=(0, 2))
     table.add_column(no_wrap=True)
     table.add_column()
@@ -365,20 +397,23 @@ def _render_plugins(ctx: ProfileContext, console: Console) -> None:
             plugin_name,
             chain_resolved_by_name=chain_by_name,
             leaf_name=ctx.profile,
+            overlay_add=frozenset(local_add),
         )
         table.add_row(plugin_name, tag)
     console.print(table)
 
 
-def _render_marketplaces(ctx: ProfileContext, console: Console) -> None:
+def _render_marketplaces(
+    ctx: ProfileContext,
+    console: Console,
+    *,
+    overlay: LocalOverlayResolution | None = None,
+) -> None:
     """Render the global ``marketplaces:`` mapping.
 
-    Marketplaces live on :class:`Config`, not on :class:`Profile`, so
-    every profile in the file sees the same registry. Provenance per
-    entry is therefore the config file itself; the rendering shows the
-    count and lists the (name, source-kind) pairs without per-entry
-    profile tags. ``local.yaml`` marketplace overrides are not yet
-    implemented.
+    Marketplaces live on :class:`Config`, not on :class:`Profile`, so every
+    profile sees the shared registry plus host-local additions/removals. The
+    effective rows include local-add provenance when applicable.
     """
     items = ctx.cfg.marketplaces
     console.print(f"marketplaces ({len(items)} effective):")
@@ -389,21 +424,29 @@ def _render_marketplaces(ctx: ProfileContext, console: Console) -> None:
     table.add_column(no_wrap=True)
     table.add_column(no_wrap=True)
     table.add_column()
+    table.add_column()
+    local_add = {
+        item.value
+        for item in (overlay.marketplaces if overlay is not None else [])
+        if item.origin is OverlayOrigin.LOCAL_ADD
+    }
     for mp_name, source in items.items():
         target = source.repo if source.repo is not None else str(source.path)
-        table.add_row(mp_name, source.source.value, target)
+        tag = _tag_provenance(
+            mp_name,
+            chain_resolved_by_name=[],
+            leaf_name=ctx.profile,
+            overlay_add=frozenset(local_add),
+        )
+        table.add_row(mp_name, source.source.value, target, tag)
     console.print(table)
-    console.print(f"  {_OVERLAY_PENDING_NOTE}")
 
 
 def _render_host_local_sections(ctx: ProfileContext, console: Console) -> None:
-    """Placeholder section for the upcoming host_local_sections overlay.
+    """Retain the retired marker-section block in the output shape.
 
-    The ``host_local_sections:`` block in ``~/.config/setforge/local.yaml``
-    is sketched as a commented stub in :mod:`setforge.binaries` but has
-    no loader yet; the data shape is not yet implemented. Until
-    then this renderer prints the section title with the pending-overlay
-    note so the user knows the surface is acknowledged but empty.
+    Host-local section bodies now live in the reconcile store rather than the
+    effective profile/local.yaml model, so this compatibility row stays empty.
     """
     del ctx  # No data to read until the loader is implemented.
     console.print("host_local_sections (0 effective):")
@@ -434,7 +477,12 @@ def _render_bootstrap(ctx: ProfileContext, console: Console) -> None:
     console.print(table)
 
 
-def _render_extensions(ctx: ProfileContext, console: Console) -> None:
+def _render_extensions(
+    ctx: ProfileContext,
+    console: Console,
+    *,
+    overlay: LocalOverlayResolution | None = None,
+) -> None:
     """Render the resolved ``extensions.include`` list with provenance."""
     effective = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
     include = effective.include
@@ -442,6 +490,11 @@ def _render_extensions(ctx: ProfileContext, console: Console) -> None:
     console.print(f"extensions.include ({len(include)} effective):")
     if include:
         chain_by_name = _extensions_chain_by_name(ctx.cfg, ctx.profile)
+        local_add = {
+            item.value
+            for item in (overlay.extensions if overlay is not None else [])
+            if item.origin is OverlayOrigin.LOCAL_ADD
+        }
         table = Table.grid(padding=(0, 2))
         table.add_column(no_wrap=True)
         table.add_column()
@@ -450,6 +503,7 @@ def _render_extensions(ctx: ProfileContext, console: Console) -> None:
                 ext_id,
                 chain_resolved_by_name=chain_by_name,
                 leaf_name=ctx.profile,
+                overlay_add=frozenset(local_add),
             )
             table.add_row(ext_id, tag)
         console.print(table)

@@ -17,7 +17,12 @@ from setforge.cli import (
 from setforge.cli._help_examples import INSPECT_EXAMPLES
 from setforge.cli._output import OutputContext, OutputFormat, render, wrap_json
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
+from setforge.config import (
+    Config,
+    ResolvedProfile,
+    load_config,
+    resolve_effective_profile,
+)
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.index_model import FileEntry
@@ -120,7 +125,7 @@ def inspect(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
 
     match = _resolve_fid(cfg, resolved, repo_root, file)
     if match is None:

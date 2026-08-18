@@ -32,8 +32,14 @@ from setforge.cli._welcome import (
     prompt_welcome,
     reject_auto_on_fresh_host,
 )
-from setforge.config import load_config, resolve_profile
+from setforge.config import LocalOverlayResolution, load_config, resolve_profile
 from setforge.errors import WelcomeRequiresInteractive
+from setforge.overlay_provenance import (
+    OverlayOrigin,
+    ResolvedExtension,
+    ResolvedMarketplace,
+    ResolvedPlugin,
+)
 from setforge.ui.widgets import CANCEL
 
 pytestmark = pytest.mark.fresh_host
@@ -270,20 +276,41 @@ def test_welcome_inventory_is_frozen() -> None:
         inv.profile = "y"  # type: ignore[misc]
 
 
-def test_build_welcome_inventory_overlay_delta_is_zero(
+def test_build_welcome_inventory_without_resolution_has_zero_overlay_delta(
     fixture_repo: Path, sandboxed_home: Path
 ) -> None:
-    """Fresh inventory carries a zero-shaped :class:`OverlayDelta`.
-
-    Spec B (local.yaml ``preserve_user_keys`` overlay) is not yet
-    implemented, so every channel reads zero. When spec B lands, this
-    test grows fixtures that drive non-zero values; the contract that
-    :class:`OverlayDelta` is always present on the inventory stays.
-    """
+    """Direct callers without overlay provenance retain the zero default."""
     ctx = _build_ctx(fixture_repo, profile="test-comprehensive")
     inv = build_welcome_inventory(ctx)
     assert inv.overlay_delta == OverlayDelta()
     assert inv.overlay_delta.is_empty
+
+
+def test_build_welcome_inventory_reports_effective_overlay_delta(
+    fixture_repo: Path, sandboxed_home: Path
+) -> None:
+    """Fresh-host consent truthfully reports local add/remove provenance."""
+    ctx = _build_ctx(fixture_repo, profile="test-comprehensive")
+    overlay = LocalOverlayResolution(
+        plugins=[
+            ResolvedPlugin("added", OverlayOrigin.LOCAL_ADD),
+            ResolvedPlugin("removed", OverlayOrigin.LOCAL_REMOVE),
+        ],
+        extensions=[
+            ResolvedExtension("added.ext", OverlayOrigin.LOCAL_ADD),
+            ResolvedExtension("removed.ext", OverlayOrigin.LOCAL_REMOVE),
+        ],
+        marketplaces=[ResolvedMarketplace("local", OverlayOrigin.LOCAL_ADD)],
+    )
+
+    inv = build_welcome_inventory(ctx, local_overlay=overlay)
+
+    assert inv.overlay_delta == OverlayDelta(
+        plugin_add=1,
+        plugin_remove=1,
+        extension_add=1,
+        extension_remove=1,
+    )
 
 
 # ---------------------------------------------------------------------------

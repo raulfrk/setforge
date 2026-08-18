@@ -17,7 +17,7 @@ from setforge.cli._help_examples import (
     EXT_RECONCILE_EXAMPLES,
     EXT_REMOVE_EXAMPLES,
 )
-from setforge.config import ReconcilePolicy, load_config, resolve_profile
+from setforge.config import ReconcilePolicy, load_config, resolve_effective_profile
 from setforge.errors import ExtensionInstallFailed, ExtensionToolMissing
 
 ext_app: typer.Typer = typer.Typer(
@@ -36,7 +36,8 @@ def ext_list(
     """Show declared (YAML) vs installed (code --list-extensions)."""
     config = _resolve_config_arg(config)
     cfg = load_config(config)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     effective = reconcile_adapter.extensions_input(cfg, resolved)
     declared_include = set(effective.include)
     declared_exclude = set(effective.exclude)
@@ -144,7 +145,8 @@ def ext_reconcile(
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     ext = reconcile_adapter.extensions_input(cfg, resolved)
     try:
         report = vscode_extensions.reconcile(ext, dry_run=dry_run)

@@ -65,11 +65,9 @@ from setforge.cli._welcome import (
 from setforge.config import (
     Config,
     ResolvedProfile,
-    apply_host_local_tracked_file_overrides,
-    apply_local_overlay,
     load_config,
     refuse_unmigrated_host_local_leak,
-    resolve_and_expand,
+    resolve_effective_profile,
 )
 from setforge.errors import SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
@@ -284,11 +282,9 @@ def install(
     repo_root = config.resolve().parent
     # Must expand bundle file components BEFORE the revert snapshot below, so
     # the synthetic entry is in `_iter_all_tracked_files` ahead of capture.
-    resolved = resolve_and_expand(cfg, profile, repo_root)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    resolved = effective.resolved
     active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
-    # Both overlays below must apply AFTER profile resolution.
-    apply_host_local_tracked_file_overrides(cfg)
-    apply_local_overlay(cfg, resolved, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
@@ -297,7 +293,7 @@ def install(
     fresh = is_fresh_host()
     if fresh and not dry_run:
         reject_auto_on_fresh_host(auto=auto)
-        inventory = build_welcome_inventory(ctx)
+        inventory = build_welcome_inventory(ctx, local_overlay=effective.local_overlay)
 
         def _welcome_dry_run() -> None:
             _dry_run_pipeline(ctx=ctx)

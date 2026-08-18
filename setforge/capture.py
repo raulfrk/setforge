@@ -27,7 +27,7 @@ from setforge import (
     user_section_markers as sections,
 )
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, resolve_profile
+from setforge.config import Config, ResolvedProfile, resolve_profile
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
@@ -333,6 +333,7 @@ def capture_profile(
     auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
     console: Console | None = None,
+    resolved: ResolvedProfile | None = None,
     host_local_sections_map: (
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
@@ -365,6 +366,10 @@ def capture_profile(
     console:
         Rich Console for the wizard (defaults to a fresh
         ``Console()``).
+    resolved:
+        Pre-resolved effective profile supplied by the CLI. When omitted,
+        preserve the domain API's tracked-config-only behavior for callers that
+        intentionally resolve overlays themselves.
 
     Raises
     ------
@@ -377,8 +382,10 @@ def capture_profile(
     # minus host-local overlays. Per-tracked_file writeback below.
     overlay = host_local_sections_map or {}
     results: list[CaptureResult] = []
-    resolved = resolve_profile(config, profile_name)
-    for name in resolved.tracked_files:
+    effective = (
+        resolved if resolved is not None else resolve_profile(config, profile_name)
+    )
+    for name in effective.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)

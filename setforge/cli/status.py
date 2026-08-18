@@ -12,8 +12,9 @@ The command is informational: it returns 0 even when capabilities are
 missing or the config repo is dirty. The exit code is gated only on
 hard errors raised by :func:`setforge.cli._resolve_config_arg`,
 :func:`setforge.config.load_config`, and
-:func:`setforge.config.resolve_profile` (no source configured,
-malformed YAML, unknown profile).
+:func:`setforge.config.resolve_effective_profile` (no source configured,
+malformed shared or host-local configuration, unknown profile, or invalid
+host-local overlay state).
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ from setforge.cli._init_helpers import (
 )
 from setforge.cli._output import render
 from setforge.compare import CompareStatus
-from setforge.config import load_config, resolve_profile
+from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import InvalidTransitionRecord
 from setforge.source import LOCAL_CONFIG_PATH, get_resolved_source, resolve_source_dir
 
@@ -372,13 +373,14 @@ def status(
     non-zero exits come from
     :func:`setforge.cli._resolve_config_arg` /
     :func:`setforge.config.load_config` /
-    :func:`setforge.config.resolve_profile` failures, which surface via
+    :func:`setforge.config.resolve_effective_profile` failures, including
+    malformed or invalid host-local overlays, which surface via
     :class:`setforge.errors.SetforgeError`.
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

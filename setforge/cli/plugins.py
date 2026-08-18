@@ -32,7 +32,7 @@ from setforge.config import (
     MarketplaceSource,
     ReconcilePolicy,
     load_config,
-    resolve_profile,
+    resolve_effective_profile,
 )
 from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
 
@@ -56,7 +56,8 @@ def plugin_list(
     """Show declared (YAML) vs installed (claude plugin list) status."""
     config = _resolve_config_arg(config)
     cfg = load_config(config)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     declared_ids = set(reconcile_adapter.plugin_bare_names(cfg, resolved))
 
     try:
@@ -354,7 +355,8 @@ def plugin_reconcile(
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     policy = reconcile_adapter.plugin_policy(resolved)
     try:
         report = claude_plugins_mod.reconcile(
@@ -437,7 +439,8 @@ def sync_cache(
 
     config = _resolve_config_arg(config)
     cfg = load_config(config)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     try:
         refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)
     except MarketplaceCacheMiss as exc:

@@ -52,6 +52,7 @@ from setforge.errors import (
     ProfileNotFound,
     ResolveError,
 )
+from setforge.overlay_provenance import OverlayOrigin, ResolvedExtension
 from setforge.provision import driver
 from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
@@ -567,13 +568,22 @@ def _ancestor_excluding(cfg: Config, profile: str, ext_id: str) -> str | None:
     return None
 
 
-def capture_extensions(config_path: Path, profile: str) -> bool:
+def capture_extensions(
+    config_path: Path,
+    profile: str,
+    *,
+    overlay_extensions: list[ResolvedExtension] | None = None,
+) -> bool:
     """Replace the profile's extension includes with the installed set minus
     the resolved profile's ``exclude``.
 
     Per locked decision (spec § Locked implementation decisions #7): capture
     only ever edits the include set. ``exclude`` is never auto-touched — to
     remove something from the declared set, use ``setforge ext remove``.
+
+    ``overlay_extensions`` reverses host-local intent at the write boundary:
+    local additions are omitted from shared YAML and local removals are
+    retained there even when absent from the host's installed set.
 
     Rewrites the profile's ``packages`` list so its extension refs are exactly
     the captured set (minting any missing top-level ExtensionPackage), leaving
@@ -592,7 +602,23 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     exclude_keys = {
         e.casefold() for e in reconcile_adapter.extensions_input(cfg, resolved).exclude
     }
-    new_include = sorted(i for i in installed if i.casefold() not in exclude_keys)
+    local_add_keys = {
+        item.value.casefold()
+        for item in (overlay_extensions or [])
+        if item.origin is OverlayOrigin.LOCAL_ADD
+    }
+    local_removes = {
+        item.value.casefold(): item.value
+        for item in (overlay_extensions or [])
+        if item.origin is OverlayOrigin.LOCAL_REMOVE
+    }
+    captured = {
+        i.casefold(): i
+        for i in installed
+        if i.casefold() not in exclude_keys and i.casefold() not in local_add_keys
+    }
+    captured.update(local_removes)
+    new_include = sorted(captured.values())
 
     if _profile_include_ids(cfg, profile) == set(new_include):
         return False

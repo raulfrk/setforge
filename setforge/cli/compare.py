@@ -26,11 +26,9 @@ from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
 from setforge.config import (
     Config,
     OrphanOverlay,
-    apply_host_local_tracked_file_overrides,
-    apply_local_overlay,
     collect_orphan_overlays,
     load_config,
-    resolve_profile,
+    resolve_effective_profile,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.locking import profile_lock
@@ -64,23 +62,15 @@ def compare(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
-    # Apply local.yaml host-local mode/dst/symlink_target overlay.
-    # Captures the per-tracked_file override mapping
-    # so the renderer can emit ``[host-local mode=...]`` /
-    # ``[host-local dst=...]`` / ``[host-local symlink → ...]``
-    # provenance tags next to each affected entry.
-    host_local_overrides = apply_host_local_tracked_file_overrides(cfg)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    resolved = effective.resolved
+    host_local_overrides = effective.tracked_file_overrides
     # Surface local.yaml overlay entries the apply site silently skipped
     # (unknown id / off-profile id). Read-only diagnosis — collected from
     # the same overlay block, classified against cfg.tracked_files and the
     # resolved profile's tracked_files list.
     orphan_overlays = collect_orphan_overlays(cfg, resolved)
-    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2).
-    # Mutates resolved and cfg in place; the resolved
-    # provenance lists drive the host-overlay block printed below the
-    # drift report (cf. render_local_overlay_block in setforge.compare).
-    overlay_resolution = apply_local_overlay(cfg, resolved, profile)
+    overlay_resolution = effective.local_overlay
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

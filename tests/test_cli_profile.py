@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
@@ -131,6 +132,35 @@ def test_profile_show_includes_all_sections(tmp_path: Path) -> None:
     )
     for section in expected_sections:
         assert section in result.output, f"missing section {section!r}: {result.output}"
+
+
+def test_profile_show_renders_host_local_tracked_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracked destination, mode, and symlink provenance are all visible."""
+    from setforge import source as source_mod
+
+    cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
+    local_config = tmp_path / "local.yaml"
+    local_config.write_text(
+        """\
+tracked_files:
+  base_tracked:
+    dst: /host/base.txt
+    mode: 0o600
+  derived_tracked:
+    symlink_target: /host/derived-target.txt
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
+
+    result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
+
+    assert result.exit_code == 0, result.output
+    assert "dst=/host/base.txt" in result.output
+    assert "mode=0o600" in result.output
+    assert "symlink→/host/derived-target.txt" in result.output
 
 
 def test_profile_show_provenance_tags_base_vs_derived(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ loading are stubbed via ``monkeypatch`` (auto-reverted) so no real
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -56,7 +57,11 @@ def _stub_ext_config_layer(
     )
     monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
     monkeypatch.setattr(ext_mod, "load_config", lambda c: _empty_config())
-    monkeypatch.setattr(ext_mod, "resolve_profile", lambda cfg, profile: resolved)
+    monkeypatch.setattr(
+        ext_mod,
+        "resolve_effective_profile",
+        lambda cfg, profile, repo_root: SimpleNamespace(resolved=resolved),
+    )
 
 
 def _stub_plugin_config_layer(
@@ -74,7 +79,11 @@ def _stub_plugin_config_layer(
     )
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
     monkeypatch.setattr(plugins_mod, "load_config", lambda c: _empty_config())
-    monkeypatch.setattr(plugins_mod, "resolve_profile", lambda cfg, profile: resolved)
+    monkeypatch.setattr(
+        plugins_mod,
+        "resolve_effective_profile",
+        lambda cfg, profile, repo_root: SimpleNamespace(resolved=resolved),
+    )
 
 
 # ---------------------------------------------------------------------------

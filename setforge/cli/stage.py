@@ -33,7 +33,12 @@ from setforge.cli import (
 from setforge.cli._help_examples import STAGE_EXAMPLES
 from setforge.cli._output import OutputContext, render
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
+from setforge.config import (
+    Config,
+    ResolvedProfile,
+    load_config,
+    resolve_effective_profile,
+)
 from setforge.errors import StructuredParseError
 from setforge.locking import profile_lock
 from setforge.reconcile import hunks as hunks_mod
@@ -714,7 +719,7 @@ def stage(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
 
     if list_only:
         stages = collect_stages(cfg, resolved, repo_root, profile)

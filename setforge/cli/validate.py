@@ -37,6 +37,7 @@ from setforge.config import (
     Profile,
     ResolvedProfile,
     TrackedFile,
+    apply_host_local_tracked_file_overrides,
     apply_local_overlay,
     collect_orphan_overlays,
     load_config,
@@ -85,6 +86,8 @@ def _check_profile(
     if resolved is None:
         return
 
+    _apply_tracked_file_overlay_check(cfg, ctx, failures)
+
     # Apply the local.yaml plugin / extension / marketplace overlay so its
     # collision / unknown-remove and marketplace cross-ref errors surface at
     # validate time too. The install path runs the same applier; the validate
@@ -104,6 +107,26 @@ def _check_profile(
     _check_package_refs(cfg, prof_name, ctx, failures)
     if not cross_ref_ran:
         _check_marketplaces(cfg, resolved, ctx, failures)
+
+
+def _apply_tracked_file_overlay_check(
+    cfg: Config,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Apply valid host-local path fields before effective-path checks.
+
+    The raw ``local.yaml`` validator reports schema errors separately. This
+    merge step catches cross-field errors that exist only after combining a
+    valid overlay with its tracked-side declaration, while preserving
+    validate's report-all contract.
+    """
+    try:
+        apply_host_local_tracked_file_overrides(cfg)
+    except (ConfigError, ValidationError) as exc:
+        failures.append(f"{ctx}: {exc}")
+    except (OSError, UnicodeDecodeError) as exc:
+        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
 
 
 def _apply_local_overlay_check(

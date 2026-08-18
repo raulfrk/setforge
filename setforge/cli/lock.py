@@ -15,7 +15,7 @@ import setforge.provision.resolve.python as _python_resolver  # noqa: F401
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import LOCK_EXAMPLES
 from setforge.cli._lock_enumerate import _LockItem, enumerate_lock_items
-from setforge.config import load_config, resolve_and_expand
+from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import LockConflict, ResolveError
 from setforge.lockfile import LockFile, lock_path, parse_lock, write_lock
 from setforge.locking import lockfile_lock
@@ -114,7 +114,7 @@ def lock(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_and_expand(cfg, profile, repo_root)
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
 
     path = lock_path(config)
     items = enumerate_lock_items(cfg, resolved)

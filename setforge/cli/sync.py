@@ -57,15 +57,16 @@ from setforge.cli._install_helpers import (
 )
 from setforge.config import (
     Config,
-    apply_host_local_tracked_file_overrides,
+    ResolvedProfile,
     load_config,
     refuse_unmigrated_host_local_leak,
-    resolve_profile,
+    resolve_effective_profile,
 )
 from setforge.errors import (
     ExtensionToolMissing,
 )
 from setforge.locking import profile_lock
+from setforge.overlay_provenance import ResolvedExtension
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import file_id
 
@@ -137,10 +138,13 @@ def capture(
 
     cfg = load_config(config)
     refuse_unmigrated_host_local_leak(cfg, verb="capture", profile=profile)
-    apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    resolved = effective.resolved
     try:
-        results = _run_capture(cfg, profile, repo_root, config, auto_enum)
+        results = _run_capture(
+            cfg, profile, repo_root, config, auto_enum, resolved=resolved
+        )
     except KeyboardInterrupt:
         # Plain ``capture`` takes no snapshot (only ``sync`` records a
         # transition + restorable snapshots), and ``capture_profile`` has
@@ -193,9 +197,9 @@ def sync(
     cfg = load_config(config)
     # Same host-local leak gate as install (see install.py).
     refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
-    apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    resolved = effective.resolved
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
@@ -218,10 +222,16 @@ def sync(
         state_pre = _capture_sync_store_snapshots(ctx)
 
         try:
-            results = _run_capture(cfg, profile, repo_root, config, auto_enum)
+            results = _run_capture(
+                cfg, profile, repo_root, config, auto_enum, resolved=resolved
+            )
             _render_capture_results(results)
 
-            _capture_extensions(config, profile)
+            _capture_extensions(
+                config,
+                profile,
+                overlay_extensions=effective.local_overlay.extensions,
+            )
         except (KeyboardInterrupt, OSError) as exc:
             # capture_profile writes tracked srcs and re-baselines stores
             # one at a time with no internal rollback, so a Ctrl-C OR a
@@ -401,10 +411,17 @@ def _sync_snapshot_paths(
     return paths
 
 
-def _capture_extensions(config: Path, profile: str) -> None:
+def _capture_extensions(
+    config: Path,
+    profile: str,
+    *,
+    overlay_extensions: list[ResolvedExtension],
+) -> None:
     """Capture vscode-extension include changes; surface tool-missing as a warning."""
     try:
-        changed = vscode_extensions.capture_extensions(config, profile)
+        changed = vscode_extensions.capture_extensions(
+            config, profile, overlay_extensions=overlay_extensions
+        )
     except ExtensionToolMissing as exc:
         typer.secho(
             f"warning: skipping extension capture — {exc}",
@@ -435,6 +452,8 @@ def _run_capture(
     repo_root: Path,
     config: Path,
     auto_enum: capture_mod.CaptureAuto | None,
+    *,
+    resolved: ResolvedProfile,
 ) -> list[capture_mod.CaptureResult]:
     """Run ``capture_profile``.
 
@@ -443,8 +462,9 @@ def _run_capture(
     contract — ``sync`` restores from the pre-capture snapshot it took and
     ``capture`` reports the partial-write truth.
 
-    No host-local overlay is loaded: host-local content is now a LOCAL unit
-    in the reconcile store, and ``capture_profile``'s per-hunk staged path
+    The already-resolved path/package overlays are passed in. No legacy
+    host-local *section-body* overlay is loaded: host-local content is now a
+    LOCAL unit in the reconcile store, and ``capture_profile``'s per-hunk staged path
     (:func:`setforge.capture._capture_staged_plain`) already promotes ONLY
     the SHARED hunks into tracked and keeps LOCAL host-only content out, so
     the legacy local.yaml ``host_local_sections`` strip is redundant.
@@ -455,6 +475,7 @@ def _run_capture(
         repo_root,
         setforge_yaml_path=config.resolve(),
         auto=auto_enum,
+        resolved=resolved,
     )
 
 

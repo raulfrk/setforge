@@ -613,17 +613,10 @@ def compare_profile(
     before passing it in; callers that don't carry an overlay (e.g.
     the orphan-detection and status commands) pass ``None``.
 
-    Overlay contract (SPEC 2): this function re-resolves
-    the profile via :func:`resolve_profile` and intentionally discards
-    any :func:`apply_local_overlay` mutations to the profile's plugin /
-    extension ``packages`` refs that callers may have applied
-    upstream. That's safe today because compare
-    only iterates ``resolved.tracked_files`` — a field the overlay never
-    touches. If compare ever starts reading plugin / extension lists
-    (e.g. to surface overlay-tagged drift in the report), this
-    re-resolution MUST be replaced by accepting a pre-resolved
-    :class:`ResolvedProfile` parameter so the overlay's mutations
-    survive.
+    The CLI resolves the effective profile first, mutating ``config`` with
+    host-local tracked-file paths. This helper re-expands the tracked-file list
+    idempotently and reads those already-effective definitions; plugin and
+    extension lists are irrelevant to its file-only comparison.
     """
     resolved = resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []

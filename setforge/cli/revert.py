@@ -52,9 +52,8 @@ from setforge.cli._revert_confirm import (
     confirm_revert_operation,
 )
 from setforge.config import (
-    apply_host_local_tracked_file_overrides,
     load_config,
-    resolve_profile,
+    resolve_effective_profile,
 )
 from setforge.errors import (
     InvalidTransitionRecord,
@@ -521,10 +520,9 @@ def _revert_symlink_deployments(
 ) -> None:
     """Unlink every symlink-deployed tracked_file in the resolved profile.
 
-    Loads the resolved profile via the same path the install side uses
-    (``load_config`` + ``resolve_profile`` +
-    ``apply_host_local_tracked_file_overrides``) so the iteration order,
-    expansion semantics, AND host-local overlay folding match — an
+    Loads the resolved profile through :func:`resolve_effective_profile`, the
+    same boundary the install side uses, so the iteration order, bundle
+    expansion semantics, and host-local overlay folding match — an
     overlay-only symlink (``symlink_target`` in local.yaml) is therefore
     visible to the unlink pass instead of left dangling. For each tracked_file
     with
@@ -550,17 +548,11 @@ def _revert_symlink_deployments(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     try:
-        resolved = resolve_profile(cfg, profile)
+        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     except ProfileNotFound:
         if profile == transitions.MIGRATE_TRANSITION_PROFILE:
             return
         raise
-    # Fold the local.yaml host-local mode/dst/symlink_target overlay in place,
-    # matching install (install.py). Without this an overlay-only symlink
-    # (``symlink_target`` declared in local.yaml) keeps ``symlink is None`` in
-    # the resolved profile and is skipped by the unlink pass below, leaving the
-    # link object dangling. No ``prefer_shared_anchors`` on the revert path.
-    apply_host_local_tracked_file_overrides(cfg)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

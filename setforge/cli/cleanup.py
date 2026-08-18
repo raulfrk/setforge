@@ -19,7 +19,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
-from setforge.config import load_config, resolve_profile
+from setforge.config import load_config, resolve_effective_profile
 from setforge.locking import profile_lock
 from setforge.provision.dispatch import resolve_provision_items
 from setforge.provision.protocol import Identity
@@ -173,7 +173,8 @@ def mark_orphan(identity: Identity, *, console: Console) -> None:
 
 def _resolve_declared(config_path: Path, profile: str) -> set[Identity]:
     cfg = load_config(config_path)
-    resolved = resolve_profile(cfg, profile)
+    repo_root = config_path.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     declared = {item.identity for item in resolve_provision_items(cfg, resolved)}
     declared |= {Identity(key=key, display=key) for key in load_ignored_provisioned()}
     return declared

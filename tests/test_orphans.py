@@ -22,7 +22,12 @@ from setforge import compare as compare_mod
 from setforge import transitions
 from setforge.cli import app
 from setforge.cli import orphans as orphans_mod
-from setforge.compare import OrphanEntry, detect_orphans, load_ignored_orphans
+from setforge.compare import (
+    OrphanDetection,
+    OrphanEntry,
+    detect_orphans,
+    load_ignored_orphans,
+)
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import ConfigError, OrphanCleanupRequiresInteractive
 
@@ -607,6 +612,35 @@ def _write_minimal_yaml(tmp_path: Path) -> Path:
     return cfg
 
 
+def _write_retargeted_active_path(
+    tmp_path: Path,
+    transitions_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    """Create an active destination that exists only through local.yaml."""
+    from setforge import source as source_mod
+
+    cfg = _write_minimal_yaml(tmp_path)
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "kept.txt").write_text("shared\n", encoding="utf-8")
+    effective = tmp_path / "live" / "effective.txt"
+    effective.parent.mkdir(parents=True, exist_ok=True)
+    effective.write_text("active\n", encoding="utf-8")
+    local_config = tmp_path / "local.yaml"
+    local_config.write_text(
+        f"tracked_files:\n  kept:\n    dst: {effective}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
+    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
+    _write_meta_record(
+        transitions_root,
+        "20260518T120000000000Z-install-p",
+        [str(effective)],
+    )
+    return cfg, effective
+
+
 def test_apply_default_is_dry_run(
     runner: CliRunner, tmp_path: Path, isolated_state_dir: Path
 ) -> None:
@@ -631,6 +665,55 @@ def test_apply_default_is_dry_run(
     plain = _strip_ansi_and_newlines(result.stderr)
     assert "WOULD delete" in plain
     assert live_orphan.name in plain
+
+
+def test_dry_run_keeps_host_retargeted_active_destination(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The effective local destination is active, never an orphan candidate."""
+    cfg, effective = _write_retargeted_active_path(
+        tmp_path, isolated_state_dir / "transitions", monkeypatch
+    )
+
+    result = runner.invoke(
+        app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "=== no orphans ===" in _strip_ansi_and_newlines(result.stderr)
+    assert effective.read_text(encoding="utf-8") == "active\n"
+
+
+def test_apply_keeps_host_retargeted_active_destination(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even the confirmed mutation path cannot delete the effective target."""
+    cfg, effective = _write_retargeted_active_path(
+        tmp_path, isolated_state_dir / "transitions", monkeypatch
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "cleanup-orphans",
+            "--profile",
+            "p",
+            "--config",
+            str(cfg),
+            "--apply",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "=== no orphans ===" in _strip_ansi_and_newlines(result.stderr)
+    assert effective.read_text(encoding="utf-8") == "active\n"
 
 
 def test_dry_run_prints_skip_note(
@@ -722,7 +805,7 @@ def test_apply_yes_writes_transition_first(
     """`--apply --yes` → `_write_orphan_transition` must fire BEFORE any unlink.
 
     Probes the transition-first invariant directly on
-    :func:`_execute_cleanup` so the test doesn't depend on
+    :func:`_execute_cleanup_locked` so the test doesn't depend on
     prompt_toolkit being available or on CliRunner stdin behavior.
     """
     live_orphan = tmp_path / "live" / "orphan.txt"
@@ -749,7 +832,7 @@ def test_apply_yes_writes_transition_first(
     )
     monkeypatch.setattr(Path, "unlink", _spy_unlink)
 
-    orphans_mod._execute_cleanup(
+    orphans_mod._execute_cleanup_locked(
         "p",
         [orphan_entry],
         orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
@@ -764,7 +847,7 @@ def test_apply_yes_holds_profile_lock(
     isolated_state_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_execute_cleanup` must enter profile_lock BEFORE any unlink.
+    """The apply path must enter profile_lock before its refreshed unlink.
 
     Every other mutating verb (install/sync/revert) serializes its live
     mutation under profile_lock; orphan cleanup deletes files + writes a
@@ -801,12 +884,15 @@ def test_apply_yes_holds_profile_lock(
 
     monkeypatch.setattr("setforge.cli.orphans.profile_lock", _recording_lock)
     monkeypatch.setattr(Path, "unlink", _spy_unlink)
+    detection = OrphanDetection(orphans=[orphan_entry])
+    monkeypatch.setattr(
+        orphans_mod,
+        "_detect_orphans_live",
+        lambda profile, config_path: (_make_config_with({}), detection),
+    )
 
-    orphans_mod._execute_cleanup(
-        "p",
-        [orphan_entry],
-        orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
-        Console(),
+    orphans_mod._apply_orphan_cleanup(
+        "p", tmp_path / "setforge.yaml", yes=True, console=Console()
     )
 
     assert "enter" in events, "cleanup never acquired the profile lock"
@@ -815,6 +901,89 @@ def test_apply_yes_holds_profile_lock(
         f"lock must be held before mutating; order: {events}"
     )
     assert events[-1] == "exit", f"lock must be released last; order: {events}"
+
+
+def test_apply_redetects_after_prompt_inside_profile_lock(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path made active while cleanup waits is retained by locked re-scan."""
+    from setforge import source as source_mod
+
+    cfg = _write_minimal_yaml(tmp_path)
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "kept.txt").write_text("shared\n", encoding="utf-8")
+    candidate = tmp_path / "live" / "newly-active.txt"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("installed while waiting\n", encoding="utf-8")
+    _write_meta_record(
+        isolated_state_dir / "transitions",
+        "20260518T120000000000Z-install-p",
+        [str(candidate)],
+    )
+    local_config = tmp_path / "local.yaml"
+    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
+    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
+    prompt_called = False
+
+    def _activate_during_prompt(*, yes: bool) -> orphans_mod.ApplyChoice:
+        nonlocal prompt_called
+        prompt_called = True
+        assert yes is False
+        local_config.write_text(
+            f"tracked_files:\n  kept:\n    dst: {candidate}\n", encoding="utf-8"
+        )
+        return orphans_mod.ApplyChoice.DELETE_AND_TRANSITION
+
+    monkeypatch.setattr(orphans_mod, "_pick_cleanup_branch", _activate_during_prompt)
+
+    orphans_mod._apply_orphan_cleanup("p", cfg, yes=False, console=Console())
+
+    assert prompt_called, "cleanup never reached the prompt activation boundary"
+    assert local_config.exists(), "prompt callback never activated the candidate"
+    assert candidate.read_text(encoding="utf-8") == "installed while waiting\n"
+    assert not list((isolated_state_dir / "transitions").glob("*cleanup-orphans*"))
+
+
+def test_apply_never_deletes_orphan_discovered_after_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The locked scan may contract approval, but cannot expand it."""
+    approved = OrphanEntry(path=tmp_path / "approved")
+    newly_discovered = OrphanEntry(path=tmp_path / "not-shown-to-user")
+    detections = iter(
+        [
+            (_make_config_with({}), OrphanDetection(orphans=[approved])),
+            (
+                _make_config_with({}),
+                OrphanDetection(orphans=[approved, newly_discovered]),
+            ),
+        ]
+    )
+    executed: list[OrphanEntry] = []
+
+    monkeypatch.setattr(
+        orphans_mod, "_detect_orphans_live", lambda *_a: next(detections)
+    )
+    monkeypatch.setattr(
+        orphans_mod,
+        "_pick_cleanup_branch",
+        lambda *, yes: orphans_mod.ApplyChoice.DELETE_ONLY,
+    )
+    monkeypatch.setattr(
+        orphans_mod,
+        "_execute_cleanup_locked",
+        lambda _profile, orphans, _choice, _console: executed.extend(orphans),
+    )
+
+    orphans_mod._apply_orphan_cleanup(
+        "p", tmp_path / "setforge.yaml", yes=False, console=Console()
+    )
+
+    assert executed == [approved]
 
 
 def test_apply_default_branch_uses_yes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1014,9 +1183,9 @@ def test_no_shutil_rmtree_or_removedirs() -> None:
 def test_no_resolve_in_orphan_unlink_helpers() -> None:
     """Calling `.resolve()` on a symlink before `.unlink()` torches the
     pointed-to file. None of the per-orphan helpers
-    (`_unlink_orphan_path`, `_rmdir_empty_parents`, `_execute_cleanup`,
+    (`_unlink_orphan_path`, `_rmdir_empty_parents`, `_execute_cleanup_locked`,
     `_write_orphan_transition`, `_read_orphan_content`,
-    `_lstat_safe`) may call `.resolve()`. The
+    `_lstat_safe`, `_orphan_path_identity`) may call `.resolve()`. The
     `_detect_orphans_live` helper is allowed to call
     `config_path.resolve()` for source-dir normalization (Typer config
     path, not an orphan path)."""
@@ -1024,10 +1193,11 @@ def test_no_resolve_in_orphan_unlink_helpers() -> None:
     helper_names = {
         "_unlink_orphan_path",
         "_rmdir_empty_parents",
-        "_execute_cleanup",
+        "_execute_cleanup_locked",
         "_write_orphan_transition",
         "_read_orphan_content",
         "_lstat_safe",
+        "_orphan_path_identity",
     }
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):

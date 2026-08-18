@@ -896,8 +896,8 @@ verbs = ["install", "validate"]
 [tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_applies_host_local_dst_retarget"]
 verdict = "keep"
 smoke = false
-signal = "host-local overlay mode/symlink/dst-retarget"
-verbs = ["install", "validate"]
+signal = "one host-local dst across install/inspect/status/stage/snapshot/orphan-cleanup"
+verbs = ["install", "inspect", "status", "stage", "snapshot", "cleanup-orphans"]
 
 [tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_applies_host_local_mode_chmod"]
 verdict = "keep"
