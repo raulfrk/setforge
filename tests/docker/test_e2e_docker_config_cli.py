@@ -82,14 +82,19 @@ def test_config_completion_path_works(
     #     invoking via ``uv run setforge`` bypasses the completion.
     # (2) ``autoload -U compinit && compinit -u`` before the eval so the
     #     ``compdef`` builtin used by the typer script is defined.
-    # (3) Explicit echo markers (DONE_COMPINIT / DONE_EVAL) — a stale
+    # (3) Explicit output markers (DONE_COMPINIT / DONE_EVAL) — a stale
     #     ``%`` prompt from initial shell startup would otherwise let
-    #     TAB fire before compinit / eval actually completed.
+    #     TAB fire before compinit / eval actually completed. Build each
+    #     marker from separate printf arguments so the echoed command line
+    #     cannot satisfy the display wait before the command has executed.
     session.send_keys("export PATH=/workspace/.venv/bin:$PATH\r")
-    session.send_keys("autoload -U compinit && compinit -u && echo DONE_COMPINIT\r")
+    session.send_keys(
+        "autoload -U compinit && compinit -u && printf 'DONE_%s\\n' COMPINIT\r"
+    )
     session.expect_in_display("DONE_COMPINIT", timeout=15)
     session.send_keys(
-        'eval "$(setforge --show-completion zsh)" 2>/dev/null && echo DONE_EVAL\r'
+        'eval "$(setforge --show-completion zsh)" 2>/dev/null '
+        "&& printf 'DONE_%s\\n' EVAL\r"
     )
     session.expect_in_display("DONE_EVAL", timeout=30)
     # zsh's first TAB may only recognize an ambiguous completion; the second
