@@ -15,6 +15,7 @@ from a zero-byte file and from "not recorded yet" (``None``).
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from enum import Enum, StrEnum
 from typing import Final, NewType
 
@@ -63,6 +64,29 @@ class HunkClass(StrEnum):
     SHARED = "shared"
     PENDING = "pending"
     SHARED_DRAFTED = "shared_drafted"
+
+
+class UnitKind(StrEnum):
+    """Persisted staging-unit discriminator."""
+
+    LINE = "line"
+    KEY = "key"
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class UnitRef:
+    """Typed identity for a line unit or structured semantic-path unit."""
+
+    kind: UnitKind
+    identity: str
+
+    @classmethod
+    def line(cls, unit_id: str) -> UnitRef:
+        return cls(UnitKind.LINE, unit_id)
+
+    @classmethod
+    def key(cls, path: str) -> UnitRef:
+        return cls(UnitKind.KEY, path)
 
 
 class _Absent(Enum):

@@ -403,16 +403,17 @@ def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
     # An install/sync that advances the reconcile store must be byte-exactly
     # restorable: local content + drafts manifest + per-profile index + base.
     from setforge.reconcile import store
-    from setforge.reconcile.types import file_id
+    from setforge.reconcile.types import UnitRef, file_id
     from setforge.transitions import reconcile_file_snapshots
 
     fid = file_id("claude/CLAUDE.md")
     draft = b"workdir: $HOME\n"
     row: dict[str, object] = {
+        "kind": "line",
         "cls": "shared_drafted",
         "label": "## Paths",
         "live_hash": store.content_sha(b"host"),
-        "anchor": "sha256:a",
+        "unit_id": "sha256:a",
         "draft_hash": store.content_sha(draft),
     }
     store.record(
@@ -421,7 +422,7 @@ def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
         base=b"base\n",
         local=b"host live\n",
         hunks=[row],
-        drafts={"sha256:a": draft},
+        drafts={UnitRef.line("sha256:a"): draft},
     )
     store.verify(_PROFILE, fid)
 
@@ -440,7 +441,7 @@ def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
 
     assert store.read_base(_PROFILE, fid) == b"base\n"
     assert store.read_local(_PROFILE, fid) == b"host live\n"
-    assert store.read_drafts(_PROFILE, fid) == {"sha256:a": draft}
+    assert store.read_drafts(_PROFILE, fid) == {UnitRef.line("sha256:a"): draft}
     store.verify(_PROFILE, fid)  # the restored store is self-consistent
 
 

@@ -29,9 +29,10 @@ from setforge import (
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_profile
 from setforge.reconcile import hunks as reconcile_hunks
+from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
-from setforge.reconcile.types import FileId, HunkClass, file_id
+from setforge.reconcile.types import HunkClass, UnitKind, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 
@@ -167,13 +168,16 @@ def _capture_staged_plain(
     base = reconcile_store.read_base(profile, fid)
     if base is None:
         return None  # not reconcile-managed → legacy verbatim capture
+    entry = reconcile_store.read_index(profile).files.get(str(fid))
+    stored = entry.hunks if entry is not None else []
+    stored = index_model.require_unit_kind(stored, UnitKind.LINE)
     live = dst.read_bytes()
     try:
         base.decode("utf-8")
         live.decode("utf-8")
     except UnicodeDecodeError:
         return None  # text-only staging; a binary plain file stays verbatim
-    hunks = _classify_live(profile, fid, base, live)
+    hunks = reconcile_hunks.classify(reconcile_hunks.extract_hunks(base, live), stored)
     # A5 staging is OPT-IN per file: until the host has classified at least one
     # hunk (SHARED, SHARED_DRAFTED, or LOCAL) via `setforge stage`, the file keeps
     # the legacy capture behavior (sync absorbs live drift into tracked). Falling
@@ -230,24 +234,6 @@ def _capture_staged_plain(
     return CaptureResult(name=sub_name, action=result.action, warnings=tuple(warnings))
 
 
-def _classify_live(
-    profile: str, fid: FileId, base: bytes, live: bytes
-) -> list[reconcile_hunks.Hunk]:
-    """Freshly extract base↔live hunks and carry stored classifications by identity."""
-    entry = reconcile_store.read_index(profile).files.get(str(fid))
-    stored = entry.hunks if entry is not None else []
-    return reconcile_hunks.classify(reconcile_hunks.extract_hunks(base, live), stored)
-
-
-def _classify_live_structured(
-    profile: str, fid: FileId, fresh: list[su_mod.KeyUnit]
-) -> list[su_mod.KeyUnit]:
-    """Carry stored KEY-unit classifications onto freshly-extracted units by path."""
-    entry = reconcile_store.read_index(profile).files.get(str(fid))
-    stored = entry.hunks if entry is not None else []
-    return su_mod.classify_structured(fresh, stored)
-
-
 def _capture_staged_structured(
     profile: str,
     sub_name: str,
@@ -279,12 +265,15 @@ def _capture_staged_structured(
     base = reconcile_store.read_base(profile, fid)
     if base is None:
         return None  # not reconcile-managed → legacy verbatim capture
+    entry = reconcile_store.read_index(profile).files.get(str(fid))
+    stored = entry.hunks if entry is not None else []
+    stored = index_model.require_unit_kind(stored, UnitKind.KEY)
     live = dst.read_bytes()
     try:
         fresh = su_mod.extract_structured_units(base, live, fmt)
     except Exception:
         return None  # unparseable structured live → verbatim fallback
-    units = _classify_live_structured(profile, fid, fresh)
+    units = su_mod.classify_structured(fresh, stored)
     # A5 staging is OPT-IN per file (mirrors the plain path): until at least one
     # key is classified, the file keeps the legacy absorb behavior.
     staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)

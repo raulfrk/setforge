@@ -234,7 +234,7 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
             base=_BASE,
             local=drift_local,
             hunks=drafted_rows,
-            drafts={gamma_hunk.unit_id: draft_bytes},
+            drafts={gamma_hunk.ref: draft_bytes},
         )
 
     SpanSurfaceRetireMigration().apply(roots=roots)
@@ -250,9 +250,7 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
         h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
         for h in hunks
     )
-    assert reconcile_store.read_drafts("default", fid) == {
-        gamma_hunk.unit_id: draft_bytes
-    }
+    assert reconcile_store.read_drafts("default", fid) == {gamma_hunk.ref: draft_bytes}
 
 
 def test_apply_folds_undeployed_section_without_loss(tmp_path) -> None:

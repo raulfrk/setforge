@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
 
-from setforge.errors import CorruptIndexError, IndexVersionError
-from setforge.reconcile.types import content_sha
+from setforge.errors import CorruptIndexError, IndexVersionError, InvariantViolation
+from setforge.reconcile.types import UnitKind, content_sha
 
 CURRENT_VERSION: Final = "2.0"
 """The index schema version this engine writes."""
@@ -178,6 +178,11 @@ def _parse_entry(fid: str, raw: object, *, legacy: bool) -> FileEntry:
     ]
     if len(unit_ids) != len(set(unit_ids)):
         raise CorruptIndexError(f"index entry for {fid!r} has duplicate line unit_id")
+    key_paths = [
+        str(row["path"]) for row in normalized if row.get("kind") == HunkKind.KEY
+    ]
+    if len(key_paths) != len(set(key_paths)):
+        raise CorruptIndexError(f"index entry for {fid!r} has duplicate key path")
     return FileEntry(present=raw["present"], local_hash=local_hash, hunks=normalized)
 
 
@@ -210,20 +215,8 @@ def _migrate_v1_hunk(fid: str, row: object) -> dict[str, Any]:
     return migrated
 
 
-class HunkKind(StrEnum):
-    """The two ``kind`` discriminators of a persisted hunk row — the frozen
-    on-disk schema values this module owns.
-
-    ``LINE`` is a markdown line-hunk row; ``KEY`` is a structured key-unit row.
-    Each member ``.value`` is the exact byte-string written to / read from disk;
-    because :class:`~enum.StrEnum` members *are* ``str`` and equal their value,
-    ``json.dumps`` emits the bare string and comparisons against parsed strings
-    keep working. Defined locally (not imported) to keep this codec a leaf with
-    no dependency on the staging layer.
-    """
-
-    LINE = "line"
-    KEY = "key"
+HunkKind = UnitKind
+"""Backwards-compatible name for the persisted unit-kind discriminator."""
 
 
 class HunkCls(StrEnum):
@@ -245,6 +238,20 @@ class HunkCls(StrEnum):
 #: layer imports :data:`KIND_KEY`); both equal their bare on-disk string.
 KIND_LINE: Final = HunkKind.LINE
 KIND_KEY: Final = HunkKind.KEY
+
+
+def require_unit_kind(
+    rows: list[dict[str, object]], expected: UnitKind
+) -> list[dict[str, object]]:
+    """Return ``rows`` only when every persisted unit matches ``expected``."""
+    mismatched = [row.get("kind") for row in rows if row.get("kind") != expected]
+    if mismatched:
+        raise InvariantViolation(
+            f"persisted unit kind {mismatched[0]!r} is incompatible with "
+            f"current {expected.value!r} routing"
+        )
+    return rows
+
 
 #: The keys a v2 LINE hunk row must carry (mirrors ``hunks.serialize``).
 _HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "unit_id")

@@ -17,7 +17,14 @@ from setforge.errors import (
 )
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import store
-from setforge.reconcile.types import ABSENT, Absent, HunkClass, file_id
+from setforge.reconcile.types import (
+    ABSENT,
+    Absent,
+    HunkClass,
+    UnitKind,
+    UnitRef,
+    file_id,
+)
 
 # --------------------------------------------------------------------------- #
 # Resolver (Task 4)
@@ -89,9 +96,137 @@ def test_absent_then_content_clears_marker(tmp_state: Path) -> None:
 
 def test_drafts_round_trip(tmp_state: Path) -> None:
     fid = file_id("claude/CLAUDE.md")
-    drafts = {"sha256:aa": b"Land them in ~/projects/wt/.\n", "sha256:bb": b"other"}
+    drafts = {
+        UnitRef.line("sha256:aa"): b"Land them in ~/projects/wt/.\n",
+        UnitRef.key("sha256:aa"): b"other",
+    }
     store.write_drafts("p", fid, drafts)
     assert store.read_drafts("p", fid) == drafts
+    raw = json.loads(store._drafts_path("p", fid).read_text(encoding="utf-8"))
+    assert {(row["kind"], row["identity"]) for row in raw} == {
+        ("line", "sha256:aa"),
+        ("key", "sha256:aa"),
+    }
+
+
+def test_unit_refs_keep_kinds_distinct() -> None:
+    assert UnitRef.line("same") != UnitRef.key("same")
+    assert len({UnitRef.line("same"), UnitRef.key("same")}) == 2
+
+
+def test_write_drafts_rejects_untyped_key(tmp_state: Path) -> None:
+    with pytest.raises(ReconcileStoreError, match="typed UnitRef"):
+        store.write_drafts("p", file_id("f"), {"same": b"x"})  # type: ignore[dict-item]
+
+
+def test_legacy_draft_identity_ambiguous_across_kinds_fails_closed(
+    tmp_state: Path,
+) -> None:
+    from setforge.reconcile.index_model import FileEntry, Index
+
+    fid = file_id("f")
+    identity = "same"
+    draft = b"draft"
+    rows: list[dict[str, object]] = [
+        {
+            "kind": UnitKind.LINE,
+            "cls": HunkClass.SHARED_DRAFTED.value,
+            "label": "line",
+            "live_hash": "sha256:line",
+            "unit_id": identity,
+            "draft_hash": store.content_sha(draft),
+        },
+        {
+            "kind": UnitKind.KEY,
+            "cls": HunkClass.SHARED_DRAFTED.value,
+            "label": "key",
+            "path": identity,
+            "value_hash": "sha256:key",
+            "draft_hash": store.content_sha(draft),
+        },
+    ]
+    store.write_index(
+        "p", Index(files={str(fid): FileEntry(True, "sha256:local", rows)})
+    )
+    path = store._drafts_path("p", fid)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({identity: base64.b64encode(draft).decode("ascii")}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReconcileStoreError, match="exactly one persisted unit kind"):
+        store.read_drafts("p", fid)
+
+
+def test_legacy_draft_duplicate_key_rows_do_not_collapse_to_unique(
+    tmp_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile.index_model import FileEntry, Index
+
+    fid = file_id("f")
+    draft = b"draft"
+    row: dict[str, object] = {
+        "kind": UnitKind.KEY,
+        "cls": HunkClass.SHARED_DRAFTED.value,
+        "label": "same",
+        "path": "same",
+        "value_hash": "sha256:key",
+        "draft_hash": store.content_sha(draft),
+    }
+    monkeypatch.setattr(
+        store,
+        "read_index",
+        lambda profile: Index(files={str(fid): FileEntry(True, None, [row, row])}),
+    )
+    path = store._drafts_path("p", fid)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"same": base64.b64encode(draft).decode("ascii")}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReconcileStoreError, match="exactly one persisted unit kind"):
+        store.read_drafts("p", fid)
+
+
+def test_legacy_flat_structured_draft_verifies_then_upgrades_typed(
+    tmp_state: Path,
+) -> None:
+    fid = file_id("settings.yaml")
+    base = b"workdir: /default\n"
+    live = b"workdir: /home/host\n"
+    draft = b"~/work"
+    row: dict[str, object] = {
+        "kind": UnitKind.KEY,
+        "cls": HunkClass.SHARED_DRAFTED.value,
+        "label": "workdir",
+        "path": "workdir",
+        "value_hash": store.content_sha(b"/home/host"),
+        "draft_hash": store.content_sha(draft),
+    }
+    store.record("p", fid, base=base, local=live, hunks=[row], drafts={})
+    path = store._drafts_path("p", fid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"workdir": base64.b64encode(draft).decode("ascii")}),
+        encoding="utf-8",
+    )
+
+    legacy = store.read_drafts("p", fid)
+    assert legacy == {UnitRef.key("workdir"): draft}
+    store.verify("p", fid)
+
+    store.record("p", fid, base=base, local=live, hunks=[row], drafts=legacy)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw == [
+        {
+            "data": base64.b64encode(draft).decode("ascii"),
+            "identity": "workdir",
+            "kind": "key",
+        }
+    ]
+    store.verify("p", fid)
 
 
 def test_drafts_verbatim_bytes(tmp_state: Path) -> None:
@@ -99,8 +234,9 @@ def test_drafts_verbatim_bytes(tmp_state: Path) -> None:
     data = (
         b"a\r\nb\x00c"  # CRLF + NUL, no trailing newline — survives base64 round-trip
     )
-    store.write_drafts("p", fid, {"sha256:aa": data})
-    assert store.read_drafts("p", fid)["sha256:aa"] == data
+    ref = UnitRef.line("sha256:aa")
+    store.write_drafts("p", fid, {ref: data})
+    assert store.read_drafts("p", fid)[ref] == data
 
 
 def test_drafts_absent_is_empty(tmp_state: Path) -> None:
@@ -109,7 +245,7 @@ def test_drafts_absent_is_empty(tmp_state: Path) -> None:
 
 def test_drafts_empty_removes_manifest(tmp_state: Path) -> None:
     fid = file_id("f")
-    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {UnitRef.line("sha256:aa"): b"x"})
     store.write_drafts("p", fid, {})  # demote: no drafted hunks remain
     assert store.read_drafts("p", fid) == {}
     assert not store._drafts_path("p", fid).exists()
@@ -117,7 +253,7 @@ def test_drafts_empty_removes_manifest(tmp_state: Path) -> None:
 
 def test_drafts_perms(tmp_state: Path) -> None:
     fid = file_id("f")
-    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {UnitRef.line("sha256:aa"): b"x"})
     path = store._drafts_path("p", fid)
     assert path.stat().st_mode & 0o777 == 0o600
     assert path.parent.stat().st_mode & 0o077 == 0
@@ -125,7 +261,7 @@ def test_drafts_perms(tmp_state: Path) -> None:
 
 def test_drafts_corrupt_manifest_raises(tmp_state: Path) -> None:
     fid = file_id("f")
-    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {UnitRef.line("sha256:aa"): b"x"})
     store._drafts_path("p", fid).write_text("{not json", encoding="utf-8")
     with pytest.raises(ReconcileStoreError):
         store.read_drafts("p", fid)
@@ -195,7 +331,7 @@ def test_v1_drafted_row_reconstructs_and_migrates_atomically(tmp_state: Path) ->
         drafts=bound,
     )
     assert json.loads(index_path.read_text())["schema_version"] == "2.0"
-    assert store.read_drafts("p", fid) == {fresh.unit_id: draft}
+    assert store.read_drafts("p", fid) == {fresh.ref: draft}
     store.verify("p", fid)
 
 
@@ -204,7 +340,7 @@ def test_drafts_non_string_value_raises(tmp_state: Path, bad_value: str) -> None
     # a non-string scalar manifest value must fail closed, not str()-coerce into
     # garbage bytes (a number/null/bool would otherwise base64-decode silently).
     fid = file_id("f")
-    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {UnitRef.line("sha256:aa"): b"x"})
     store._drafts_path("p", fid).write_text(
         f'{{"sha256:aa": {bad_value}}}', encoding="utf-8"
     )
@@ -217,7 +353,7 @@ def test_drafts_oversized_value_raises(tmp_state: Path) -> None:
     # must fail closed with the module's corrupt-store error (naming the limit),
     # never attempt an unbounded decode into a MemoryError.
     fid = file_id("f")
-    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {UnitRef.line("sha256:aa"): b"x"})
     # encoded length just over the cap; no need to allocate the decoded bytes.
     oversized = "A" * (store._MAX_DRAFT_VALUE_ENCODED_BYTES + 4)
     store._drafts_path("p", fid).write_text(
@@ -232,8 +368,9 @@ def test_drafts_large_but_legitimate_value_round_trips(tmp_state: Path) -> None:
     # cleanly — the guard rejects only the pathological, never a real drafts set.
     fid = file_id("f")
     data = b"x" * (1024 * 1024)
-    store.write_drafts("p", fid, {"sha256:aa": data})
-    assert store.read_drafts("p", fid)["sha256:aa"] == data
+    ref = UnitRef.line("sha256:aa")
+    store.write_drafts("p", fid, {ref: data})
+    assert store.read_drafts("p", fid)[ref] == data
 
 
 def _drafted_row(unit_id: str, draft: bytes) -> dict[str, object]:
@@ -256,16 +393,23 @@ def test_record_writes_drafts_and_verifies(tmp_state: Path) -> None:
         base=b"base\n",
         local=b"live\n",
         hunks=[_drafted_row("sha256:aa", draft)],
-        drafts={"sha256:aa": draft},
+        drafts={UnitRef.line("sha256:aa"): draft},
     )
-    assert store.read_drafts("p", fid) == {"sha256:aa": draft}
+    assert store.read_drafts("p", fid) == {UnitRef.line("sha256:aa"): draft}
     store.verify("p", fid)  # no raise: manifest matches the SHARED_DRAFTED hunk
 
 
 def test_verify_orphan_draft_raises(tmp_state: Path) -> None:
     # a drafts manifest with an anchor that no SHARED_DRAFTED hunk claims.
     fid = file_id("f")
-    store.record("p", fid, base=b"b", local=b"l", hunks=[], drafts={"sha256:aa": b"x"})
+    store.record(
+        "p",
+        fid,
+        base=b"b",
+        local=b"l",
+        hunks=[],
+        drafts={UnitRef.line("sha256:aa"): b"x"},
+    )
     with pytest.raises(InvariantViolation, match="INV-10"):
         store.verify("p", fid)
 
@@ -289,7 +433,12 @@ def test_verify_draft_hash_mismatch_raises(tmp_state: Path) -> None:
     fid = file_id("f")
     row = _drafted_row("sha256:aa", b"correct")
     store.record(
-        "p", fid, base=b"b", local=b"l", hunks=[row], drafts={"sha256:aa": b"TAMPERED"}
+        "p",
+        fid,
+        base=b"b",
+        local=b"l",
+        hunks=[row],
+        drafts={UnitRef.line("sha256:aa"): b"TAMPERED"},
     )
     with pytest.raises(InvariantViolation, match="INV-2"):
         store.verify("p", fid)
@@ -465,7 +614,13 @@ def test_record_writes_index_last(
             "setforge.reconcile.index_model", fromlist=["Index"]
         ).Index(files={}),
     )
-    store.record("p", file_id("f"), base=b"B", local=b"L", drafts={"sha256:a": b"d"})
+    store.record(
+        "p",
+        file_id("f"),
+        base=b"B",
+        local=b"L",
+        drafts={UnitRef.line("sha256:a"): b"d"},
+    )
     # The drafts manifest is written BEFORE the index too — so a crash leaves a
     # prunable orphan manifest, never an index row pointing at an unwritten draft.
     assert calls == ["base", "local", "drafts", "index"]
@@ -548,7 +703,7 @@ def test_stored_file_ids_unions_every_store_leg(tmp_state: Path) -> None:
     store.write_base("p", file_id("base-only"), b"B")
     store.write_local("p", file_id("local-only"), b"L")
     store.write_local("p", file_id("absent-only"), ABSENT)
-    store.write_drafts("p", file_id("draft-only"), {"anchor": b"D"})
+    store.write_drafts("p", file_id("draft-only"), {UnitRef.line("anchor"): b"D"})
     store.write_index(
         "p",
         Index(

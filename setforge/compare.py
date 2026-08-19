@@ -849,8 +849,10 @@ def _reconcile_staged_expected(
     # graph acyclic — the reconcile package imports compare-adjacent helpers.
     from setforge.errors import InvariantViolation, ReconcileStoreError
     from setforge.reconcile import hunks as reconcile_hunks
+    from setforge.reconcile import index_model
     from setforge.reconcile import store as reconcile_store
     from setforge.reconcile.structured_units import structured_format
+    from setforge.reconcile.types import UnitKind
     from setforge.reconcile.types import file_id as make_file_id
 
     fmt = structured_format(dst)  # None for .jsonc — stays on this plain path
@@ -872,7 +874,8 @@ def _reconcile_staged_expected(
         base.decode("utf-8")
         live.decode("utf-8")  # text-only staging
         hunks = reconcile_hunks.classify(
-            reconcile_hunks.extract_hunks(base, live), entry.hunks
+            reconcile_hunks.extract_hunks(base, live),
+            index_model.require_unit_kind(entry.hunks, UnitKind.LINE),
         )
         drafts = reconcile_store.read_drafts(profile, fid)
         reconcile_hunks.assert_stage_fidelity(base, live, tracked, hunks, drafts)
@@ -901,8 +904,10 @@ def _reconcile_staged_expected_structured(
         ReconcileStoreError,
         StructuredParseError,
     )
+    from setforge.reconcile import index_model
     from setforge.reconcile import store as reconcile_store
     from setforge.reconcile import structured_units as su
+    from setforge.reconcile.types import UnitKind
     from setforge.reconcile.types import file_id as make_file_id
 
     try:
@@ -916,7 +921,9 @@ def _reconcile_staged_expected_structured(
         live = dst.read_bytes()  # raw bytes, not re-parsed — INV-8 needs on-disk form
         tracked = src.read_bytes()
         fresh = su.extract_structured_units(base, live, fmt)
-        units = su.classify_structured(fresh, entry.hunks)
+        units = su.classify_structured(
+            fresh, index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
+        )
         drafts = reconcile_store.read_drafts(profile, fid)
         su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)
         return True

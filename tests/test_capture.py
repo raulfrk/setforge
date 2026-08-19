@@ -10,6 +10,7 @@ from setforge.capture import (
     capture_tracked_file,
 )
 from setforge.config import Config, Profile, TrackedFile
+from setforge.errors import InvariantViolation
 
 
 def _write(path: Path, content: str) -> None:
@@ -116,6 +117,44 @@ def _a5_config(dst: Path) -> Config:
         tracked_files={"CLAUDE.md": TrackedFile(src=Path("CLAUDE.md"), dst=str(dst))},
         profiles={"p": Profile(tracked_files=["CLAUDE.md"])},
     )
+
+
+def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.capture import _capture_staged_plain
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    src = tmp_path / "tracked" / "blob"
+    dst = tmp_path / "live" / "blob"
+    src.parent.mkdir(parents=True)
+    dst.parent.mkdir(parents=True)
+    src.write_bytes(b"tracked\x00")
+    dst.write_bytes(b"live\xff")
+    fid = file_id("blob")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            fid,
+            base=b"base\xff",
+            local=dst.read_bytes(),
+            hunks=[
+                {
+                    "kind": "key",
+                    "cls": "local",
+                    "label": "foreign",
+                    "path": "foreign",
+                    "value_hash": "sha256:value",
+                }
+            ],
+        )
+
+    with pytest.raises(InvariantViolation, match="current 'line' routing"):
+        _capture_staged_plain("p", "blob", src, dst, auto=None)
+    assert src.read_bytes() == b"tracked\x00"
 
 
 def test_staged_capture_promotes_only_shared_and_keeps_base(

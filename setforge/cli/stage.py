@@ -45,12 +45,20 @@ from setforge.config import (
 from setforge.errors import StructuredParseError
 from setforge.locking import mutation_locks
 from setforge.reconcile import hunks as hunks_mod
+from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
-from setforge.reconcile.types import FileId, HunkClass, content_sha, file_id
+from setforge.reconcile.types import (
+    FileId,
+    HunkClass,
+    UnitKind,
+    UnitRef,
+    content_sha,
+    file_id,
+)
 from setforge.scalar_merge import ABSENT
 from setforge.ui.primitives import CANCEL, Button, Cancelled
 
@@ -162,8 +170,8 @@ class WalkResult:
     """The walk's outcome: updated hunks + per-unit drafts + adopt set."""
 
     hunks: list[Hunk]
-    drafts: dict[str, bytes]
-    adopt_unit_ids: set[str]
+    drafts: dict[UnitRef, bytes]
+    adopt_refs: set[UnitRef]
 
 
 def collect_stages(
@@ -202,15 +210,19 @@ def collect_stages(
             base = reconcile_store.read_base(profile, fid)
             if base is None:
                 continue  # not reconcile-managed (run `setforge install` first)
+            entry = reconcile_store.read_index(profile).files.get(str(fid))
+            stored = entry.hunks if entry is not None else []
+            stored = index_model.require_unit_kind(stored, UnitKind.LINE)
             live = sub_dst.read_bytes()
             try:
                 base.decode("utf-8")
                 live.decode("utf-8")
             except UnicodeDecodeError:
                 continue  # binary plain file — staging is text-only
-            entry = reconcile_store.read_index(profile).files.get(str(fid))
-            stored = entry.hunks if entry is not None else []
-            hunks = hunks_mod.classify(hunks_mod.extract_hunks(base, live), stored)
+            hunks = hunks_mod.classify(
+                hunks_mod.extract_hunks(base, live),
+                stored,
+            )
             stages.append(FileStage(sub_name, fid, sub_src, sub_dst, base, live, hunks))
     return stages
 
@@ -268,13 +280,14 @@ def collect_structured_stages(
             base = reconcile_store.read_base(profile, fid)
             if base is None:
                 continue  # not reconcile-managed (run `setforge install` first)
+            entry = reconcile_store.read_index(profile).files.get(str(fid))
+            stored = entry.hunks if entry is not None else []
+            stored = index_model.require_unit_kind(stored, UnitKind.KEY)
             live = sub_dst.read_bytes()
             try:
                 fresh = su_mod.extract_structured_units(base, live, fmt)
             except StructuredParseError:
                 continue  # unparseable → no interactive staging; capture is verbatim
-            entry = reconcile_store.read_index(profile).files.get(str(fid))
-            stored = entry.hunks if entry is not None else []
             units = su_mod.classify_structured(fresh, stored)
             stages.append(
                 StructuredFileStage(
@@ -293,8 +306,8 @@ class StructuredWalkResult:
     """The structured walk's outcome: updated units + per-PATH drafts + adopt set."""
 
     units: list[KeyUnit]
-    drafts: dict[str, bytes]
-    adopt_paths: set[str]
+    drafts: dict[UnitRef, bytes]
+    adopt_refs: set[UnitRef]
 
 
 def walk_structured(
@@ -303,12 +316,12 @@ def walk_structured(
     """Apply one :class:`Decision` per key-unit, keyed by the unit's PATH.
 
     The structured analog of :func:`walk`: identical control flow, but a unit's
-    identity is its dotted ``path`` (not a line ``anchor``), so drafts and the
-    adopt set are keyed by path.
+    identity is its dotted ``path`` (not a line ``unit_id``), so drafts and the
+    adopt set use typed KEY references.
     """
     out = list(units)
-    drafts: dict[str, bytes] = {}
-    adopt_paths: set[str] = set()
+    drafts: dict[UnitRef, bytes] = {}
+    adopt_refs: set[UnitRef] = set()
     for index, unit in enumerate(units):
         decision = choose(unit, index, len(units))
         if isinstance(decision, _Quit):
@@ -318,10 +331,10 @@ def walk_structured(
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(unit, cls=decision.cls, draft_hash=draft_hash)
         if decision.draft is not None:
-            drafts[unit.path] = decision.draft
+            drafts[unit.ref] = decision.draft
         if decision.adopt:
-            adopt_paths.add(unit.path)
-    return StructuredWalkResult(units=out, drafts=drafts, adopt_paths=adopt_paths)
+            adopt_refs.add(unit.ref)
+    return StructuredWalkResult(units=out, drafts=drafts, adopt_refs=adopt_refs)
 
 
 def _apply_structured(
@@ -363,12 +376,13 @@ def _persist_structured(
     decided = {
         path
         for path, unit in walk_by_path.items()
-        if collect_cls.get(path) != unit.cls or path in result.drafts
+        if collect_cls.get(path) != unit.cls or unit.ref in result.drafts
     }
     entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
     stored = entry.hunks if entry is not None else []
     current = su_mod.classify_structured(
-        su_mod.extract_structured_units(stage.base, final_live, stage.fmt), stored
+        su_mod.extract_structured_units(stage.base, final_live, stage.fmt),
+        index_model.require_unit_kind(stored, UnitKind.KEY),
     )
     merged = [
         replace(
@@ -382,9 +396,9 @@ def _persist_structured(
     ]
     pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
     drafts = {
-        u.path: pool[u.path]
+        u.ref: pool[u.ref]
         for u in merged
-        if u.cls is HunkClass.SHARED_DRAFTED and u.path in pool
+        if u.cls is HunkClass.SHARED_DRAFTED and u.ref in pool
     }
     reconcile_store.record(
         profile,
@@ -407,12 +421,12 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
     ``choose(hunk, index, total)`` returns a :class:`Decision` to (re)classify,
     ``None`` to leave the hunk unchanged (skip / next), or :data:`QUIT` to stop
     early. Choices made before a QUIT are kept. A drafted decision records the
-    hunk's ``draft_hash`` and stashes its bytes under the hunk's ``unit_id``; an
+    hunk's ``draft_hash`` and stashes its bytes under a typed LINE reference; an
     ``adopt`` decision additionally marks that unit for the live-rewrite.
     """
     out = list(hunks)
-    drafts: dict[str, bytes] = {}
-    adopt_unit_ids: set[str] = set()
+    drafts: dict[UnitRef, bytes] = {}
+    adopt_refs: set[UnitRef] = set()
     for index, hunk in enumerate(hunks):
         decision = choose(hunk, index, len(hunks))
         if isinstance(decision, _Quit):
@@ -422,10 +436,10 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(hunk, cls=decision.cls, draft_hash=draft_hash)
         if decision.draft is not None:
-            drafts[hunk.unit_id] = decision.draft
+            drafts[hunk.ref] = decision.draft
         if decision.adopt:
-            adopt_unit_ids.add(hunk.unit_id)
-    return WalkResult(hunks=out, drafts=drafts, adopt_unit_ids=adopt_unit_ids)
+            adopt_refs.add(hunk.ref)
+    return WalkResult(hunks=out, drafts=drafts, adopt_refs=adopt_refs)
 
 
 def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
@@ -606,11 +620,11 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     a ``SHARED_DRAFTED`` hunk is matched by unit ID (unchanged by the
     rewrite), re-extraction after the rewrite re-identifies it cleanly.
     """
-    if not result.adopt_unit_ids:
+    if not result.adopt_refs:
         return stage.live
     live_lines = split_lines(stage.live)
     adopted = sorted(
-        (h for h in result.hunks if h.unit_id in result.adopt_unit_ids),
+        (h for h in result.hunks if h.ref in result.adopt_refs),
         key=lambda h: h.live_span[0],
     )
     out: list[bytes] = []
@@ -618,7 +632,7 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     for hunk in adopted:
         j1, j2 = hunk.live_span
         out.extend(live_lines[cursor:j1])
-        out.append(result.drafts[hunk.unit_id])
+        out.append(result.drafts[hunk.ref])
         cursor = j2
     out.extend(live_lines[cursor:])
     return b"".join(out)
@@ -685,12 +699,13 @@ def _persist(
     decided = {
         unit_id
         for unit_id, hunk in walk_by_unit.items()
-        if collect_cls.get(unit_id) != hunk.cls or unit_id in result.drafts
+        if collect_cls.get(unit_id) != hunk.cls or hunk.ref in result.drafts
     }
     entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
     stored = entry.hunks if entry is not None else []
     current = hunks_mod.classify(
-        hunks_mod.extract_hunks(stage.base, final_live), stored
+        hunks_mod.extract_hunks(stage.base, final_live),
+        index_model.require_unit_kind(stored, UnitKind.LINE),
     )
     merged = [
         replace(
@@ -709,9 +724,9 @@ def _persist(
         **result.drafts,
     }
     drafts = {
-        h.unit_id: pool[h.unit_id]
+        h.ref: pool[h.ref]
         for h in merged
-        if h.cls is HunkClass.SHARED_DRAFTED and h.unit_id in pool
+        if h.cls is HunkClass.SHARED_DRAFTED and h.ref in pool
     }
     reconcile_store.record(
         profile,

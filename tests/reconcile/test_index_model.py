@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from setforge.errors import CorruptIndexError, IndexVersionError
+from setforge.errors import CorruptIndexError, IndexVersionError, InvariantViolation
 from setforge.reconcile.index_model import (
     CURRENT_VERSION,
     FileEntry,
@@ -13,7 +13,9 @@ from setforge.reconcile.index_model import (
     Index,
     dumps,
     loads,
+    require_unit_kind,
 )
+from setforge.reconcile.types import UnitKind
 
 
 def test_round_trip() -> None:
@@ -37,6 +39,22 @@ def test_key_kind_hunk_row_round_trips() -> None:
     )
     out = loads(dumps(idx))
     assert out.files["s.yaml"].hunks[0]["path"] == "editor.fontSize"
+
+
+@pytest.mark.parametrize(
+    ("stored", "current"),
+    [(UnitKind.LINE, UnitKind.KEY), (UnitKind.KEY, UnitKind.LINE)],
+)
+def test_require_unit_kind_rejects_incompatible_routing(
+    stored: UnitKind, current: UnitKind
+) -> None:
+    with pytest.raises(InvariantViolation, match="incompatible with current"):
+        require_unit_kind([{"kind": stored}], current)
+
+
+def test_require_unit_kind_accepts_only_current_routing() -> None:
+    rows: list[dict[str, object]] = [{"kind": UnitKind.KEY}, {"kind": "key"}]
+    assert require_unit_kind(rows, UnitKind.KEY) is rows
 
 
 def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
@@ -146,6 +164,47 @@ def test_v2_duplicate_line_unit_ids_fail_closed() -> None:
     )
     with pytest.raises(CorruptIndexError, match="duplicate line unit_id"):
         loads(text)
+
+
+def test_v2_duplicate_key_paths_fail_closed() -> None:
+    import json
+
+    row = {
+        "kind": "key",
+        "cls": "shared",
+        "label": "x",
+        "path": "same",
+        "value_hash": "sha256:v",
+    }
+    text = json.dumps(
+        {
+            "schema_version": "2.0",
+            "files": {"f": {"present": True, "local_hash": None, "hunks": [row, row]}},
+        }
+    )
+    with pytest.raises(CorruptIndexError, match="duplicate key path"):
+        loads(text)
+
+
+def test_same_identity_across_line_and_key_kinds_is_valid() -> None:
+    rows = [
+        {
+            "kind": "line",
+            "cls": "shared",
+            "label": "line",
+            "unit_id": "same",
+            "live_hash": "sha256:l",
+        },
+        {
+            "kind": "key",
+            "cls": "shared",
+            "label": "key",
+            "path": "same",
+            "value_hash": "sha256:k",
+        },
+    ]
+    idx = Index(files={"f": FileEntry(True, None, rows)})
+    assert loads(dumps(idx)).files["f"].hunks == rows
 
 
 @pytest.mark.parametrize("version", ["0.9", "1.1", "1.9"])

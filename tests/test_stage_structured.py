@@ -16,9 +16,10 @@ from setforge.cli.stage import (
     walk_structured,
 )
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
+from setforge.errors import InvariantViolation
 from setforge.reconcile import share_draft
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
-from setforge.reconcile.types import HunkClass, file_id
+from setforge.reconcile.types import HunkClass, UnitRef, file_id
 from setforge.ui.widgets import CANCEL
 
 
@@ -64,6 +65,37 @@ def test_collect_structured_yields_key_units(
     assert stage.fmt is StructuredFormat.YAML
     assert [u.path for u in stage.units] == ["fontSize"]
     assert all(u.cls is HunkClass.PENDING for u in stage.units)
+
+
+def test_collect_structured_rejects_persisted_line_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import locking
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    with locking.profile_lock(profile):
+        store.record(
+            profile,
+            file_id("settings.yaml"),
+            base=b"theme: dark\nfontSize: 14\n",
+            local=b"theme: dark\nfontSize: 16\n",
+            hunks=[
+                {
+                    "kind": "line",
+                    "cls": "local",
+                    "label": "foreign",
+                    "unit_id": "foreign",
+                    "live_hash": "sha256:value",
+                }
+            ],
+        )
+    # Routing incompatibility wins even when the new structured representation
+    # is not parseable; it must not be silently treated as an unstaged fallback.
+    Path(cfg.tracked_files["settings.yaml"].dst).write_bytes(b"not: [valid")
+
+    with pytest.raises(InvariantViolation, match="current 'key' routing"):
+        collect_structured_stages(cfg, resolve_profile(cfg, profile), repo, profile)
 
 
 def test_collect_stages_skips_structured_file(
@@ -112,6 +144,27 @@ def test_walk_structured_shared_records_shared(
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
+
+
+def test_walk_structured_draft_uses_typed_key_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
+    draft = b"18"
+    result = walk_structured(
+        stage.units,
+        lambda u, i, t: Decision(cls=HunkClass.SHARED_DRAFTED, draft=draft),
+    )
+
+    assert result.drafts == {UnitRef.key("fontSize"): draft}
+    _apply_structured(profile, stage, result)
+    assert store.read_drafts(profile, file_id("settings.yaml")) == {
+        UnitRef.key("fontSize"): draft
+    }
 
 
 # --- structured Share sub-menu (Draft button → type-confined key draft) -------

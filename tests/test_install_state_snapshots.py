@@ -20,7 +20,7 @@ from typer.testing import CliRunner
 from setforge import base_store, transitions
 from setforge.cli import app
 from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.types import HunkClass, file_id
+from setforge.reconcile.types import HunkClass, UnitRef, file_id
 from setforge.transitions import SnapshotStore
 
 _PROFILE = "test-snapshots"
@@ -184,7 +184,7 @@ def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> 
                 "draft_hash": reconcile_store.content_sha(draft),
             }
         ],
-        drafts={unit_id: draft},
+        drafts={UnitRef.line(unit_id): draft},
     )
     paths = {
         SnapshotStore.BASE: base_store.base_path(_PROFILE, _FILE_ID),

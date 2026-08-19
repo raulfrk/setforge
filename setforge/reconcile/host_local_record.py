@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from setforge.errors import ConfigError
-from setforge.reconcile import store
+from setforge.reconcile import index_model, store
 from setforge.reconcile.hunks import (
     _section_heading,
     bind_drafts,
@@ -34,7 +34,7 @@ from setforge.reconcile.hunks import (
     extract_hunks,
     serialize,
 )
-from setforge.reconcile.types import FileId, HunkClass
+from setforge.reconcile.types import FileId, HunkClass, UnitKind
 
 if TYPE_CHECKING:
     from setforge.config import Config, ResolvedProfile, SectionTemplateRef
@@ -86,7 +86,10 @@ def record_local_reloc_sections(
     merged base+local+hunks (drafts preserved: ``record`` leaves the on-disk
     drafts manifest intact when passed no ``drafts=``).
     """
-    classified = classify(extract_hunks(base, new_local), existing_hunks)
+    classified = classify(
+        extract_hunks(base, new_local),
+        index_model.require_unit_kind(existing_hunks, UnitKind.LINE),
+    )
     rows = serialize(
         [
             replace(hunk, cls=HunkClass.LOCAL)

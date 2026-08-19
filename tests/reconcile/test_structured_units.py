@@ -32,7 +32,7 @@ from setforge.reconcile.structured_units import (
     reconstruct_structured,
     serialize_structured,
 )
-from setforge.reconcile.types import HunkClass
+from setforge.reconcile.types import HunkClass, UnitRef
 
 
 def test_extract_one_changed_scalar_leaf_yields_one_pending_unit() -> None:
@@ -258,7 +258,7 @@ def test_reconstruct_rejects_overlapping_drafted_and_shared_shape_change(
             base,
             live,
             list(reversed(units)),
-            {drafted_path: b"3"},
+            {UnitRef.key(drafted_path): b"3"},
             StructuredFormat.YAML,
         )
 
@@ -342,6 +342,29 @@ def test_classify_unmatched_path_stays_pending() -> None:
     assert out[0].cls is HunkClass.PENDING
 
 
+def test_classify_rejects_duplicate_stored_key_paths() -> None:
+    fresh = [KeyUnit(HunkClass.PENDING, "same", "same", "sha256:fresh")]
+    with pytest.raises(
+        InvariantViolation, match="duplicate stored structured key path"
+    ):
+        classify_structured(
+            fresh,
+            [
+                _row("shared", "same", "sha256:one"),
+                _row("local", "same", "sha256:two"),
+            ],
+        )
+
+
+def test_classify_rejects_duplicate_fresh_key_paths() -> None:
+    fresh = [
+        KeyUnit(HunkClass.PENDING, "one", "same", "sha256:one"),
+        KeyUnit(HunkClass.PENDING, "two", "same", "sha256:two"),
+    ]
+    with pytest.raises(InvariantViolation, match="duplicate fresh structured key path"):
+        classify_structured(fresh, [])
+
+
 def test_assert_stage_fidelity_structured_passes_when_tracked_matches() -> None:
     """INV-8 holds: tracked == reconstruct of the promoted set."""
     base = b"a: 1\nb: 2\n"
@@ -407,7 +430,7 @@ def test_reconstruct_shared_drafted_splices_draft_value() -> None:
             HunkClass.SHARED_DRAFTED, "path", "path", "sha256:v", draft_hash="sha256:d"
         )
     ]
-    drafts = {"path": b"/home/USER/x"}
+    drafts = {UnitRef.key("path"): b"/home/USER/x"}
 
     out = reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)
 
@@ -423,7 +446,7 @@ def test_reconstruct_shared_drafted_preserves_scalar_type() -> None:
             HunkClass.SHARED_DRAFTED, "port", "port", "sha256:v", draft_hash="sha256:d"
         )
     ]
-    drafts = {"port": b"22"}
+    drafts = {UnitRef.key("port"): b"22"}
 
     out = reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)
 
@@ -440,7 +463,7 @@ def test_reconstruct_shared_drafted_rejects_structure_injection() -> None:
             HunkClass.SHARED_DRAFTED, "path", "path", "sha256:v", draft_hash="sha256:d"
         )
     ]
-    drafts = {"path": b"injected: evil"}
+    drafts = {UnitRef.key("path"): b"injected: evil"}
 
     with pytest.raises(DraftConfinementError):
         reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)

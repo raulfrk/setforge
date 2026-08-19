@@ -16,6 +16,7 @@ store (the caller wires all I/O).
 from __future__ import annotations
 
 import io
+from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -31,7 +32,7 @@ from setforge.errors import (
     StructuredParseError,
 )
 from setforge.reconcile.index_model import KIND_KEY
-from setforge.reconcile.types import HunkClass, content_sha
+from setforge.reconcile.types import HunkClass, UnitRef, content_sha
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
     append_key_segment,
@@ -101,6 +102,10 @@ class KeyUnit:
     value_hash: str
     changed: bool = False
     draft_hash: str | None = None
+
+    @property
+    def ref(self) -> UnitRef:
+        return UnitRef.key(self.path)
 
 
 def _yaml() -> YAML:
@@ -295,8 +300,9 @@ def classify_structured(
     class, flagged ``changed=True`` (surfaced for re-confirm, never silently
     reset). A ``SHARED_DRAFTED`` row matches by ``path`` alone (its tracked bytes
     come from the draft store, so the live value may be anything). Paths are
-    unique within a file, so no anchor-collision guard is needed. Anything
-    unmatched stays PENDING.
+    unique within a file; duplicate fresh or stored paths fail closed rather than
+    letting a dict comprehension pick an arbitrary unit. Anything unmatched stays
+    PENDING.
 
     Only ``kind:"key"`` rows carry a ``path`` + ``value_hash`` identity, so the
     stored list is filtered to key-rows first — a stray line-row (``anchor`` +
@@ -304,6 +310,17 @@ def classify_structured(
     ``KeyError`` here.
     """
     key_rows = [r for r in stored if r.get("kind") == KIND_KEY]
+    for source, paths in (
+        ("fresh", [unit.path for unit in fresh]),
+        ("stored", [str(row["path"]) for row in key_rows]),
+    ):
+        duplicate = next(
+            (path for path, count in Counter(paths).items() if count > 1), None
+        )
+        if duplicate is not None:
+            raise InvariantViolation(
+                f"duplicate {source} structured key path {duplicate!r}"
+            )
     drafted_by_path = {
         str(r["path"]): r
         for r in key_rows
@@ -410,7 +427,7 @@ def reconstruct_structured(
     base: bytes,
     live: bytes,
     units: list[KeyUnit],
-    drafts: dict[str, bytes],
+    drafts: dict[UnitRef, bytes],
     fmt: StructuredFormat,
 ) -> bytes:
     """Rebuild tracked content as ``base`` with each promoted key's value spliced.
@@ -441,7 +458,7 @@ def reconstruct_structured(
     for unit in ordered_units:
         if unit.cls is HunkClass.SHARED_DRAFTED and not unit.changed:
             try:
-                draft = drafts[unit.path]
+                draft = drafts[unit.ref]
             except KeyError as err:
                 raise InvariantViolation(
                     f"SHARED_DRAFTED key-unit {unit.path!r} has no draft in the store"
@@ -479,7 +496,7 @@ def assert_stage_fidelity_structured(
     live: bytes,
     tracked: bytes,
     units: list[KeyUnit],
-    drafts: dict[str, bytes],
+    drafts: dict[UnitRef, bytes],
     fmt: StructuredFormat,
 ) -> None:
     """INV-8: ``tracked`` must equal the reconstruct of exactly the promoted set.

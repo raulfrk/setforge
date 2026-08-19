@@ -22,7 +22,7 @@ from setforge.reconcile.hunks import (
     identity,
     serialize,
 )
-from setforge.reconcile.types import HunkClass
+from setforge.reconcile.types import HunkClass, UnitRef
 
 # A base/live pair with two independent changes:
 #   - an inserted "## Shell" block (generally useful → SHARE candidate)
@@ -145,6 +145,7 @@ def test_classify_carries_stored_class_for_stable_hunk() -> None:
     shell = _by_label(fresh)["## Shell"]
     stored: list[dict[str, object]] = [
         {
+            "kind": "line",
             "cls": HunkClass.SHARED.value,
             "label": shell.label,
             "live_hash": shell.live_hash,
@@ -164,9 +165,30 @@ def test_classify_unmatched_is_pending() -> None:
     assert all(h.cls is HunkClass.PENDING for h in classified)
 
 
+def test_classify_ignores_key_rows_with_the_same_identity() -> None:
+    (fresh,) = extract_hunks(b"old\n", b"new\n")
+    stored: list[dict[str, object]] = [
+        {
+            "kind": "key",
+            "cls": "shared",
+            "label": fresh.label,
+            "path": fresh.unit_id,
+            "value_hash": fresh.live_hash,
+        }
+    ]
+    (classified,) = classify([fresh], stored)
+    assert classified.cls is HunkClass.PENDING
+
+
+@given(identity_text=st.text())
+def test_property_unit_kind_namespaces_never_alias(identity_text: str) -> None:
+    assert UnitRef.line(identity_text) != UnitRef.key(identity_text)
+
+
 def test_classify_rejects_duplicate_stored_unit_ids() -> None:
     (fresh,) = extract_hunks(b"old\n", b"new\n")
     row: dict[str, object] = {
+        "kind": "line",
         "cls": "shared",
         "label": fresh.label,
         "live_hash": fresh.live_hash,
@@ -181,6 +203,7 @@ def test_classify_anchor_stable_but_changed_keeps_class_flagged() -> None:
     fresh1 = _by_label(extract_hunks(BASE, LIVE))["## Host paths"]
     stored: list[dict[str, object]] = [
         {
+            "kind": "line",
             "cls": HunkClass.SHARED.value,
             "label": fresh1.label,
             "live_hash": fresh1.live_hash,
@@ -360,6 +383,7 @@ def test_classify_carries_draft_hash_for_drafted_row() -> None:
     shell = _by_label(fresh)["## Shell"]
     stored: list[dict[str, object]] = [
         {
+            "kind": "line",
             "cls": HunkClass.SHARED_DRAFTED.value,
             "label": shell.label,
             "live_hash": shell.live_hash,
@@ -382,7 +406,7 @@ def test_reconstruct_splices_draft_not_live_not_base() -> None:
 
     h = _drafted("## Host paths")
     draft = b"workdir: $HOME\n"  # the shareable rewrite
-    out = reconstruct(BASE, LIVE, [h], {h.unit_id: draft})
+    out = reconstruct(BASE, LIVE, [h], {h.ref: draft})
     assert b"workdir: $HOME" in out  # the DRAFT is promoted into tracked
     assert b"workdir: /home/raul" not in out  # NOT live (host bytes stay local)
     assert b"workdir: /home/generic" not in out  # NOT base
@@ -401,7 +425,7 @@ def test_reconstruct_drafted_independent_of_live_drift() -> None:
         cls=HunkClass.SHARED_DRAFTED,
         draft_hash="sha256:dd",
     )
-    out = reconstruct(BASE, live2, [h2], {h2.unit_id: draft})
+    out = reconstruct(BASE, live2, [h2], {h2.ref: draft})
     assert b"workdir: $HOME" in out
     assert b"somewhere-else" not in out
 
@@ -412,6 +436,14 @@ def test_reconstruct_missing_draft_raises() -> None:
     h = _drafted("## Host paths")
     with pytest.raises(InvariantViolation, match="no draft"):
         reconstruct(BASE, LIVE, [h], {})  # dangling draft pointer → fail-closed
+
+
+def test_reconstruct_rejects_key_draft_with_same_identity() -> None:
+    from setforge.reconcile.hunks import reconstruct
+
+    h = _drafted("## Host paths")
+    with pytest.raises(InvariantViolation, match="no draft"):
+        reconstruct(BASE, LIVE, [h], {UnitRef.key(h.unit_id): b"wrong kind\n"})
 
 
 def test_classify_drafted_anchor_collision_fails_safe() -> None:

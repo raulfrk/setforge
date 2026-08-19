@@ -9,7 +9,8 @@ import pytest
 from setforge.cli import stage as stage_mod
 from setforge.cli.stage import QUIT, FileStage, _Quit, collect_stages, counts, walk
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
-from setforge.reconcile.types import HunkClass, file_id
+from setforge.errors import InvariantViolation
+from setforge.reconcile.types import HunkClass, UnitRef, file_id
 
 _BASE = b"## Tool prefs\nUse rg not grep.\n\n## Host paths\nworkdir: /home/generic\n"
 _LIVE = (
@@ -84,6 +85,34 @@ def test_collect_classifies_unstaged_as_pending(
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     assert {h.label for h in stage.hunks} == {"## Shell", "## Host paths"}
     assert all(h.cls is HunkClass.PENDING for h in stage.hunks)
+
+
+def test_collect_rejects_persisted_key_units_for_plain_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import locking
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    with locking.profile_lock(profile):
+        store.record(
+            profile,
+            file_id("CLAUDE.md"),
+            base=_BASE,
+            local=_LIVE,
+            hunks=[
+                {
+                    "kind": "key",
+                    "cls": "local",
+                    "label": "foreign",
+                    "path": "foreign",
+                    "value_hash": "sha256:value",
+                }
+            ],
+        )
+
+    with pytest.raises(InvariantViolation, match="current 'line' routing"):
+        collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
 
 
 def test_collect_skips_file_with_no_recorded_base(
@@ -244,7 +273,9 @@ def test_apply_keep_local_draft_stores_draft_and_keeps_live(
     entry = store.read_index(profile).files["CLAUDE.md"]
     classes = {row["label"]: row["cls"] for row in entry.hunks}
     assert classes["## Shell"] == "shared_drafted"
-    assert store.read_drafts(profile, fid) == {_shell_anchor(stage): draft}
+    assert store.read_drafts(profile, fid) == {
+        UnitRef.line(_shell_anchor(stage)): draft
+    }
     assert stage.dst.read_bytes() == _LIVE  # live file UNCHANGED (host keeps theirs)
     store.verify(profile, fid)  # manifest matches the SHARED_DRAFTED hunk
 

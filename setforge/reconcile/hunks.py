@@ -26,8 +26,9 @@ from dataclasses import dataclass
 from patiencediff import PatienceSequenceMatcher
 
 from setforge.errors import InvariantViolation
+from setforge.reconcile.index_model import KIND_LINE
 from setforge.reconcile.merge import split_lines  # canonical engine line splitter
-from setforge.reconcile.types import HunkClass, content_sha
+from setforge.reconcile.types import HunkClass, UnitRef, content_sha
 
 #: Base-context lines hashed on each side of a hunk to anchor its identity to
 #: surrounding base content (so an edit elsewhere in the file does not re-mint it).
@@ -72,6 +73,10 @@ class Hunk:
     reloc_anchor: str | None = None
     legacy_anchor: str | None = None
     legacy_unit_id: str | None = None
+
+    @property
+    def ref(self) -> UnitRef:
+        return UnitRef.line(self.unit_id)
 
 
 def _norm(lines: list[bytes]) -> bytes:
@@ -205,6 +210,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     their unique legacy context anchor. Every stored row is consumed at most once;
     duplicate v2 IDs fail closed instead of selecting an arbitrary row.
     """
+    stored = [row for row in stored if row.get("kind") == KIND_LINE]
     fresh_unit_counts = Counter(h.unit_id for h in fresh)
     duplicates = sorted(
         unit_id for unit_id, count in fresh_unit_counts.items() if count > 1
@@ -381,23 +387,29 @@ def _with(
     )
 
 
-def bind_drafts(hunks: list[Hunk], drafts: dict[str, bytes]) -> dict[str, bytes]:
+def bind_drafts(
+    hunks: list[Hunk], drafts: dict[UnitRef, bytes]
+) -> dict[UnitRef, bytes]:
     """Bind migrated v1 draft keys to their unique freshly matched v2 units."""
     bound = dict(drafts)
     for hunk in hunks:
-        legacy_key = hunk.legacy_unit_id
+        legacy_key = (
+            UnitRef.line(hunk.legacy_unit_id)
+            if hunk.legacy_unit_id is not None
+            else None
+        )
         if legacy_key is None or legacy_key not in bound:
             continue
-        if hunk.unit_id in bound:
+        if hunk.ref in bound:
             raise InvariantViolation(
                 f"draft store contains both legacy and v2 keys for {hunk.unit_id}"
             )
-        bound[hunk.unit_id] = bound.pop(legacy_key)
+        bound[hunk.ref] = bound.pop(legacy_key)
     return bound
 
 
 def reconstruct(
-    base: bytes, live: bytes, hunks: list[Hunk], drafts: dict[str, bytes]
+    base: bytes, live: bytes, hunks: list[Hunk], drafts: dict[UnitRef, bytes]
 ) -> bytes:
     """Rebuild the tracked content from ``base`` with each promoted region spliced.
 
@@ -407,7 +419,7 @@ def reconstruct(
     * a non-``changed`` ``SHARED`` hunk takes its **live** bytes (see
       :func:`_promotes`);
     * a non-``changed`` ``SHARED_DRAFTED`` hunk takes its **draft** bytes from
-      ``drafts`` keyed by the hunk's ``unit_id`` — NOT live (which stays
+      ``drafts`` keyed by the hunk's typed LINE reference — NOT live (which stays
       host-specific) and NOT base. A ``SHARED_DRAFTED`` hunk whose draft is
       missing from ``drafts`` raises :class:`~setforge.errors.InvariantViolation`
       (fail-closed: a dangling draft pointer never silently falls back to
@@ -429,7 +441,7 @@ def reconstruct(
         out.extend(base_lines[cursor:i1])  # unchanged region before this hunk
         if hunk.cls is HunkClass.SHARED_DRAFTED and not hunk.changed:
             try:
-                out.append(drafts[hunk.unit_id])  # shareable draft, verbatim bytes
+                out.append(drafts[hunk.ref])  # shareable draft, verbatim bytes
             except KeyError as err:
                 raise InvariantViolation(
                     f"SHARED_DRAFTED hunk {hunk.unit_id} has no draft in the store"
@@ -462,7 +474,7 @@ def assert_stage_fidelity(
     live: bytes,
     tracked: bytes,
     hunks: list[Hunk],
-    drafts: dict[str, bytes],
+    drafts: dict[UnitRef, bytes],
 ) -> None:
     """INV-8: tracked must equal ``base`` with only the promoted set spliced in.
 

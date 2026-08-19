@@ -50,6 +50,8 @@ from setforge.reconcile.types import (
     Absent,
     FileId,
     HunkClass,
+    UnitKind,
+    UnitRef,
     content_sha,
     file_id,
 )
@@ -271,59 +273,93 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return parsed
 
 
-def _decode_drafts_manifest(text: str) -> dict[str, bytes]:
+def _decode_draft_value(identity: str, value: object) -> bytes:
+    if not isinstance(value, str):
+        raise ValueError(f"drafts manifest value for {identity!r} is not a string")
+    if len(value) > _MAX_DRAFT_VALUE_ENCODED_BYTES:
+        raise ValueError(
+            f"drafts manifest value for {identity!r} exceeds the "
+            f"{_MAX_DRAFT_VALUE_DECODED_BYTES}-byte per-draft limit "
+            f"(encoded {len(value)} > {_MAX_DRAFT_VALUE_ENCODED_BYTES})"
+        )
+    return base64.b64decode(value, validate=True)
+
+
+def _decode_drafts_manifest(
+    text: str,
+) -> tuple[dict[UnitRef, bytes] | None, dict[str, bytes] | None]:
     obj = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    if isinstance(obj, list):
+        typed: dict[UnitRef, bytes] = {}
+        for row in obj:
+            if not isinstance(row, dict):
+                raise ValueError("typed drafts manifest row must be an object")
+            if set(row) != {"kind", "identity", "data"}:
+                raise ValueError("typed drafts manifest row has unknown/missing fields")
+            kind = row["kind"]
+            identity = row["identity"]
+            if not isinstance(kind, str) or kind not in {
+                item.value for item in UnitKind
+            }:
+                raise ValueError(f"typed drafts manifest has unknown kind {kind!r}")
+            if not isinstance(identity, str):
+                raise ValueError("typed drafts manifest identity must be a string")
+            ref = UnitRef(UnitKind(kind), identity)
+            if ref in typed:
+                raise ValueError(f"duplicate typed draft reference {ref!r}")
+            typed[ref] = _decode_draft_value(identity, row["data"])
+        return typed, None
     if not isinstance(obj, dict):
-        raise ValueError("drafts manifest top level must be an object")
-    result: dict[str, bytes] = {}
-    for unit_id, b64 in obj.items():
-        if not isinstance(b64, str):
-            raise ValueError(f"drafts manifest value for {unit_id!r} is not a string")
-        if len(b64) > _MAX_DRAFT_VALUE_ENCODED_BYTES:
-            raise ValueError(
-                f"drafts manifest value for {unit_id!r} exceeds the "
-                f"{_MAX_DRAFT_VALUE_DECODED_BYTES}-byte per-draft limit "
-                f"(encoded {len(b64)} > {_MAX_DRAFT_VALUE_ENCODED_BYTES})"
-            )
-        result[str(unit_id)] = base64.b64decode(b64, validate=True)
-    return result
+        raise ValueError("drafts manifest top level must be a list or legacy object")
+    legacy: dict[str, bytes] = {}
+    for identity, value in obj.items():
+        legacy[identity] = _decode_draft_value(identity, value)
+    return None, legacy
 
 
-def _remap_legacy_draft_keys(
-    profile: str, fid: FileId, result: dict[str, bytes]
-) -> dict[str, bytes]:
+def _row_ref(row: dict[str, object]) -> UnitRef:
+    if row.get("kind") == index_model.KIND_KEY:
+        return UnitRef.key(str(row["path"]))
+    return UnitRef.line(str(row["unit_id"]))
+
+
+def _type_legacy_drafts(
+    profile: str, fid: FileId, legacy: dict[str, bytes]
+) -> dict[UnitRef, bytes]:
     entry = read_index(profile).files.get(str(fid))
-    legacy_to_units: dict[str, list[str]] = {}
+    candidates: dict[str, list[UnitRef]] = {}
     for row in entry.hunks if entry is not None else []:
-        legacy_anchor = row.get("legacy_anchor")
-        unit_id = row.get("unit_id")
-        if isinstance(legacy_anchor, str) and isinstance(unit_id, str):
-            legacy_to_units.setdefault(legacy_anchor, []).append(unit_id)
-    for legacy_anchor, unit_ids in legacy_to_units.items():
-        if legacy_anchor not in result:
+        if row.get("cls") != HunkClass.SHARED_DRAFTED.value:
             continue
-        if len(unit_ids) != 1:
+        ref = _row_ref(row)
+        candidates.setdefault(ref.identity, []).append(ref)
+        old_anchor = row.get("legacy_anchor")
+        if isinstance(old_anchor, str):
+            candidates.setdefault(old_anchor, []).append(ref)
+    typed: dict[UnitRef, bytes] = {}
+    for identity, data in legacy.items():
+        refs = candidates.get(identity, [])
+        if len(refs) != 1:
             raise ValueError(
-                f"legacy draft key {legacy_anchor!r} maps to multiple line units"
+                f"legacy draft identity {identity!r} does not map to exactly one "
+                "persisted unit kind"
             )
-        unit_id = unit_ids[0]
-        if unit_id in result:
-            raise ValueError(
-                f"drafts manifest contains both legacy key {legacy_anchor!r} "
-                f"and v2 unit key {unit_id!r}"
-            )
-        result[unit_id] = result.pop(legacy_anchor)
-    return result
+        ref = refs[0]
+        if ref in typed:
+            raise ValueError(f"legacy drafts map multiple identities to {ref!r}")
+        typed[ref] = data
+    return typed
 
 
-def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
+def read_drafts(profile: str, fid: FileId) -> dict[UnitRef, bytes]:
     """Return shareable-draft bytes for ``fid``, keyed by persisted unit identity.
 
-    Empty dict when nothing is recorded. The on-disk manifest is a JSON object
-    mapping ``unit_id``/structured ``path`` → base64 bytes; each draft hash is
-    recorded in the index, but the bytes themselves live here (the index stays
-    pure metadata). Fail-closed: a damaged manifest raises rather than silently
-    dropping a blessed draft.
+    Empty dict when nothing is recorded. The current on-disk manifest is a JSON
+    list whose rows carry ``kind``, ``identity``, and base64 ``data``; legacy flat
+    objects are typed through their unique drafted index row on read. Each draft
+    hash is recorded in the index, but the bytes themselves live here (the index
+    stays pure metadata). Fail-closed: a damaged or ambiguous manifest raises
+    rather than silently dropping or misrouting a blessed draft.
     """
     path = _drafts_path(profile, fid)
     try:
@@ -335,15 +371,20 @@ def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
             f"failed to read drafts for {profile}/{fid}: {err}"
         ) from err
     try:
-        return _remap_legacy_draft_keys(profile, fid, _decode_drafts_manifest(text))
+        typed, legacy = _decode_drafts_manifest(text)
+        return (
+            typed
+            if typed is not None
+            else _type_legacy_drafts(profile, fid, legacy or {})
+        )
     except (ValueError, json.JSONDecodeError, binascii.Error) as err:
         raise ReconcileStoreError(
             f"drafts manifest for {profile}/{fid} is corrupt: {err}"
         ) from err
 
 
-def write_drafts(profile: str, fid: FileId, drafts: dict[str, bytes]) -> None:
-    """Record identity-keyed ``drafts`` for ``fid``. Call inside ``profile_lock``.
+def write_drafts(profile: str, fid: FileId, drafts: dict[UnitRef, bytes]) -> None:
+    """Record typed-reference-keyed ``drafts``. Call inside ``profile_lock``.
 
     An empty mapping removes the manifest (no drafted hunks remain). Written
     BEFORE the index in :func:`record` so a crash leaves a prunable orphan
@@ -354,10 +395,16 @@ def write_drafts(profile: str, fid: FileId, drafts: dict[str, bytes]) -> None:
         if not drafts:
             path.unlink(missing_ok=True)
             return
-        obj = {
-            anchor: base64.b64encode(data).decode("ascii")
-            for anchor, data in drafts.items()
-        }
+        if not all(isinstance(ref, UnitRef) for ref in drafts):
+            raise ReconcileStoreError("draft keys must be typed UnitRef values")
+        obj = [
+            {
+                "kind": ref.kind.value,
+                "identity": ref.identity,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+            for ref, data in sorted(drafts.items())
+        ]
         _mkdir_secure(path.parent)
         atomicio.atomic_write_text(
             path,
@@ -492,22 +539,20 @@ def _verify_drafts(profile: str, fid: FileId, entry: FileEntry | None) -> None:
     for a drafted row, or a tampered draft is caught fail-closed.
     """
     drafted = {
-        str(
-            row["path"] if row.get("kind") == index_model.KIND_KEY else row["unit_id"]
-        ): str(row["draft_hash"])
+        _row_ref(row): str(row["draft_hash"])
         for row in (entry.hunks if entry is not None else [])
         if row.get("cls") == HunkClass.SHARED_DRAFTED.value
     }
     manifest = read_drafts(profile, fid)
     if set(manifest) != set(drafted):
         raise InvariantViolation(
-            f"INV-10: {profile}/{fid} drafts manifest anchors do not match the "
-            f"SHARED_DRAFTED hunk set"
+            f"INV-10: {profile}/{fid} typed drafts manifest does not match the "
+            f"SHARED_DRAFTED unit set"
         )
-    for anchor, data in manifest.items():
-        if content_sha(data) != drafted[anchor]:
+    for ref, data in manifest.items():
+        if content_sha(data) != drafted[ref]:
             raise InvariantViolation(
-                f"INV-2: {profile}/{fid} draft bytes for {anchor} do not match the "
+                f"INV-2: {profile}/{fid} draft bytes for {ref} do not match the "
                 f"recorded draft_hash"
             )
 
@@ -557,7 +602,7 @@ def record(
     base: bytes,
     local: bytes | Absent,
     hunks: list[dict[str, object]] | None = None,
-    drafts: dict[str, bytes] | None = None,
+    drafts: dict[UnitRef, bytes] | None = None,
 ) -> None:
     """Record a base+local+drafts+index quad for ``fid``. Call inside ``profile_lock``.
 

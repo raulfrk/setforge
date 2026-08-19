@@ -18,7 +18,7 @@ from setforge.compare import CompareStatus, DriftClass, compare_profile
 from setforge.config import Config, Profile, TrackedFile
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.types import HunkClass, file_id
+from setforge.reconcile.types import HunkClass, UnitRef, file_id
 
 BASE = b"## Worktrees\nUse wt.\n\n## Paths\nworkdir: /home/generic\n"
 LIVE = b"## Worktrees\nUse wt.\n\n## Shell\nzsh\n\n## Paths\nworkdir: /home/raul\n"
@@ -32,7 +32,7 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _stage(
-    classes: dict[str, HunkClass], drafts: dict[str, bytes] | None = None
+    classes: dict[str, HunkClass], drafts: dict[UnitRef, bytes] | None = None
 ) -> list:
     """Record a reconcile-staged state for file-id 'x' over BASE/LIVE."""
     drafts = drafts or {}
@@ -40,7 +40,7 @@ def _stage(
     for h in reconcile_hunks.extract_hunks(BASE, LIVE):
         cls = classes.get(h.label, HunkClass.PENDING)
         draft_hash = (
-            reconcile_store.content_sha(drafts[h.unit_id])
+            reconcile_store.content_sha(drafts[h.ref])
             if cls is HunkClass.SHARED_DRAFTED
             else None
         )
@@ -92,8 +92,8 @@ def test_staged_drafted_divergence_is_expected(tmp_path: Path) -> None:
         h for h in reconcile_hunks.extract_hunks(BASE, LIVE) if h.label == "## Paths"
     )
     draft = b"workdir: $HOME\n"
-    hunks = _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.unit_id: draft})
-    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {paths.unit_id: draft})
+    hunks = _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.ref: draft})
+    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {paths.ref: draft})
     config, repo = _config(tmp_path, tracked)
 
     entry = compare_profile(config, "p", repo).entries[0]
@@ -109,7 +109,7 @@ def test_drafted_tracked_missing_the_draft_is_unexpected(tmp_path: Path) -> None
     )
     _stage(
         {"## Paths": HunkClass.SHARED_DRAFTED},
-        {paths.unit_id: b"workdir: $HOME\n"},
+        {paths.ref: b"workdir: $HOME\n"},
     )
     config, repo = _config(tmp_path, BASE)  # tracked lacks the $HOME draft splice
 
