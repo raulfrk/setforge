@@ -191,6 +191,61 @@ def test_reconstruct_all_shared_shape_change_is_order_independent(
     assert forward == reverse == live
 
 
+@pytest.mark.parametrize("fmt", [StructuredFormat.YAML, StructuredFormat.JSONC])
+@pytest.mark.parametrize(
+    ("base", "live"),
+    [
+        pytest.param(b"1\n", b"2\n", id="scalar-to-scalar"),
+        pytest.param(b"a: 1\n", b"2\n", id="mapping-to-scalar-yaml"),
+        pytest.param(b"1\n", b"a:\n  b: 2\n", id="scalar-to-mapping-yaml"),
+    ],
+)
+def test_reconstruct_shared_document_root_replacement_is_live_exact(
+    fmt: StructuredFormat, base: bytes, live: bytes
+) -> None:
+    if fmt is StructuredFormat.JSONC:
+        base = b'{"a": 1}\n' if base == b"a: 1\n" else base
+        live = b'{"a": {"b": 2}}\n' if live == b"a:\n  b: 2\n" else live
+    units = [
+        replace(unit, cls=HunkClass.SHARED)
+        for unit in extract_structured_units(base, live, fmt)
+    ]
+    assert any(unit.path == "" for unit in units)
+
+    assert reconstruct_structured(base, live, units, {}, fmt) == live
+    assert reconstruct_structured(base, live, list(reversed(units)), {}, fmt) == live
+
+
+def test_reconstruct_root_and_deeper_mixed_intent_fails_closed() -> None:
+    fmt = StructuredFormat.YAML
+    base = b"0\n"
+    live = b"a:\n  b: 2\n"
+    units = [
+        replace(
+            unit,
+            cls=HunkClass.SHARED if unit.path == "" else HunkClass.LOCAL,
+        )
+        for unit in extract_structured_units(base, live, fmt)
+    ]
+
+    with pytest.raises(StructuredParseError, match=r"incompatible.*intent"):
+        reconstruct_structured(base, live, units, {}, fmt)
+
+
+def test_jsonc_mapping_change_stays_one_opaque_root_unit() -> None:
+    """JSON/JSONC staging remains whole-document, never recursive key walking."""
+    base = b'{"a": 1, "untouched": true}\n'
+    live = b'{"a": 2, "untouched": true}\n'
+
+    units = extract_structured_units(base, live, StructuredFormat.JSONC)
+
+    assert [unit.path for unit in units] == [""]
+    promoted = [replace(units[0], cls=HunkClass.SHARED)]
+    assert (
+        reconstruct_structured(base, live, promoted, {}, StructuredFormat.JSONC) == live
+    )
+
+
 @pytest.mark.parametrize(
     ("classes"),
     [
@@ -781,6 +836,45 @@ def test_extract_empty_string_key_distinct_from_nonempty_same_shape() -> None:
 
     assert len(units) == 2
     assert len({u.path for u in units}) == 2
+
+
+@pytest.mark.parametrize(
+    ("base", "live", "expected"),
+    [
+        pytest.param(b'"": old\nkeep: 1\n', b'"": new\nkeep: 1\n', "new", id="update"),
+        pytest.param(b'"": old\nkeep: 1\n', b"keep: 1\n", None, id="delete"),
+    ],
+)
+def test_yaml_empty_key_uses_non_root_path_and_reconstructs(
+    base: bytes, live: bytes, expected: str | None
+) -> None:
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+    assert [unit.path for unit in units] == [r"\0"]
+
+    out = reconstruct_structured(
+        base,
+        live,
+        [replace(units[0], cls=HunkClass.SHARED)],
+        {},
+        StructuredFormat.YAML,
+    )
+    model = cast("Mapping[str, object]", _load_model(out, StructuredFormat.YAML))
+    if expected is None:
+        assert "" not in model
+    else:
+        assert model[""] == expected
+
+
+def test_legacy_yaml_empty_path_row_still_addresses_empty_key() -> None:
+    """A mapping↔mapping legacy ``path:''`` remains an empty-key identity."""
+    base = b'"": old\nkeep: 1\n'
+    live = b'"": new\nkeep: 1\n'
+    legacy = KeyUnit(HunkClass.SHARED, "", "", "sha256:legacy")
+
+    out = reconstruct_structured(base, live, [legacy], {}, StructuredFormat.YAML)
+
+    model = cast("Mapping[str, object]", _load_model(out, StructuredFormat.YAML))
+    assert model[""] == "new"
 
 
 def test_reconstruct_promotes_flat_dotted_key_to_flat_slot() -> None:

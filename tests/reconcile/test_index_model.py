@@ -179,7 +179,32 @@ def test_v2_rejects_non_boolean_staged(value: object) -> None:
         )
 
 
-def test_v1_duplicate_line_anchors_fail_closed() -> None:
+def test_v1_same_anchor_distinct_live_hashes_migrate_to_distinct_ids() -> None:
+    import json
+
+    rows = [
+        {
+            "cls": "shared",
+            "label": label,
+            "live_hash": live_hash,
+            "anchor": "sha256:a",
+        }
+        for label, live_hash in (("x", "sha256:h1"), ("y", "sha256:h2"))
+    ]
+    text = json.dumps(
+        {
+            "schema_version": "1.0",
+            "files": {"f": {"present": True, "local_hash": None, "hunks": rows}},
+        }
+    )
+
+    migrated = loads(text).files["f"].hunks
+
+    assert {row["legacy_anchor"] for row in migrated} == {"sha256:a"}
+    assert len({row["unit_id"] for row in migrated}) == 2
+
+
+def test_v1_duplicate_line_identity_fails_closed() -> None:
     import json
 
     row = {

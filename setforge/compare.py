@@ -922,7 +922,7 @@ def _reconcile_staged_expected_structured(
         tracked = src.read_bytes()
         fresh = su.extract_structured_units(base, live, fmt)
         units = su.classify_structured(
-            fresh, index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
+            fresh, index_model.require_unit_kind(entry.hunks, UnitKind.KEY), fmt
         )
         drafts = reconcile_store.read_drafts(profile, fid)
         su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)

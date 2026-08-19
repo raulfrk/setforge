@@ -126,11 +126,11 @@ class StructuralMergeResult:
 # only a key with a literal ``.`` (the previously-colliding case) or a ``\``
 # (vanishingly rare) changes encoding.
 #
-# "Root" is a real ``None`` sentinel, NEVER the empty string: an empty-string
-# mapping KEY is a genuine segment (it encodes to ``""`` and prefixes its
-# children with the empty STRING), distinct from the no-prefix root. Using
-# empty-string truthiness for "root" would collapse ``{"": {"a": 1}}`` onto
-# ``{"a": 1}`` — the same silent data-loss the codec exists to prevent.
+# "Root" is a real ``None`` sentinel, NEVER the empty string.  ``\0`` is the
+# canonical encoding of an empty-string mapping key.  That sequence was never
+# emitted by the previous encoder (``"0"`` encoded as ``"0"`` and a literal
+# backslash-zero as ``"\\\\0"``), so ordinary persisted paths remain compatible
+# while the staged-unit root identity ``""`` stays disjoint from a real key.
 
 
 def encode_key_segment(key: str) -> str:
@@ -141,6 +141,8 @@ def encode_key_segment(key: str) -> str:
     dot in a key is not mistaken for a segment separator). A key with neither
     character is returned UNCHANGED (identity) — the byte-compat guarantee.
     """
+    if key == "":
+        return r"\0"
     return key.replace("\\", "\\\\").replace(".", "\\.")
 
 
@@ -175,7 +177,13 @@ def split_key_path(path: str) -> list[str]:
     while i < n:
         ch = path[i]
         if ch == "\\" and i + 1 < n:
-            current.append(path[i + 1])
+            escaped = path[i + 1]
+            if escaped == "0" and not current:
+                next_index = i + 2
+                if next_index == n or path[next_index] == ".":
+                    i = next_index
+                    continue
+            current.append(escaped)
             i += 2
             continue
         if ch == ".":

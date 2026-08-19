@@ -105,7 +105,7 @@ def _preflight_staged_file(
         raise InvariantViolation(
             f"staged file {sub_name!r} cannot be parsed as {fmt.value}"
         ) from err
-    units = su_mod.classify_structured(fresh, entry.hunks)
+    units = su_mod.classify_structured(fresh, entry.hunks, fmt)
     su_mod.reconstruct_structured(base, live, units, drafts, fmt)
     return True
 
@@ -263,7 +263,7 @@ def preview_capture_profile(
                 else:
                     stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
                     key_units = su_mod.classify_structured(
-                        su_mod.extract_structured_units(base, live, fmt), stored
+                        su_mod.extract_structured_units(base, live, fmt), stored, fmt
                     )
                     proposed = su_mod.reconstruct_structured(
                         base, live, key_units, drafts, fmt
@@ -517,8 +517,10 @@ def _capture_staged_structured(
     stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
     live = dst.read_bytes()
     fresh = su_mod.extract_structured_units(base, live, fmt)
-    units = su_mod.classify_structured(fresh, stored)
-    drafts = reconcile_store.read_drafts(profile, fid)
+    units = su_mod.classify_structured(fresh, stored, fmt)
+    drafts = su_mod.bind_structured_drafts(
+        units, reconcile_store.read_drafts(profile, fid)
+    )
     new_text = su_mod.reconstruct_structured(base, live, units, drafts, fmt).decode(
         "utf-8"
     )

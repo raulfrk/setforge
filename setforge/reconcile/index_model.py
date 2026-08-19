@@ -154,9 +154,13 @@ def _frame(part: bytes) -> bytes:
     return len(part).to_bytes(8, "big") + part
 
 
-def _legacy_line_unit_id(anchor: str) -> str:
-    """Give a v1 anchor a deterministic bridge ID during in-memory migration."""
-    return content_sha(b"setforge.legacy-line.v1\x00" + _frame(anchor.encode("ascii")))
+def _legacy_line_unit_id(anchor: str, live_hash: str) -> str:
+    """Give one exact v1 line identity a deterministic in-memory bridge ID."""
+    return content_sha(
+        b"setforge.legacy-line.v1\x00"
+        + _frame(anchor.encode("ascii"))
+        + _frame(live_hash.encode("ascii"))
+    )
 
 
 def _parse_staged(
@@ -224,11 +228,17 @@ def _migrate_v1_hunk(fid: str, row: object) -> dict[str, Any]:
                 f"index entry for {fid!r} has a line hunk row with a "
                 "missing/non-string 'anchor'"
             )
+        live_hash = row.get("live_hash")
+        if not isinstance(live_hash, str):
+            raise CorruptIndexError(
+                f"index entry for {fid!r} has a line hunk row with a "
+                "missing/non-string 'live_hash'"
+            )
         try:
-            unit_id = _legacy_line_unit_id(anchor)
+            unit_id = _legacy_line_unit_id(anchor, live_hash)
         except UnicodeEncodeError as err:
             raise CorruptIndexError(
-                f"index entry for {fid!r} has a non-ASCII legacy anchor"
+                f"index entry for {fid!r} has a non-ASCII legacy line identity"
             ) from err
         migrated.pop("anchor", None)
         migrated["kind"] = HunkKind.LINE

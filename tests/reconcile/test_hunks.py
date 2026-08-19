@@ -523,6 +523,39 @@ def test_legacy_match_requires_unique_fresh_anchor() -> None:
     ]
 
 
+def test_legacy_exact_identity_collision_requires_unique_fresh_side() -> None:
+    fresh = [
+        Hunk(
+            HunkClass.PENDING,
+            label,
+            "sha256:same-live",
+            unit_id,
+            span,
+            span,
+            legacy_anchor="sha256:legacy",
+        )
+        for label, unit_id, span in (
+            ("one", "sha256:u1", (0, 1)),
+            ("two", "sha256:u2", (2, 3)),
+        )
+    ]
+    stored: list[dict[str, object]] = [
+        {
+            "kind": "line",
+            "cls": "shared",
+            "label": "old",
+            "live_hash": "sha256:same-live",
+            "unit_id": "sha256:legacy-id",
+            "legacy_anchor": "sha256:legacy",
+        }
+    ]
+
+    assert [hunk.cls for hunk in classify(fresh, stored)] == [
+        HunkClass.PENDING,
+        HunkClass.PENDING,
+    ]
+
+
 # R1 -> R2 simulates an upstream heading rename that breaks exact/anchor
 # identity, leaving only the heading-identity fallback to carry the class.
 BASE_R1 = b"## Alpha\naaa\n## Beta\nbbb\n"

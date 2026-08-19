@@ -210,9 +210,12 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     reset). Anything unmatched stays PENDING.
 
     A ``SHARED_DRAFTED`` row is the exception: a matching ``unit_id`` carries the
-    draft with ``changed=False`` independent of live bytes. V1 rows bridge through
-    their unique legacy context anchor. Every stored row is consumed at most once;
-    duplicate v2 IDs fail closed instead of selecting an arbitrary row.
+    draft with ``changed=False`` independent of live bytes. V1 rows first bridge
+    through their exact old ``(legacy_anchor, live_hash)`` identity, allowing
+    repeated context anchors whose changed bytes differ. A changed v1 row may
+    fall back by anchor only when that anchor is unique on both sides. Every
+    stored row is consumed at most once; duplicate identities fail closed instead
+    of selecting an arbitrary row.
     """
     stored = [row for row in stored if row.get("kind") == KIND_LINE]
     fresh_unit_counts = Counter(h.unit_id for h in fresh)
@@ -239,6 +242,17 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
         for index, row in enumerate(stored)
         if isinstance(row.get("unit_id"), str)
     }
+    legacy_identity_counts = Counter(
+        (str(anchor), str(row["live_hash"]))
+        for row in stored
+        if isinstance((anchor := row.get("legacy_anchor", row.get("anchor"))), str)
+    )
+    legacy_by_identity = {
+        (str(anchor), str(row["live_hash"])): (index, row)
+        for index, row in enumerate(stored)
+        if isinstance((anchor := row.get("legacy_anchor", row.get("anchor"))), str)
+        and legacy_identity_counts[(str(anchor), str(row["live_hash"]))] == 1
+    }
     legacy_counts = Counter(
         str(anchor)
         for row in stored
@@ -252,6 +266,11 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     }
     fresh_legacy_counts = Counter(
         hunk.legacy_anchor for hunk in fresh if hunk.legacy_anchor is not None
+    )
+    fresh_legacy_identity_counts = Counter(
+        (hunk.legacy_anchor, hunk.live_hash)
+        for hunk in fresh
+        if hunk.legacy_anchor is not None
     )
     # Stored LOCAL rows keyed by their minted heading identity, but ONLY where the
     # heading is unique among stored rows — a duplicated reloc_anchor is ambiguous,
@@ -293,6 +312,31 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
             )
             continue
         legacy_anchor = hunk.legacy_anchor
+        exact_legacy = (
+            legacy_by_identity.get((legacy_anchor, hunk.live_hash))
+            if legacy_anchor is not None
+            and fresh_legacy_identity_counts[(legacy_anchor, hunk.live_hash)] == 1
+            else None
+        )
+        if exact_legacy is not None and exact_legacy[0] not in consumed:
+            index, row = exact_legacy
+            consumed.add(index)
+            out.append(
+                _with(
+                    hunk,
+                    cls=HunkClass(str(row["cls"])),
+                    changed=False,
+                    confirmed_hash=str(row["live_hash"]),
+                    draft_hash=_row_draft_hash(row),
+                    reloc_anchor=_row_reloc_anchor(row),
+                    legacy_unit_id=(
+                        str(row["unit_id"])
+                        if isinstance(row.get("unit_id"), str)
+                        else None
+                    ),
+                )
+            )
+            continue
         legacy = (
             legacy_by_anchor.get(legacy_anchor) if legacy_anchor is not None else None
         )
@@ -309,7 +353,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                 _with(
                     hunk,
                     cls=HunkClass(str(row["cls"])),
-                    changed=not (drafted or str(row["live_hash"]) == hunk.live_hash),
+                    changed=not drafted,
                     confirmed_hash=str(row["live_hash"]),
                     draft_hash=_row_draft_hash(row),
                     reloc_anchor=_row_reloc_anchor(row),

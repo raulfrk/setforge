@@ -39,6 +39,7 @@ from setforge.structural_merge import (
     delete_node_at_path,
     get_at_path,
     get_node_at_path,
+    join_key_segments,
     set_at_path,
     set_node_at_path,
     split_key_path,
@@ -106,6 +107,7 @@ class KeyUnit:
     changed: bool = False
     confirmed_hash: str | None = None
     draft_hash: str | None = None
+    legacy_path: str | None = None
 
     @property
     def ref(self) -> UnitRef:
@@ -242,9 +244,10 @@ def extract_structured_units(
 ) -> list[KeyUnit]:
     """Extract the per-key base↔live diff units (each unclassified → PENDING).
 
-    Enumerates the union of leaf paths in both models; every path whose base and
-    live values differ becomes one PENDING :class:`KeyUnit`. An empty result
-    means live equals base (nothing to stage).
+    YAML enumerates the union of leaf paths in both models. JSON/JSONC remains
+    intentionally opaque and therefore produces at most one whole-document unit
+    at ``path == ""``. Every differing path becomes one PENDING
+    :class:`KeyUnit`; an empty result means live equals base (nothing to stage).
     """
     base_leaves = dict(_walk_leaves(_load_model(base, fmt)))
     live_leaves = dict(_walk_leaves(_load_model(live, fmt)))
@@ -300,8 +303,38 @@ def _row_draft_hash(row: dict[str, object]) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _normalize_legacy_yaml_paths(
+    fresh: list[KeyUnit],
+    rows: list[dict[str, object]],
+    fmt: StructuredFormat | None,
+) -> tuple[list[dict[str, object]], dict[str, str]]:
+    """Alias uniquely-shaped pre-codec YAML empty keys to canonical paths."""
+    if fmt is not StructuredFormat.YAML:
+        return rows, {}
+    fresh_paths = {unit.path for unit in fresh}
+    normalized: list[dict[str, object]] = []
+    legacy_paths: dict[str, str] = {}
+    for row in rows:
+        old_path = str(row["path"])
+        segments = split_key_path(old_path)
+        canonical = join_key_segments(segments)
+        if "" in segments and canonical != old_path and canonical in fresh_paths:
+            candidates = fresh_paths & {old_path, canonical}
+            if len(candidates) != 1:
+                raise InvariantViolation(
+                    f"legacy YAML key path {old_path!r} is ambiguous with a "
+                    "document-root or shape-transition unit"
+                )
+            legacy_paths[canonical] = old_path
+            row = {**row, "path": canonical}
+        normalized.append(row)
+    return normalized, legacy_paths
+
+
 def classify_structured(
-    fresh: list[KeyUnit], stored: list[dict[str, object]]
+    fresh: list[KeyUnit],
+    stored: list[dict[str, object]],
+    fmt: StructuredFormat | None = None,
 ) -> list[KeyUnit]:
     """Carry stored classifications onto freshly-extracted units by PATH.
 
@@ -320,6 +353,7 @@ def classify_structured(
     ``KeyError`` here.
     """
     key_rows = [r for r in stored if r.get("kind") == KIND_KEY]
+    key_rows, legacy_paths = _normalize_legacy_yaml_paths(fresh, key_rows, fmt)
     for source, paths in (
         ("fresh", [unit.path for unit in fresh]),
         ("stored", [str(row["path"]) for row in key_rows]),
@@ -349,6 +383,7 @@ def classify_structured(
                     changed=False,
                     confirmed_hash=str(drafted["value_hash"]),
                     draft_hash=_row_draft_hash(drafted),
+                    legacy_path=legacy_paths.get(unit.path),
                 )
             )
             continue
@@ -361,6 +396,7 @@ def classify_structured(
                     changed=False,
                     confirmed_hash=str(exact["value_hash"]),
                     draft_hash=_row_draft_hash(exact),
+                    legacy_path=legacy_paths.get(unit.path),
                 )
             )
             continue
@@ -373,11 +409,31 @@ def classify_structured(
                     changed=True,
                     confirmed_hash=str(moved["value_hash"]),
                     draft_hash=_row_draft_hash(moved),
+                    legacy_path=legacy_paths.get(unit.path),
                 )
             )
             continue
         out.append(unit)  # unmatched → PENDING (the extract default)
     return out
+
+
+def bind_structured_drafts(
+    units: list[KeyUnit], drafts: dict[UnitRef, bytes]
+) -> dict[UnitRef, bytes]:
+    """Bind an old YAML empty-key draft identity to its canonical fresh path."""
+    bound = dict(drafts)
+    for unit in units:
+        if unit.legacy_path is None:
+            continue
+        legacy_ref = UnitRef.key(unit.legacy_path)
+        if legacy_ref not in bound:
+            continue
+        if unit.ref in bound:
+            raise InvariantViolation(
+                f"draft store contains both legacy and canonical keys for {unit.path!r}"
+            )
+        bound[unit.ref] = bound.pop(legacy_ref)
+    return bound
 
 
 def _promotes(unit: KeyUnit) -> bool:
@@ -394,7 +450,9 @@ def _has_promoted_intent(unit: KeyUnit) -> bool:
     return unit.cls in (HunkClass.SHARED, HunkClass.SHARED_DRAFTED) and not unit.changed
 
 
-def _validated_reconstruction_order(units: list[KeyUnit]) -> list[KeyUnit]:
+def _validated_reconstruction_order(
+    units: list[KeyUnit], *, document_root: bool = False
+) -> list[KeyUnit]:
     """Validate overlaps and return an ancestor-before-descendant order.
 
     A structural shape change can yield overlapping leaf paths: replacing
@@ -409,7 +467,15 @@ def _validated_reconstruction_order(units: list[KeyUnit]) -> list[KeyUnit]:
     mapping-to-scalar and scalar-to-mapping reconstruction independent of the
     caller's unit order while preserving input order among equal-depth units.
     """
-    paths = [(unit, tuple(split_key_path(unit.path))) for unit in units]
+    paths = [
+        (
+            unit,
+            ()
+            if document_root and unit.path == ""
+            else tuple(split_key_path(unit.path)),
+        )
+        for unit in units
+    ]
     for index, (left, left_segments) in enumerate(paths):
         for right, right_segments in paths[index + 1 :]:
             shorter, longer = (
@@ -434,6 +500,30 @@ def _validated_reconstruction_order(units: list[KeyUnit]) -> list[KeyUnit]:
                     f"{left.path!r} overlaps {right.path!r}"
                 )
     return [unit for unit, _segments in sorted(paths, key=lambda item: len(item[1]))]
+
+
+def _reconstruct_document_root(
+    root: KeyUnit,
+    drafts: dict[UnitRef, bytes],
+    fmt: StructuredFormat,
+    *,
+    base: bytes,
+    live: bytes,
+) -> bytes:
+    """Resolve one explicit whole-document unit without dotted-path mutation."""
+    if root.cls is HunkClass.SHARED_DRAFTED and not root.changed:
+        try:
+            draft = drafts[root.ref]
+        except KeyError as err:
+            raise InvariantViolation(
+                "SHARED_DRAFTED document-root unit has no draft in the store"
+            ) from err
+        parsed = parse_scalar_draft(draft, fmt)
+        # json-five's model dumper does not accept a bare Python scalar. The
+        # bounded parser above already proved confinement, so an opaque JSON
+        # root draft can retain its validated bytes exactly.
+        return draft if fmt is StructuredFormat.JSONC else _dump_model(parsed, fmt)
+    return live if _promotes(root) else base
 
 
 def reconstruct_structured(
@@ -464,11 +554,27 @@ def reconstruct_structured(
     parent/descendant classifications and a promoted path absent from both the
     original base and live models raise :class:`~setforge.errors.StructuredParseError`.
     """
-    ordered_units = _validated_reconstruction_order(units)
+    drafts = bind_structured_drafts(units, drafts)
     original_base_model = _load_model(base, fmt)
-    base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
+    # JSON/JSONC is deliberately a single opaque root unit. For YAML, legacy
+    # persisted path ``""`` remains interpretable: mapping↔mapping means the old
+    # empty-string key, while any scalar root makes it a document replacement.
+    document_root = any(unit.path == "" for unit in units) and (
+        fmt is StructuredFormat.JSONC
+        or not isinstance(original_base_model, Mapping)
+        or not isinstance(live_model, Mapping)
+    )
+    ordered_units = _validated_reconstruction_order(units, document_root=document_root)
+    if document_root:
+        root = next(unit for unit in ordered_units if unit.path == "")
+        return _reconstruct_document_root(root, drafts, fmt, base=base, live=live)
+    base_model = _load_model(base, fmt)
     for unit in ordered_units:
+        # Before the canonical empty-key token existed, YAML mapping rows used
+        # ``path:""`` for a genuine empty key. ``document_root`` is false only
+        # for mapping↔mapping YAML, which makes that old interpretation safe.
+        operation_path = r"\0" if unit.path == "" else unit.path
         if unit.cls is HunkClass.SHARED_DRAFTED and not unit.changed:
             try:
                 draft = drafts[unit.ref]
@@ -476,12 +582,12 @@ def reconstruct_structured(
                 raise InvariantViolation(
                     f"SHARED_DRAFTED key-unit {unit.path!r} has no draft in the store"
                 ) from err
-            set_at_path(base_model, unit.path, parse_scalar_draft(draft, fmt))
+            set_at_path(base_model, operation_path, parse_scalar_draft(draft, fmt))
         elif _promotes(unit):
-            node = get_node_at_path(live_model, unit.path)
+            node = get_node_at_path(live_model, operation_path)
             if node is not ABSENT:
-                set_node_at_path(base_model, unit.path, node)
-            elif get_node_at_path(original_base_model, unit.path) is not ABSENT:
+                set_node_at_path(base_model, operation_path, node)
+            elif get_node_at_path(original_base_model, operation_path) is not ABSENT:
                 # A promoted SHARED unit whose LIVE value was deleted (key
                 # present in base, absent in live): drop the leaf from base
                 # (mirroring the line path's empty-span deletion) rather than
@@ -490,8 +596,8 @@ def reconstruct_structured(
                 # the file uncapturable until the index was hand-edited. An
                 # earlier promoted ancestor may already have removed this leaf;
                 # in that case the deletion is satisfied and is a benign no-op.
-                if get_node_at_path(base_model, unit.path) is not ABSENT:
-                    delete_node_at_path(base_model, unit.path)
+                if get_node_at_path(base_model, operation_path) is not ABSENT:
+                    delete_node_at_path(base_model, operation_path)
             else:
                 # The path addressed no leaf in the IMMUTABLE original base or
                 # live model, so this is a genuinely malformed/stale unit rather

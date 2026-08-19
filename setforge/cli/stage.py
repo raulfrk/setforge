@@ -312,7 +312,7 @@ def collect_structured_stages(
                 fresh = su_mod.extract_structured_units(base, live, fmt)
             except StructuredParseError:
                 continue  # unparseable → no interactive staging; capture is verbatim
-            units = su_mod.classify_structured(fresh, stored)
+            units = su_mod.classify_structured(fresh, stored, fmt)
             stages.append(
                 StructuredFileStage(
                     sub_name,
@@ -469,6 +469,7 @@ def _prepare_structured_persist(
     current = su_mod.classify_structured(
         su_mod.extract_structured_units(stage.base, final_live, stage.fmt),
         stored,
+        stage.fmt,
     )
     merged = [
         replace(
@@ -482,7 +483,12 @@ def _prepare_structured_persist(
         else u
         for u in current
     ]
-    pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
+    pool = {
+        **su_mod.bind_structured_drafts(
+            current, reconcile_store.read_drafts(profile, stage.fid)
+        ),
+        **result.drafts,
+    }
     drafts: dict[UnitRef, bytes] = {}
     for unit in merged:
         if unit.cls is not HunkClass.SHARED_DRAFTED:

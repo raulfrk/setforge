@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -218,7 +220,6 @@ def test_legacy_flat_structured_draft_verifies_then_upgrades_typed(
     legacy = store.read_drafts("p", fid)
     assert legacy == {UnitRef.key("workdir"): draft}
     store.verify("p", fid)
-
     store.record("p", fid, base=base, local=live, hunks=[row], drafts=legacy)
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw == [
@@ -229,6 +230,258 @@ def test_legacy_flat_structured_draft_verifies_then_upgrades_typed(
         }
     ]
     store.verify("p", fid)
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["current", "v1"])
+@pytest.mark.parametrize(
+    "cls", [HunkClass.SHARED, HunkClass.SHARED_DRAFTED], ids=["shared", "drafted"]
+)
+def test_json_root_unit_classifies_reconstructs_and_records_without_child_paths(
+    tmp_state: Path, legacy: bool, cls: HunkClass
+) -> None:
+    """JSON current/v1 rows retain the documented opaque ``path:''`` identity."""
+    from dataclasses import replace
+
+    from setforge.reconcile.structured_units import (
+        StructuredFormat,
+        classify_structured,
+        extract_structured_units,
+        reconstruct_structured,
+        serialize_structured,
+    )
+
+    fid = file_id("settings.json")
+    base = b'{"nested": {"value": 1}, "keep": true}\n'
+    live = b'{"nested": {"value": 2}, "keep": true}\n'
+    (fresh,) = extract_structured_units(base, live, StructuredFormat.JSONC)
+    assert fresh.path == ""
+    draft = b"42"
+    classified_seed = replace(
+        fresh,
+        cls=cls,
+        draft_hash=store.content_sha(draft)
+        if cls is HunkClass.SHARED_DRAFTED
+        else None,
+    )
+    (row,) = serialize_structured([classified_seed])
+    drafts = {UnitRef.key(""): draft} if cls is HunkClass.SHARED_DRAFTED else {}
+
+    if legacy:
+        index_path = store._index_path("p")
+        index_path.parent.mkdir(parents=True)
+        index_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "files": {
+                        str(fid): {
+                            "present": True,
+                            "local_hash": store.content_sha(live),
+                            "hunks": [row],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        if drafts:
+            drafts_path = store._drafts_path("p", fid)
+            drafts_path.parent.mkdir(parents=True)
+            drafts_path.write_text(
+                json.dumps({"": base64.b64encode(draft).decode("ascii")}),
+                encoding="utf-8",
+            )
+    else:
+        store.record("p", fid, base=base, local=live, hunks=[row], drafts=drafts)
+
+    entry = store.read_index("p").files[str(fid)]
+    classified = classify_structured([fresh], entry.hunks)
+    assert [unit.path for unit in classified] == [""]
+    stored_drafts = store.read_drafts("p", fid)
+    expected = draft if cls is HunkClass.SHARED_DRAFTED else live
+    assert (
+        reconstruct_structured(
+            base, live, classified, stored_drafts, StructuredFormat.JSONC
+        )
+        == expected
+    )
+
+    store.record(
+        "p",
+        fid,
+        base=base,
+        local=live,
+        hunks=serialize_structured(classified),
+        drafts=stored_drafts,
+    )
+    rewritten = json.loads(store._index_path("p").read_text(encoding="utf-8"))
+    assert rewritten["schema_version"] == "2.0"
+    assert [item["path"] for item in rewritten["files"][str(fid)]["hunks"]] == [""]
+    store.verify("p", fid)
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["v2-old-path", "v1"])
+@pytest.mark.parametrize(
+    "cls", [HunkClass.SHARED, HunkClass.SHARED_DRAFTED], ids=["shared", "drafted"]
+)
+@pytest.mark.parametrize(
+    ("base", "live", "old_path", "canonical_path"),
+    [
+        pytest.param(
+            b'"": old\nkeep: 1\n',
+            b'"": live\nkeep: 1\n',
+            "",
+            r"\0",
+            id="root-empty-key",
+        ),
+        pytest.param(
+            b'a:\n  "": old\nkeep: 1\n',
+            b'a:\n  "": live\nkeep: 1\n',
+            "a.",
+            r"a.\0",
+            id="nested-empty-key",
+        ),
+    ],
+)
+def test_legacy_yaml_empty_key_path_rebinds_and_upgrades_atomically(
+    tmp_state: Path,
+    legacy: bool,
+    cls: HunkClass,
+    base: bytes,
+    live: bytes,
+    old_path: str,
+    canonical_path: str,
+) -> None:
+    from setforge.reconcile.structured_units import (
+        StructuredFormat,
+        bind_structured_drafts,
+        classify_structured,
+        extract_structured_units,
+        reconstruct_structured,
+        serialize_structured,
+    )
+
+    fid = file_id("settings.yaml")
+    fresh_by_path = {
+        unit.path: unit
+        for unit in extract_structured_units(base, live, StructuredFormat.YAML)
+    }
+    fresh = fresh_by_path[canonical_path]
+    draft = b"drafted"
+    old_row: dict[str, object] = {
+        "kind": UnitKind.KEY,
+        "cls": cls.value,
+        "label": old_path,
+        "path": old_path,
+        "value_hash": fresh.value_hash,
+    }
+    old_drafts: dict[UnitRef, bytes] = {}
+    if cls is HunkClass.SHARED_DRAFTED:
+        old_row["draft_hash"] = store.content_sha(draft)
+        old_drafts[UnitRef.key(old_path)] = draft
+
+    if legacy:
+        index_path = store._index_path("p")
+        index_path.parent.mkdir(parents=True)
+        index_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "files": {
+                        str(fid): {
+                            "present": True,
+                            "local_hash": store.content_sha(live),
+                            "hunks": [old_row],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        if old_drafts:
+            draft_path = store._drafts_path("p", fid)
+            draft_path.parent.mkdir(parents=True)
+            draft_path.write_text(
+                json.dumps({old_path: base64.b64encode(draft).decode("ascii")}),
+                encoding="utf-8",
+            )
+    else:
+        store.record(
+            "p", fid, base=base, local=live, hunks=[old_row], drafts=old_drafts
+        )
+
+    entry = store.read_index("p").files[str(fid)]
+    classified = classify_structured(
+        list(fresh_by_path.values()), entry.hunks, StructuredFormat.YAML
+    )
+    migrated = next(unit for unit in classified if unit.path == canonical_path)
+    assert migrated.cls is cls
+    assert migrated.legacy_path == old_path
+    old_manifest = store.read_drafts("p", fid)
+    bound = bind_structured_drafts(classified, old_manifest)
+    assert UnitRef.key(old_path) not in bound
+    if cls is HunkClass.SHARED_DRAFTED:
+        assert bound == {UnitRef.key(canonical_path): draft}
+
+    reconstructed = reconstruct_structured(
+        base, live, classified, bound, StructuredFormat.YAML
+    )
+    expected_value = "drafted" if cls is HunkClass.SHARED_DRAFTED else "live"
+    from setforge.reconcile.structured_units import _load_model
+
+    model = cast(
+        "Mapping[str, object]", _load_model(reconstructed, StructuredFormat.YAML)
+    )
+    actual_value = (
+        model[""] if old_path == "" else cast("Mapping[str, object]", model["a"])[""]
+    )
+    assert actual_value == expected_value
+
+    store.record(
+        "p",
+        fid,
+        base=base,
+        local=live,
+        hunks=serialize_structured(classified),
+        drafts=bound,
+    )
+    rewritten = json.loads(store._index_path("p").read_text(encoding="utf-8"))
+    assert [row["path"] for row in rewritten["files"][str(fid)]["hunks"]] == [
+        canonical_path
+    ]
+    if bound:
+        manifest = json.loads(store._drafts_path("p", fid).read_text(encoding="utf-8"))
+        assert [row["identity"] for row in manifest] == [canonical_path]
+    store.verify("p", fid)
+
+
+@pytest.mark.parametrize(
+    ("base", "live"),
+    [
+        pytest.param(b'"": old\n', b"scalar\n", id="mapping-to-scalar"),
+        pytest.param(b"scalar\n", b'"": live\n', id="scalar-to-mapping"),
+    ],
+)
+def test_legacy_yaml_empty_path_alias_fails_closed_on_root_shape_transition(
+    base: bytes, live: bytes
+) -> None:
+    from setforge.reconcile.structured_units import (
+        StructuredFormat,
+        classify_structured,
+        extract_structured_units,
+    )
+
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    old_row: dict[str, object] = {
+        "kind": UnitKind.KEY,
+        "cls": HunkClass.SHARED.value,
+        "label": "",
+        "path": "",
+        "value_hash": "sha256:old",
+    }
+
+    with pytest.raises(InvariantViolation, match=r"ambiguous.*document-root"):
+        classify_structured(fresh, [old_row], StructuredFormat.YAML)
 
 
 def test_drafts_verbatim_bytes(tmp_state: Path) -> None:
@@ -337,6 +590,119 @@ def test_v1_drafted_row_reconstructs_and_migrates_atomically(tmp_state: Path) ->
     assert rewritten["files"]["f"]["staged"] is True
     assert store.read_drafts("p", fid) == {fresh.ref: draft}
     store.verify("p", fid)
+
+
+def test_v1_repeated_context_rows_classify_reconstruct_and_upgrade(
+    tmp_state: Path,
+) -> None:
+    """Distinct v1 ``(live_hash, anchor)`` identities may share one anchor."""
+    fid = file_id("f")
+    base = (
+        b"head1\nhead2\nhead3\nold-one\ntail1\ntail2\ntail3\nSEP\n"
+        b"head1\nhead2\nhead3\nold-two\ntail1\ntail2\ntail3\n"
+    )
+    live = base.replace(b"old-one", b"NEW-A").replace(b"old-two", b"NEW-B")
+    fresh = hunks_mod.extract_hunks(base, live)
+    assert len(fresh) == 2
+    assert len({hunk.legacy_anchor for hunk in fresh}) == 1
+    assert len({hunk.live_hash for hunk in fresh}) == 2
+    index_path = store._index_path("p")
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "files": {
+                    "f": {
+                        "present": True,
+                        "local_hash": store.content_sha(live),
+                        "hunks": [
+                            {
+                                "cls": cls,
+                                "label": hunk.label,
+                                "live_hash": hunk.live_hash,
+                                "anchor": hunk.legacy_anchor,
+                            }
+                            for hunk, cls in zip(
+                                fresh, ("shared", "local"), strict=True
+                            )
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_rows = store.read_index("p").files["f"].hunks
+    classified = hunks_mod.classify(fresh, legacy_rows)
+    assert [hunk.cls for hunk in classified] == [
+        HunkClass.SHARED,
+        HunkClass.LOCAL,
+    ]
+    expected = base.replace(b"old-one", b"NEW-A")
+    assert hunks_mod.reconstruct(base, live, classified, {}) == expected
+
+    store.record(
+        "p",
+        fid,
+        base=base,
+        local=live,
+        staged=True,
+        hunks=hunks_mod.serialize(classified),
+        drafts={},
+    )
+    rewritten = json.loads(index_path.read_text())
+    assert rewritten["schema_version"] == "2.0"
+    assert {row["unit_id"] for row in rewritten["files"]["f"]["hunks"]} == {
+        hunk.unit_id for hunk in fresh
+    }
+    store.verify("p", fid)
+
+
+def test_v1_same_anchor_drafted_rows_make_flat_manifest_ambiguous(
+    tmp_state: Path,
+) -> None:
+    fid = file_id("f")
+    anchor = "sha256:shared-anchor"
+    index_path = store._index_path("p")
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "files": {
+                    "f": {
+                        "present": True,
+                        "local_hash": None,
+                        "hunks": [
+                            {
+                                "cls": "shared_drafted",
+                                "label": label,
+                                "live_hash": live_hash,
+                                "anchor": anchor,
+                                "draft_hash": store.content_sha(draft),
+                            }
+                            for label, live_hash, draft in (
+                                ("one", "sha256:h1", b"one"),
+                                ("two", "sha256:h2", b"two"),
+                            )
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    drafts_path = store._drafts_path("p", fid)
+    drafts_path.parent.mkdir(parents=True)
+    drafts_path.write_text(
+        json.dumps({anchor: base64.b64encode(b"ambiguous").decode("ascii")}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReconcileStoreError, match="does not map to exactly one"):
+        store.read_drafts("p", fid)
 
 
 @pytest.mark.parametrize("bad_value", ["123", "null", "true"])

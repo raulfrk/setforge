@@ -779,6 +779,15 @@ def test_encode_identity_for_ordinary_key() -> None:
     assert append_key_segment("a.b", "c") == "a.b.c"
 
 
+def test_empty_key_has_canonical_non_root_encoding() -> None:
+    """The staged root identity and a genuine empty mapping key are disjoint."""
+    assert append_key_segment(None, "") == r"\0"
+    assert split_key_path(r"\0") == [""]
+    assert split_key_path("") == [""]  # legacy path remains readable
+    assert append_key_segment(None, r"\0") == r"\\0"
+    assert split_key_path(r"\\0") == [r"\0"]
+
+
 def test_flat_dotted_key_distinct_from_nested_path() -> None:
     """The flat key ``"a.b"`` encodes distinctly from the nested path
     ``a -> b``, and each round-trips to its own segment list."""
