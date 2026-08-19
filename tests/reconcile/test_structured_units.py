@@ -139,6 +139,130 @@ def test_reconstruct_promoted_shared_absent_in_both_fails_closed() -> None:
         reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
 
+def test_reconstruct_all_shared_parent_replacement_subsumes_child_deletion() -> None:
+    """A mapping-to-scalar replacement is one coherent promoted shape change.
+
+    Extraction represents it as a new parent leaf plus deletion of the old child
+    leaf.  Applying the parent first makes the child absent from the working base;
+    that deletion is already satisfied and must not be mistaken for a malformed
+    unit.
+    """
+    base = b"a:\n  b: 1\n"
+    live = b"a: 2\n"
+    units = [
+        replace(unit, cls=HunkClass.SHARED)
+        for unit in extract_structured_units(base, live, StructuredFormat.YAML)
+    ]
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == live
+
+
+@pytest.mark.parametrize(
+    ("base", "live"),
+    [
+        pytest.param(
+            b"a:\n  b:\n    c: 1\n",
+            b"a: 2\n",
+            id="mapping-to-scalar",
+        ),
+        pytest.param(
+            b"a: 1\n",
+            b"a:\n  b:\n    c: 2\n",
+            id="scalar-to-mapping",
+        ),
+    ],
+)
+def test_reconstruct_all_shared_shape_change_is_order_independent(
+    base: bytes, live: bytes
+) -> None:
+    """Ancestors apply first even when callers supply deeper units first."""
+    units = [
+        replace(unit, cls=HunkClass.SHARED)
+        for unit in extract_structured_units(base, live, StructuredFormat.YAML)
+    ]
+
+    forward = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+    reverse = reconstruct_structured(
+        base, live, list(reversed(units)), {}, StructuredFormat.YAML
+    )
+
+    assert forward == reverse == live
+
+
+@pytest.mark.parametrize(
+    ("classes"),
+    [
+        pytest.param(
+            {"a": HunkClass.SHARED, "a.b": HunkClass.LOCAL},
+            id="shared-parent-local-child",
+        ),
+        pytest.param(
+            {"a": HunkClass.LOCAL, "a.b": HunkClass.SHARED},
+            id="local-parent-shared-child",
+        ),
+    ],
+)
+def test_reconstruct_rejects_incompatible_parent_descendant_intent(
+    classes: dict[str, HunkClass],
+) -> None:
+    """Overlapping units cannot independently keep and promote the same shape."""
+    base = b"a:\n  b: 1\n"
+    live = b"a: 2\n"
+    units = [
+        replace(unit, cls=classes[unit.path])
+        for unit in extract_structured_units(base, live, StructuredFormat.YAML)
+    ]
+
+    with pytest.raises(StructuredParseError, match=r"incompatible.*intent"):
+        reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+
+@pytest.mark.parametrize(
+    ("base", "live", "drafted_path"),
+    [
+        pytest.param(
+            b"a:\n  b: 1\n",
+            b"a: 2\n",
+            "a",
+            id="drafted-scalar-parent",
+        ),
+        pytest.param(
+            b"a: 1\n",
+            b"a:\n  b: 2\n",
+            "a.b",
+            id="drafted-scalar-descendant",
+        ),
+    ],
+)
+def test_reconstruct_rejects_overlapping_drafted_and_shared_shape_change(
+    base: bytes, live: bytes, drafted_path: str
+) -> None:
+    """A scalar draft cannot safely compose with a promoted structural peer."""
+    units = [
+        replace(
+            unit,
+            cls=(
+                HunkClass.SHARED_DRAFTED
+                if unit.path == drafted_path
+                else HunkClass.SHARED
+            ),
+            draft_hash=("sha256:d" if unit.path == drafted_path else None),
+        )
+        for unit in extract_structured_units(base, live, StructuredFormat.YAML)
+    ]
+
+    with pytest.raises(StructuredParseError, match=r"drafted.*overlap"):
+        reconstruct_structured(
+            base,
+            live,
+            list(reversed(units)),
+            {drafted_path: b"3"},
+            StructuredFormat.YAML,
+        )
+
+
 # Round-trip fidelity: a no-promotion reconstruct (empty unit set) must equal the
 # input byte-for-byte. Each case pins one structured-parser smell (SP1/5/6/7).
 _YAML_ROUNDTRIP = [

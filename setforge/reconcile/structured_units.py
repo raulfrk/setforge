@@ -40,6 +40,7 @@ from setforge.structural_merge import (
     get_node_at_path,
     set_at_path,
     set_node_at_path,
+    split_key_path,
 )
 
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
@@ -358,6 +359,53 @@ def _promotes(unit: KeyUnit) -> bool:
     return unit.cls is HunkClass.SHARED and not unit.changed
 
 
+def _has_promoted_intent(unit: KeyUnit) -> bool:
+    """Whether reconstruction intends to replace this unit's base value."""
+    return unit.cls in (HunkClass.SHARED, HunkClass.SHARED_DRAFTED) and not unit.changed
+
+
+def _validated_reconstruction_order(units: list[KeyUnit]) -> list[KeyUnit]:
+    """Validate overlaps and return an ancestor-before-descendant order.
+
+    A structural shape change can yield overlapping leaf paths: replacing
+    ``a: {b: 1}`` with ``a: 2`` produces an added ``a`` unit and a deleted
+    ``a.b`` unit.  Those units form one coherent change only when both are
+    promoted or both are kept at base.  Applying just one side cannot preserve
+    the other classification, so fail closed instead of silently losing intent.
+    A promoted scalar draft cannot safely compose with any promoted overlapping
+    unit, so that shape is rejected too.
+
+    Coherent all-SHARED shape changes apply ancestors first. This makes both
+    mapping-to-scalar and scalar-to-mapping reconstruction independent of the
+    caller's unit order while preserving input order among equal-depth units.
+    """
+    paths = [(unit, tuple(split_key_path(unit.path))) for unit in units]
+    for index, (left, left_segments) in enumerate(paths):
+        for right, right_segments in paths[index + 1 :]:
+            shorter, longer = (
+                (left_segments, right_segments)
+                if len(left_segments) < len(right_segments)
+                else (right_segments, left_segments)
+            )
+            if len(shorter) == len(longer) or longer[: len(shorter)] != shorter:
+                continue
+            if _has_promoted_intent(left) != _has_promoted_intent(right):
+                raise StructuredParseError(
+                    "structured units have incompatible parent/descendant intent: "
+                    f"{left.path!r} is {left.cls.value}, "
+                    f"{right.path!r} is {right.cls.value}"
+                )
+            if _has_promoted_intent(left) and (
+                left.cls is HunkClass.SHARED_DRAFTED
+                or right.cls is HunkClass.SHARED_DRAFTED
+            ):
+                raise StructuredParseError(
+                    "drafted structured unit overlap cannot be reconstructed safely: "
+                    f"{left.path!r} overlaps {right.path!r}"
+                )
+    return [unit for unit, _segments in sorted(paths, key=lambda item: len(item[1]))]
+
+
 def reconstruct_structured(
     base: bytes,
     live: bytes,
@@ -382,11 +430,15 @@ def reconstruct_structured(
     dangling draft pointer), or :class:`~setforge.errors.DraftConfinementError` (a
     subclass) when a draft-store value escapes scalar confinement at splice — a
     corrupted/tampered store can no more inject structure than an interactive
-    draft can; it never falls back to the live or base value.
+    draft can; it never falls back to the live or base value. Incompatible
+    parent/descendant classifications and a promoted path absent from both the
+    original base and live models raise :class:`~setforge.errors.StructuredParseError`.
     """
+    ordered_units = _validated_reconstruction_order(units)
+    original_base_model = _load_model(base, fmt)
     base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
-    for unit in units:
+    for unit in ordered_units:
         if unit.cls is HunkClass.SHARED_DRAFTED and not unit.changed:
             try:
                 draft = drafts[unit.path]
@@ -399,23 +451,22 @@ def reconstruct_structured(
             node = get_node_at_path(live_model, unit.path)
             if node is not ABSENT:
                 set_node_at_path(base_model, unit.path, node)
-            elif get_node_at_path(base_model, unit.path) is not ABSENT:
+            elif get_node_at_path(original_base_model, unit.path) is not ABSENT:
                 # A promoted SHARED unit whose LIVE value was deleted (key
                 # present in base, absent in live): drop the leaf from base
                 # (mirroring the line path's empty-span deletion) rather than
                 # splice the ABSENT sentinel, which _dump_model cannot
                 # serialise — the old behavior crashed sync/capture and left
-                # the file uncapturable until the index was hand-edited.
-                delete_node_at_path(base_model, unit.path)
+                # the file uncapturable until the index was hand-edited. An
+                # earlier promoted ancestor may already have removed this leaf;
+                # in that case the deletion is satisfied and is a benign no-op.
+                if get_node_at_path(base_model, unit.path) is not ABSENT:
+                    delete_node_at_path(base_model, unit.path)
             else:
-                # The path addresses no leaf in EITHER model — either a
-                # malformed unit (e.g. a non-string mapping key a string path
-                # cannot reach) or a key since dropped from both base and live.
-                # Fail closed rather than silently no-op: preserves INV-8's
-                # residual guard, and a conservative raise never emits wrong
-                # output. (Whether the benign drop-from-both case should instead
-                # no-op is deferred — it needs a fresh-vs-persisted-unit
-                # reachability analysis.)
+                # The path addressed no leaf in the IMMUTABLE original base or
+                # live model, so this is a genuinely malformed/stale unit rather
+                # than a deletion subsumed by an earlier ancestor replacement.
+                # Preserve INV-8's fail-closed residual guard.
                 raise StructuredParseError(
                     f"promoted SHARED unit {unit.path!r} addresses no leaf in "
                     f"base or live; cannot reconstruct"
