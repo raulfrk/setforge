@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/raulfrk/setforge/actions/workflows/ci.yml/badge.svg)](https://github.com/raulfrk/setforge/actions/workflows/ci.yml)
 
-One CLI to deploy your dotfiles, VSCode extensions, and Claude Code plugins
-from a declarative config repo you own — idempotent, drift-aware, and
-revertible.
+One CLI to deploy your dotfiles and provision packages, VSCode extensions, and
+Claude Code plugins from a declarative config repo you own — idempotent,
+drift-aware, and revertible.
 
 ## What is setforge?
 
@@ -24,7 +24,7 @@ split is what lets one published tool drive many different people's setups.
 - **Engine repo** (`raulfrk/setforge`, this one): the `setforge` CLI plus the
   source-discovery and git-management layers. No user config.
 - **Config repo** (yours): a `setforge.yaml` declaring `tracked_files`,
-  `profiles`, extensions, and plugins, alongside a `tracked/` tree holding the
+  top-level registries, and profiles, alongside a `tracked/` tree holding the
   source files.
 
 setforge finds your config repo through a 4-layer precedence — first match
@@ -67,9 +67,10 @@ your-config/
     └── example.txt
 ```
 
+<!-- setforge-doc-example: readme-minimal-schema6 -->
 ```yaml
 # your-config/setforge.yaml
-schema_version: "5.0"
+schema_version: "6.0"
 tracked_files:
   example:
     src: example.txt            # lives at tracked/example.txt
@@ -82,10 +83,11 @@ profiles:
 
 Put any content in `tracked/example.txt`, then `git init` the directory.
 See [docs/configuration.md](docs/configuration.md) for the full schema
-(templates, file modes, extensions, plugins, per-host preservation).
+(packages, bundles, plugins, MCP servers, templates, and per-host
+preservation).
 
 (Configs without a `schema_version` — or with an older one — still load and are
-migrated forward to the current `5.0` by `setforge migrate`. The unrelated
+migrated forward to the current `6.0` by `setforge migrate`. The unrelated
 engine-owned `version:` file-format field defaults to `1` and you don't set it.)
 
 **4. Wire setforge to your config**
@@ -107,8 +109,8 @@ for you — no hand-editing. For a git source, `init --git-source` records it an
 uv run setforge install --profile=default
 ```
 
-This deploys your tracked files to their live destinations and reconciles
-VSCode extensions and Claude plugins.
+This deploys tracked files and reconciles the profile's packages, bundles,
+VSCode extensions, Claude plugins, and MCP servers.
 
 ## Daily workflow
 
@@ -131,24 +133,26 @@ command surface, run `setforge --help` or see
 
 Beyond the daily commands above, setforge's full surface groups as:
 
-- **Lifecycle:** install · compare · sync · capture · revert · status · validate
-- **Config repo:** init · fetch · migrate · upgrade
-- **Cleanup:** cleanup-orphans
-- **Subcommand groups:** override · plugin · marketplace · ext · section ·
-  snapshot · profile · transitions · config · completion
+- **Lifecycle:** install · compare · capture · sync · revert · status · validate
+- **Config and packages:** init · fetch · migrate · upgrade · lock
+- **Inspection and recovery:** stage · inspect · recover · transitions · profile
+- **Cleanup:** cleanup (provisioning receipts) · cleanup-orphans (tracked-file
+  transition history or an explicit bounded scan)
+- **Subcommand groups:** ext · plugin · marketplace · transitions · profile ·
+  snapshot · completion · config
 
-New to setforge, or want to see what each command's output looks like? The
-**[guided tutorial](docs/tutorial.md)** walks the whole lifecycle and documents
-every command with worked examples and terminal mockups. Exhaustive flags live
-in [docs/commands.md](docs/commands.md).
+New to setforge, or want to see what the main commands' output looks like? The
+**[guided tutorial](docs/tutorial.md)** walks the lifecycle with worked examples
+and terminal mockups. The complete inventory and flags live in
+[docs/commands.md](docs/commands.md).
 
 ## Concepts & deep reference
 
-- **Guided tutorial** — the full lifecycle plus every command with examples and
+- **Guided tutorial** — the full lifecycle and main commands with examples and
   output mockups: [docs/tutorial.md](docs/tutorial.md).
 - **Configuration & the config repo** — source discovery, the `setforge.yaml`
   schema, per-host preservation: [docs/configuration.md](docs/configuration.md).
-- **Command reference & subcommand groups** — every command, the ten
+- **Command reference & subcommand groups** — every command, the eight
   subcommand groups, and `--auto=*` confirmation:
   [docs/commands.md](docs/commands.md).
 - **Cutting a release** — CI gates and the tag-push flow:

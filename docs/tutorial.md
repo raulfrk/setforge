@@ -1,8 +1,8 @@
-# setforge tutorial — everything it does, and how
+# setforge tutorial — the main workflows, end to end
 
 This is the guided tour of setforge: a narrative walkthrough of the full
-lifecycle followed by a reference for **every** command, each with an example,
-a realistic terminal mockup, and a note on when to reach for it.
+lifecycle followed by a practical command guide with examples, realistic
+terminal mockups, and links to the complete inventory.
 
 - New here? Read **[Part A — Guided walkthrough](#part-a--guided-walkthrough)** top to bottom.
 - Looking for one command? Jump to **[Part B — Command reference](#part-b--command-reference)**.
@@ -27,8 +27,8 @@ a realistic terminal mockup, and a note on when to reach for it.
   - [7. `revert` — undo the last transition](#7-revert--undo-the-last-transition)
 - [Part B — Command reference](#part-b--command-reference)
   - [Lifecycle: install, compare, sync, capture, revert, status, validate](#lifecycle-commands)
-  - [Config repo: init, fetch, migrate, upgrade](#config-repo-commands)
-  - [cleanup-orphans](#cleanup-orphans)
+  - [Config repo and locks: init, fetch, lock, migrate, upgrade](#config-repo-commands)
+  - [cleanup and cleanup-orphans](#cleanup-orphans)
   - [User sections (host-local vs shared) + the reconcile wizard](#user-sections--the-reconcile-wizard)
   - [Plugins, marketplaces, extensions](#plugins-marketplaces-extensions)
   - [Snapshots](#snapshots)
@@ -48,10 +48,10 @@ a realistic terminal mockup, and a note on when to reach for it.
   `~/.config/setforge/local.yaml` `source:` block → a `setforge.yaml` in the
   current directory. (Git sources live in `local.yaml`; the flag/env take
   paths only.)
-- **Profiles.** A profile is a named subset of tracked files / plugins /
-  extensions, with optional inheritance (`extends:`). Every command that
-  deploys or compares takes `--profile`.
-- **Schema.** `setforge.yaml` carries `schema_version: "5.0"`. An optional
+- **Profiles.** A profile is a named subset of tracked files, packages,
+  bundles, and MCP servers, with optional inheritance (`extends:`). Reconcile
+  policy for plugin/extension package types also lives on the profile.
+- **Schema.** New `setforge.yaml` files carry `schema_version: "6.0"`. An optional
   `minimum_version:` floor refuses to run an engine older than your config
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
@@ -156,9 +156,10 @@ A minimal config repo is a manifest plus the file content it points at:
     └── notes.md
 ```
 
+<!-- setforge-doc-example: tutorial-schema6 -->
 ```yaml
 # ~/projects/dotfiles/setforge.yaml
-schema_version: "5.0"
+schema_version: "6.0"
 tracked_files:
   gitconfig:
     src: gitconfig            # lives at tracked/gitconfig
@@ -166,9 +167,22 @@ tracked_files:
   notes:
     src: notes.md
     dst: ~/.config/sample/notes.md
+packages:
+  rg:
+    type: cargo
+    crate: ripgrep
+bundles:
+  command_line:
+    components:
+      - id: search
+        package: rg
 profiles:
   default:
     tracked_files: [gitconfig, notes]
+    bundles: [command_line]
+    reconcile:
+      plugins: {policy: additive}
+      extensions: {exclude: [], policy: additive}
 ```
 
 `src` resolves under `tracked/`; `dst` is where the file deploys (it expands
@@ -391,10 +405,9 @@ it again acts as a redo.
 
 ## Part B — Command reference
 
-Every command setforge ships, grouped by purpose. Lifecycle commands and the
-two wizards get full mockups; routine CRUD subcommands get an example, their
-one-line output, and a "when to use". Flags are summarized — see
-**[commands.md](commands.md)** for the exhaustive list.
+The main commands, grouped by purpose. Lifecycle commands and the two wizards
+get full mockups; routine CRUD subcommands get a compact example. Flags and the
+closed-world top-level inventory live in **[commands.md](commands.md)**.
 
 <a id="lifecycle-commands"></a>
 ### Lifecycle: install · compare · sync · capture · revert · status · validate
@@ -435,7 +448,7 @@ quick index.
   ```
 
 <a id="config-repo-commands"></a>
-### Config repo: init · fetch · migrate · upgrade
+### Config repo and locks: init · fetch · lock · migrate · upgrade
 
 - **`init`** — bootstrap host dirs + `local.yaml`, report env health, optionally
   wire the source. Flags: `--config-repo` (scaffold a new repo), `--git-source`
@@ -446,6 +459,20 @@ quick index.
 
   ```console
   $ setforge fetch
+  ```
+
+- **`lock --profile=P`** — resolve exact package pins into the shared,
+  committed `setforge.lock`; `--update=<key>` refreshes one pin. Cargo locks
+  carry an exact version and crates.io sparse-index checksum. Install rechecks
+  that exact row before skipping or invoking `cargo install` to mutate;
+  mismatch or an unavailable index is HARD. The read-only `cargo install
+  --list` inventory probe may already have run. `install --locked` requires
+  complete lock coverage but is not a Cargo offline mode. *When:* after changing
+  a lockable package declaration.
+
+  ```console
+  $ setforge lock --profile=default
+  $ setforge install --profile=default --locked
   ```
 
 - **`migrate`** — run schema migrations against the active `setforge.yaml`.
@@ -460,8 +487,8 @@ quick index.
   ```
   === schema migration check ===
   your setforge.yaml:  ~/projects/dotfiles/setforge.yaml
-    declared schema:   5.0
-  installed setforge expects schema:   5.0
+    declared schema:   6.0
+  installed setforge expects schema:   6.0
   === no migrations available ===
   ```
 
@@ -482,18 +509,59 @@ quick index.
   *(upgrade prompt rendered from `setforge/cli/upgrade.py`)*
 
 <a id="cleanup-orphans"></a>
-### cleanup-orphans
+### cleanup and cleanup-orphans
 
-Find and remove tracked-file **orphans** — live files left behind after their
-entry was removed from a profile. Dry-run by default; `--apply` to act,
-`--yes` to skip the prompt, `--ignore` to record an orphan as intentional.
+`setforge cleanup --profile=default` reviews undeclared provisioned binaries
+using provisioner receipts. It is separate from filesystem orphan handling.
+
+Without `--scan`, this is the legacy, transition-history-attributed mode: it
+finds live files attributed to removed `tracked_files` entries. It is a dry-run
+unless `--apply` is present. The apply wizard can delete only or delete and
+write a reversible transition; `--apply --yes` chooses the reversible branch.
+`--ignore=<tracked-id>` records a host-local exclusion and returns without
+scanning.
 
 ```console
 $ setforge cleanup-orphans --profile=default
+$ setforge cleanup-orphans --profile=default --apply --yes
 ```
 
-*When:* after you delete a `tracked_files` entry and want the stale live file
-cleaned up.
+Explicit `--scan` instead searches for unrecorded leaves beneath bounded roots
+derived from directory and individual-file destinations across every effective
+profile:
+
+```console
+$ setforge cleanup-orphans --profile=default --scan          # dry-run
+$ setforge cleanup-orphans --profile=default --scan --apply  # TTY only
+```
+
+Scan mode never starts at generic roots such as `$HOME`, `~/.config`, or `/`,
+and excludes the config repo, tracked sources, host-local files, ignored and
+transition-attributed paths, and SetForge control/state trees. It never follows
+symlinks and does not descend into a directory whose filesystem device differs
+from the managed root's device. That is a device-boundary check, not general
+mount detection: a same-device bind mount is not distinguishable by this check.
+Only regular files and symlinks are candidates; directories and unsupported
+leaf types are retained. A managed root reached through a
+symlinked/non-directory parent is refused rather than traversed.
+
+Applying a scan asks separately for every file, defaults each answer to keep,
+and rejects both blanket `--yes` and `--ignore`. Under the mutation lock,
+SetForge reloads all effective profiles and rescans: approved paths that are no
+longer identical candidates are retained, newly appearing candidates are not
+added, and only the surviving contraction is removed. Parent directories are
+never pruned.
+
+The reversible branch records typed before/after images, preserving arbitrary
+file bytes or a symlink target plus mode and nanosecond mtime for undo/redo. An
+interrupted cleanup is recovered from its write-ahead journal. If recovery
+finds a replacement at a deleted path or a changed/symlinked parent, it keeps
+that user data, retains the recovery record, and blocks conflicting mutations;
+move the replacement aside, retry `setforge recover --profile=default --apply
+--yes`.
+
+*When:* use legacy mode after removing a tracked entry; opt into `--scan` only
+to review otherwise unrecorded leaves inside already managed trees.
 
 <a id="user-sections--the-reconcile-wizard"></a>
 ### User sections (host-local vs shared) + the reconcile wizard
@@ -647,7 +715,7 @@ $ setforge profile show default        # fully-resolved profile + provenance
 tracked_files (2 effective):
 gitconfig  [from profile default]
 notes      [from profile default]
-claude_plugins (0 effective):
+packages (0 effective):
   (none)
 ```
 

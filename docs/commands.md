@@ -48,6 +48,40 @@ content into your config repo's `tracked/`; `git diff` + commit + push from
 inside the config repo to lock it in. `capture` is the lower-level piece
 `sync` composes (the capture pipeline without the transition record).
 
+## Top-level command inventory
+
+This table is intentionally complete and is checked against `setforge --help`.
+
+<!-- setforge-doc-command-inventory:start -->
+| Command | Purpose |
+|---|---|
+| `install` | Deploy tracked files and reconcile provisioned state. |
+| `compare` | Report tracked/live drift. |
+| `cleanup-orphans` | Review transition-attributed or explicitly scanned file orphans. |
+| `cleanup` | Review undeclared provisioned binaries recorded by receipts. |
+| `capture` | Capture live tracked-file content. |
+| `sync` | Capture files and reconcile extension declarations. |
+| `revert` | Undo or redo recorded transitions. |
+| `recover` | Inspect or recover an interrupted write-ahead operation. |
+| `validate` | Validate config shape without comparing live paths. |
+| `fetch` | Update a configured git source. |
+| `lock` | Resolve exact package pins into `setforge.lock`. |
+| `init` | Bootstrap host-local configuration or a config repo. |
+| `upgrade` | Upgrade the installed SetForge engine. |
+| `migrate` | Preview or apply schema migrations. |
+| `status` | Summarize profile state. |
+| `stage` | Classify and stage selected plain-file changes. |
+| `inspect` | Inspect reconcile base/live/merge state. |
+| `transitions` | Inspect transition history. |
+| `ext` | Manage VSCode extension package declarations. |
+| `plugin` | Manage Claude plugin package declarations. |
+| `marketplace` | Manage top-level Claude marketplaces. |
+| `profile` | Inspect raw and effective profiles. |
+| `snapshot` | Create, list, and restore directory snapshots. |
+| `completion` | Install shell completions. |
+| `config` | Read or edit tracked and host-local configuration. |
+<!-- setforge-doc-command-inventory:end -->
+
 ## Subcommand groups
 
 setforge ships eight subcommand groups for narrow inspections and edits. Run
@@ -55,21 +89,20 @@ setforge ships eight subcommand groups for narrow inspections and edits. Run
 
 | Group | Subcommands | Purpose |
 |---|---|---|
-| `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugins in a profile's `claude_plugins:` block. |
+| `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugin packages and marketplace cache state. |
 | `marketplace` | `add`, `remove`, `update` | Claude plugin marketplaces (upstream plugin sources). |
-| `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extensions in a profile's `extensions:` block. |
+| `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extension packages selected by a profile. |
 | `transitions` | `list`, `show` | Inspect install/sync/revert history. |
 | `profile` | `list`, `show` | Inspect profile definitions and resolved overlays. |
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
 
-Other top-level commands: `init` (bootstrap config dirs + `local.yaml`),
-`upgrade` (PyPI check + release notes + `uv` upgrade), `migrate` (schema
-migrations against `setforge.yaml`), `cleanup-orphans` (review/remove
-tracked-file orphans), and `recover` (inspect or restore an interrupted
-write-ahead operation; manual remediation records require explicit
-`--acknowledge-manual --yes`).
+`cleanup` and `cleanup-orphans` are deliberately different. `cleanup` compares
+package provisioner receipts with the effective package/bundle declaration and
+reviews undeclared binaries. `cleanup-orphans` concerns filesystem paths: its
+default mode uses tracked-file transition attribution, while `--scan` opts into
+bounded discovery of unrecorded leaves.
 
 Mutating commands share one lock order: a user-global mutation gate, then
 user-global package/adapter resources, the canonical config repository, and
@@ -82,6 +115,78 @@ and across `SETFORGE_STATE_DIR` overrides until automatic recovery succeeds or
 the operator runs `setforge recover --profile=<name> --apply --yes` from the
 recorded transition-state root. A begun package checkpoint is intentionally
 reported as uncertain/manual even if it did not reach its completion marker.
+
+## Package locks and Cargo
+
+`setforge lock --profile=<profile>` resolves all lockable entries selected by
+the effective profile and writes the shared `setforge.lock`; `--update=<key>`
+re-resolves one key while retaining the rest. `setforge install --locked`
+requires matching pins for every lockable item and does not re-resolve them.
+
+For Cargo, a pin is an exact semantic version plus a `sha256:` checksum from
+the exact crate/version row in the crates.io sparse index. Install compares
+that row with the committed lock before either skipping an exact installed
+crate or invoking `cargo install` to mutate. A malformed pin, checksum
+mismatch, unavailable row, or unavailable index is **HARD** and invokes no
+mutating install for that item; the read-only `cargo install --list` inventory
+probe may already have run during planning.
+
+The invoked command uses `cargo install --version <exact> --locked`; Cargo's
+`--locked` selects the archive's packaged Cargo lockfile. Cargo handles its
+registry archive download and checksum verification; SetForge independently
+validates the sparse-index checksum but does not hash the downloaded archive.
+Neither SetForge `--locked` nor `--no-fetch` is a Cargo offline mode: the former
+still needs the sparse-index comparison and the latter only disables the
+config-source git fetch.
+
+<!-- setforge-doc-flags: lock -->
+| `lock` flags documented here | Meaning |
+|---|---|
+| `--profile` | Effective profile to resolve. |
+| `--update` | Re-resolve one lock key. |
+| `--config` | Select a manifest path. |
+
+<!-- setforge-doc-flags: install -->
+| `install` lock-related flags documented here | Meaning |
+|---|---|
+| `--locked` | Require complete matching lock coverage. |
+| `--no-fetch` | Skip only the config-source git fetch. |
+
+## Filesystem orphan cleanup
+
+Legacy mode (`cleanup-orphans` without `--scan`) reviews paths attributed to
+removed tracked-file entries by transition history. It defaults to dry-run;
+`--apply` opens the delete/delete-and-transition wizard, `--apply --yes`
+chooses the reversible transition branch, and `--ignore=<tracked-id>` adds a
+host-local exclusion without scanning.
+
+Explicit `--scan` searches only bounded roots inferred from managed
+destinations across all effective profiles. It excludes tracked sources,
+host-local files, ignored/attributed destinations, the config repo, and control
+state; never follows symlinks; and does not descend into a directory whose
+filesystem device differs from the managed root's device. This device-boundary
+check does not detect a same-device bind mount. Only regular files and symlinks
+are offered. Apply is TTY-only, asks separately for every path, defaults to
+keeping it, and rejects both `--yes` and `--ignore`. A locked reload and rescan
+may contract the approved set but never expands it, and deletion never prunes
+parent directories. A managed root with a symlinked or non-directory parent is
+refused rather than traversed.
+
+Reversible deletion stores typed absent/file/symlink images, including
+arbitrary bytes or link target, mode, and nanosecond mtime. Crash recovery
+refuses to overwrite a replacement or traverse a changed/symlinked parent; the
+journal remains active and conflicting mutations remain blocked until the
+operator moves the replacement aside and retries recovery.
+
+<!-- setforge-doc-flags: cleanup-orphans -->
+| `cleanup-orphans` flags documented here | Meaning |
+|---|---|
+| `--profile` | Profile whose transition-history-attributed mode is reviewed. |
+| `--config` | Select a manifest path. |
+| `--apply` | Mutate; absence means dry-run. |
+| `--yes` | Legacy mode only: choose reversible cleanup non-interactively. |
+| `--ignore` | Legacy mode only: record one tracked id as host-local ignored. |
+| `--scan` | Opt into bounded unrecorded-leaf discovery. |
 
 ### Managing user-section markers
 

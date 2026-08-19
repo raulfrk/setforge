@@ -67,9 +67,86 @@ loads. Everything else has a default:
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
 | `version` | no | `1` | Config format version. |
-| `schema_version` | no | `"1.0"` | Migration schema version (`setforge migrate`). |
+| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.0"`. |
+| `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |
 | `claude_plugins` | no | `{}` | Top-level Claude plugin defaults. |
+| `mcp_servers` | no | `{}` | Named Claude MCP server commands. |
+| `section_templates` | no | `{}` | Reusable host-local section bodies. |
+| `packages` | no | `{}` | Named package declarations. |
+| `bundles` | no | `{}` | Ordered, dependency-aware package/file groups. |
+
+The current schema keeps deployable registries at the top level. Profiles only
+select `tracked_files`, `packages`, `bundles`, and `mcp_servers`, then configure
+`reconcile` and `section_slots`. The pre-6.0 profile fields `extensions`,
+`claude_plugins`, `cargo_binaries`, and `plugins_reconcile` are migration input,
+not schema-6 authoring syntax. The historical `5.0 -> 6.0` migration folds
+those selections into package declarations before removing the old fields.
+
+### Complete schema-6 shape
+
+This compact example exercises every top-level registry and every schema-6
+profile selection field. Registry entries may be split or expanded to suit a
+real config.
+
+<!-- setforge-doc-example: configuration-full-schema6 -->
+```yaml
+schema_version: "6.0"
+minimum_version: "6.0"
+tracked_files:
+  shell:
+    src: shell/zshrc
+    dst: ~/.zshrc
+marketplaces:
+  team:
+    source: github
+    repo: example/claude-plugins
+claude_plugins:
+  review:
+    marketplace: team
+mcp_servers:
+  notes:
+    command: [uvx, notes-mcp]
+    scope: user
+section_templates:
+  workstation_notes:
+    src: workstation-notes.md
+packages:
+  rg:
+    type: cargo
+    crate: ripgrep
+  formatter:
+    type: python
+    package: ruff
+  review_plugin:
+    type: plugin
+    plugin: review
+  python_extension:
+    type: extension
+    extension: ms-python.python
+bundles:
+  developer:
+    components:
+      - id: search
+        package: rg
+      - id: formatting
+        package: formatter
+        depends_on: [search]
+profiles:
+  default:
+    tracked_files: [shell]
+    packages: [review_plugin, python_extension]
+    bundles: [developer]
+    mcp_servers: [notes]
+    reconcile:
+      plugins:
+        policy: additive
+      extensions:
+        exclude: [vendor.unwanted]
+        policy: prune
+    section_slots:
+      workstation: workstation_notes
+```
 
 ### Tracked files
 
@@ -94,7 +171,7 @@ checks this.
 
 ### Profiles
 
-A profile selects which tracked files, extensions, and plugins to deploy. Every
+A profile selects tracked files, packages, bundles, and MCP servers. Every
 profile field is optional (an empty profile is valid shape):
 
 ```yaml
@@ -102,14 +179,55 @@ profiles:
   default:
     tracked_files:
       - example
-    extensions:
-      include:
-        - ms-python.python
+    packages:
+      - python_extension
+    bundles:
+      - developer
+    reconcile:
+      extensions:
+        exclude: [vendor.unwanted]
+        policy: additive
     # extends: base      # optional — inherit from one parent profile (by name)
 ```
 
 Inspect resolved profiles with `setforge profile list` / `setforge profile
 show`.
+
+### Package locks and Cargo verification
+
+`setforge lock --profile=<profile>` resolves lockable package declarations and
+writes the exact version and integrity value to the shared, committed
+`setforge.lock`. For a Cargo package, the lock entry has this TOML shape:
+
+```toml
+version = 1
+
+[[package]]
+type = "cargo"
+key = "ripgrep"
+version = "14.1.1"
+checksum = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+profiles = ["default"]
+```
+
+At install time, a pinned Cargo crate is considered present only when
+`cargo install --list` reports the exact version from the registry (not a path
+or git source) and the lock checksum equals the exact crate/version row fetched
+from the crates.io sparse index. A malformed pin, unavailable index row, or
+checksum mismatch is a **HARD** outcome and no mutating `cargo install`
+invocation is attempted for that item. SetForge rechecks the index before
+treating an exact installed crate as satisfied or invoking `cargo install` to
+mutate, so a frozen plan cannot silently use a changed row. Inventory planning
+may still run the read-only `cargo install --list` probe.
+
+`cargo install --version <exact> --locked` then asks Cargo to use the crate
+archive's packaged `Cargo.lock`; Cargo performs its own registry download and
+archive checksum handling. SetForge does not download or hash the `.crate`
+archive itself. `setforge install --locked` means every lockable declaration
+must have a matching `setforge.lock` entry and disables re-resolution; it does
+not make Cargo offline. Cargo pins still need the crates.io sparse-index check,
+and a missing crate/tool download can still need the network. `--no-fetch`
+only suppresses the config-repository git fetch.
 
 ## Per-host preservation
 
@@ -176,13 +294,14 @@ profile's `bootstrap:` block and `setforge install` creates it as an empty stub
 if missing (e.g. `~/.claude/additional-content.md`) — the engine never tracks
 its content.
 
-## Adding a tracked file or extension
+## Adding a tracked file or extension package
 
 All of this happens in **your** config repo, not the engine repo:
 
 1. Add an entry under `tracked_files:` in `setforge.yaml` and reference its id
-   from the relevant profile's `tracked_files:` list. (Extensions: add the
-   extension id to the profile's `extensions.include:` list.)
+   from the relevant profile's `tracked_files:` list. For an extension, add a
+   top-level `packages:` entry with `type: extension` and `extension: <id>`,
+   then reference that package key from the profile's `packages:` list.
 2. Place the source under `<config-repo>/tracked/<src>`, matching the entry's
    `src:` path.
 3. Commit and push your config repo.
