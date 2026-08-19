@@ -20,8 +20,7 @@ from setforge.overlay_provenance import OverlayOrigin
 _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("compare.py", "compare"),
     ("install.py", "_load_install_context"),
-    ("sync.py", "capture"),
-    ("sync.py", "sync"),
+    ("sync.py", "_load_capture_preview"),
     ("inspect.py", "inspect"),
     ("status.py", "status"),
     ("snapshot.py", "_build_profile_ctx"),
@@ -134,6 +133,19 @@ def test_effective_consumer_inventory_matches_cli_call_sites() -> None:
             ):
                 discovered.add((module_path.name, node.name))
     assert discovered == set(_PROFILE_CONSUMERS)
+
+
+def test_capture_preview_helper_has_exact_command_callers() -> None:
+    """Both capture commands directly use the reviewed effective-profile seam."""
+    module_path = Path(setforge.__file__).parent / "cli" / "sync.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    discovered = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and "_load_capture_preview" in _direct_calls(node)
+    }
+    assert discovered == {"capture", "sync"}
 
 
 def test_legacy_profile_resolution_calls_are_explicitly_allowlisted() -> None:

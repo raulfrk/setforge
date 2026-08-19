@@ -146,7 +146,16 @@ def test_sync_writes_transition_dir(
     assert install_result.exit_code == 0, install_result.output
     dst.write_text("hello edited\n", encoding="utf-8")
 
-    result = runner.invoke(app, ["sync", "--profile=vmh", f"--config={cfg}"])
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--profile=vmh",
+            f"--config={cfg}",
+            "--auto=use-live",
+            "--yes",
+        ],
+    )
     assert result.exit_code == 0, result.output
 
     children = list((state / "transitions").iterdir())

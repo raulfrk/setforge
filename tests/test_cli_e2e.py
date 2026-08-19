@@ -523,19 +523,27 @@ class TestSync:
         assert synced.exit_code == 0, synced.output
         assert tracked.read_bytes() == before
 
-    def test_sync_absorbs_minimal_drift_silently(
+    def test_sync_auto_use_live_absorbs_minimal_drift(
         self,
         fixture_repo: Path,
         sandboxed_home: Path,
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        """Plain-text drift outside preserve_user_* surfaces is silently absorbed."""
+        """Explicit use-live confirmation absorbs ordinary plain-text drift."""
         _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
         live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
         live.write_text("updated locally\n")
 
-        synced = _invoke(["sync", "--profile=test-minimal", f"--config={fixture_repo}"])
+        synced = _invoke(
+            [
+                "sync",
+                "--profile=test-minimal",
+                f"--config={fixture_repo}",
+                "--auto=use-live",
+                "--yes",
+            ]
+        )
         assert synced.exit_code == 0, synced.output
         tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
         assert "updated locally" in tracked.read_text()
