@@ -2,7 +2,9 @@
 
 An orphan is a live path setforge previously deployed (per a
 ``transitions/*/meta.json`` ``paths`` field) that is no longer listed
-in any resolved tracked_files entry. The subcommand has four modes:
+in any resolved tracked_files entry. ``--scan`` is a separate explicit mode
+for unrecorded leaves inside bounded currently-managed trees. The legacy
+subcommand has four modes:
 
 - default (no ``--apply``) — dry-run; print ``WOULD delete`` lines.
 - ``--apply`` + TTY — arrow-key wizard with three choices: abort /
@@ -15,12 +17,14 @@ in any resolved tracked_files entry. The subcommand has four modes:
 ``~/.config/setforge/local.yaml``'s ``orphan_ignore`` list so future
 runs skip the corresponding orphan. The tracked ``setforge.yaml`` is
 NEVER mutated — orphan-ignore is strictly a host-local decision.
+
+``--scan --apply`` requires a TTY and asks separately for each candidate,
+defaulting to keep. It rejects ``--yes`` and never removes parent directories.
 """
 
 from __future__ import annotations
 
 import os
-import stat as stat_mod
 import sys
 from enum import StrEnum
 from pathlib import Path
@@ -31,7 +35,7 @@ from rich.console import Console
 from ruamel.yaml import YAML
 
 from setforge import compare as compare_mod
-from setforge import operations, transitions
+from setforge import operations, orphan_scan, transitions
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -42,7 +46,7 @@ from setforge.cli import (
 from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
 from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config, resolve_effective_profile
-from setforge.errors import OrphanCleanupRequiresInteractive
+from setforge.errors import OrphanCleanupRequiresInteractive, SetforgeError
 from setforge.locking import mutation_locks
 
 __all__ = [
@@ -154,6 +158,31 @@ def _print_dry_run(
     )
 
 
+def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> None:
+    """Render unrecorded scan candidates without implying attribution."""
+    if not result.entries:
+        console.print("=== no unrecorded managed-tree candidates ===")
+    else:
+        console.print(
+            "=== unrecorded managed-tree candidates — nothing will be deleted ==="
+        )
+        for entry in result.entries:
+            suffix = (
+                f" -> {entry.link_target}"
+                if entry.kind is orphan_scan.ScanEntryKind.SYMLINK
+                else ""
+            )
+            console.print(f"REVIEW  {entry.kind.value:<7}  {entry.path}{suffix}")
+        console.print("=== rerun with --scan --apply to review each path ===")
+    skipped = result.skipped_unsupported + result.skipped_mounts
+    if skipped:
+        console.print(
+            f"note: skipped {skipped} path(s) — "
+            f"{result.skipped_unsupported} unsupported type, "
+            f"{result.skipped_mounts} mounted subtree"
+        )
+
+
 def _detect_orphans_live(
     profile: str, config_path: Path
 ) -> tuple[Any, OrphanDetection]:
@@ -183,6 +212,134 @@ def _detect_orphans_live(
         skipped_host_local=report.orphan_skipped_host_local,
     )
     return cfg, detection
+
+
+def _detect_scan_live(
+    profile: str, config_path: Path
+) -> tuple[Any, orphan_scan.ScanResult]:
+    """Reload config and scan every effective profile from current disk state."""
+    cfg = load_config(config_path)
+    repo_root = config_path.resolve().parent
+    resolve_effective_profile(cfg, profile, repo_root)
+    result = orphan_scan.scan_unrecorded_managed_tree(
+        cfg,
+        repo_root,
+        config_path=config_path.resolve(),
+        transitions_dir=transitions.transitions_root(),
+    )
+    return cfg, result
+
+
+def _confirm_scan_entries(
+    entries: tuple[orphan_scan.ScanEntry, ...], console: Console
+) -> tuple[orphan_scan.ScanEntry, ...]:
+    """Ask for separate, default-keep consent for every scan candidate."""
+    if not sys.stdin.isatty():
+        raise OrphanCleanupRequiresInteractive(
+            "setforge cleanup-orphans --scan --apply requires a TTY for "
+            "per-file confirmation"
+        )
+    approved: list[orphan_scan.ScanEntry] = []
+    for entry in entries:
+        suffix = (
+            f" -> {entry.link_target}"
+            if entry.kind is orphan_scan.ScanEntryKind.SYMLINK
+            else ""
+        )
+        if typer.confirm(
+            f"delete {entry.kind.value} {entry.path}{suffix}?",
+            default=False,
+        ):
+            approved.append(entry)
+        else:
+            console.print(f"  kept     {entry.path}")
+    return tuple(approved)
+
+
+def _scan_path_guards(
+    entries: tuple[orphan_scan.ScanEntry, ...],
+) -> tuple[operations.PathGuard, ...]:
+    return orphan_scan.capture_parent_path_guards(
+        tuple(entry.path for entry in entries)
+    )
+
+
+def _execute_scan_cleanup(
+    profile: str,
+    config_path: Path,
+    *,
+    console: Console,
+) -> None:
+    """Apply only individually approved candidates surviving a locked re-scan."""
+    _, initial = _detect_scan_live(profile, config_path)
+    if not initial.entries:
+        console.print("=== no unrecorded managed-tree candidates ===")
+        return
+    approved = _confirm_scan_entries(initial.entries, console)
+    if not approved:
+        console.print("=== no scan candidates approved ===")
+        return
+    approved_by_path = {entry.path: entry for entry in approved}
+    with (
+        mutation_locks(config_dir=config_path.resolve().parent, profile=profile),
+        operations.recover_on_error(profile, "cleanup-orphans"),
+    ):
+        operations.refuse_active(profile)
+        _, refreshed = _detect_scan_live(profile, config_path)
+        selected = tuple(
+            entry
+            for entry in refreshed.entries
+            if (approved_entry := approved_by_path.get(entry.path)) is not None
+            and orphan_scan.approval_matches(approved_entry, entry)
+        )
+        if not selected:
+            console.print("=== no approved scan candidates remain ===")
+            return
+        journal = operations.prepare(
+            command="cleanup-orphans",
+            profile=profile,
+            config_dir=config_path.resolve().parent,
+            resources_lock=False,
+            command_line=("cleanup-orphans", "--scan", "--apply"),
+            paths=tuple(entry.path for entry in selected),
+            path_guards=_scan_path_guards(selected),
+        )
+        try:
+            for entry in selected:
+                orphan_scan.validate_approved_entry(entry)
+        except BaseException as primary:
+            try:
+                operations.complete(journal)
+            except BaseException as cleanup_error:
+                primary.add_note(
+                    "cleanup-orphans journal cleanup failed after a no-effect "
+                    f"preflight refusal: {cleanup_error}"
+                )
+            raise
+        deltas = transitions.filesystem_deletion_deltas(
+            entry.path for entry in selected
+        )
+        for entry in selected:
+            orphan_scan.validate_approved_entry(entry)
+        console.print("=== unrecorded orphan cleanup ===")
+        for index, entry in enumerate(selected, start=1):
+            journal = operations.begin_checkpoint(
+                journal,
+                name=f"delete-unrecorded-path-{index}",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery=f"restore approved managed-tree candidate {entry.path}",
+                paths=(entry.path,),
+                restore_state=False,
+                adapters=(),
+            )
+            if index == 1:
+                transition_dir = _write_scan_transition(profile, deltas)
+                console.print(f"  transition: {transition_dir}")
+            orphan_scan.unlink_approved_entry(entry)
+            console.print(f"  deleted  {entry.path}")
+            journal = operations.finish_checkpoint(journal)
+        operations.complete(journal)
+        console.print(f"  to undo: setforge revert --profile={profile}")
 
 
 def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
@@ -239,99 +396,56 @@ def _lstat_safe(path: Path) -> os.stat_result | None:
         return None
 
 
-def _read_orphan_content(path: Path) -> str | None:
-    """Snapshot ``path``'s content for the transition record.
-
-    Symlinks record as ``None`` (no body for the transition patch —
-    revert recreates the link by re-deploying from tracked). Regular
-    files read as UTF-8; binary content not supported (matches
-    :func:`setforge.transitions.snapshot_paths`).
-    """
-    info = _lstat_safe(path)
-    if info is None:
-        return None
-    if stat_mod.S_ISLNK(info.st_mode):
-        return None
-    try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def _write_orphan_transition(profile: str, orphans: list[OrphanEntry]) -> Path:
-    """Write a transition record capturing pre-delete content for revert.
-
-    Builds ``file_pre`` from each orphan's current content (or ``None``
-    for symlinks / unreadable files) and ``file_post`` mapping every
-    path to ``None`` — the existing convention for deletions in
-    :func:`setforge.transitions.write_transition`. Writes BEFORE any
-    unlink so a crash mid-cleanup still leaves the user a recoverable
-    state.
-    """
+def _write_orphan_transition(
+    profile: str, deltas: tuple[transitions.FilesystemDelta, ...]
+) -> Path:
+    """Write an arbitrary-byte, type-preserving deletion transition."""
     meta = transitions.make_meta(transitions.TransitionCommand.CLEANUP_ORPHANS, profile)
-    file_pre: dict[Path, str | None] = {
-        orphan.path: _read_orphan_content(orphan.path) for orphan in orphans
-    }
-    file_post: dict[Path, str | None] = {orphan.path: None for orphan in orphans}
     return transitions.write_transition(
         meta,
-        file_pre,
-        file_post,
+        {},
+        {},
         ext_delta=None,
+        filesystem_deltas=deltas,
+    )
+
+
+def _write_scan_transition(
+    profile: str, deltas: tuple[transitions.FilesystemDelta, ...]
+) -> Path:
+    """Write the committed undo record for approved scan candidates."""
+    meta = transitions.make_meta(transitions.TransitionCommand.CLEANUP_ORPHANS, profile)
+    return transitions.write_transition(
+        meta,
+        {},
+        {},
+        ext_delta=None,
+        filesystem_deltas=deltas,
     )
 
 
 def _unlink_orphan_path(path: Path, console: Console) -> None:
-    """Remove one orphan (file or symlink).
+    """Freeze and descriptor-unlink one legacy orphan (file or symlink).
 
     Symlinks: ``unlink()`` removes the link, never the target. NEVER
     ``resolve()`` before unlink — that would point at the user's data.
-    Regular files: ``unlink()`` straight. Directories: NOT handled
-    here (cleanup walks empty parents via :func:`_rmdir_empty_parents`
-    AFTER all file deletes).
+    Regular files: ``unlink()`` straight. Directories and parent
+    directories are never removed: parent mutation is outside the
+    frozen, journalled cleanup effect.
 
     Missing path → log warning + return (a race between detection and
     apply; user re-added the file, removed it manually, or the
     meta.json snapshot was stale). NEVER use ``unlink(missing_ok=True)``
     — swallowing the race is the bug.
     """
-    info = _lstat_safe(path)
-    if info is None:
+    if _lstat_safe(path) is None:
         console.print(
             f"[yellow]warning:[/yellow] orphan vanished before delete: {path}"
         )
         return
-    if stat_mod.S_ISDIR(info.st_mode):
-        # Directories are deleted post-file by _rmdir_empty_parents.
-        return
-    path.unlink()
+    entry = orphan_scan.freeze_candidate(path)
+    orphan_scan.unlink_approved_entry(entry)
     console.print(f"  deleted  {path}")
-
-
-def _rmdir_empty_parents(parents: list[Path], console: Console) -> None:
-    """Remove now-empty parent dirs, single-level only.
-
-    For every parent, check ``not any(p.iterdir())`` and call
-    ``Path.rmdir()`` once. NEVER ``os.removedirs`` (walks up, can nuke
-    shared parents) and NEVER ``shutil.rmtree`` (recursive delete, would
-    torch unrelated files). Each unique parent is attempted exactly
-    once.
-    """
-    seen: set[Path] = set()
-    for parent in parents:
-        if parent in seen:
-            continue
-        seen.add(parent)
-        if not parent.exists():
-            continue
-        try:
-            if not any(parent.iterdir()):
-                parent.rmdir()
-                console.print(f"  deleted  {parent}/   (empty)")
-        except OSError as exc:
-            console.print(
-                f"[yellow]warning:[/yellow] could not remove empty dir {parent}: {exc}"
-            )
 
 
 def _execute_cleanup_locked(
@@ -339,7 +453,11 @@ def _execute_cleanup_locked(
     orphans: list[OrphanEntry],
     choice: ApplyChoice,
     console: Console,
-) -> None:
+    *,
+    entries: tuple[orphan_scan.ScanEntry, ...] | None = None,
+    deltas: tuple[transitions.FilesystemDelta, ...] | None = None,
+    journal: operations.OperationJournal | None = None,
+) -> operations.OperationJournal | None:
     """Execute the chosen cleanup branch over a locked, refreshed list.
 
     For :attr:`ApplyChoice.DELETE_AND_TRANSITION` the transition record
@@ -350,19 +468,45 @@ def _execute_cleanup_locked(
     mutation, no console line beyond the abort marker). The caller owns the
     profile lock and re-detects immediately before invoking this helper.
     """
+    frozen = (
+        entries
+        if entries is not None
+        else tuple(orphan_scan.freeze_candidate(orphan.path) for orphan in orphans)
+    )
+    filesystem_deltas = (
+        deltas
+        if deltas is not None
+        else transitions.filesystem_deletion_deltas(entry.path for entry in frozen)
+    )
+    for entry in frozen:
+        orphan_scan.validate_approved_entry(entry)
     transitions.ensure_state_dir_writable()
     wrote_transition = False
     if choice is ApplyChoice.DELETE_AND_TRANSITION:
-        transition_dir = _write_orphan_transition(profile, orphans)
-        console.print(f"  transition: {transition_dir}")
         wrote_transition = True
 
     console.print("=== orphan cleanup ===")
-    for orphan in orphans:
-        _unlink_orphan_path(orphan.path, console)
-    _rmdir_empty_parents([o.path.parent for o in orphans], console)
+    for index, (orphan, entry) in enumerate(zip(orphans, frozen, strict=True), start=1):
+        if journal is not None:
+            journal = operations.begin_checkpoint(
+                journal,
+                name=f"delete-transition-orphan-{index}",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery=f"restore transition-attributed orphan {entry.path}",
+                paths=(entry.path,),
+                restore_state=False,
+                adapters=(),
+            )
+        if index == 1 and wrote_transition:
+            transition_dir = _write_orphan_transition(profile, filesystem_deltas)
+            console.print(f"  transition: {transition_dir}")
+        orphan_scan.unlink_approved_entry(entry)
+        console.print(f"  deleted  {orphan.path}")
+        if journal is not None:
+            journal = operations.finish_checkpoint(journal)
     if wrote_transition:
         console.print(f"  to undo: setforge revert --profile={profile}")
+    return journal
 
 
 def _orphan_path_identity(path: Path) -> str:
@@ -398,7 +542,10 @@ def _apply_orphan_cleanup(
         return
 
     confirmed = {_orphan_path_identity(orphan.path) for orphan in orphans}
-    with mutation_locks(config_dir=config_path.resolve().parent, profile=profile):
+    with (
+        mutation_locks(config_dir=config_path.resolve().parent, profile=profile),
+        operations.recover_on_error(profile, "cleanup-orphans"),
+    ):
         operations.refuse_active(profile)
         _, refreshed = _detect_orphans_live(profile, config_path)
         approved_still_orphaned = [
@@ -409,7 +556,32 @@ def _apply_orphan_cleanup(
         if not approved_still_orphaned:
             console.print("=== no orphans ===")
             return
-        _execute_cleanup_locked(profile, approved_still_orphaned, choice, console)
+        paths = tuple(orphan.path for orphan in approved_still_orphaned)
+        entries = tuple(orphan_scan.freeze_candidate(path) for path in paths)
+        deltas = transitions.filesystem_deletion_deltas(entry.path for entry in entries)
+        for entry in entries:
+            orphan_scan.validate_approved_entry(entry)
+        journal = operations.prepare(
+            command="cleanup-orphans",
+            profile=profile,
+            config_dir=config_path.resolve().parent,
+            resources_lock=False,
+            command_line=("cleanup-orphans", "--apply"),
+            paths=paths,
+            path_guards=orphan_scan.capture_parent_path_guards(paths),
+        )
+        updated = _execute_cleanup_locked(
+            profile,
+            approved_still_orphaned,
+            choice,
+            console,
+            entries=entries,
+            deltas=deltas,
+            journal=journal,
+        )
+        assert updated is not None
+        journal = updated
+        operations.complete(journal)
 
 
 @app.command("cleanup-orphans", epilog=CLEANUP_ORPHANS_EXAMPLES)
@@ -441,6 +613,14 @@ def cleanup_orphans(
             "the tracked setforge.yaml is never touched."
         ),
     ),
+    scan: bool = typer.Option(
+        False,
+        "--scan",
+        help=(
+            "Discover unrecorded files and symlinks inside bounded managed "
+            "trees. Apply requires separate TTY confirmation for each path."
+        ),
+    ),
 ) -> None:
     """Review and remove tracked-file orphans for ``profile``.
 
@@ -453,7 +633,17 @@ def cleanup_orphans(
     ``--ignore <id>`` appends to the host-local ignore list and
     returns without scanning — useful for one-shot manual exclusion
     without scanning the transitions dir.
+
+    ``--scan`` discovers only unrecorded leaves under bounded managed roots.
+    Its apply path requires per-file TTY consent and rejects blanket ``--yes``.
     """
+    if scan and yes:
+        raise SetforgeError(
+            "--scan rejects --yes; unrecorded paths require per-file confirmation"
+        )
+    if scan and ignore is not None:
+        raise SetforgeError("--scan and --ignore cannot be combined")
+
     resolved_config = _resolve_config_arg(config)
     console = Console(stderr=True)
 
@@ -462,6 +652,14 @@ def cleanup_orphans(
         console.print(
             f"added [cyan]{ignore}[/cyan] to orphan_ignore in {LOCAL_CONFIG_PATH}"
         )
+        return
+
+    if scan:
+        if apply:
+            _execute_scan_cleanup(profile, resolved_config, console=console)
+        else:
+            _, result = _detect_scan_live(profile, resolved_config)
+            _print_scan_dry_run(result, console)
         return
 
     if not apply:

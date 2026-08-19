@@ -564,7 +564,7 @@ def recover_files(journal: OperationJournal) -> OperationJournal:
     _validate_snapshot_restore_parents(journal)
     recovering = replace(journal, phase=OperationPhase.RECOVERING)
     _write(recovering)
-    scoped_paths = {path for item in recovering.checkpoints for path in item.paths}
+    scoped_paths, blocked_paths = _recovery_paths(recovering)
     guard_identities = (
         _guard_identities(journal.path_guards) if journal.path_guards else None
     )
@@ -573,16 +573,94 @@ def recover_files(journal: OperationJournal) -> OperationJournal:
         key=lambda item: len(item.path.parts),
         reverse=True,
     ):
-        _restore_path(
+        restored = _restore_path(
             snapshot,
             guard_identities=guard_identities,
             permit_existing_absent=True,
+            require_leaf_absent=recovering.command == "cleanup-orphans",
+        )
+        if not restored:
+            blocked_paths.add(str(snapshot.path))
+    if blocked_paths:
+        blocked = ", ".join(sorted(blocked_paths))
+        raise SetforgeError(
+            "cleanup recovery preserved replacement path(s); move them aside "
+            f"and retry recovery to restore the original bytes: {blocked}"
         )
     if any(item.restore_state for item in recovering.checkpoints):
         transitions.restore_state_snapshots(recovering.state_snapshots)
     if any(item.restore_transitions for item in recovering.checkpoints):
         _remove_uncommitted_transition_records(recovering)
     return recovering
+
+
+def _recovery_paths(journal: OperationJournal) -> tuple[set[str], set[str]]:
+    """Select effects that reached, or may have reached, their post-state.
+
+    Cleanup-orphans checkpoints each unlink separately. Absence is the only
+    live post-state proving that its deletion remains published; any present
+    object may be an external replacement and recovery must preserve it.
+    """
+    selected: set[str] = set()
+    blocked: set[str] = set()
+    snapshots = {str(item.path): item for item in journal.paths}
+    for checkpoint in journal.checkpoints:
+        if journal.command != "cleanup-orphans":
+            selected.update(checkpoint.paths)
+            continue
+        for raw_path in checkpoint.paths:
+            try:
+                current = snapshot_path(Path(raw_path))
+            except FileNotFoundError:
+                selected.add(raw_path)
+            except SetforgeError:
+                blocked.add(raw_path)
+            else:
+                if current.kind is SnapshotKind.ABSENT:
+                    selected.add(raw_path)
+                    continue
+                if current == snapshots[raw_path]:
+                    continue
+                # The intended delete post-state is no longer live. Preserve
+                # any independently-created replacement instead of restoring
+                # the stale pre-operation snapshot over it.
+                blocked.add(raw_path)
+    return selected, blocked
+
+
+def apply_filesystem_deltas_reverse_anchored(
+    deltas: tuple[transitions.FilesystemDelta, ...],
+    guards: tuple[PathGuard, ...],
+) -> None:
+    """Validate and reverse typed filesystem deltas through guarded dirfds."""
+    guard_identities = _guard_identities(guards)
+    for delta in deltas:
+        _replace_filesystem_delta_anchored(delta, guard_identities)
+
+
+def _replace_filesystem_delta_anchored(
+    delta: transitions.FilesystemDelta,
+    guard_identities: dict[Path, tuple[int, int, int] | None],
+) -> None:
+    replacement = _path_snapshot_from_filesystem_image(delta.path, delta.pre)
+    with _open_guarded_parent(
+        delta.path,
+        guard_identities,
+        create_missing=replacement.kind is not SnapshotKind.ABSENT,
+        permit_existing_absent=False,
+    ) as parent_fd:
+        if parent_fd is None:
+            raise SetforgeError(f"filesystem path parent changed: {delta.path.parent}")
+        _verify_parent_binding(parent_fd, delta.path.parent)
+        current = _snapshot_path_at(parent_fd, delta.path)
+        expected = _path_snapshot_from_filesystem_image(delta.path, delta.post)
+        if current != expected:
+            raise SetforgeError(
+                f"filesystem path changed since transition: {delta.path}"
+            )
+        _verify_parent_binding(parent_fd, delta.path.parent)
+        _restore_path_at(parent_fd, replacement)
+        _verify_parent_binding(parent_fd, delta.path.parent)
 
 
 def finish_recovery(journal: OperationJournal) -> OperationJournal:
@@ -978,12 +1056,111 @@ def _atomic_write_at(
             os.unlink(temporary, dir_fd=parent_fd)
 
 
+def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
+    """Capture one leaf relative to a held, verified parent descriptor."""
+    name = path.name
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return PathSnapshot(path, SnapshotKind.ABSENT)
+    if stat.S_ISLNK(before.st_mode):
+        target = os.readlink(name, dir_fd=parent_fd)
+        after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_snapshot_stat(before, after):
+            raise SetforgeError(f"filesystem path changed while reading: {path}")
+        return PathSnapshot(
+            path,
+            SnapshotKind.SYMLINK,
+            mode=stat.S_IMODE(before.st_mode),
+            link_target=target,
+            mtime_ns=before.st_mtime_ns,
+        )
+    if not stat.S_ISREG(before.st_mode):
+        raise SetforgeError(f"unsupported transition filesystem object: {path}")
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=parent_fd,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not _same_snapshot_stat(before, opened):
+            raise SetforgeError(f"filesystem path changed while reading: {path}")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if not _same_snapshot_stat(opened, after):
+            raise SetforgeError(f"filesystem path changed while reading: {path}")
+    finally:
+        os.close(descriptor)
+    return PathSnapshot(
+        path,
+        SnapshotKind.FILE,
+        mode=stat.S_IMODE(opened.st_mode),
+        payload=b"".join(chunks),
+        mtime_ns=opened.st_mtime_ns,
+    )
+
+
+def _path_snapshot_from_filesystem_image(
+    path: Path, image: transitions.FilesystemImage
+) -> PathSnapshot:
+    kinds = {
+        transitions.FilesystemKind.ABSENT: SnapshotKind.ABSENT,
+        transitions.FilesystemKind.FILE: SnapshotKind.FILE,
+        transitions.FilesystemKind.SYMLINK: SnapshotKind.SYMLINK,
+    }
+    return PathSnapshot(
+        path,
+        kinds[image.kind],
+        mode=image.mode,
+        payload=image.payload,
+        link_target=image.link_target,
+        mtime_ns=image.mtime_ns,
+    )
+
+
+def _restore_path_at(parent_fd: int, snapshot: PathSnapshot) -> None:
+    """Publish one snapshot relative to an already-held parent descriptor."""
+    name = snapshot.path.name
+    if snapshot.kind is SnapshotKind.ABSENT:
+        _remove_replaceable_at(parent_fd, name, snapshot.path)
+        os.fsync(parent_fd)
+        return
+    _remove_replaceable_at(parent_fd, name, snapshot.path)
+    if snapshot.kind is SnapshotKind.FILE:
+        assert snapshot.payload is not None
+        _atomic_write_at(
+            parent_fd,
+            name,
+            snapshot.payload,
+            mode=snapshot.mode if snapshot.mode is not None else 0o600,
+            mtime_ns=snapshot.mtime_ns,
+        )
+        return
+    if snapshot.kind is SnapshotKind.SYMLINK:
+        assert snapshot.link_target is not None
+        os.symlink(snapshot.link_target, name, dir_fd=parent_fd)
+        if snapshot.mtime_ns is not None:
+            os.utime(
+                name,
+                ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        os.fsync(parent_fd)
+        return
+    raise SetforgeError(f"unsupported anchored filesystem replacement: {snapshot.path}")
+
+
 def _restore_path_anchored(  # noqa: C901
     snapshot: PathSnapshot,
     guard_identities: dict[Path, tuple[int, int, int] | None],
     *,
     permit_existing_absent: bool,
-) -> None:
+    require_leaf_absent: bool = False,
+) -> bool:
     """Restore one path relative to a verified parent descriptor."""
     create_missing = snapshot.kind is not SnapshotKind.ABSENT
     with _open_guarded_parent(
@@ -993,14 +1170,20 @@ def _restore_path_anchored(  # noqa: C901
         permit_existing_absent=permit_existing_absent,
     ) as parent_fd:
         if parent_fd is None:
-            return
+            return True
         _verify_parent_binding(parent_fd, snapshot.path.parent)
         name = snapshot.path.name
+        if require_leaf_absent:
+            try:
+                os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                return False
         if snapshot.kind is SnapshotKind.ABSENT:
-            _remove_replaceable_at(parent_fd, name, snapshot.path)
-            os.fsync(parent_fd)
+            _restore_path_at(parent_fd, snapshot)
             _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return
+            return True
         if snapshot.kind is SnapshotKind.DIRECTORY:
             try:
                 info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -1030,33 +1213,11 @@ def _restore_path_anchored(  # noqa: C901
                 os.close(directory_fd)
             os.fsync(parent_fd)
             _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return
-        _remove_replaceable_at(parent_fd, name, snapshot.path)
-        if snapshot.kind is SnapshotKind.FILE:
-            assert snapshot.payload is not None
-            mode = snapshot.mode if snapshot.mode is not None else 0o600
-            _atomic_write_at(
-                parent_fd,
-                name,
-                snapshot.payload,
-                mode=mode,
-                mtime_ns=snapshot.mtime_ns,
-            )
+            return True
+        if snapshot.kind in (SnapshotKind.FILE, SnapshotKind.SYMLINK):
+            _restore_path_at(parent_fd, snapshot)
             _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return
-        if snapshot.kind is SnapshotKind.SYMLINK:
-            assert snapshot.link_target is not None
-            os.symlink(snapshot.link_target, name, dir_fd=parent_fd)
-            if snapshot.mtime_ns is not None:
-                os.utime(
-                    name,
-                    ns=(snapshot.mtime_ns, snapshot.mtime_ns),
-                    dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-            os.fsync(parent_fd)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return
+            return True
         raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
 
 
@@ -1065,22 +1226,23 @@ def _restore_path(
     *,
     guard_identities: dict[Path, tuple[int, int, int] | None] | None = None,
     permit_existing_absent: bool = False,
-) -> None:
+    require_leaf_absent: bool = False,
+) -> bool:
     if guard_identities is not None:
-        _restore_path_anchored(
+        return _restore_path_anchored(
             snapshot,
             guard_identities,
             permit_existing_absent=permit_existing_absent,
+            require_leaf_absent=require_leaf_absent,
         )
-        return
     path = snapshot.path
     if snapshot.kind is SnapshotKind.ABSENT:
         _restore_absent(path)
-        return
+        return True
     path.parent.mkdir(parents=True, exist_ok=True)
     if snapshot.kind is SnapshotKind.DIRECTORY:
         _restore_directory(snapshot)
-        return
+        return True
     _remove_replaceable(path)
     if snapshot.kind is SnapshotKind.FILE:
         assert snapshot.payload is not None
@@ -1093,7 +1255,7 @@ def _restore_path(
                 follow_symlinks=False,
             )
             atomicio.fsync_path(path, strict=True)
-        return
+        return True
     if snapshot.kind is SnapshotKind.SYMLINK:
         assert snapshot.link_target is not None
         path.symlink_to(snapshot.link_target)
@@ -1104,7 +1266,7 @@ def _restore_path(
                 follow_symlinks=False,
             )
         atomicio.fsync_dir(path.parent)
-        return
+        return True
     raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
 
 

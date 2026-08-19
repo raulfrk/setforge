@@ -23,7 +23,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from setforge import operations, transitions
+from setforge import operations, orphan_scan, transitions
 from setforge._editor import run_editor
 from setforge._redact import redact_argv
 from setforge.cli import (
@@ -394,7 +394,11 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
 
 
 def _apply_revert(
-    transition: transitions.TransitionDir, profile: str, config: Path
+    transition: transitions.TransitionDir,
+    profile: str,
+    config: Path,
+    *,
+    path_guards: tuple[operations.PathGuard, ...] = (),
 ) -> None:
     """Apply the reverse transition and print the post-success summary.
 
@@ -434,7 +438,10 @@ def _apply_revert(
     typer.echo(f"reverting: {transition}")
 
     touched_paths = _load_meta_touched_paths(transition)
-    file_pre = transitions.snapshot_paths(touched_paths)
+    filesystem_deltas = transitions.load_filesystem_deltas(transition)
+    filesystem_paths = {item.path for item in filesystem_deltas}
+    text_paths = [path for path in touched_paths if path not in filesystem_paths]
+    file_pre = transitions.snapshot_paths(text_paths)
 
     pre_store_state = transitions.load_state_snapshots(transition)
     reverse_store_state: tuple[transitions.StateSnapshotEntry, ...] = ()
@@ -462,8 +469,10 @@ def _apply_revert(
     # same readlink / regular-file probes the real unlink does, so revert
     # refuses cleanly with zero mutation.
     _revert_symlink_deployments(config=config, profile=profile, dry_run=True)
+    transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
 
     transitions.apply_patch_reverse(transition)
+    operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
     _revert_symlink_deployments(config=config, profile=profile)
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
@@ -474,10 +483,11 @@ def _apply_revert(
     target = _write_reverse_transition(
         transition,
         profile,
-        touched_paths,
+        text_paths,
         file_pre,
         state_snapshots=reverse_store_state,
         file_modes=reverse_modes,
+        filesystem_deltas=transitions.reverse_filesystem_deltas(filesystem_deltas),
     )
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
@@ -689,7 +699,7 @@ def revert(
             kind=operations.CheckpointKind.COMPENSATABLE,
             recovery="restore pre-revert files, stores, modes, and adapter inventories",
         )
-        _apply_revert(transition, profile, config)
+        _apply_revert(transition, profile, config, path_guards=journal.path_guards)
         journal = operations.finish_checkpoint(journal)
         operations.complete(journal)
 
@@ -803,7 +813,12 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
             recovery="restore pre-chain files, stores, modes, and adapter inventories",
         )
         for entry in chain:
-            _apply_revert(entry.directory, profile, config)
+            _apply_revert(
+                entry.directory,
+                profile,
+                config,
+                path_guards=journal.path_guards,
+            )
         journal = operations.finish_checkpoint(journal)
         operations.complete(journal)
 
@@ -820,8 +835,14 @@ def _prepare_revert_journal(
     has_extensions = False
     has_plugins = False
     mcp_names: dict[str, None] = {}
+    generic_paths: dict[Path, None] = {}
     for transition in chain:
         touched.update(dict.fromkeys(_load_meta_touched_paths(transition)))
+        generic_paths.update(
+            dict.fromkeys(
+                item.path for item in transitions.load_filesystem_deltas(transition)
+            )
+        )
         snapshots = transitions.load_state_snapshots(transition) or ()
         for snapshot in snapshots:
             identity = (snapshot.store, snapshot.profile, snapshot.key)
@@ -849,6 +870,7 @@ def _prepare_revert_journal(
             plugins=has_plugins,
             mcp_names=tuple(mcp_names),
         ),
+        path_guards=orphan_scan.capture_parent_path_guards(tuple(generic_paths)),
     )
 
 

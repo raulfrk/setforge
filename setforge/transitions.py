@@ -16,6 +16,8 @@ under ``~/.local/state/setforge/transitions/`` containing:
   whose MODE (not just content) the command changed (omitted if none).
   The content patch carries bytes only; this records the mode axis so
   revert can chmod each reverted path back to its pre-command mode.
+- ``filesystem_deltas.json`` — optional arbitrary-byte file and symlink
+  pre/post images for mutations a unified text patch cannot represent.
 - ``state_snapshots/`` — pre-command per-host store state (byte bases,
   spans sidecars, scalar-base manifests) as a ``manifest.json`` plus
   numbered raw-byte payload files (omitted when nothing was captured)
@@ -27,11 +29,14 @@ restores the snapshotted store state, and records its own reverse
 transition.
 """
 
+import base64
+import binascii
 import difflib
 import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -63,6 +68,34 @@ class TransitionCommand(StrEnum):
     CLEANUP_ORPHANS = "cleanup-orphans"
     PROMOTE = "promote"
     MIGRATE = "migrate"
+
+
+class FilesystemKind(StrEnum):
+    """Portable filesystem kinds stored in a transition delta."""
+
+    ABSENT = "absent"
+    FILE = "file"
+    SYMLINK = "symlink"
+
+
+@dataclass(frozen=True, slots=True)
+class FilesystemImage:
+    """Exact state of one transition-managed filesystem leaf."""
+
+    kind: FilesystemKind
+    payload: bytes | None = None
+    link_target: str | None = None
+    mode: int | None = None
+    mtime_ns: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FilesystemDelta:
+    """Pre/post images for one arbitrary-byte file or symlink mutation."""
+
+    path: Path
+    pre: FilesystemImage
+    post: FilesystemImage
 
 
 # The profile label recorded on a ``migrate`` transition. A schema migration
@@ -1357,6 +1390,262 @@ def _touched_paths(
     )
 
 
+_FILESYSTEM_DELTAS_FILENAME: Final[str] = "filesystem_deltas.json"
+
+
+def _canonical_filesystem_path(path: Path) -> Path:
+    """Return one-slash, lexical absolute identity without following symlinks."""
+    absolute = os.fspath(path.expanduser().absolute())
+    return Path(os.path.normpath(f"/{absolute.lstrip('/')}"))
+
+
+def snapshot_filesystem_image(path: Path) -> FilesystemImage:
+    """Capture an arbitrary-byte regular file or symlink without dereferencing."""
+    path = _canonical_filesystem_path(path)
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return FilesystemImage(FilesystemKind.ABSENT)
+    try:
+        if stat.S_ISLNK(before.st_mode):
+            target = str(path.readlink())
+            after = path.lstat()
+            if _filesystem_stat_identity(before) != _filesystem_stat_identity(after):
+                raise OSError("symlink changed while snapshotting")
+            return FilesystemImage(
+                FilesystemKind.SYMLINK,
+                link_target=target,
+                mode=stat.S_IMODE(before.st_mode),
+                mtime_ns=before.st_mtime_ns,
+            )
+        if not stat.S_ISREG(before.st_mode):
+            raise SetforgeError(f"unsupported transition filesystem object: {path}")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            opened = os.fstat(fd)
+            if _filesystem_stat_identity(before) != _filesystem_stat_identity(opened):
+                raise OSError("file changed before snapshot read")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                payload = stream.read()
+            after = os.fstat(fd)
+            if _filesystem_stat_identity(opened) != _filesystem_stat_identity(after):
+                raise OSError("file changed while snapshotting")
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise SetforgeError(
+            f"filesystem path changed while snapshotting {path}"
+        ) from exc
+    return FilesystemImage(
+        FilesystemKind.FILE,
+        payload=payload,
+        mode=stat.S_IMODE(opened.st_mode),
+        mtime_ns=opened.st_mtime_ns,
+    )
+
+
+def filesystem_deletion_deltas(paths: Iterable[Path]) -> tuple[FilesystemDelta, ...]:
+    """Snapshot ``paths`` as reversible deletion deltas."""
+    canonical = tuple(_canonical_filesystem_path(path) for path in paths)
+    if len(canonical) != len(set(canonical)):
+        raise SetforgeError("filesystem transition delta paths must be unique")
+    return tuple(
+        FilesystemDelta(
+            path,
+            snapshot_filesystem_image(path),
+            FilesystemImage(FilesystemKind.ABSENT),
+        )
+        for path in canonical
+    )
+
+
+def reverse_filesystem_deltas(
+    deltas: tuple[FilesystemDelta, ...],
+) -> tuple[FilesystemDelta, ...]:
+    """Return the exact inverse records for a redo transition."""
+    return tuple(FilesystemDelta(item.path, item.post, item.pre) for item in deltas)
+
+
+def _filesystem_stat_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _image_to_json(image: FilesystemImage) -> dict[str, object]:
+    return {
+        "kind": image.kind.value,
+        **(
+            {"payload_b64": base64.b64encode(image.payload).decode("ascii")}
+            if image.payload is not None
+            else {}
+        ),
+        **({"link_target": image.link_target} if image.link_target is not None else {}),
+        **({"mode": image.mode} if image.mode is not None else {}),
+        **({"mtime_ns": image.mtime_ns} if image.mtime_ns is not None else {}),
+    }
+
+
+def _canonicalize_filesystem_deltas(
+    deltas: tuple[FilesystemDelta, ...],
+) -> tuple[FilesystemDelta, ...]:
+    canonical = tuple(
+        FilesystemDelta(
+            _canonical_filesystem_path(item.path),
+            item.pre,
+            item.post,
+        )
+        for item in deltas
+    )
+    if len(canonical) != len({item.path for item in canonical}):
+        raise SetforgeError("filesystem transition delta paths must be unique")
+    return canonical
+
+
+def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | None:
+    if not deltas:
+        return None
+    canonical_deltas = _canonicalize_filesystem_deltas(deltas)
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "path": str(item.path),
+                        "pre": _image_to_json(item.pre),
+                        "post": _image_to_json(item.post),
+                    }
+                    for item in canonical_deltas
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def load_filesystem_deltas(
+    transition_dir: TransitionDir,
+) -> tuple[FilesystemDelta, ...]:
+    """Load and validate optional arbitrary-filesystem transition deltas."""
+    path = transition_dir / _FILESYSTEM_DELTAS_FILENAME
+    if not path.exists():
+        return ()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            raise ValueError("unsupported filesystem delta schema")
+        entries = raw.get("entries")
+        if not isinstance(entries, list):
+            raise TypeError("entries must be a list")
+        deltas = tuple(_filesystem_delta_from_json(entry) for entry in entries)
+        paths = [item.path for item in deltas]
+        if len(paths) != len(set(paths)):
+            raise ValueError("duplicate filesystem delta path")
+        return deltas
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        binascii.Error,
+    ) as exc:
+        raise InvalidTransitionRecord(
+            f"invalid {_FILESYSTEM_DELTAS_FILENAME} at {path}: {exc}"
+        ) from exc
+
+
+def _filesystem_delta_from_json(raw: object) -> FilesystemDelta:
+    if not isinstance(raw, dict):
+        raise TypeError("filesystem delta entry must be an object")
+    raw_path = raw.get("path")
+    if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+        raise ValueError("filesystem delta path must be absolute text")
+    normalized = os.path.normpath(raw_path)
+    if (
+        raw_path.startswith("//")
+        or normalized != raw_path
+        or ".." in Path(raw_path).parts
+    ):
+        raise ValueError("filesystem delta path must be lexically normalized")
+    return FilesystemDelta(
+        Path(normalized),
+        _filesystem_image_from_json(raw.get("pre")),
+        _filesystem_image_from_json(raw.get("post")),
+    )
+
+
+def _filesystem_image_from_json(raw: object) -> FilesystemImage:
+    if not isinstance(raw, dict):
+        raise TypeError("filesystem image must be an object")
+    raw_kind = raw.get("kind")
+    if not isinstance(raw_kind, str):
+        raise TypeError("filesystem kind must be text")
+    kind = FilesystemKind(raw_kind)
+    payload_raw = raw.get("payload_b64")
+    link_target = raw.get("link_target")
+    mode = raw.get("mode")
+    mtime_ns = raw.get("mtime_ns")
+    if payload_raw is not None and not isinstance(payload_raw, str):
+        raise TypeError("filesystem payload must be base64 text")
+    if link_target is not None and not isinstance(link_target, str):
+        raise TypeError("filesystem link target must be text")
+    if mode is not None and (isinstance(mode, bool) or not isinstance(mode, int)):
+        raise TypeError("filesystem mode must be an integer")
+    if mtime_ns is not None and (
+        isinstance(mtime_ns, bool) or not isinstance(mtime_ns, int)
+    ):
+        raise TypeError("filesystem mtime_ns must be an integer")
+    payload = (
+        base64.b64decode(payload_raw, validate=True)
+        if payload_raw is not None
+        else None
+    )
+    image = FilesystemImage(kind, payload, link_target, mode, mtime_ns)
+    _validate_filesystem_image(image)
+    return image
+
+
+def _validate_filesystem_image(image: FilesystemImage) -> None:
+    if image.kind is FilesystemKind.ABSENT:
+        if any(
+            value is not None
+            for value in (image.payload, image.link_target, image.mode, image.mtime_ns)
+        ):
+            raise ValueError("absent filesystem image carries metadata")
+        return
+    if image.mode is None or image.mtime_ns is None:
+        raise ValueError("present filesystem image lacks mode or mtime")
+    if not 0 <= image.mode <= 0o7777:
+        raise ValueError("filesystem mode out of range")
+    if image.kind is FilesystemKind.FILE:
+        if image.payload is None or image.link_target is not None:
+            raise ValueError("invalid regular-file image")
+    elif image.payload is not None or image.link_target is None:
+        raise ValueError("invalid symlink image")
+
+
+def validate_filesystem_deltas_reverse(deltas: tuple[FilesystemDelta, ...]) -> None:
+    """Refuse drift before any inverse filesystem effect begins."""
+    for item in deltas:
+        try:
+            current = snapshot_filesystem_image(item.path)
+        except SetforgeError as exc:
+            raise RevertFailed(
+                f"filesystem path changed since transition: {item.path}"
+            ) from exc
+        if current != item.post:
+            raise RevertFailed(f"filesystem path changed since transition: {item.path}")
+
+
 def write_transition(
     meta: TransitionMeta,
     file_pre: Mapping[Path, str | None],
@@ -1367,6 +1656,7 @@ def write_transition(
     state_snapshots: tuple[StateSnapshotEntry, ...] = (),
     mcp_delta: MCPDelta | None = None,
     file_modes: Mapping[Path, int] | None = None,
+    filesystem_deltas: tuple[FilesystemDelta, ...] = (),
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1403,6 +1693,10 @@ def write_transition(
     at all, which :func:`load_file_modes` reads back as ``{}`` (the
     no-mode-change backward-compat path for pre-bump records).
 
+    ``filesystem_deltas`` is additive: old transitions omit the payload and
+    load as an empty tuple; cleanup-orphans uses it for exact binary/symlink
+    undo and redo without changing other transition producers.
+
     Returns the absolute path of the committed directory.
 
     Raises:
@@ -1414,6 +1708,8 @@ def write_transition(
             source dict with a non-str value (caller bypassed
             ``MarketplaceSource.model_dump(mode="json")``).
     """
+    filesystem_deltas = _canonicalize_filesystem_deltas(filesystem_deltas)
+    filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
     root = transitions_root()
     dirname = transition_dirname(meta.timestamp, meta.command.value, meta.profile)
     target = TransitionDir(root / dirname)
@@ -1453,13 +1749,22 @@ def write_transition(
     if file_modes_payload is not None:
         _write_text_durable(pending / _FILE_MODES_FILENAME, file_modes_payload)
 
+    if filesystem_payload is not None:
+        _write_text_durable(pending / _FILESYSTEM_DELTAS_FILENAME, filesystem_payload)
+
     _stage_state_snapshots(pending, state_snapshots)
 
     atomicio.fsync_dir(pending)
     pending.rename(target)
     atomicio.fsync_dir(root)
 
-    touched = _touched_paths(file_pre, file_post)
+    touched = sorted(
+        {
+            *_touched_paths(file_pre, file_post),
+            *(item.path for item in filesystem_deltas),
+        },
+        key=str,
+    )
     write_meta(target, meta, paths=touched)
     atomicio.fsync_dir(target)
 

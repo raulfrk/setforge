@@ -29,6 +29,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("lock.py", "lock"),
     ("cleanup.py", "_resolve_declared"),
     ("orphans.py", "_detect_orphans_live"),
+    ("orphans.py", "_detect_scan_live"),
     ("ext.py", "ext_list"),
     ("ext.py", "ext_reconcile"),
     ("ext.py", "_run_ext_reconcile"),

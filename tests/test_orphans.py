@@ -29,7 +29,11 @@ from setforge.compare import (
     load_ignored_orphans,
 )
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
-from setforge.errors import ConfigError, OrphanCleanupRequiresInteractive
+from setforge.errors import (
+    ConfigError,
+    OrphanCleanupRequiresInteractive,
+    SetforgeError,
+)
 
 _ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -544,19 +548,22 @@ def test_detect_orphans_overreach_regression(
     assert detection.skipped_absent == 0
 
 
-def test_rmdir_empty_parents_keeps_dir_with_sibling(tmp_path: Path) -> None:
-    """``_rmdir_empty_parents`` removes a dir emptied by the deletion but
-    keeps one still holding an unrelated sibling (Decision 5: keep the
-    directory unless the orphan was its only content)."""
-    emptied = tmp_path / "emptied"
-    emptied.mkdir()
-    shared = tmp_path / "shared"
-    shared.mkdir()
-    (shared / "user_file.txt").write_text("keep me\n", encoding="utf-8")
-    orphans_mod._rmdir_empty_parents([emptied, shared], Console())
-    assert not emptied.exists()
-    assert shared.exists()
-    assert (shared / "user_file.txt").exists()
+def test_cleanup_retains_parent_after_last_orphan_is_deleted(tmp_path: Path) -> None:
+    """Cleanup never performs an unjournalled parent-directory mutation."""
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    orphan = parent / "orphan.txt"
+    orphan.write_text("junk\n", encoding="utf-8")
+
+    orphans_mod._execute_cleanup_locked(
+        "p",
+        [OrphanEntry(path=orphan)],
+        orphans_mod.ApplyChoice.DELETE_ONLY,
+        Console(),
+    )
+
+    assert not orphan.exists()
+    assert parent.is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -820,17 +827,17 @@ def test_apply_yes_writes_transition_first(
         order.append("write_transition")
         return real_write(*args, **kwargs)  # type: ignore[arg-type]
 
-    real_unlink = Path.unlink
+    real_unlink = orphans_mod.orphan_scan.unlink_approved_entry
 
-    def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
-        if self == live_orphan:
+    def _spy_unlink(entry) -> None:
+        if entry.path == live_orphan:
             order.append("unlink")
-        real_unlink(self, missing_ok=missing_ok)
+        real_unlink(entry)
 
     monkeypatch.setattr(
         "setforge.cli.orphans.transitions.write_transition", _spy_write_transition
     )
-    monkeypatch.setattr(Path, "unlink", _spy_unlink)
+    monkeypatch.setattr(orphans_mod.orphan_scan, "unlink_approved_entry", _spy_unlink)
 
     orphans_mod._execute_cleanup_locked(
         "p",
@@ -875,15 +882,15 @@ def test_apply_yes_holds_profile_lock(
             finally:
                 events.append("exit")
 
-    real_unlink = Path.unlink
+    real_unlink = orphans_mod.orphan_scan.unlink_approved_entry
 
-    def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
-        if self == live_orphan:
+    def _spy_unlink(entry) -> None:
+        if entry.path == live_orphan:
             events.append("unlink")
-        real_unlink(self, missing_ok=missing_ok)
+        real_unlink(entry)
 
     monkeypatch.setattr("setforge.cli.orphans.mutation_locks", _recording_locks)
-    monkeypatch.setattr(Path, "unlink", _spy_unlink)
+    monkeypatch.setattr(orphans_mod.orphan_scan, "unlink_approved_entry", _spy_unlink)
     detection = OrphanDetection(orphans=[orphan_entry])
     monkeypatch.setattr(
         orphans_mod,
@@ -954,6 +961,8 @@ def test_apply_never_deletes_orphan_discovered_after_prompt(
     """The locked scan may contract approval, but cannot expand it."""
     approved = OrphanEntry(path=tmp_path / "approved")
     newly_discovered = OrphanEntry(path=tmp_path / "not-shown-to-user")
+    approved.path.write_text("approved", encoding="utf-8")
+    newly_discovered.path.write_text("new", encoding="utf-8")
     detections = iter(
         [
             (_make_config_with({}), OrphanDetection(orphans=[approved])),
@@ -964,6 +973,16 @@ def test_apply_never_deletes_orphan_discovered_after_prompt(
         ]
     )
     executed: list[OrphanEntry] = []
+
+    def _record_execution(
+        _profile: str,
+        orphans: list[OrphanEntry],
+        _choice: object,
+        _console: Console,
+        **kwargs: object,
+    ) -> object:
+        executed.extend(orphans)
+        return kwargs["journal"]
 
     monkeypatch.setattr(
         orphans_mod, "_detect_orphans_live", lambda *_a: next(detections)
@@ -976,7 +995,7 @@ def test_apply_never_deletes_orphan_discovered_after_prompt(
     monkeypatch.setattr(
         orphans_mod,
         "_execute_cleanup_locked",
-        lambda _profile, orphans, _choice, _console: executed.extend(orphans),
+        _record_execution,
     )
 
     orphans_mod._apply_orphan_cleanup(
@@ -1134,6 +1153,64 @@ def test_unlink_missing_path_warns_does_not_crash(
     assert "vanished before delete" in captured.out
 
 
+def test_legacy_cleanup_refuses_same_path_replacement_before_unlink(
+    tmp_path: Path, isolated_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "live" / "orphan"
+    candidate.parent.mkdir()
+    candidate.write_bytes(b"original")
+    real_unlink = orphans_mod.orphan_scan.unlink_approved_entry
+
+    def _replace_then_unlink(entry) -> None:
+        entry.path.unlink()
+        entry.path.write_bytes(b"replacement")
+        real_unlink(entry)
+
+    monkeypatch.setattr(
+        orphans_mod.orphan_scan, "unlink_approved_entry", _replace_then_unlink
+    )
+
+    with pytest.raises(SetforgeError, match="scan candidate changed"):
+        orphans_mod._execute_cleanup_locked(
+            "p",
+            [OrphanEntry(path=candidate)],
+            orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
+            Console(),
+        )
+
+    assert candidate.read_bytes() == b"replacement"
+
+
+def test_legacy_cleanup_refuses_symlink_swapped_ancestor_before_unlink(
+    tmp_path: Path, isolated_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "live"
+    candidate = live / "nested" / "orphan"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"original")
+    moved = tmp_path / "live-moved"
+    real_unlink = orphans_mod.orphan_scan.unlink_approved_entry
+
+    def _swap_then_unlink(entry) -> None:
+        live.rename(moved)
+        live.symlink_to(moved, target_is_directory=True)
+        real_unlink(entry)
+
+    monkeypatch.setattr(
+        orphans_mod.orphan_scan, "unlink_approved_entry", _swap_then_unlink
+    )
+
+    with pytest.raises(SetforgeError, match="scan candidate parent changed"):
+        orphans_mod._execute_cleanup_locked(
+            "p",
+            [OrphanEntry(path=candidate)],
+            orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
+            Console(),
+        )
+
+    assert (moved / "nested" / "orphan").read_bytes() == b"original"
+
+
 # ---------------------------------------------------------------------------
 # Anti-pattern checks: source-code structural assertions
 # ---------------------------------------------------------------------------
@@ -1166,10 +1243,10 @@ def test_no_unlink_missing_ok_in_orphans_module() -> None:
 
 def test_no_shutil_rmtree_or_removedirs() -> None:
     """`shutil.rmtree` (recursive) and `os.removedirs` (walks up) are
-    both forbidden — single-level Path.rmdir() only. AST-walk for
+    forbidden, as is any parent-directory ``rmdir``. AST-walk for
     matching attribute call shapes."""
     tree = _orphans_module_ast()
-    forbidden = {"rmtree", "removedirs"}
+    forbidden = {"rmtree", "removedirs", "rmdir"}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -1183,7 +1260,7 @@ def test_no_shutil_rmtree_or_removedirs() -> None:
 def test_no_resolve_in_orphan_unlink_helpers() -> None:
     """Calling `.resolve()` on a symlink before `.unlink()` torches the
     pointed-to file. None of the per-orphan helpers
-    (`_unlink_orphan_path`, `_rmdir_empty_parents`, `_execute_cleanup_locked`,
+    (`_unlink_orphan_path`, `_execute_cleanup_locked`,
     `_write_orphan_transition`, `_read_orphan_content`,
     `_lstat_safe`, `_orphan_path_identity`) may call `.resolve()`. The
     `_detect_orphans_live` helper is allowed to call
@@ -1192,7 +1269,6 @@ def test_no_resolve_in_orphan_unlink_helpers() -> None:
     tree = _orphans_module_ast()
     helper_names = {
         "_unlink_orphan_path",
-        "_rmdir_empty_parents",
         "_execute_cleanup_locked",
         "_write_orphan_transition",
         "_read_orphan_content",
