@@ -123,6 +123,7 @@ def test_persist_structured_records_key_classification(
     _apply_structured(profile, stage, result)
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
+    assert entry.staged is True
     rows = {r["path"]: r["cls"] for r in entry.hunks}
     assert rows == {"fontSize": "local"}
 

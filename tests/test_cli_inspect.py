@@ -47,7 +47,14 @@ def _setup(
     _write(dst, live)
     if base is not None:
         with locking.profile_lock("p"):
-            store.record("p", file_id("CLAUDE.md"), base=base, local=live, hunks=hunks)
+            store.record(
+                "p",
+                file_id("CLAUDE.md"),
+                base=base,
+                local=live,
+                staged=bool(hunks),
+                hunks=hunks,
+            )
     cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(_config(dst), encoding="utf-8")
     return cfg_path, dst

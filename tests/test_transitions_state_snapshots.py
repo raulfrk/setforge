@@ -421,6 +421,7 @@ def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
         fid,
         base=b"base\n",
         local=b"host live\n",
+        staged=True,
         hunks=[row],
         drafts={UnitRef.line("sha256:a"): draft},
     )

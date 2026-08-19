@@ -50,6 +50,7 @@ def _stage(
         file_id("x"),
         base=BASE,
         local=LIVE,
+        staged=True,
         hunks=reconcile_hunks.serialize(hunks),
         drafts=drafts,
     )
@@ -181,6 +182,7 @@ def test_structured_unparseable_live_degrades_to_false(tmp_path: Path) -> None:
             file_id("settings.json"),
             base=base,
             local=b'{"theme": "light"}',
+            staged=True,
             hunks=serialize_structured([unit]),
         )
 

@@ -209,6 +209,7 @@ def test_load_validated_host_local_sections_reads_the_store(
         fid,
         base=base,
         local=live,
+        staged=True,
         hunks=serialize([dc_replace(hunk, cls=HunkClass.LOCAL)]),
     )
 

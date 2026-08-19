@@ -189,6 +189,7 @@ def test_apply_writes_classes_and_keeps_base(
     _apply(profile, stage, result)
 
     entry = store.read_index(profile).files["CLAUDE.md"]
+    assert entry.staged is True
     classes = {row["label"]: row["cls"] for row in entry.hunks}
     assert classes == {"## Shell": "shared", "## Host paths": "local"}
     assert store.read_base(profile, file_id("CLAUDE.md")) == _BASE  # base unchanged

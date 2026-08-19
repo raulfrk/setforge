@@ -20,7 +20,11 @@ from setforge.reconcile.types import UnitKind
 
 def test_round_trip() -> None:
     idx = Index(
-        files={"a/b": FileEntry(present=True, local_hash="sha256:00", hunks=[])}
+        files={
+            "a/b": FileEntry(
+                present=True, local_hash="sha256:00", staged=False, hunks=[]
+            )
+        }
     )
     assert loads(dumps(idx)) == idx
 
@@ -35,7 +39,11 @@ def test_key_kind_hunk_row_round_trips() -> None:
         "value_hash": "sha256:v",
     }
     idx = Index(
-        files={"s.yaml": FileEntry(present=True, local_hash="sha256:l", hunks=[row])}
+        files={
+            "s.yaml": FileEntry(
+                present=True, local_hash="sha256:l", staged=True, hunks=[row]
+            )
+        }
     )
     out = loads(dumps(idx))
     assert out.files["s.yaml"].hunks[0]["path"] == "editor.fontSize"
@@ -82,7 +90,11 @@ def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
         "draft_hash": "sha256:d",
     }
     idx = Index(
-        files={"s.yaml": FileEntry(present=True, local_hash="sha256:l", hunks=[row])}
+        files={
+            "s.yaml": FileEntry(
+                present=True, local_hash="sha256:l", staged=True, hunks=[row]
+            )
+        }
     )
     text = dumps(idx)
     # raw persisted text carries the bare literals, never an enum-qualified name
@@ -120,11 +132,51 @@ def test_line_row_without_kind_still_valid() -> None:
             },
         }
     )
-    row = loads(text).files["f"].hunks[0]
+    entry = loads(text).files["f"]
+    row = entry.hunks[0]
+    assert entry.staged is True
     assert row["kind"] == "line"
     assert row["legacy_anchor"] == "sha256:a"
     assert str(row["unit_id"]).startswith("sha256:")
     assert "anchor" not in row
+
+
+def test_v1_empty_hunks_infer_nonparticipating() -> None:
+    entry = loads(
+        '{"schema_version":"1.0","files":{"f":'
+        '{"present":true,"local_hash":null,"hunks":[]}}}'
+    ).files["f"]
+    assert entry.staged is False
+
+
+def test_v2_requires_explicit_staged_boolean() -> None:
+    with pytest.raises(CorruptIndexError, match="missing/invalid 'staged'"):
+        loads(
+            '{"schema_version":"2.0","files":{"f":'
+            '{"present":true,"local_hash":null,"hunks":[]}}}'
+        )
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", []])
+def test_v2_rejects_non_boolean_staged(value: object) -> None:
+    import json
+
+    with pytest.raises(CorruptIndexError, match="missing/invalid 'staged'"):
+        loads(
+            json.dumps(
+                {
+                    "schema_version": "2.0",
+                    "files": {
+                        "f": {
+                            "present": True,
+                            "local_hash": None,
+                            "staged": value,
+                            "hunks": [],
+                        }
+                    },
+                }
+            )
+        )
 
 
 def test_v1_duplicate_line_anchors_fail_closed() -> None:
@@ -203,7 +255,7 @@ def test_same_identity_across_line_and_key_kinds_is_valid() -> None:
             "value_hash": "sha256:k",
         },
     ]
-    idx = Index(files={"f": FileEntry(True, None, rows)})
+    idx = Index(files={"f": FileEntry(True, None, True, rows)})
     assert loads(dumps(idx)).files["f"].hunks == rows
 
 
@@ -247,8 +299,8 @@ def test_empty_round_trip() -> None:
 def test_dump_byte_stable_and_sorted() -> None:
     idx = Index(
         files={
-            "z": FileEntry(present=True, local_hash=None, hunks=[]),
-            "a": FileEntry(present=False, local_hash=None, hunks=[]),
+            "z": FileEntry(present=True, local_hash=None, staged=False, hunks=[]),
+            "a": FileEntry(present=False, local_hash=None, staged=False, hunks=[]),
         }
     )
     out = dumps(idx)
@@ -260,7 +312,11 @@ def test_dump_byte_stable_and_sorted() -> None:
 def test_dump_ascii_escaped() -> None:
     # ensure_ascii=True: non-ASCII in metadata is escaped, never raw bytes.
     idx = Index(
-        files={"f": FileEntry(present=True, local_hash="sha256:café", hunks=[])}
+        files={
+            "f": FileEntry(
+                present=True, local_hash="sha256:café", staged=False, hunks=[]
+            )
+        }
     )
     assert "\\u" in dumps(idx)
 
@@ -316,7 +372,17 @@ def test_loads_never_writes(tmp_path, monkeypatch) -> None:
     # chdir into tmp_path so a stray relative-path write would surface here.
     monkeypatch.chdir(tmp_path)
     before = set(tmp_path.rglob("*"))
-    loads(dumps(Index(files={"f": FileEntry(present=True, local_hash=None, hunks=[])})))
+    loads(
+        dumps(
+            Index(
+                files={
+                    "f": FileEntry(
+                        present=True, local_hash=None, staged=False, hunks=[]
+                    )
+                }
+            )
+        )
+    )
     assert set(tmp_path.rglob("*")) == before
 
 

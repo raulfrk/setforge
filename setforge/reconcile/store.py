@@ -601,6 +601,7 @@ def record(
     *,
     base: bytes,
     local: bytes | Absent,
+    staged: bool | None = None,
     hunks: list[dict[str, object]] | None = None,
     drafts: dict[UnitRef, bytes] | None = None,
 ) -> None:
@@ -610,6 +611,8 @@ def record(
     so a crash leaves a prunable orphan rather than an index pointing at content
     or a draft that was never written.
 
+    ``staged`` is the durable file-level opt-in to unit reconciliation. ``None``
+    preserves an existing entry's value and defaults a new entry to ``False``.
     ``hunks`` is the A5 per-hunk classification list; ``drafts`` is the A5c
     identity→draft-bytes mapping for any ``SHARED_DRAFTED`` hunks. When either is
     ``None`` (the default, used by the non-staging ``install`` writeback) the
@@ -626,10 +629,14 @@ def record(
     local_hash = content_sha(local) if isinstance(local, bytes) else None
     index = read_index(profile)
     files = dict(index.files)
+    prior = files.get(str(fid))
     if hunks is None:
-        prior = files.get(str(fid))
         hunks = list(prior.hunks) if prior is not None else []
-    files[str(fid)] = FileEntry(present=present, local_hash=local_hash, hunks=hunks)
+    if staged is None:
+        staged = prior.staged if prior is not None else False
+    files[str(fid)] = FileEntry(
+        present=present, local_hash=local_hash, staged=staged, hunks=hunks
+    )
     write_index(profile, Index(files=files))
 
 

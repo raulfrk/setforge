@@ -174,6 +174,7 @@ def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> 
         fid,
         base=base,
         local=local,
+        staged=True,
         hunks=[
             {
                 "kind": "line",

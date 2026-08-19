@@ -867,7 +867,7 @@ def _reconcile_staged_expected(
         if base is None:
             return False
         entry = reconcile_store.read_index(profile).files.get(file_id_str)
-        if entry is None or not entry.hunks:
+        if entry is None or not entry.staged:
             return False  # not A5-staged → not this slot's case
         live = dst.read_bytes()
         tracked = src.read_bytes()
@@ -916,7 +916,7 @@ def _reconcile_staged_expected_structured(
         if base is None:
             return False
         entry = reconcile_store.read_index(profile).files.get(file_id_str)
-        if entry is None or not entry.hunks:
+        if entry is None or not entry.staged:
             return False
         live = dst.read_bytes()  # raw bytes, not re-parsed — INV-8 needs on-disk form
         tracked = src.read_bytes()

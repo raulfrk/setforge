@@ -191,6 +191,7 @@ class DispositionRetireMigration:
                     rec.fid,
                     base=plan.base,
                     local=plan.local,
+                    staged=bool(plan.hunks),
                     hunks=plan.hunks,
                 )
 

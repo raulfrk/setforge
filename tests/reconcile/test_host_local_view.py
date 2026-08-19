@@ -127,7 +127,11 @@ def test_fail_soft_when_base_missing_for_reloc_row(tmp_state: Path) -> None:
     store.write_index(
         "p",
         Index(
-            files={str(fid): FileEntry(present=True, local_hash="sha256:x", hunks=rows)}
+            files={
+                str(fid): FileEntry(
+                    present=True, local_hash="sha256:x", staged=True, hunks=rows
+                )
+            }
         ),
     )
     assert store.read_base("p", fid) is None

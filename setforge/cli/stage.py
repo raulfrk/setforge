@@ -405,6 +405,7 @@ def _persist_structured(
         stage.fid,
         base=stage.base,
         local=final_live,
+        staged=(entry.staged if entry is not None else False) or bool(decided),
         hunks=su_mod.serialize_structured(merged),
         drafts=drafts,
     )
@@ -733,6 +734,7 @@ def _persist(
         stage.fid,
         base=stage.base,
         local=final_live,
+        staged=(entry.staged if entry is not None else False) or bool(decided),
         hunks=hunks_mod.serialize(merged),
         drafts=drafts,
     )

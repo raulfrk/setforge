@@ -88,15 +88,21 @@ def test_record_then_verify(fid: str, data: bytes) -> None:
 @given(
     files=st.dictionaries(
         _fid,
-        st.tuples(st.booleans(), st.one_of(st.none(), st.just("sha256:00"))),
+        st.tuples(
+            st.booleans(),
+            st.one_of(st.none(), st.just("sha256:00")),
+            st.booleans(),
+        ),
         max_size=5,
     )
 )
-def test_index_codec_round_trip(files: dict[str, tuple[bool, str | None]]) -> None:
+def test_index_codec_round_trip(
+    files: dict[str, tuple[bool, str | None, bool]],
+) -> None:
     idx = Index(
         files={
-            k: FileEntry(present=p, local_hash=h, hunks=[])
-            for k, (p, h) in files.items()
+            k: FileEntry(present=p, local_hash=h, staged=participates, hunks=[])
+            for k, (p, h, participates) in files.items()
         }
     )
     assert loads(dumps(idx)) == idx

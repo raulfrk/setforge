@@ -100,7 +100,15 @@ def record_local_reloc_sections(
         ]
     )
     drafts = bind_drafts(classified, store.read_drafts(profile, fid))
-    store.record(profile, fid, base=base, local=new_local, hunks=rows, drafts=drafts)
+    store.record(
+        profile,
+        fid,
+        base=base,
+        local=new_local,
+        staged=True,
+        hunks=rows,
+        drafts=drafts,
+    )
 
 
 def resolve_template_src(ref: SectionTemplateRef, repo_root: Path) -> Path:

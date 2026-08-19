@@ -146,7 +146,7 @@ def test_legacy_draft_identity_ambiguous_across_kinds_fails_closed(
         },
     ]
     store.write_index(
-        "p", Index(files={str(fid): FileEntry(True, "sha256:local", rows)})
+        "p", Index(files={str(fid): FileEntry(True, "sha256:local", True, rows)})
     )
     path = store._drafts_path("p", fid)
     path.parent.mkdir(parents=True)
@@ -177,7 +177,9 @@ def test_legacy_draft_duplicate_key_rows_do_not_collapse_to_unique(
     monkeypatch.setattr(
         store,
         "read_index",
-        lambda profile: Index(files={str(fid): FileEntry(True, None, [row, row])}),
+        lambda profile: Index(
+            files={str(fid): FileEntry(True, None, True, [row, row])}
+        ),
     )
     path = store._drafts_path("p", fid)
     path.parent.mkdir(parents=True)
@@ -330,7 +332,9 @@ def test_v1_drafted_row_reconstructs_and_migrates_atomically(tmp_state: Path) ->
         hunks=hunks_mod.serialize(classified),
         drafts=bound,
     )
-    assert json.loads(index_path.read_text())["schema_version"] == "2.0"
+    rewritten = json.loads(index_path.read_text())
+    assert rewritten["schema_version"] == "2.0"
+    assert rewritten["files"]["f"]["staged"] is True
     assert store.read_drafts("p", fid) == {fresh.ref: draft}
     store.verify("p", fid)
 
@@ -463,7 +467,11 @@ def test_read_index_absent_is_empty(tmp_state: Path) -> None:
 def test_index_round_trip(tmp_state: Path) -> None:
     from setforge.reconcile.index_model import FileEntry, Index
 
-    idx = Index(files={"f": FileEntry(present=True, local_hash="sha256:00", hunks=[])})
+    idx = Index(
+        files={
+            "f": FileEntry(present=True, local_hash="sha256:00", staged=False, hunks=[])
+        }
+    )
     store.write_index("p", idx)
     assert store.read_index("p") == idx
 
@@ -571,7 +579,13 @@ def test_verify_detects_present_flag_disagreement(tmp_state: Path) -> None:
     # rewrite the index to claim present=True while the marker still says absent:
     store.write_index(
         "p",
-        Index(files={"f": FileEntry(present=True, local_hash="sha256:00", hunks=[])}),
+        Index(
+            files={
+                "f": FileEntry(
+                    present=True, local_hash="sha256:00", staged=False, hunks=[]
+                )
+            }
+        ),
     )
     with pytest.raises(InvariantViolation):
         store.verify("p", fid)
@@ -660,6 +674,19 @@ def test_record_with_no_hunks_preserves_existing(tmp_state: Path) -> None:
     assert store.read_index("p").files["f"].hunks == [_HUNK]  # preserved
 
 
+def test_record_preserves_explicit_staged_participation(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.record("p", fid, base=b"B", local=b"L", staged=True, hunks=[_HUNK])
+    store.record("p", fid, base=b"B2", local=b"L2")
+    assert store.read_index("p").files["f"].staged is True
+
+
+def test_record_new_file_defaults_nonparticipating(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.record("p", fid, base=b"B", local=b"L")
+    assert store.read_index("p").files["f"].staged is False
+
+
 def test_record_with_explicit_hunks_overwrites(tmp_state: Path) -> None:
     fid = file_id("f")
     _record_locked("p", fid, base=b"B", local=b"L", hunks=[_HUNK])
@@ -707,7 +734,11 @@ def test_stored_file_ids_unions_every_store_leg(tmp_state: Path) -> None:
     store.write_index(
         "p",
         Index(
-            files={"index-only": FileEntry(present=False, local_hash=None, hunks=[])}
+            files={
+                "index-only": FileEntry(
+                    present=False, local_hash=None, staged=False, hunks=[]
+                )
+            }
         ),
     )
 

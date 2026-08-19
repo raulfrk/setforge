@@ -28,6 +28,7 @@ from setforge import (
 )
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_profile
+from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
@@ -54,6 +55,58 @@ class CaptureAuto(StrEnum):
 
     USE_LIVE = "use-live"
     KEEP_TRACKED = "keep-tracked"
+
+
+def _preflight_staged_file(
+    profile: str,
+    sub_name: str,
+    dst: Path,
+    fmt: su_mod.StructuredFormat | None,
+) -> bool:
+    """Validate one participating file without writing; false when opted out."""
+    fid = file_id(sub_name)
+    entry = reconcile_store.read_index(profile).files.get(str(fid))
+    if entry is None or not entry.staged:
+        return False
+    base = reconcile_store.read_base(profile, fid)
+    if base is None:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} has no recorded reconciliation base"
+        )
+    if not dst.is_file():
+        raise InvariantViolation(f"staged file {sub_name!r} has no live file")
+    try:
+        live = dst.read_bytes()
+    except OSError as err:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} live bytes cannot be read: {err}"
+        ) from err
+    drafts = reconcile_store.read_drafts(profile, fid)
+    if fmt is None:
+        index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
+        try:
+            base.decode("utf-8")
+            live.decode("utf-8")
+        except UnicodeDecodeError as err:
+            raise InvariantViolation(
+                f"staged file {sub_name!r} is not valid UTF-8 text"
+            ) from err
+        hunks = reconcile_hunks.classify(
+            reconcile_hunks.extract_hunks(base, live), entry.hunks
+        )
+        bound = reconcile_hunks.bind_drafts(hunks, drafts)
+        reconcile_hunks.reconstruct(base, live, hunks, bound)
+        return True
+    index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
+    try:
+        fresh = su_mod.extract_structured_units(base, live, fmt)
+    except StructuredParseError as err:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} cannot be parsed as {fmt.value}"
+        ) from err
+    units = su_mod.classify_structured(fresh, entry.hunks)
+    su_mod.reconstruct_structured(base, live, units, drafts, fmt)
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,35 +210,22 @@ def _capture_staged_plain(
     full live bytes, so the store still round-trips live verbatim (INV-2).
 
     Must run inside the caller's ``profile_lock`` (like every capture helper).
-    Returns ``None`` (caller falls back to the verbatim writeback) when the file
-    is not staged-eligible — no recorded base, live missing, non-UTF-8, OR no hunk
-    yet classified SHARED/LOCAL (A5 staging is opt-in per file; an unstaged file
-    keeps the legacy absorb behavior).
+    Returns ``None`` only when the file has not explicitly opted into staged
+    reconciliation. A participating file fails closed when its recorded base,
+    live bytes, encoding, routing, or identities cannot be reconciled; it never
+    falls through to the verbatim writeback.
     """
-    if not dst.exists():
+    if not _preflight_staged_file(profile, sub_name, dst, None):
         return None
     fid = file_id(sub_name)
     base = reconcile_store.read_base(profile, fid)
-    if base is None:
-        return None  # not reconcile-managed → legacy verbatim capture
+    assert base is not None  # preflight established the participating store shape
     entry = reconcile_store.read_index(profile).files.get(str(fid))
-    stored = entry.hunks if entry is not None else []
-    stored = index_model.require_unit_kind(stored, UnitKind.LINE)
+    assert entry is not None
+    assert entry.staged
+    stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
     live = dst.read_bytes()
-    try:
-        base.decode("utf-8")
-        live.decode("utf-8")
-    except UnicodeDecodeError:
-        return None  # text-only staging; a binary plain file stays verbatim
     hunks = reconcile_hunks.classify(reconcile_hunks.extract_hunks(base, live), stored)
-    # A5 staging is OPT-IN per file: until the host has classified at least one
-    # hunk (SHARED, SHARED_DRAFTED, or LOCAL) via `setforge stage`, the file keeps
-    # the legacy capture behavior (sync absorbs live drift into tracked). Falling
-    # back here — rather than treating every unstaged hunk as PENDING-keep-local —
-    # avoids silently changing sync's behavior for files no one has staged.
-    staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)
-    if not any(hunk.cls in staged for hunk in hunks):
-        return None
     # Bind any migrated v1 draft key to its unique fresh v2 unit before splicing
     # the shareable bytes in place of host-specific live bytes. Capture passes the
     # bound manifest to record() so a legacy payload is upgraded before the v2
@@ -214,6 +254,7 @@ def _capture_staged_plain(
         fid,
         base=base,
         local=live,
+        staged=True,
         hunks=reconcile_hunks.serialize(hunks),
         drafts=drafts,
     )
@@ -254,31 +295,23 @@ def _capture_staged_structured(
     advances only on ``install``); ``local`` records the full live bytes, so the
     store still round-trips live verbatim (INV-2).
 
-    Must run inside the caller's ``profile_lock``. Returns ``None`` (caller falls
-    back to the verbatim writeback) when not staged-eligible — no recorded base,
-    live missing, unparseable structured content, OR no key yet classified
-    SHARED/SHARED_DRAFTED/LOCAL (per-file opt-in, like the plain path).
+    Must run inside the caller's ``profile_lock``. Returns ``None`` only when the
+    file has not explicitly opted into staged reconciliation. A participating
+    file fails closed when its recorded base, live bytes, parse, routing, or
+    identities cannot be reconciled; it never falls through to verbatim capture.
     """
-    if not dst.exists():
+    if not _preflight_staged_file(profile, sub_name, dst, fmt):
         return None
     fid = file_id(sub_name)
     base = reconcile_store.read_base(profile, fid)
-    if base is None:
-        return None  # not reconcile-managed → legacy verbatim capture
+    assert base is not None  # preflight established the participating store shape
     entry = reconcile_store.read_index(profile).files.get(str(fid))
-    stored = entry.hunks if entry is not None else []
-    stored = index_model.require_unit_kind(stored, UnitKind.KEY)
+    assert entry is not None
+    assert entry.staged
+    stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
     live = dst.read_bytes()
-    try:
-        fresh = su_mod.extract_structured_units(base, live, fmt)
-    except Exception:
-        return None  # unparseable structured live → verbatim fallback
+    fresh = su_mod.extract_structured_units(base, live, fmt)
     units = su_mod.classify_structured(fresh, stored)
-    # A5 staging is OPT-IN per file (mirrors the plain path): until at least one
-    # key is classified, the file keeps the legacy absorb behavior.
-    staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)
-    if not any(unit.cls in staged for unit in units):
-        return None
     drafts = reconcile_store.read_drafts(profile, fid)
     new_text = su_mod.reconstruct_structured(base, live, units, drafts, fmt).decode(
         "utf-8"
@@ -298,6 +331,7 @@ def _capture_staged_structured(
         fid,
         base=base,
         local=live,
+        staged=True,
         hunks=su_mod.serialize_structured(units),
         drafts=drafts,
     )
@@ -376,6 +410,7 @@ def capture_profile(
     effective = (
         resolved if resolved is not None else resolve_profile(config, profile_name)
     )
+    work: list[tuple[str, Path, Path, frozenset[HostLocalSectionName]]] = []
     for name in effective.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
@@ -387,38 +422,46 @@ def capture_profile(
         # directly in tracked carries through unchanged.
         host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            # A5: a plain reconcile file (no host-local overlay) with a recorded
-            # base captures per-hunk — only the SHARED hunks promote into
-            # tracked/. A structured (YAML/JSON/JSONC) file takes the per-KEY
-            # analog instead (line-diffing a structured file would mis-stage it).
-            # Both fall back to the verbatim writeback below when not
-            # staged-eligible (no base / binary / unparseable).
-            staged: CaptureResult | None = None
-            if not host_local_names:
-                fmt = su_mod.structured_format(sub_dst)
-                if fmt is not None:
-                    staged = _capture_staged_structured(
-                        profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
-                    )
-                else:
-                    staged = _capture_staged_plain(
-                        profile_name, sub_name, sub_src, sub_dst, auto=auto
-                    )
-            if staged is not None:
-                result = staged
+            work.append((sub_name, sub_src, sub_dst, host_local_names))
+
+    # Validate every participating file before the first tracked/store write. A
+    # later invalid participant can therefore never leave earlier files captured.
+    participating: set[str] = set()
+    for sub_name, _sub_src, sub_dst, host_local_names in work:
+        # Legacy local.yaml overlays are injected as marker pairs outside the
+        # unit model. Keep their historical name-scoped strip path authoritative;
+        # otherwise a staged SHARED unit could promote the injected host body.
+        if host_local_names:
+            continue
+        fmt = su_mod.structured_format(sub_dst)
+        if _preflight_staged_file(profile_name, sub_name, sub_dst, fmt):
+            participating.add(sub_name)
+
+    for sub_name, sub_src, sub_dst, host_local_names in work:
+        fmt = su_mod.structured_format(sub_dst)
+        if sub_name in participating and not host_local_names:
+            if fmt is not None:
+                result = _capture_staged_structured(
+                    profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
+                )
             else:
-                result = capture_tracked_file(
-                    sub_src,
-                    sub_dst,
-                    host_local_section_names=host_local_names,
-                    auto=auto,
+                result = _capture_staged_plain(
+                    profile_name, sub_name, sub_src, sub_dst, auto=auto
                 )
-            results.append(
-                CaptureResult(
-                    name=sub_name,
-                    action=result.action,
-                    reason=result.reason,
-                    warnings=result.warnings,
-                )
+            assert result is not None
+        else:
+            result = capture_tracked_file(
+                sub_src,
+                sub_dst,
+                host_local_section_names=host_local_names,
+                auto=auto,
             )
+        results.append(
+            CaptureResult(
+                name=sub_name,
+                action=result.action,
+                reason=result.reason,
+                warnings=result.warnings,
+            )
+        )
     return results

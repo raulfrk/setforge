@@ -116,7 +116,12 @@ def test_already_unified_fid_is_preserved_not_clobbered(tmp_path) -> None:
 
     with locking.profile_lock("default"):
         reconcile.record(
-            "default", fid, base=b"seeded\n", local=b"seeded-live\n", hunks=custom
+            "default",
+            fid,
+            base=b"seeded\n",
+            local=b"seeded-live\n",
+            staged=True,
+            hunks=custom,
         )
 
     DispositionRetireMigration().apply(roots=roots)
@@ -124,6 +129,7 @@ def test_already_unified_fid_is_preserved_not_clobbered(tmp_path) -> None:
     # The pre-existing seed + its staged hunks survive (never re-seeded).
     assert reconcile.read_base("default", fid) == b"seeded\n"
     assert reconcile.read_index("default").files["conf"].hunks == custom
+    assert reconcile.read_index("default").files["conf"].staged is True
     assert detect_current_schema(roots.cfg_path) == "3.0"
 
 

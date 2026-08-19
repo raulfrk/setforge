@@ -8,7 +8,12 @@ without interpreting hunk semantics::
     {
       "schema_version": "2.0",
       "files": {
-        "<file-id>": {"present": true, "local_hash": "sha256:…", "hunks": []}
+        "<file-id>": {
+          "present": true,
+          "local_hash": "sha256:…",
+          "staged": false,
+          "hunks": []
+        }
       }
     }
 
@@ -40,12 +45,14 @@ class FileEntry:
     ``present`` is ``False`` for the explicit-absence sentinel (the file is
     absent on the recorded side), distinct from a zero-byte file. ``local_hash``
     is ``"sha256:<hex>"`` of the verbatim recorded-local bytes, or ``None`` when
-    nothing local is recorded. ``hunks`` is populated by the staging layer
-    (per-hunk classification rows); an empty list means no drafted hunks.
+    nothing local is recorded. ``staged`` durably opts the file into unit-level
+    reconciliation even when no current identity survives. ``hunks`` is populated
+    by the staging layer (per-unit classification rows).
     """
 
     present: bool
     local_hash: str | None
+    staged: bool
     hunks: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -70,6 +77,7 @@ def dumps(index: Index) -> str:
             fid: {
                 "present": entry.present,
                 "local_hash": entry.local_hash,
+                "staged": entry.staged,
                 "hunks": entry.hunks,
             }
             for fid, entry in index.files.items()
@@ -151,6 +159,20 @@ def _legacy_line_unit_id(anchor: str) -> str:
     return content_sha(b"setforge.legacy-line.v1\x00" + _frame(anchor.encode("ascii")))
 
 
+def _parse_staged(
+    fid: str, raw: dict[str, Any], *, legacy: bool, has_hunks: bool
+) -> bool:
+    """Read explicit v2 participation or conservatively infer it for v1."""
+    if legacy:
+        return has_hunks
+    staged = raw.get("staged")
+    if not isinstance(staged, bool):
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a missing/invalid 'staged'"
+        )
+    return staged
+
+
 def _parse_entry(fid: str, raw: object, *, legacy: bool) -> FileEntry:
     if not isinstance(raw, dict):
         raise CorruptIndexError(f"index entry for {fid!r} must be an object")
@@ -183,7 +205,10 @@ def _parse_entry(fid: str, raw: object, *, legacy: bool) -> FileEntry:
     ]
     if len(key_paths) != len(set(key_paths)):
         raise CorruptIndexError(f"index entry for {fid!r} has duplicate key path")
-    return FileEntry(present=raw["present"], local_hash=local_hash, hunks=normalized)
+    staged = _parse_staged(fid, raw, legacy=legacy, has_hunks=bool(normalized))
+    return FileEntry(
+        present=raw["present"], local_hash=local_hash, staged=staged, hunks=normalized
+    )
 
 
 def _migrate_v1_hunk(fid: str, row: object) -> dict[str, Any]:

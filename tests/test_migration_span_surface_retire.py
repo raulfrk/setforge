@@ -187,7 +187,12 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
             ]
         )
         reconcile.record(
-            "default", fid, base=_BASE, local=drift_local, hunks=drift_rows
+            "default",
+            fid,
+            base=_BASE,
+            local=drift_local,
+            staged=True,
+            hunks=drift_rows,
         )
 
     SpanSurfaceRetireMigration().apply(roots=roots)
@@ -233,6 +238,7 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
             fid,
             base=_BASE,
             local=drift_local,
+            staged=True,
             hunks=drafted_rows,
             drafts={gamma_hunk.ref: draft_bytes},
         )
@@ -347,7 +353,12 @@ def test_migrate_then_revert_restores_local_yaml_and_reconcile_legs(
             ]
         )
         reconcile.record(
-            "default", fid, base=_BASE, local=drift_local, hunks=drift_rows
+            "default",
+            fid,
+            base=_BASE,
+            local=drift_local,
+            staged=True,
+            hunks=drift_rows,
         )
 
     local_yaml = _local_yaml_path(roots)

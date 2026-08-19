@@ -109,7 +109,14 @@ def _stage_index(profile: str, fid, base: bytes, live: bytes, classes: dict) -> 
         for h in H.extract_hunks(base, live)
     ]
     with locking.profile_lock(profile):
-        store.record(profile, fid, base=base, local=live, hunks=H.serialize(staged))
+        store.record(
+            profile,
+            fid,
+            base=base,
+            local=live,
+            staged=bool(classes),
+            hunks=H.serialize(staged),
+        )
 
 
 def _a5_config(dst: Path) -> Config:
@@ -141,6 +148,7 @@ def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
             fid,
             base=b"base\xff",
             local=dst.read_bytes(),
+            staged=True,
             hunks=[
                 {
                     "kind": "key",
@@ -155,6 +163,62 @@ def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
     with pytest.raises(InvariantViolation, match="current 'line' routing"):
         _capture_staged_plain("p", "blob", src, dst, auto=None)
     assert src.read_bytes() == b"tracked\x00"
+
+
+def test_participating_plain_binary_fails_closed_before_wholesale_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.capture import _capture_staged_plain
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    src = tmp_path / "tracked" / "blob"
+    dst = tmp_path / "live" / "blob"
+    _write(src, "tracked before\n")
+    dst.parent.mkdir(parents=True)
+    dst.write_bytes(b"host-secret\xff")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("blob"),
+            base=b"base\xff",
+            local=dst.read_bytes(),
+            staged=True,
+            hunks=[],
+        )
+
+    with pytest.raises(InvariantViolation, match="not valid UTF-8"):
+        _capture_staged_plain("p", "blob", src, dst, auto=None)
+    assert src.read_bytes() == b"tracked before\n"
+
+
+def test_participating_plain_missing_live_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.capture import _capture_staged_plain
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    src = tmp_path / "tracked" / "missing"
+    dst = tmp_path / "live" / "missing"
+    _write(src, "tracked before\n")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("missing"),
+            base=b"base\n",
+            local=b"prior live\n",
+            staged=True,
+            hunks=[],
+        )
+
+    with pytest.raises(InvariantViolation, match="has no live file"):
+        _capture_staged_plain("p", "missing", src, dst, auto=None)
+    assert src.read_bytes() == b"tracked before\n"
 
 
 def test_staged_capture_promotes_only_shared_and_keeps_base(
@@ -263,6 +327,71 @@ def test_staged_capture_keeps_host_local_section_out_of_tracked(
     store.verify("p")
 
 
+def test_legacy_host_local_overlay_excludes_file_from_staged_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Injected marker content is stripped even if its unit was staged SHARED."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from dataclasses import replace
+
+    from setforge import locking
+    from setforge.anchors import AnchorAtEndOfFile
+    from setforge.reconcile import hunks as H
+    from setforge.reconcile import store
+    from setforge.reconcile.types import HunkClass, file_id
+    from setforge.source import HostLocalSection, HostLocalSectionName
+
+    base = b"before\nafter\n"
+    end_marker = (
+        f"<!-- setforge:user-section end host-local NAME hash={'a' * 64} -->\n"
+    ).encode()
+    live = (
+        b"before\n"
+        b"<!-- setforge:user-section start host-local NAME -->\n"
+        b"HOST SECRET\n" + end_marker + b"after\n"
+    )
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    src.parent.mkdir(parents=True)
+    dst.parent.mkdir(parents=True)
+    src.write_bytes(base)
+    dst.write_bytes(live)
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("CLAUDE.md"),
+            base=base,
+            local=live,
+            staged=True,
+            hunks=H.serialize(
+                [
+                    replace(hunk, cls=HunkClass.SHARED)
+                    for hunk in H.extract_hunks(base, live)
+                ]
+            ),
+        )
+    overlay = {
+        "CLAUDE.md": {
+            HostLocalSectionName("NAME"): HostLocalSection(
+                anchor=AnchorAtEndOfFile(), body="HOST SECRET\n"
+            )
+        }
+    }
+
+    capture_profile(
+        _a5_config(dst),
+        "p",
+        repo,
+        setforge_yaml_path=tmp_path / "setforge.yaml",
+        host_local_sections_map=overlay,
+    )
+
+    assert src.read_bytes() == base
+    assert b"HOST SECRET" not in src.read_bytes()
+    assert store.read_index("p").files["CLAUDE.md"].staged is True
+
+
 def test_unstaged_file_falls_back_to_legacy_absorb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -291,6 +420,94 @@ def test_unstaged_file_falls_back_to_legacy_absorb(
     # the legacy plain-capture path does not touch the reconcile store — base is
     # left as recorded; it self-heals to the absorbed content on the next install.
     assert store.read_base("p", fid) == _A5_BASE
+
+
+def test_participating_file_with_invalidated_identity_never_wholesale_captures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    base = b"before\nold\nafter\n"
+    live = b"before\nHOST SECRET\nafter\n"
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    dst = tmp_path / "live" / "x"
+    _write(src, base.decode())
+    _write(dst, live.decode())
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("x"),
+            base=base,
+            local=live,
+            staged=True,
+            hunks=[
+                {
+                    "kind": "line",
+                    "cls": "shared",
+                    "label": "removed identity",
+                    "unit_id": "sha256:no-longer-present",
+                    "live_hash": "sha256:old",
+                }
+            ],
+        )
+    config = Config(
+        tracked_files={"x": TrackedFile(src=Path("x"), dst=str(dst))},
+        profiles={"p": Profile(tracked_files=["x"])},
+    )
+
+    capture_profile(config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml")
+
+    assert src.read_bytes() == base
+    entry = store.read_index("p").files["x"]
+    assert entry.staged is True
+    assert entry.hunks[0]["cls"] == "pending"
+
+
+def test_profile_preflight_prevents_earlier_write_when_later_participant_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import base_store, locking
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    repo = tmp_path / "repo"
+    x_src = repo / "tracked" / "x"
+    x_dst = tmp_path / "live" / "x"
+    y_src = repo / "tracked" / "y"
+    y_dst = tmp_path / "live" / "y"
+    _write(x_src, "tracked-before\n")
+    _write(x_dst, "would-be-captured\n")
+    _write(y_src, "y-base\n")
+    _write(y_dst, "y-live\n")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("y"),
+            base=b"y-base\n",
+            local=b"y-live\n",
+            staged=True,
+            hunks=[],
+        )
+    base_store.base_path("p", "y").unlink()
+    config = Config(
+        tracked_files={
+            "x": TrackedFile(src=Path("x"), dst=str(x_dst)),
+            "y": TrackedFile(src=Path("y"), dst=str(y_dst)),
+        },
+        profiles={"p": Profile(tracked_files=["x", "y"])},
+    )
+
+    with pytest.raises(InvariantViolation, match="no recorded reconciliation base"):
+        capture_profile(
+            config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+        )
+
+    assert x_src.read_bytes() == b"tracked-before\n"
 
 
 def test_staged_capture_changed_shared_held_local_with_hint(
@@ -374,7 +591,12 @@ def _stage_structured_index(
     staged = [replace(u, cls=classes.get(u.path, HunkClass.PENDING)) for u in fresh]
     with locking.profile_lock(profile):
         store.record(
-            profile, fid, base=base, local=live, hunks=su.serialize_structured(staged)
+            profile,
+            fid,
+            base=base,
+            local=live,
+            staged=bool(classes),
+            hunks=su.serialize_structured(staged),
         )
 
 
@@ -385,6 +607,37 @@ def _sy_config(dst: Path) -> Config:
         },
         profiles={"p": Profile(tracked_files=["settings.yaml"])},
     )
+
+
+def test_participating_structured_parse_failure_never_wholesale_captures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.capture import _capture_staged_structured
+    from setforge.reconcile import store
+    from setforge.reconcile.structured_units import StructuredFormat
+    from setforge.reconcile.types import file_id
+
+    src = tmp_path / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    _write(src, "theme: dark\n")
+    _write(dst, "theme: [not valid\n")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("settings.yaml"),
+            base=b"theme: dark\n",
+            local=dst.read_bytes(),
+            staged=True,
+            hunks=[],
+        )
+
+    with pytest.raises(InvariantViolation, match="cannot be parsed as yaml"):
+        _capture_staged_structured(
+            "p", "settings.yaml", src, dst, StructuredFormat.YAML, auto=None
+        )
+    assert src.read_bytes() == b"theme: dark\n"
 
 
 def test_staged_capture_structured_promotes_only_shared(
