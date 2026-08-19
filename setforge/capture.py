@@ -182,14 +182,13 @@ def _capture_staged_plain(
     staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)
     if not any(hunk.cls in staged for hunk in hunks):
         return None
-    # The shareable-draft bytes for any SHARED_DRAFTED hunk (keyed by anchor);
-    # reconstruct splices these in place of the host-specific live bytes, so
-    # tracked gets the shareable text while live stays host-specific (the blessed
-    # divergence). The drafts manifest is authored by the `stage` share-draft
-    # sub-flow, never by capture — so record() below preserves it (drafts=None)
-    # rather than rewriting it. When no manifest exists this is empty and
-    # reconstruct degrades to the plain SHARED/LOCAL behavior.
-    drafts = reconcile_store.read_drafts(profile, fid)
+    # Bind any migrated v1 draft key to its unique fresh v2 unit before splicing
+    # the shareable bytes in place of host-specific live bytes. Capture passes the
+    # bound manifest to record() so a legacy payload is upgraded before the v2
+    # index row lands (index-last), preserving the blessed divergence atomically.
+    drafts = reconcile_hunks.bind_drafts(
+        hunks, reconcile_store.read_drafts(profile, fid)
+    )
     new_text = reconcile_hunks.reconstruct(base, live, hunks, drafts).decode("utf-8")
     if _keep_tracked_refuses(auto, src, new_text):
         return CaptureResult(
@@ -202,7 +201,8 @@ def _capture_staged_plain(
     # just computed.
     reconcile_hunks.assert_stage_fidelity(base, live, src.read_bytes(), hunks, drafts)
     # Persist full live + classifications; base is UNCHANGED on sync (it advances
-    # only on install). drafts=None preserves the existing manifest. Runs
+    # only on install). Passing the bound map atomically upgrades a v1 draft key
+    # alongside the v2 hunk row. Runs
     # unconditionally w.r.t. the tracked NOOP so a classification-only change
     # (e.g. PENDING→LOCAL) still persists.
     reconcile_store.record(
@@ -211,6 +211,7 @@ def _capture_staged_plain(
         base=base,
         local=live,
         hunks=reconcile_hunks.serialize(hunks),
+        drafts=drafts,
     )
     warnings: list[str] = []
     if any(hunk.cls is HunkClass.PENDING for hunk in hunks):
@@ -309,6 +310,7 @@ def _capture_staged_structured(
         base=base,
         local=live,
         hunks=su_mod.serialize_structured(units),
+        drafts=drafts,
     )
     warnings: list[str] = []
     if any(unit.cls is HunkClass.PENDING for unit in units):

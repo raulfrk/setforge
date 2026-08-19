@@ -234,7 +234,7 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
             base=_BASE,
             local=drift_local,
             hunks=drafted_rows,
-            drafts={gamma_hunk.anchor: draft_bytes},
+            drafts={gamma_hunk.unit_id: draft_bytes},
         )
 
     SpanSurfaceRetireMigration().apply(roots=roots)
@@ -251,7 +251,7 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
         for h in hunks
     )
     assert reconcile_store.read_drafts("default", fid) == {
-        gamma_hunk.anchor: draft_bytes
+        gamma_hunk.unit_id: draft_bytes
     }
 
 

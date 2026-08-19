@@ -100,9 +100,10 @@ def _stage_index(profile: str, fid, base: bytes, live: bytes, classes: dict) -> 
             cls=classes.get(h.label, HunkClass.PENDING),
             label=h.label,
             live_hash=h.live_hash,
-            anchor=h.anchor,
+            unit_id=h.unit_id,
             base_span=h.base_span,
             live_span=h.live_span,
+            legacy_anchor=h.legacy_anchor,
         )
         for h in H.extract_hunks(base, live)
     ]

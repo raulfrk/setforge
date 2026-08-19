@@ -40,7 +40,7 @@ def _stage(
     for h in reconcile_hunks.extract_hunks(BASE, LIVE):
         cls = classes.get(h.label, HunkClass.PENDING)
         draft_hash = (
-            reconcile_store.content_sha(drafts[h.anchor])
+            reconcile_store.content_sha(drafts[h.unit_id])
             if cls is HunkClass.SHARED_DRAFTED
             else None
         )
@@ -92,8 +92,8 @@ def test_staged_drafted_divergence_is_expected(tmp_path: Path) -> None:
         h for h in reconcile_hunks.extract_hunks(BASE, LIVE) if h.label == "## Paths"
     )
     draft = b"workdir: $HOME\n"
-    hunks = _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.anchor: draft})
-    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {paths.anchor: draft})
+    hunks = _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.unit_id: draft})
+    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {paths.unit_id: draft})
     config, repo = _config(tmp_path, tracked)
 
     entry = compare_profile(config, "p", repo).entries[0]
@@ -107,7 +107,10 @@ def test_drafted_tracked_missing_the_draft_is_unexpected(tmp_path: Path) -> None
     paths = next(
         h for h in reconcile_hunks.extract_hunks(BASE, LIVE) if h.label == "## Paths"
     )
-    _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.anchor: b"workdir: $HOME\n"})
+    _stage(
+        {"## Paths": HunkClass.SHARED_DRAFTED},
+        {paths.unit_id: b"workdir: $HOME\n"},
+    )
     config, repo = _config(tmp_path, BASE)  # tracked lacks the $HOME draft splice
 
     entry = compare_profile(config, "p", repo).entries[0]

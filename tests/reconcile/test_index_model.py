@@ -80,7 +80,7 @@ def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
 
 
 def test_line_row_without_kind_still_valid() -> None:
-    """A legacy line row (no ``kind``, with anchor/live_hash) stays byte-stable."""
+    """A v1 line row migrates in memory to the discriminated v2 identity shape."""
     import json
 
     text = json.dumps(
@@ -102,7 +102,56 @@ def test_line_row_without_kind_still_valid() -> None:
             },
         }
     )
-    assert loads(text).files["f"].hunks[0]["cls"] == "shared"
+    row = loads(text).files["f"].hunks[0]
+    assert row["kind"] == "line"
+    assert row["legacy_anchor"] == "sha256:a"
+    assert str(row["unit_id"]).startswith("sha256:")
+    assert "anchor" not in row
+
+
+def test_v1_duplicate_line_anchors_fail_closed() -> None:
+    import json
+
+    row = {
+        "cls": "shared",
+        "label": "x",
+        "live_hash": "sha256:h",
+        "anchor": "sha256:a",
+    }
+    text = json.dumps(
+        {
+            "schema_version": "1.0",
+            "files": {"f": {"present": True, "local_hash": None, "hunks": [row, row]}},
+        }
+    )
+    with pytest.raises(CorruptIndexError, match="duplicate line unit_id"):
+        loads(text)
+
+
+def test_v2_duplicate_line_unit_ids_fail_closed() -> None:
+    import json
+
+    row = {
+        "kind": "line",
+        "cls": "shared",
+        "label": "x",
+        "live_hash": "sha256:h",
+        "unit_id": "sha256:u",
+    }
+    text = json.dumps(
+        {
+            "schema_version": "2.0",
+            "files": {"f": {"present": True, "local_hash": None, "hunks": [row, row]}},
+        }
+    )
+    with pytest.raises(CorruptIndexError, match="duplicate line unit_id"):
+        loads(text)
+
+
+@pytest.mark.parametrize("version", ["0.9", "1.1", "1.9"])
+def test_unsupported_historical_versions_are_rejected(version: str) -> None:
+    with pytest.raises(IndexVersionError, match="unsupported"):
+        loads(f'{{"schema_version":"{version}","files":{{}}}}')
 
 
 def test_key_row_missing_path_is_rejected() -> None:
@@ -180,6 +229,22 @@ def test_bad_entry_shape() -> None:
 def test_newer_version_refused() -> None:
     with pytest.raises(IndexVersionError):
         loads('{"schema_version": "99.0", "files": {}}')
+
+
+@pytest.mark.parametrize("version", [1.0, 2.0, 1, 2])
+def test_numeric_schema_version_is_corrupt(version: object) -> None:
+    import json
+
+    with pytest.raises(CorruptIndexError, match="must be a string"):
+        loads(json.dumps({"schema_version": version, "files": {}}))
+
+
+@pytest.mark.parametrize("version", ["1.00", "01.0", "2.00", "02.0"])
+def test_schema_version_alias_is_corrupt(version: str) -> None:
+    import json
+
+    with pytest.raises(CorruptIndexError, match="canonical supported value"):
+        loads(json.dumps({"schema_version": version, "files": {}}))
 
 
 def test_current_version_loads() -> None:

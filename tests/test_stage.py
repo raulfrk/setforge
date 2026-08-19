@@ -216,7 +216,7 @@ def test_apply_merges_concurrent_classification(
 
 
 def _shell_anchor(stage: FileStage) -> str:
-    return next(h.anchor for h in stage.hunks if h.label == "## Shell")
+    return next(h.unit_id for h in stage.hunks if h.label == "## Shell")
 
 
 def test_apply_keep_local_draft_stores_draft_and_keeps_live(

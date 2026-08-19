@@ -6,7 +6,7 @@ storage layer just persists whatever it's given, validating the on-disk shape
 without interpreting hunk semantics::
 
     {
-      "schema_version": "1.0",
+      "schema_version": "2.0",
       "files": {
         "<file-id>": {"present": true, "local_hash": "sha256:…", "hunks": []}
       }
@@ -27,8 +27,9 @@ from enum import StrEnum
 from typing import Any, Final
 
 from setforge.errors import CorruptIndexError, IndexVersionError
+from setforge.reconcile.types import content_sha
 
-CURRENT_VERSION: Final = "1.0"
+CURRENT_VERSION: Final = "2.0"
 """The index schema version this engine writes."""
 
 
@@ -110,27 +111,47 @@ def loads(text: str) -> Index:
     if "schema_version" not in obj:
         raise CorruptIndexError("index is missing the mandatory 'schema_version' field")
 
-    found = _version_tuple(str(obj["schema_version"]))
+    raw_version = obj["schema_version"]
+    if not isinstance(raw_version, str):
+        raise CorruptIndexError("index schema_version must be a string")
+    found = _version_tuple(raw_version)
     expected = _version_tuple(CURRENT_VERSION)
     if found > expected:
         raise IndexVersionError(
-            f"index schema_version {obj['schema_version']} is newer than this engine "
+            f"index schema_version {raw_version} is newer than this engine "
             f"reads ({CURRENT_VERSION}); upgrade setforge"
         )
-    # found < expected → migrate in memory (identity for 1.0; future maps go here).
-    # found == expected → load as-is.
+    if raw_version not in {"1.0", CURRENT_VERSION} and found in {(1, 0), expected}:
+        raise CorruptIndexError(
+            f"index schema_version {raw_version!r} is not a canonical supported value"
+        )
+    if found not in {(1, 0), expected}:
+        raise IndexVersionError(
+            f"index schema_version {raw_version} is unsupported; "
+            f"this engine reads exactly 1.0 and {CURRENT_VERSION}"
+        )
 
     raw_files = obj.get("files", {})
     if not isinstance(raw_files, dict):
         raise CorruptIndexError("index 'files' must be an object")
 
     files: dict[str, FileEntry] = {}
+    legacy = found == (1, 0)
     for fid, raw_entry in raw_files.items():
-        files[fid] = _parse_entry(fid, raw_entry)
+        files[fid] = _parse_entry(fid, raw_entry, legacy=legacy)
     return Index(files=files, version=CURRENT_VERSION)
 
 
-def _parse_entry(fid: str, raw: object) -> FileEntry:
+def _frame(part: bytes) -> bytes:
+    return len(part).to_bytes(8, "big") + part
+
+
+def _legacy_line_unit_id(anchor: str) -> str:
+    """Give a v1 anchor a deterministic bridge ID during in-memory migration."""
+    return content_sha(b"setforge.legacy-line.v1\x00" + _frame(anchor.encode("ascii")))
+
+
+def _parse_entry(fid: str, raw: object, *, legacy: bool) -> FileEntry:
     if not isinstance(raw, dict):
         raise CorruptIndexError(f"index entry for {fid!r} must be an object")
     if "present" not in raw or not isinstance(raw["present"], bool):
@@ -145,9 +166,48 @@ def _parse_entry(fid: str, raw: object) -> FileEntry:
     hunks = raw.get("hunks", [])
     if not isinstance(hunks, list):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-list 'hunks'")
+    normalized: list[dict[str, Any]] = []
     for row in hunks:
-        _check_hunk_row(fid, row)
-    return FileEntry(present=raw["present"], local_hash=local_hash, hunks=hunks)
+        if legacy:
+            normalized.append(_migrate_v1_hunk(fid, row))
+        else:
+            _check_hunk_row(fid, row)
+            normalized.append(row)
+    unit_ids = [
+        str(row["unit_id"]) for row in normalized if row.get("kind") == HunkKind.LINE
+    ]
+    if len(unit_ids) != len(set(unit_ids)):
+        raise CorruptIndexError(f"index entry for {fid!r} has duplicate line unit_id")
+    return FileEntry(present=raw["present"], local_hash=local_hash, hunks=normalized)
+
+
+def _migrate_v1_hunk(fid: str, row: object) -> dict[str, Any]:
+    """Normalize one v1 row into the v2 discriminated schema in memory."""
+    if not isinstance(row, dict):
+        raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
+    kind = row.get("kind", HunkKind.LINE)
+    migrated = dict(row)
+    if kind == HunkKind.LINE:
+        anchor = row.get("anchor")
+        if not isinstance(anchor, str):
+            raise CorruptIndexError(
+                f"index entry for {fid!r} has a line hunk row with a "
+                "missing/non-string 'anchor'"
+            )
+        try:
+            unit_id = _legacy_line_unit_id(anchor)
+        except UnicodeEncodeError as err:
+            raise CorruptIndexError(
+                f"index entry for {fid!r} has a non-ASCII legacy anchor"
+            ) from err
+        migrated.pop("anchor", None)
+        migrated["kind"] = HunkKind.LINE
+        migrated["unit_id"] = unit_id
+        migrated["legacy_anchor"] = anchor
+    else:
+        migrated["kind"] = kind
+    _check_hunk_row(fid, migrated)
+    return migrated
 
 
 class HunkKind(StrEnum):
@@ -186,9 +246,8 @@ class HunkCls(StrEnum):
 KIND_LINE: Final = HunkKind.LINE
 KIND_KEY: Final = HunkKind.KEY
 
-#: The keys a LINE hunk row must carry (mirrors ``hunks.serialize``). ``line`` is
-#: the default ``kind``, so a legacy row with no ``kind`` stays valid + byte-stable.
-_HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "anchor")
+#: The keys a v2 LINE hunk row must carry (mirrors ``hunks.serialize``).
+_HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "unit_id")
 #: The keys a structured KEY-unit row must carry (mirrors
 #: ``structured_units.serialize_structured``): a dotted ``path`` + ``value_hash``
 #: identity in place of the line row's ``anchor`` + ``live_hash``.
@@ -207,8 +266,8 @@ def _check_hunk_row(fid: str, row: object) -> None:
     :class:`~setforge.errors.CorruptIndexError`, never let a partial dict reach
     the staging layer as an unwrapped ``KeyError`` / ``ValueError``.
 
-    A ``kind`` discriminator selects the required identity keys: a ``line`` row
-    (the default, for markdown line-hunks) carries ``live_hash`` + ``anchor``; a
+    A mandatory ``kind`` discriminator selects the required identity keys: a
+    ``line`` row carries ``live_hash`` + ``unit_id``; a
     ``key`` row (structured key-unit) carries ``path`` + ``value_hash``. A
     ``shared_drafted`` row of either kind additionally carries a ``draft_hash``
     (string) — the identity of its shareable draft; the codec requires it so a
@@ -219,7 +278,7 @@ def _check_hunk_row(fid: str, row: object) -> None:
     """
     if not isinstance(row, dict):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
-    kind = row.get("kind", KIND_LINE)
+    kind = row.get("kind")
     if not isinstance(kind, str) or kind not in _HUNK_KINDS:
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with an unknown kind {kind!r}"
@@ -235,6 +294,11 @@ def _check_hunk_row(fid: str, row: object) -> None:
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with an unknown cls {row['cls']!r}"
         )
+    _check_optional_hunk_fields(fid, row, kind)
+
+
+def _check_optional_hunk_fields(fid: str, row: dict[object, object], kind: str) -> None:
+    """Validate class-dependent and optional fields after core row validation."""
     draft_hash = row.get("draft_hash")
     if row["cls"] == HunkCls.SHARED_DRAFTED:
         if not isinstance(draft_hash, str):
@@ -250,4 +314,11 @@ def _check_hunk_row(fid: str, row: object) -> None:
     if reloc_anchor is not None and not isinstance(reloc_anchor, str):
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with a non-string 'reloc_anchor'"
+        )
+    legacy_anchor = row.get("legacy_anchor")
+    if legacy_anchor is not None and (
+        kind != KIND_LINE or not isinstance(legacy_anchor, str)
+    ):
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a hunk row with an invalid 'legacy_anchor'"
         )

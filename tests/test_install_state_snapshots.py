@@ -167,7 +167,7 @@ def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> 
     local = reconcile_store.read_local(_PROFILE, fid)
     assert base is not None
     assert isinstance(local, bytes)
-    anchor = "sha256:retired-draft"
+    unit_id = "sha256:retired-draft"
     draft = b"Shareable retired draft\n"
     reconcile_store.record(
         _PROFILE,
@@ -176,14 +176,15 @@ def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> 
         local=local,
         hunks=[
             {
+                "kind": "line",
                 "cls": HunkClass.SHARED_DRAFTED.value,
                 "label": "## Notes",
                 "live_hash": "sha256:live",
-                "anchor": anchor,
+                "unit_id": unit_id,
                 "draft_hash": reconcile_store.content_sha(draft),
             }
         ],
-        drafts={anchor: draft},
+        drafts={unit_id: draft},
     )
     paths = {
         SnapshotStore.BASE: base_store.base_path(_PROFILE, _FILE_ID),

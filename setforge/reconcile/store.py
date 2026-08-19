@@ -208,7 +208,7 @@ def write_local(profile: str, fid: FileId, data: bytes | Absent) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# drafts/ — A5c shareable-draft bytes (per-fid manifest: anchor → bytes)
+# drafts/ — A5c shareable-draft bytes (per-fid manifest: unit identity → bytes)
 # --------------------------------------------------------------------------- #
 
 
@@ -262,11 +262,65 @@ _MAX_DRAFT_VALUE_DECODED_BYTES = 64 * 1024 * 1024
 _MAX_DRAFT_VALUE_ENCODED_BYTES = ((_MAX_DRAFT_VALUE_DECODED_BYTES + 2) // 3) * 4
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    parsed: dict[str, object] = {}
+    for key, value in pairs:
+        if key in parsed:
+            raise ValueError(f"duplicate drafts manifest key {key!r}")
+        parsed[key] = value
+    return parsed
+
+
+def _decode_drafts_manifest(text: str) -> dict[str, bytes]:
+    obj = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    if not isinstance(obj, dict):
+        raise ValueError("drafts manifest top level must be an object")
+    result: dict[str, bytes] = {}
+    for unit_id, b64 in obj.items():
+        if not isinstance(b64, str):
+            raise ValueError(f"drafts manifest value for {unit_id!r} is not a string")
+        if len(b64) > _MAX_DRAFT_VALUE_ENCODED_BYTES:
+            raise ValueError(
+                f"drafts manifest value for {unit_id!r} exceeds the "
+                f"{_MAX_DRAFT_VALUE_DECODED_BYTES}-byte per-draft limit "
+                f"(encoded {len(b64)} > {_MAX_DRAFT_VALUE_ENCODED_BYTES})"
+            )
+        result[str(unit_id)] = base64.b64decode(b64, validate=True)
+    return result
+
+
+def _remap_legacy_draft_keys(
+    profile: str, fid: FileId, result: dict[str, bytes]
+) -> dict[str, bytes]:
+    entry = read_index(profile).files.get(str(fid))
+    legacy_to_units: dict[str, list[str]] = {}
+    for row in entry.hunks if entry is not None else []:
+        legacy_anchor = row.get("legacy_anchor")
+        unit_id = row.get("unit_id")
+        if isinstance(legacy_anchor, str) and isinstance(unit_id, str):
+            legacy_to_units.setdefault(legacy_anchor, []).append(unit_id)
+    for legacy_anchor, unit_ids in legacy_to_units.items():
+        if legacy_anchor not in result:
+            continue
+        if len(unit_ids) != 1:
+            raise ValueError(
+                f"legacy draft key {legacy_anchor!r} maps to multiple line units"
+            )
+        unit_id = unit_ids[0]
+        if unit_id in result:
+            raise ValueError(
+                f"drafts manifest contains both legacy key {legacy_anchor!r} "
+                f"and v2 unit key {unit_id!r}"
+            )
+        result[unit_id] = result.pop(legacy_anchor)
+    return result
+
+
 def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
-    """Return the shareable-draft bytes for ``fid``, keyed by hunk ``anchor``.
+    """Return shareable-draft bytes for ``fid``, keyed by persisted unit identity.
 
     Empty dict when nothing is recorded. The on-disk manifest is a JSON object
-    mapping ``anchor`` → base64 draft bytes; each drafted hunk's ``draft_hash`` is
+    mapping ``unit_id``/structured ``path`` → base64 bytes; each draft hash is
     recorded in the index, but the bytes themselves live here (the index stays
     pure metadata). Fail-closed: a damaged manifest raises rather than silently
     dropping a blessed draft.
@@ -281,31 +335,7 @@ def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
             f"failed to read drafts for {profile}/{fid}: {err}"
         ) from err
     try:
-        obj = json.loads(text)
-        if not isinstance(obj, dict):
-            raise ValueError("drafts manifest top level must be an object")
-        result: dict[str, bytes] = {}
-        for anchor, b64 in obj.items():
-            # Validate the value type rather than str()-coercing it: a non-string
-            # scalar (null/number/bool) would otherwise decode to garbage bytes
-            # instead of failing closed (the docstring's "a damaged manifest
-            # raises" contract). JSON keys are always strings, so anchor is sound.
-            if not isinstance(b64, str):
-                raise ValueError(
-                    f"drafts manifest value for {anchor!r} is not a string"
-                )
-            # Guard BEFORE decoding: reject a pathological/corrupt value on its
-            # encoded length so a huge value fails cleanly here instead of via an
-            # unbounded allocation inside b64decode (corruption-robustness, not a
-            # remote-DoS — the manifest is a local 0o600 state file).
-            if len(b64) > _MAX_DRAFT_VALUE_ENCODED_BYTES:
-                raise ValueError(
-                    f"drafts manifest value for {anchor!r} exceeds the "
-                    f"{_MAX_DRAFT_VALUE_DECODED_BYTES}-byte per-draft limit "
-                    f"(encoded {len(b64)} > {_MAX_DRAFT_VALUE_ENCODED_BYTES})"
-                )
-            result[str(anchor)] = base64.b64decode(b64, validate=True)
-        return result
+        return _remap_legacy_draft_keys(profile, fid, _decode_drafts_manifest(text))
     except (ValueError, json.JSONDecodeError, binascii.Error) as err:
         raise ReconcileStoreError(
             f"drafts manifest for {profile}/{fid} is corrupt: {err}"
@@ -313,7 +343,7 @@ def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
 
 
 def write_drafts(profile: str, fid: FileId, drafts: dict[str, bytes]) -> None:
-    """Record ``drafts`` (anchor → bytes) for ``fid``. Call inside ``profile_lock``.
+    """Record identity-keyed ``drafts`` for ``fid``. Call inside ``profile_lock``.
 
     An empty mapping removes the manifest (no drafted hunks remain). Written
     BEFORE the index in :func:`record` so a crash leaves a prunable orphan
@@ -409,8 +439,8 @@ def verify(profile: str, fid: FileId | None = None) -> None:
     INV-2: the recorded-local bytes hash matches the index's ``local_hash``.
     INV-10: an index entry exists iff its on-disk local file/marker exists, with
     no orphan on either side. Additionally cross-checks the drafts store (via
-    :func:`_verify_drafts`): the manifest's anchors must equal the entry's
-    ``SHARED_DRAFTED`` hunk anchors (INV-10 analog) and each draft's bytes must
+    :func:`_verify_drafts`): the manifest's unit identities must equal the entry's
+    ``SHARED_DRAFTED`` identities (INV-10 analog) and each draft's bytes must
     hash to that hunk's recorded ``draft_hash`` (INV-2 analog) — so an orphan,
     missing, or tampered draft is caught too. Raises
     :class:`~setforge.errors.InvariantViolation` naming the profile, file-id, and
@@ -456,13 +486,15 @@ def _verify_one(profile: str, fid: FileId, entry: FileEntry | None) -> None:
 
 
 def _verify_drafts(profile: str, fid: FileId, entry: FileEntry | None) -> None:
-    """INV-10/INV-2 analog for the drafts store: the manifest's anchors must equal
-    the entry's ``SHARED_DRAFTED`` hunk anchors, and each draft's bytes must hash
+    """INV-10/INV-2 analog for drafts: manifest identities must equal
+    the entry's ``SHARED_DRAFTED`` identities, and each draft's bytes must hash
     to that hunk's recorded ``draft_hash`` — so an orphan draft, a missing draft
     for a drafted row, or a tampered draft is caught fail-closed.
     """
     drafted = {
-        str(row["anchor"]): str(row["draft_hash"])
+        str(
+            row["path"] if row.get("kind") == index_model.KIND_KEY else row["unit_id"]
+        ): str(row["draft_hash"])
         for row in (entry.hunks if entry is not None else [])
         if row.get("cls") == HunkClass.SHARED_DRAFTED.value
     }
@@ -534,7 +566,7 @@ def record(
     or a draft that was never written.
 
     ``hunks`` is the A5 per-hunk classification list; ``drafts`` is the A5c
-    anchor→draft-bytes mapping for any ``SHARED_DRAFTED`` hunks. When either is
+    identity→draft-bytes mapping for any ``SHARED_DRAFTED`` hunks. When either is
     ``None`` (the default, used by the non-staging ``install`` writeback) the
     existing entry's hunks / on-disk drafts are **preserved** — so a re-baseline
     never silently flattens a host's staged classifications or blessed drafts. An

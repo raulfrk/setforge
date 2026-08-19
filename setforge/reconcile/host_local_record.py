@@ -29,6 +29,7 @@ from setforge.errors import ConfigError
 from setforge.reconcile import store
 from setforge.reconcile.hunks import (
     _section_heading,
+    bind_drafts,
     classify,
     extract_hunks,
     serialize,
@@ -95,7 +96,8 @@ def record_local_reloc_sections(
             for hunk in classified
         ]
     )
-    store.record(profile, fid, base=base, local=new_local, hunks=rows)
+    drafts = bind_drafts(classified, store.read_drafts(profile, fid))
+    store.record(profile, fid, base=base, local=new_local, hunks=rows, drafts=drafts)
 
 
 def resolve_template_src(ref: SectionTemplateRef, repo_root: Path) -> Path:

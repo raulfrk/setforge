@@ -144,7 +144,7 @@ class Decision:
     ``SHARED_DRAFTED`` hunk (``None`` otherwise). ``adopt`` is ``True`` when the
     host also wants their live region rewritten to the draft (no divergence) —
     applied as a batched live-rewrite at persist; the recorded class stays
-    ``SHARED_DRAFTED`` either way (classify matches it by anchor, live-independent).
+    ``SHARED_DRAFTED`` either way (classification is live-independent by unit ID).
     """
 
     cls: HunkClass
@@ -159,11 +159,11 @@ type Choice = Callable[[Hunk, int, int], Decision | None | _Quit]
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
-    """The walk's outcome: updated hunks + the per-anchor drafts + adopt set."""
+    """The walk's outcome: updated hunks + per-unit drafts + adopt set."""
 
     hunks: list[Hunk]
     drafts: dict[str, bytes]
-    adopt_anchors: set[str]
+    adopt_unit_ids: set[str]
 
 
 def collect_stages(
@@ -407,12 +407,12 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
     ``choose(hunk, index, total)`` returns a :class:`Decision` to (re)classify,
     ``None`` to leave the hunk unchanged (skip / next), or :data:`QUIT` to stop
     early. Choices made before a QUIT are kept. A drafted decision records the
-    hunk's ``draft_hash`` and stashes its bytes under the hunk's ``anchor``; an
-    ``adopt`` decision additionally marks the anchor for the live-rewrite.
+    hunk's ``draft_hash`` and stashes its bytes under the hunk's ``unit_id``; an
+    ``adopt`` decision additionally marks that unit for the live-rewrite.
     """
     out = list(hunks)
     drafts: dict[str, bytes] = {}
-    adopt_anchors: set[str] = set()
+    adopt_unit_ids: set[str] = set()
     for index, hunk in enumerate(hunks):
         decision = choose(hunk, index, len(hunks))
         if isinstance(decision, _Quit):
@@ -422,10 +422,10 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(hunk, cls=decision.cls, draft_hash=draft_hash)
         if decision.draft is not None:
-            drafts[hunk.anchor] = decision.draft
+            drafts[hunk.unit_id] = decision.draft
         if decision.adopt:
-            adopt_anchors.add(hunk.anchor)
-    return WalkResult(hunks=out, drafts=drafts, adopt_anchors=adopt_anchors)
+            adopt_unit_ids.add(hunk.unit_id)
+    return WalkResult(hunks=out, drafts=drafts, adopt_unit_ids=adopt_unit_ids)
 
 
 def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
@@ -603,14 +603,14 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     Returns ``stage.live`` unchanged when nothing was adopted. Each adopted region
     is replaced by its draft; every other region (including a keep-mine-local
     drafted hunk, whose live stays host-specific) passes through verbatim. Because
-    a ``SHARED_DRAFTED`` hunk is matched by anchor (base-context, unchanged by the
+    a ``SHARED_DRAFTED`` hunk is matched by unit ID (unchanged by the
     rewrite), re-extraction after the rewrite re-identifies it cleanly.
     """
-    if not result.adopt_anchors:
+    if not result.adopt_unit_ids:
         return stage.live
     live_lines = split_lines(stage.live)
     adopted = sorted(
-        (h for h in result.hunks if h.anchor in result.adopt_anchors),
+        (h for h in result.hunks if h.unit_id in result.adopt_unit_ids),
         key=lambda h: h.live_span[0],
     )
     out: list[bytes] = []
@@ -618,7 +618,7 @@ def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     for hunk in adopted:
         j1, j2 = hunk.live_span
         out.extend(live_lines[cursor:j1])
-        out.append(result.drafts[hunk.anchor])
+        out.append(result.drafts[hunk.unit_id])
         cursor = j2
     out.extend(live_lines[cursor:])
     return b"".join(out)
@@ -660,9 +660,9 @@ def _persist(
     The walk read + classified the index at collect time, OUTSIDE the lock; a
     naive whole-list overwrite here would drop any classification a concurrent
     ``sync`` committed in between. Instead, re-read the index (the caller's lock
-    still held), re-extract the (post-Adopt) base/live, and overlay ONLY the anchors
+    still held), re-extract the (post-Adopt) base/live, and overlay ONLY the units
     the host explicitly decided (class changed from collect time, OR a draft
-    attached) — so an anchor the host skipped keeps whatever the concurrent writer
+    attached) — so a unit the host skipped keeps whatever the concurrent writer
     left, while the host's explicit choices win. base is UNCHANGED (sync/install
     own it).
 
@@ -672,20 +672,20 @@ def _persist(
 
     Caveat: "explicitly decided" diffs the walk class against the collect-time
     class, so an explicit re-confirm to the SAME class (with no draft) reads as a
-    skip — in the narrow race where a concurrent writer flips that anchor meanwhile,
+    skip — in the narrow race where a concurrent writer flips that unit meanwhile,
     the concurrent value wins. Acceptable for a single-user CLI.
     """
-    collect_cls = {h.anchor: h.cls for h in stage.hunks}
-    walk_by_anchor = {h.anchor: h for h in result.hunks}
-    # "decided" = anchors the host acted on THIS walk: a class change from the
+    collect_cls = {h.unit_id: h.cls for h in stage.hunks}
+    walk_by_unit = {h.unit_id: h for h in result.hunks}
+    # "decided" = units the host acted on THIS walk: a class change from the
     # collect-time class, OR a draft authored this walk. Keying the draft case on
     # result.drafts (not a draft_hash carried forward by classify for an already-
     # SHARED_DRAFTED hunk the host SKIPPED) keeps a skip from re-asserting a stale
     # value over a concurrent writer.
     decided = {
-        anchor
-        for anchor, hunk in walk_by_anchor.items()
-        if collect_cls.get(anchor) != hunk.cls or anchor in result.drafts
+        unit_id
+        for unit_id, hunk in walk_by_unit.items()
+        if collect_cls.get(unit_id) != hunk.cls or unit_id in result.drafts
     }
     entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
     stored = entry.hunks if entry is not None else []
@@ -695,18 +695,23 @@ def _persist(
     merged = [
         replace(
             h,
-            cls=walk_by_anchor[h.anchor].cls,
-            draft_hash=walk_by_anchor[h.anchor].draft_hash,
+            cls=walk_by_unit[h.unit_id].cls,
+            draft_hash=walk_by_unit[h.unit_id].draft_hash,
         )
-        if h.anchor in decided
+        if h.unit_id in decided
         else h
         for h in current
     ]
-    pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
+    pool = {
+        **hunks_mod.bind_drafts(
+            current, reconcile_store.read_drafts(profile, stage.fid)
+        ),
+        **result.drafts,
+    }
     drafts = {
-        h.anchor: pool[h.anchor]
+        h.unit_id: pool[h.unit_id]
         for h in merged
-        if h.cls is HunkClass.SHARED_DRAFTED and h.anchor in pool
+        if h.cls is HunkClass.SHARED_DRAFTED and h.unit_id in pool
     }
     reconcile_store.record(
         profile,

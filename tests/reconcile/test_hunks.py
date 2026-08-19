@@ -1,7 +1,7 @@
 """Unit tests for the A5 per-hunk staging model (:mod:`setforge.reconcile.hunks`).
 
-Covers hunk extraction (base↔live 2-way diff), identity (EOL-normalised content
-hash + base-context anchor), classification carry-over, reconstruction of the
+Covers hunk extraction (base↔live 2-way diff), durable base-relative unit
+identity, classification carry-over, reconstruction of the
 shared-promotion, and the INV-8 stage-fidelity assertion.
 """
 
@@ -106,6 +106,35 @@ def test_edit_above_does_not_remint_lower_hunk() -> None:
     assert identity(lower1) == identity(lower2)
 
 
+def test_live_payload_edit_keeps_unit_id_but_changes_live_hash() -> None:
+    base = b"alpha\nbeta\ngamma\n"
+    (first,) = extract_hunks(base, b"alpha\nBETA ONE\ngamma\n")
+    (second,) = extract_hunks(base, b"alpha\nBETA TWO\ngamma\n")
+    assert first.unit_id == second.unit_id
+    assert first.live_hash != second.live_hash
+
+
+def test_growing_insertion_at_same_base_boundary_keeps_unit_id() -> None:
+    base = b"before\nafter\n"
+    (first,) = extract_hunks(base, b"before\ninsert one\nafter\n")
+    (second,) = extract_hunks(base, b"before\ninsert one\ninsert two\nafter\n")
+    assert first.unit_id == second.unit_id
+
+
+def test_material_base_region_change_remints_unit_id() -> None:
+    (first,) = extract_hunks(b"before\nold\nafter\n", b"before\nlive\nafter\n")
+    (second,) = extract_hunks(b"before\nnew\nafter\n", b"before\nlive\nafter\n")
+    assert first.unit_id != second.unit_id
+
+
+def test_repeated_context_regions_have_distinct_unit_ids() -> None:
+    base = b"same\none\nsame\npad\nsame\ntwo\nsame\n"
+    live = b"same\nONE\nsame\npad\nsame\nTWO\nsame\n"
+    hunks = extract_hunks(base, live)
+    assert len(hunks) == 2
+    assert len({hunk.unit_id for hunk in hunks}) == 2
+
+
 # --------------------------------------------------------------------------- #
 # classify — carry-over by identity
 # --------------------------------------------------------------------------- #
@@ -119,7 +148,7 @@ def test_classify_carries_stored_class_for_stable_hunk() -> None:
             "cls": HunkClass.SHARED.value,
             "label": shell.label,
             "live_hash": shell.live_hash,
-            "anchor": shell.anchor,
+            "unit_id": shell.unit_id,
         }
     ]
     classified = _by_label(classify(fresh, stored))
@@ -135,6 +164,18 @@ def test_classify_unmatched_is_pending() -> None:
     assert all(h.cls is HunkClass.PENDING for h in classified)
 
 
+def test_classify_rejects_duplicate_stored_unit_ids() -> None:
+    (fresh,) = extract_hunks(b"old\n", b"new\n")
+    row: dict[str, object] = {
+        "cls": "shared",
+        "label": fresh.label,
+        "live_hash": fresh.live_hash,
+        "unit_id": fresh.unit_id,
+    }
+    with pytest.raises(InvariantViolation, match="duplicate stored line unit_id"):
+        classify([fresh], [row, dict(row)])
+
+
 def test_classify_anchor_stable_but_changed_keeps_class_flagged() -> None:
     # stage the workdir hunk SHARED, then the host edits the value again.
     fresh1 = _by_label(extract_hunks(BASE, LIVE))["## Host paths"]
@@ -143,7 +184,7 @@ def test_classify_anchor_stable_but_changed_keeps_class_flagged() -> None:
             "cls": HunkClass.SHARED.value,
             "label": fresh1.label,
             "live_hash": fresh1.live_hash,
-            "anchor": fresh1.anchor,
+            "unit_id": fresh1.unit_id,
         }
     ]
     live2 = LIVE.replace(b"workdir: /home/raul", b"workdir: /home/elsewhere")
@@ -167,9 +208,10 @@ def _stage(base: bytes, live: bytes, classes: dict[str, HunkClass]) -> list[Hunk
                 cls=classes.get(h.label, HunkClass.PENDING),
                 label=h.label,
                 live_hash=h.live_hash,
-                anchor=h.anchor,
+                unit_id=h.unit_id,
                 base_span=h.base_span,
                 live_span=h.live_span,
+                legacy_anchor=h.legacy_anchor,
             )
         )
     return out
@@ -277,7 +319,8 @@ def test_serialize_drops_transient_spans() -> None:
             "cls": h.cls.value,
             "label": h.label,
             "live_hash": h.live_hash,
-            "anchor": h.anchor,
+            "kind": "line",
+            "unit_id": h.unit_id,
         }
         for h in hunks
     ]
@@ -320,7 +363,7 @@ def test_classify_carries_draft_hash_for_drafted_row() -> None:
             "cls": HunkClass.SHARED_DRAFTED.value,
             "label": shell.label,
             "live_hash": shell.live_hash,
-            "anchor": shell.anchor,
+            "unit_id": shell.unit_id,
             "draft_hash": "sha256:dd",
         }
     ]
@@ -339,7 +382,7 @@ def test_reconstruct_splices_draft_not_live_not_base() -> None:
 
     h = _drafted("## Host paths")
     draft = b"workdir: $HOME\n"  # the shareable rewrite
-    out = reconstruct(BASE, LIVE, [h], {h.anchor: draft})
+    out = reconstruct(BASE, LIVE, [h], {h.unit_id: draft})
     assert b"workdir: $HOME" in out  # the DRAFT is promoted into tracked
     assert b"workdir: /home/raul" not in out  # NOT live (host bytes stay local)
     assert b"workdir: /home/generic" not in out  # NOT base
@@ -358,7 +401,7 @@ def test_reconstruct_drafted_independent_of_live_drift() -> None:
         cls=HunkClass.SHARED_DRAFTED,
         draft_hash="sha256:dd",
     )
-    out = reconstruct(BASE, live2, [h2], {h2.anchor: draft})
+    out = reconstruct(BASE, live2, [h2], {h2.unit_id: draft})
     assert b"workdir: $HOME" in out
     assert b"somewhere-else" not in out
 
@@ -390,9 +433,45 @@ def test_classify_drafted_anchor_collision_fails_safe() -> None:
             "draft_hash": "sha256:d",
         }
     ]
-    out = classify(fresh, stored)
-    # no hunk is splice-eligible (non-changed SHARED_DRAFTED) → no duplication
-    assert not any(h.cls is HunkClass.SHARED_DRAFTED and not h.changed for h in out)
+    with pytest.raises(InvariantViolation, match="duplicate fresh line unit_id"):
+        classify(fresh, stored)
+
+
+def test_legacy_match_requires_unique_fresh_anchor() -> None:
+    fresh = [
+        Hunk(
+            HunkClass.PENDING,
+            "one",
+            "sha256:l1",
+            "sha256:u1",
+            (0, 1),
+            (0, 1),
+            legacy_anchor="sha256:legacy",
+        ),
+        Hunk(
+            HunkClass.PENDING,
+            "two",
+            "sha256:l2",
+            "sha256:u2",
+            (2, 3),
+            (2, 3),
+            legacy_anchor="sha256:legacy",
+        ),
+    ]
+    stored: list[dict[str, object]] = [
+        {
+            "cls": "shared_drafted",
+            "label": "old",
+            "live_hash": "sha256:old",
+            "unit_id": "sha256:synthetic",
+            "legacy_anchor": "sha256:legacy",
+            "draft_hash": "sha256:d",
+        }
+    ]
+    assert [hunk.cls for hunk in classify(fresh, stored)] == [
+        HunkClass.PENDING,
+        HunkClass.PENDING,
+    ]
 
 
 # R1 -> R2 simulates an upstream heading rename that breaks exact/anchor
@@ -427,11 +506,11 @@ def test_classify_reloc_match_carries_local_across_restructure() -> None:
     (row,) = serialize([stored_hunk])
     fresh = extract_hunks(BASE_R2, LIVE_R2)
     section = _by_label(fresh)["## My Tweaks"]
-    assert (section.live_hash, section.anchor) != (
+    assert (section.live_hash, section.unit_id) != (
         stored_hunk.live_hash,
-        stored_hunk.anchor,
+        stored_hunk.unit_id,
     )
-    assert section.anchor != stored_hunk.anchor
+    assert section.unit_id != stored_hunk.unit_id
     out = _by_label(classify(fresh, [row]))["## My Tweaks"]
     assert out.cls is HunkClass.LOCAL
     assert out.changed is True

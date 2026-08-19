@@ -201,8 +201,20 @@ def test_inspect_index_reflects_recorded_store_classes(
 ) -> None:
     # Store classification (HunkClass) is authoritative, not the merge stream.
     hunks: list[dict[str, object]] = [
-        {"cls": "shared", "label": "## Shell", "live_hash": "sha256:a", "anchor": "s"},
-        {"cls": "local", "label": "## Host", "live_hash": "sha256:b", "anchor": "h"},
+        {
+            "kind": "line",
+            "cls": "shared",
+            "label": "## Shell",
+            "live_hash": "sha256:a",
+            "unit_id": "s",
+        },
+        {
+            "kind": "line",
+            "cls": "local",
+            "label": "## Host",
+            "live_hash": "sha256:b",
+            "unit_id": "h",
+        },
     ]
     cfg_path, _ = _setup(tmp_path, monkeypatch, hunks=hunks)
     result = CliRunner().invoke(

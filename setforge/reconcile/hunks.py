@@ -43,15 +43,16 @@ class Hunk:
 
     ``cls`` is the staging classification; ``label`` is the human handle shown in
     the ``stage`` walk; ``live_hash`` is the sha256 of the EOL-normalised live
-    side and ``anchor`` the sha256 of the surrounding base context — together the
-    stable identity. ``draft_hash`` is the sha256 of the shareable draft bytes,
+    side. ``unit_id`` is a durable identity derived solely from the hunk's
+    base-relative region and context, so ordinary live edits do not re-mint it.
+    ``draft_hash`` is the sha256 of the shareable draft bytes,
     set **only** for a ``SHARED_DRAFTED`` hunk (the draft bytes themselves live in
     the ``drafts/`` store, never here — the index stays pure metadata); it is the
     draft's content identity, consulted by :func:`serialize` / ``store.verify``.
     (A blessed ``live != tracked`` divergence avoids re-flagging because
-    :func:`classify` matches a drafted hunk by ``anchor`` with ``changed=False``,
+    :func:`classify` matches a drafted hunk by ``unit_id`` with ``changed=False``,
     not via ``draft_hash``.) ``changed`` is a transient display flag: an
-    anchor-stable hunk whose live bytes changed since it was classified (keeps its
+    unit-stable hunk whose live bytes changed since it was classified (keeps its
     class but is surfaced for re-confirm). ``base_span`` / ``live_span`` are
     transient line ranges, recomputed every run and never persisted.
     ``reloc_anchor`` is an optional markdown heading identity (e.g. ``"## My
@@ -63,12 +64,14 @@ class Hunk:
     cls: HunkClass
     label: str
     live_hash: str
-    anchor: str
+    unit_id: str
     base_span: tuple[int, int]
     live_span: tuple[int, int]
     changed: bool = False
     draft_hash: str | None = None
     reloc_anchor: str | None = None
+    legacy_anchor: str | None = None
+    legacy_unit_id: str | None = None
 
 
 def _norm(lines: list[bytes]) -> bytes:
@@ -80,6 +83,28 @@ def _norm(lines: list[bytes]) -> bytes:
     only the hash is normalised.
     """
     return b"\n".join(line.rstrip() for line in lines)
+
+
+def _frame(part: bytes) -> bytes:
+    """Length-frame one identity component to prevent concatenation ambiguity."""
+    return len(part).to_bytes(8, "big") + part
+
+
+def _line_unit_id(
+    base_lines: list[bytes], i1: int, i2: int, before: bytes, after: bytes
+) -> str:
+    """Mint a v2 line-unit identity from the immutable base-relative region."""
+    payload = b"setforge.line-unit.v2\x00" + b"".join(
+        _frame(part)
+        for part in (
+            str(i1).encode("ascii"),
+            str(i2).encode("ascii"),
+            before,
+            _norm(base_lines[i1:i2]),
+            after,
+        )
+    )
+    return content_sha(payload)
 
 
 def _truncate(raw: bytes) -> str:
@@ -123,27 +148,26 @@ def extract_hunks(base: bytes, live: bytes) -> list[Hunk]:
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
-        anchor = content_sha(
-            _norm(base_lines[max(0, i1 - _CONTEXT_LINES) : i1])
-            + b"\x00"
-            + _norm(base_lines[i2 : i2 + _CONTEXT_LINES])
-        )
+        before = _norm(base_lines[max(0, i1 - _CONTEXT_LINES) : i1])
+        after = _norm(base_lines[i2 : i2 + _CONTEXT_LINES])
+        legacy_anchor = content_sha(before + b"\x00" + after)
         hunks.append(
             Hunk(
                 cls=HunkClass.PENDING,
                 label=_label(base_lines, live_lines, i1, i2, j1, j2),
                 live_hash=content_sha(_norm(live_lines[j1:j2])),
-                anchor=anchor,
+                unit_id=_line_unit_id(base_lines, i1, i2, before, after),
                 base_span=(i1, i2),
                 live_span=(j1, j2),
+                legacy_anchor=legacy_anchor,
             )
         )
     return hunks
 
 
-def identity(hunk: Hunk) -> tuple[str, str]:
-    """The stable identity of a hunk: ``(live_hash, anchor)``."""
-    return (hunk.live_hash, hunk.anchor)
+def identity(hunk: Hunk) -> str:
+    """The durable identity of a line unit."""
+    return hunk.unit_id
 
 
 def _section_heading(hunk: Hunk) -> str | None:
@@ -153,7 +177,7 @@ def _section_heading(hunk: Hunk) -> str | None:
     heading found in the hunk's *own changed content* (see :func:`_label`). A label
     that is an ATX heading is the region's stable identity — the handle used to
     re-find a host-local additive section across an upstream restructure that shifts
-    its context :attr:`~Hunk.anchor`. Any other label (a first-line fallback or
+    its base-relative unit context. Any other label (a first-line fallback or
     ``(blank)``) has no clean heading, so a hunk without one simply never mints or
     matches a ``reloc_anchor``. Shared by both the mint (:func:`serialize`) and the
     match (:func:`classify`) sides so the two always agree on the identity.
@@ -172,33 +196,53 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     """Carry stored classifications onto freshly-extracted hunks by identity.
 
     A hash-stable hunk (identity matches a stored row) inherits its class. A hunk
-    whose ``anchor`` matches but whose ``live_hash`` changed keeps the stored
+    whose ``unit_id`` matches but whose ``live_hash`` changed keeps the stored
     class but is flagged ``changed=True`` (surfaced for re-confirm, never silently
     reset). Anything unmatched stays PENDING.
 
-    A ``SHARED_DRAFTED`` row is the exception: a hunk whose ``anchor`` is **unique**
-    among the fresh set matches by **anchor alone** (``changed=False``,
-    live-independent). Its tracked bytes come from the draft store, not live, so the
-    live side is allowed to be anything — the host's original (keep-mine-local) OR
-    the adopted draft — without re-flagging the hunk or dropping the draft, keeping
-    a blessed divergence stable across live edits. The uniqueness guard matters:
-    on an anchor COLLISION (two fresh hunks sharing one base context) the
-    by-anchor match would splice the single draft into BOTH regions, so a colliding
-    drafted anchor instead falls through to the exact/moved logic below — which
-    fails safe (an exact ``live_hash`` match still carries it; otherwise it is held
-    at base via ``changed=True``, never duplicated).
+    A ``SHARED_DRAFTED`` row is the exception: a matching ``unit_id`` carries the
+    draft with ``changed=False`` independent of live bytes. V1 rows bridge through
+    their unique legacy context anchor. Every stored row is consumed at most once;
+    duplicate v2 IDs fail closed instead of selecting an arbitrary row.
     """
-    fresh_anchor_counts = Counter(h.anchor for h in fresh)
+    fresh_unit_counts = Counter(h.unit_id for h in fresh)
+    duplicates = sorted(
+        unit_id for unit_id, count in fresh_unit_counts.items() if count > 1
+    )
+    if duplicates:
+        raise InvariantViolation(f"duplicate fresh line unit_id {duplicates[0]!r}")
+    stored_unit_counts = Counter(
+        str(row["unit_id"]) for row in stored if isinstance(row.get("unit_id"), str)
+    )
+    duplicate_stored = sorted(
+        unit_id for unit_id, count in stored_unit_counts.items() if count > 1
+    )
+    if duplicate_stored:
+        raise InvariantViolation(
+            f"duplicate stored line unit_id {duplicate_stored[0]!r}"
+        )
     fresh_heading_counts = Counter(
         heading for h in fresh if (heading := _section_heading(h)) is not None
     )
-    drafted_by_anchor = {
-        str(r["anchor"]): r
-        for r in stored
-        if r.get("cls") == HunkClass.SHARED_DRAFTED.value
+    by_unit = {
+        str(row["unit_id"]): (index, row)
+        for index, row in enumerate(stored)
+        if isinstance(row.get("unit_id"), str)
     }
-    by_identity = {(str(r["live_hash"]), str(r["anchor"])): r for r in stored}
-    by_anchor = {str(r["anchor"]): r for r in stored}
+    legacy_counts = Counter(
+        str(anchor)
+        for row in stored
+        if isinstance((anchor := row.get("legacy_anchor", row.get("anchor"))), str)
+    )
+    legacy_by_anchor = {
+        str(anchor): (index, row)
+        for index, row in enumerate(stored)
+        if isinstance((anchor := row.get("legacy_anchor", row.get("anchor"))), str)
+        and legacy_counts[str(anchor)] == 1
+    }
+    fresh_legacy_counts = Counter(
+        hunk.legacy_anchor for hunk in fresh if hunk.legacy_anchor is not None
+    )
     # Stored LOCAL rows keyed by their minted heading identity, but ONLY where the
     # heading is unique among stored rows — a duplicated reloc_anchor is ambiguous,
     # so it is dropped here and no fresh hunk can match it (invariant I8: never
@@ -210,49 +254,67 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
         if r.get("cls") == HunkClass.LOCAL.value and r.get("reloc_anchor") is not None
     )
     local_reloc_by_heading = {
-        str(r["reloc_anchor"]): r
-        for r in stored
+        str(r["reloc_anchor"]): (index, r)
+        for index, r in enumerate(stored)
         if r.get("cls") == HunkClass.LOCAL.value
         and r.get("reloc_anchor") is not None
         and reloc_counts[str(r["reloc_anchor"])] == 1
     }
     out: list[Hunk] = []
+    consumed: set[int] = set()
     for hunk in fresh:
-        drafted = drafted_by_anchor.get(hunk.anchor)
-        if drafted is not None and fresh_anchor_counts[hunk.anchor] == 1:
+        matched = by_unit.get(hunk.unit_id)
+        if matched is not None and matched[0] not in consumed:
+            index, row = matched
+            consumed.add(index)
+            drafted = row.get("cls") == HunkClass.SHARED_DRAFTED.value
             out.append(
                 _with(
                     hunk,
-                    cls=HunkClass.SHARED_DRAFTED,
-                    changed=False,
-                    draft_hash=_row_draft_hash(drafted),
-                    reloc_anchor=_row_reloc_anchor(drafted),
+                    cls=HunkClass(str(row["cls"])),
+                    changed=False
+                    if drafted
+                    else str(row["live_hash"]) != hunk.live_hash,
+                    draft_hash=_row_draft_hash(row),
+                    reloc_anchor=_row_reloc_anchor(row),
+                    legacy_unit_id=None,
                 )
             )
             continue
-        exact = by_identity.get(identity(hunk))
-        if exact is not None:
+        legacy_anchor = hunk.legacy_anchor
+        legacy = (
+            legacy_by_anchor.get(legacy_anchor) if legacy_anchor is not None else None
+        )
+        if (
+            legacy is not None
+            and legacy[0] not in consumed
+            and legacy_anchor is not None
+            and fresh_legacy_counts[legacy_anchor] == 1
+        ):
+            index, row = legacy
+            consumed.add(index)
+            drafted = row.get("cls") == HunkClass.SHARED_DRAFTED.value
             out.append(
                 _with(
                     hunk,
-                    cls=HunkClass(str(exact["cls"])),
-                    changed=False,
-                    draft_hash=_row_draft_hash(exact),
-                    reloc_anchor=_row_reloc_anchor(exact),
+                    cls=HunkClass(str(row["cls"])),
+                    changed=not (drafted or str(row["live_hash"]) == hunk.live_hash),
+                    draft_hash=_row_draft_hash(row),
+                    reloc_anchor=_row_reloc_anchor(row),
+                    legacy_unit_id=(
+                        str(row["unit_id"])
+                        if isinstance(row.get("unit_id"), str)
+                        else None
+                    ),
                 )
             )
             continue
-        moved = by_anchor.get(hunk.anchor)
-        if moved is not None:
-            out.append(
-                _with(
-                    hunk,
-                    cls=HunkClass(str(moved["cls"])),
-                    changed=True,
-                    draft_hash=_row_draft_hash(moved),
-                    reloc_anchor=_row_reloc_anchor(moved),
-                )
-            )
+        if (
+            legacy_anchor is not None
+            and fresh_legacy_counts[legacy_anchor] > 1
+            and legacy_anchor in legacy_by_anchor
+        ):
+            out.append(hunk)
             continue
         # Reloc fallback: the exact/anchor identity is gone (an upstream restructure
         # shifted the context), but the hunk's OWN heading identity uniquely matches
@@ -261,8 +323,10 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
         # BOTH sides (fresh + stored) or no match at all (invariant I8).
         heading = _section_heading(hunk)
         if heading is not None and fresh_heading_counts[heading] == 1:
-            reloc_row = local_reloc_by_heading.get(heading)
-            if reloc_row is not None:
+            reloc = local_reloc_by_heading.get(heading)
+            if reloc is not None and reloc[0] not in consumed:
+                index, reloc_row = reloc
+                consumed.add(index)
                 out.append(
                     _with(
                         hunk,
@@ -270,6 +334,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                         changed=True,
                         draft_hash=_row_draft_hash(reloc_row),
                         reloc_anchor=_row_reloc_anchor(reloc_row),
+                        legacy_unit_id=None,
                     )
                 )
                 continue
@@ -296,6 +361,7 @@ def _with(
     changed: bool,
     draft_hash: str | None,
     reloc_anchor: str | None,
+    legacy_unit_id: str | None,
 ) -> Hunk:
     # reloc_anchor comes from the matched STORED row (a fresh hunk always carries
     # None), so a minted heading identity persists stably across runs rather than
@@ -304,13 +370,30 @@ def _with(
         cls=cls,
         label=hunk.label,
         live_hash=hunk.live_hash,
-        anchor=hunk.anchor,
+        unit_id=hunk.unit_id,
         base_span=hunk.base_span,
         live_span=hunk.live_span,
         changed=changed,
         draft_hash=draft_hash,
         reloc_anchor=reloc_anchor,
+        legacy_anchor=hunk.legacy_anchor,
+        legacy_unit_id=legacy_unit_id,
     )
+
+
+def bind_drafts(hunks: list[Hunk], drafts: dict[str, bytes]) -> dict[str, bytes]:
+    """Bind migrated v1 draft keys to their unique freshly matched v2 units."""
+    bound = dict(drafts)
+    for hunk in hunks:
+        legacy_key = hunk.legacy_unit_id
+        if legacy_key is None or legacy_key not in bound:
+            continue
+        if hunk.unit_id in bound:
+            raise InvariantViolation(
+                f"draft store contains both legacy and v2 keys for {hunk.unit_id}"
+            )
+        bound[hunk.unit_id] = bound.pop(legacy_key)
+    return bound
 
 
 def reconstruct(
@@ -324,7 +407,7 @@ def reconstruct(
     * a non-``changed`` ``SHARED`` hunk takes its **live** bytes (see
       :func:`_promotes`);
     * a non-``changed`` ``SHARED_DRAFTED`` hunk takes its **draft** bytes from
-      ``drafts`` keyed by the hunk's ``anchor`` — NOT live (which stays
+      ``drafts`` keyed by the hunk's ``unit_id`` — NOT live (which stays
       host-specific) and NOT base. A ``SHARED_DRAFTED`` hunk whose draft is
       missing from ``drafts`` raises :class:`~setforge.errors.InvariantViolation`
       (fail-closed: a dangling draft pointer never silently falls back to
@@ -335,6 +418,7 @@ def reconstruct(
     a required argument with no default — so no call path can vacuously skip the
     draft splice (see :func:`assert_stage_fidelity`).
     """
+    drafts = bind_drafts(hunks, drafts)
     base_lines = split_lines(base)
     live_lines = split_lines(live)
     out: list[bytes] = []
@@ -345,10 +429,10 @@ def reconstruct(
         out.extend(base_lines[cursor:i1])  # unchanged region before this hunk
         if hunk.cls is HunkClass.SHARED_DRAFTED and not hunk.changed:
             try:
-                out.append(drafts[hunk.anchor])  # shareable draft, verbatim bytes
+                out.append(drafts[hunk.unit_id])  # shareable draft, verbatim bytes
             except KeyError as err:
                 raise InvariantViolation(
-                    f"SHARED_DRAFTED hunk {hunk.anchor} has no draft in the store"
+                    f"SHARED_DRAFTED hunk {hunk.unit_id} has no draft in the store"
                 ) from err
         elif _promotes(hunk):
             out.extend(live_lines[j1:j2])
@@ -364,12 +448,11 @@ def _promotes(hunk: Hunk) -> bool:
 
     Only an EXACT-identity ``SHARED`` hunk promotes its live bytes. A
     ``SHARED_DRAFTED`` hunk does NOT promote live — its draft is spliced in
-    :func:`reconstruct` directly. A ``changed`` hunk (its anchor
+    :func:`reconstruct` directly. A ``changed`` hunk (its unit identity
     matched a stored row but its content differs — a value edit since it was
-    staged, OR an anchor collision with a different region) is NOT promoted: it is
+    staged) is NOT promoted: it is
     held at base bytes until the host re-confirms it in ``setforge stage``. This is
-    what stops a never-staged, anchor-colliding region from silently promoting its
-    bytes upstream.
+    what stops edited, unconfirmed bytes from silently promoting upstream.
     """
     return hunk.cls is HunkClass.SHARED and not hunk.changed
 
@@ -421,7 +504,8 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
             "cls": hunk.cls.value,
             "label": hunk.label,
             "live_hash": hunk.live_hash,
-            "anchor": hunk.anchor,
+            "kind": "line",
+            "unit_id": hunk.unit_id,
         }
         if hunk.cls is HunkClass.SHARED_DRAFTED and hunk.draft_hash is not None:
             row["draft_hash"] = hunk.draft_hash

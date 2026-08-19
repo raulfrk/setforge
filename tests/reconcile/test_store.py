@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from setforge.errors import (
     ReconcileStoreError,
     UnsafeFileId,
 )
+from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import store
 from setforge.reconcile.types import ABSENT, Absent, HunkClass, file_id
 
@@ -128,6 +131,74 @@ def test_drafts_corrupt_manifest_raises(tmp_state: Path) -> None:
         store.read_drafts("p", fid)
 
 
+def test_drafts_duplicate_json_key_raises(tmp_state: Path) -> None:
+    fid = file_id("f")
+    path = store._drafts_path("p", fid)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"dup": "eA==", "dup": "eQ=="}', encoding="utf-8")
+    with pytest.raises(ReconcileStoreError, match="duplicate drafts manifest key"):
+        store.read_drafts("p", fid)
+
+
+def test_v1_drafted_row_reconstructs_and_migrates_atomically(tmp_state: Path) -> None:
+    fid = file_id("f")
+    base = b"before\nold\nafter\n"
+    live = b"before\nhost-only\nafter\n"
+    draft = b"shareable\n"
+    (fresh,) = hunks_mod.extract_hunks(base, live)
+    assert fresh.legacy_anchor is not None
+    index_path = store._index_path("p")
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "files": {
+                    "f": {
+                        "present": True,
+                        "local_hash": store.content_sha(live),
+                        "hunks": [
+                            {
+                                "cls": "shared_drafted",
+                                "label": fresh.label,
+                                "live_hash": fresh.live_hash,
+                                "anchor": fresh.legacy_anchor,
+                                "draft_hash": store.content_sha(draft),
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    drafts_path = store._drafts_path("p", fid)
+    drafts_path.parent.mkdir(parents=True)
+    drafts_path.write_text(
+        json.dumps({fresh.legacy_anchor: base64.b64encode(draft).decode("ascii")}),
+        encoding="utf-8",
+    )
+    (legacy_row,) = store.read_index("p").files["f"].hunks
+    stored_drafts = store.read_drafts("p", fid)
+    classified = hunks_mod.classify([fresh], [legacy_row])
+    assert hunks_mod.reconstruct(base, live, classified, stored_drafts) == (
+        b"before\nshareable\nafter\n"
+    )
+
+    bound = hunks_mod.bind_drafts(classified, stored_drafts)
+    store.record(
+        "p",
+        fid,
+        base=base,
+        local=live,
+        hunks=hunks_mod.serialize(classified),
+        drafts=bound,
+    )
+    assert json.loads(index_path.read_text())["schema_version"] == "2.0"
+    assert store.read_drafts("p", fid) == {fresh.unit_id: draft}
+    store.verify("p", fid)
+
+
 @pytest.mark.parametrize("bad_value", ["123", "null", "true"])
 def test_drafts_non_string_value_raises(tmp_state: Path, bad_value: str) -> None:
     # a non-string scalar manifest value must fail closed, not str()-coerce into
@@ -165,12 +236,13 @@ def test_drafts_large_but_legitimate_value_round_trips(tmp_state: Path) -> None:
     assert store.read_drafts("p", fid)["sha256:aa"] == data
 
 
-def _drafted_row(anchor: str, draft: bytes) -> dict[str, object]:
+def _drafted_row(unit_id: str, draft: bytes) -> dict[str, object]:
     return {
+        "kind": "line",
         "cls": HunkClass.SHARED_DRAFTED.value,
         "label": "## Worktrees",
         "live_hash": "sha256:live",
-        "anchor": anchor,
+        "unit_id": unit_id,
         "draft_hash": store.content_sha(draft),
     }
 
@@ -415,10 +487,11 @@ def test_record_and_prune_do_not_take_lock(
 
 
 _HUNK: dict[str, object] = {
+    "kind": "line",
     "cls": "shared",
     "label": "## Shell",
     "live_hash": "sha256:aa",
-    "anchor": "sha256:bb",
+    "unit_id": "sha256:bb",
 }
 
 
