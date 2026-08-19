@@ -40,6 +40,16 @@ _KNOWN_LIVE_UPSTREAM_TESTS = {
     },
 }
 
+_INFRA_SUPPORT_FILES = {
+    "tests/docker/test_conftest_hash.py",
+    "tests/docker/test_container_runtime.py",
+    "tests/docker/test_image.py",
+    "tests/docker/test_network.py",
+    "tests/docker/test_offline_extension.py",
+    "tests/test_e2e_xdist_prebuild.py",
+    "tests/test_network_canary_contract.py",
+}
+
 
 def test_nightly_canary_lane_is_bounded_grouped_and_cleans_containers() -> None:
     workflow = (_ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
@@ -225,6 +235,34 @@ def test_regular_ci_splits_fast_coverage_from_slow_properties() -> None:
     ]
     for command, marker, verdict_option in expected:
         _assert_ci_pytest_lane(command, marker=marker, verdict=verdict_option)
+
+
+def test_ci_infrastructure_lane_includes_every_test_infra_file() -> None:
+    """A newly marked infrastructure file cannot silently miss every CI lane."""
+    test_root = _ROOT / "tests"
+    discovered = {
+        path.relative_to(_ROOT).as_posix()
+        for path in test_root.rglob("test_*.py")
+        if any(
+            isinstance(node, ast.Attribute)
+            and ast.unparse(node) == "pytest.mark.test_infra"
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+    }
+    steps = _workflow("ci.yml")["jobs"]["tests"]["steps"]
+    infra_run = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Test pytest/xdist infrastructure with branch coverage"
+    )
+    listed = {
+        token
+        for token in shlex.split(infra_run)
+        if token.startswith("tests/") and token.endswith(".py")
+    }
+
+    assert discovered
+    assert listed == discovered | _INFRA_SUPPORT_FILES
 
 
 @pytest.mark.parametrize(

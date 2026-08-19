@@ -69,6 +69,7 @@ jobs:
             tests/integration/test_cli_lazy_ui_import.py \
             tests/integration/test_e2e_prebuild.py \
             tests/integration/test_operation_restart.py \
+            tests/integration/test_orphan_scan_restart.py \
             -m 'not e2e_docker' --no-cov -q
           uv run coverage report --rcfile=/dev/null --fail-under=100 \
             --include='tests/e2e_xdist.py,tests/docker/container_runtime.py,tests/docker/image.py,tests/docker/network.py,tests/docker/offline_extension.py'
