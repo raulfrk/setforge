@@ -91,6 +91,39 @@ def test_read_only_commands_do_not_bootstrap_local_config(
     )
 
 
+def test_global_output_modes_cross_real_config_boundary_without_mutation(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+) -> None:
+    """Supported quiet output and unsupported JSON leave real stores unchanged."""
+    env = integration_env()
+    config_before = env.config.read_bytes()
+
+    quiet = env.run_verb(["--quiet", "compare"])
+    assert quiet.exit_code == 0, quiet.output
+    assert quiet.stdout == ""
+    state_before = sorted(env.state_dir.rglob("*"))
+
+    rejected = env.run_verb(
+        [
+            "--format=json",
+            "config",
+            "add",
+            "--local",
+            "binaries.code",
+            "/tmp/never-written",
+            "--yes",
+        ],
+        inject_config=False,
+        inject_profile=False,
+    )
+    assert rejected.exit_code == 2
+    assert "--format=json is not supported for 'config add'" in rejected.stderr
+    assert env.config.read_bytes() == config_before
+    assert not env.local_config.parent.exists()
+    assert sorted(env.state_dir.rglob("*")) == state_before
+
+
 def test_command_families_share_host_local_destination(
     integration_env: Callable[..., IntegrationEnv],
     integration_subprocess,

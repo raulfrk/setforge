@@ -1,9 +1,10 @@
 """Output-mode boundary for setforge subcommands.
 
 Concentrates the JSON-versus-human dispatch that every JSON-emitting
-subcommand (``compare``, ``status``, ``profile show``, ``transitions
-list``) needs into one renderer so the per-subcommand bodies stay
-human-shape and the JSON envelope ships in one place.
+subcommand (``compare``, ``status``, ``inspect``, ``profile show``,
+``transitions list``, ``stage --list``, ``config show --effective``)
+needs into one renderer so the per-subcommand bodies stay human-shape
+and the JSON envelope ships in one place.
 
 Three pieces:
 
@@ -63,12 +64,12 @@ class OutputContext:
     """Per-invocation output-mode envelope wired onto ``ctx.obj``.
 
     Carries the rendering mode selected by ``--format/-o``. The root
-    callback's ``--quiet`` / ``-v`` flags configure logging directly
-    (see :func:`setforge.cli._resolve_level`); they do not flow through
-    this envelope because no subcommand reads them off ``ctx.obj``.
+    ``quiet`` suppresses the human success renderer while leaving errors on
+    stderr. Logging still uses the level configured by the root callback.
     """
 
     format: OutputFormat
+    quiet: bool = False
 
 
 def wrap_json(
@@ -104,12 +105,11 @@ def render(
 ) -> None:
     """Dispatch the final-output surface for one subcommand.
 
-    When ``ctx_obj.format`` is :attr:`OutputFormat.HUMAN`, invokes
-    ``human_fn`` so the existing human renderer runs unchanged.
-    Otherwise writes the JSON envelope to ``sys.stdout`` followed by a
-    newline — JSON output is stdout-only by contract; logs and warnings
-    go to stderr exclusively, so a downstream ``| jq`` pipeline never
-    has to filter mixed streams.
+    JSON mode writes the envelope to ``sys.stdout`` followed by a newline.
+    Quiet human mode returns without invoking ``human_fn``. Default human mode
+    invokes the closure unchanged. JSON output is stdout-only by contract;
+    logs and warnings go to stderr exclusively, so a downstream ``| jq``
+    pipeline never has to filter mixed streams.
 
     ``ctx_obj=None`` always raises :class:`RuntimeError`: a subcommand
     that forgets to declare ``ctx: typer.Context`` (or otherwise fails
@@ -129,5 +129,7 @@ def render(
     if ctx_obj.format is OutputFormat.JSON:
         sys.stdout.write(wrap_json(command, data))
         sys.stdout.write("\n")
+        return
+    if ctx_obj.quiet:
         return
     human_fn()

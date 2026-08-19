@@ -39,7 +39,11 @@ from ruamel.yaml.comments import (
 
 from setforge import operations
 from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
-from setforge.cli import app
+from setforge.cli import (
+    _require_output_condition,
+    _require_output_path,
+    app,
+)
 from setforge.cli._config_helpers import (
     FieldNode as _FieldNode,
 )
@@ -119,6 +123,13 @@ config_app: typer.Typer = typer.Typer(
     rich_markup_mode=None,
 )
 app.add_typer(config_app, name="config")
+
+
+@config_app.callback()
+def _config_output_contract(ctx: typer.Context) -> None:
+    """Enforce the global output contract before a config leaf runs."""
+    if ctx.invoked_subcommand is not None:
+        _require_output_path(ctx.obj, ("config", ctx.invoked_subcommand))
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +387,11 @@ def config_show(
     slice). With ``--effective``: prints the merged profile chain
     snapshot via the existing profile-show pathway.
     """
+    _require_output_condition(
+        ctx.obj,
+        supported=effective,
+        command="config show without --effective",
+    )
     scope = _resolve_scope(
         local=local, tracked=tracked, effective=effective, allow_effective=True
     )

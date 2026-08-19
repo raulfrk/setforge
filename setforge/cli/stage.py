@@ -27,6 +27,9 @@ from setforge import atomicio, operations
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
+    _commit_invocation_state,
+    _output_requested,
+    _require_output_condition,
     _resolve_config_arg,
     app,
 )
@@ -728,6 +731,13 @@ def stage(
     ),
 ) -> None:
     """Classify a plain file's local changes per hunk: share upstream or keep local."""
+    _require_output_condition(
+        ctx.obj,
+        supported=list_only,
+        command="stage without --list",
+    )
+    if _output_requested(ctx.obj):
+        _commit_invocation_state(ctx)
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent

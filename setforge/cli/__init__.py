@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import typer
 from pydantic import ValidationError
@@ -27,6 +28,18 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # main()'s handler runs after the Typer context unwinds, so it can't read ctx.obj.
 _INVOCATION_FORMAT: OutputFormat = OutputFormat.HUMAN
+
+_SUPPORTED_OUTPUT_PATHS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("compare",),
+        ("config", "show"),
+        ("inspect",),
+        ("profile", "show"),
+        ("stage",),
+        ("status",),
+        ("transitions", "list"),
+    }
+)
 
 
 # ``rich_markup_mode=None`` is passed at every ``typer.Typer(...)``
@@ -151,6 +164,82 @@ def _resolve_level(verbose: int, quiet: bool) -> int:
     return resolved
 
 
+def _output_requested(ctx_obj: OutputContext | None) -> bool:
+    """Return whether an invocation requested non-default success output."""
+    return ctx_obj is not None and (
+        ctx_obj.quiet or ctx_obj.format is OutputFormat.JSON
+    )
+
+
+def _output_mode_label(ctx_obj: OutputContext) -> str:
+    """Return the user-facing flag spelling for a non-default output mode."""
+    return "--quiet" if ctx_obj.quiet else "--format=json"
+
+
+def _reset_invocation_state() -> None:
+    """Clear process globals owned by one CLI invocation."""
+    global _INVOCATION_FORMAT
+    _INVOCATION_FORMAT = OutputFormat.HUMAN
+    binaries.set_cli_overrides()
+    source_mod.set_cli_source(None)
+
+
+def _commit_invocation_state(ctx: typer.Context) -> None:
+    """Commit parsed root options after command-specific output validation."""
+    root = ctx.find_root()
+    output_ctx = cast(OutputContext, root.obj)
+    params = root.params
+    global _INVOCATION_FORMAT
+    _INVOCATION_FORMAT = output_ctx.format
+    binaries.set_cli_overrides(
+        code=cast(str | None, params.get("code_bin")),
+        claude=cast(str | None, params.get("claude_bin")),
+        gitleaks=cast(str | None, params.get("gitleaks_bin")),
+        patch=cast(str | None, params.get("patch_bin")),
+    )
+    source_mod.set_cli_source(cast(Path | None, params.get("source")))
+
+
+def _require_output_path(
+    ctx_obj: OutputContext | None,
+    path: tuple[str, ...],
+    *,
+    allow_prefix: bool = False,
+) -> None:
+    """Reject a non-default output mode unless ``path`` is supported."""
+    if not _output_requested(ctx_obj):
+        return
+    assert ctx_obj is not None
+    supported = path in _SUPPORTED_OUTPUT_PATHS
+    if allow_prefix:
+        supported = supported or any(
+            candidate[: len(path)] == path for candidate in _SUPPORTED_OUTPUT_PATHS
+        )
+    if supported:
+        return
+    command = " ".join(path)
+    _reset_invocation_state()
+    raise typer.BadParameter(
+        f"{_output_mode_label(ctx_obj)} is not supported for {command!r}"
+    )
+
+
+def _require_output_condition(
+    ctx_obj: OutputContext | None,
+    *,
+    supported: bool,
+    command: str,
+) -> None:
+    """Reject a mode whose command supports output only with specific options."""
+    if not _output_requested(ctx_obj) or supported:
+        return
+    assert ctx_obj is not None
+    _reset_invocation_state()
+    raise typer.BadParameter(
+        f"{_output_mode_label(ctx_obj)} is not supported for {command!r}"
+    )
+
+
 @app.callback()
 def _root(
     ctx: typer.Context,
@@ -191,13 +280,15 @@ def _root(
         False,
         "--quiet",
         "-q",
-        help="Suppress non-error output (cron/CI use). Errors still emit on stderr.",
+        help="Suppress success output on commands supported by --format. "
+        "Errors remain on stderr.",
     ),
     output_format: OutputFormat = typer.Option(
         OutputFormat.HUMAN,
         "--format",
         "-o",
-        help="Output rendering: 'human' (default) or 'json' (versioned envelope).",
+        help="Output for compare, status, inspect, profile show, transitions list, "
+        "stage --list, and config show --effective: 'human' or versioned 'json'.",
     ),
     version: bool = typer.Option(
         False,
@@ -209,18 +300,30 @@ def _root(
 ) -> None:
     """Wire host-local binary overrides, source override, logging, and output.
 
-    Side effects (in order): mutex-check ``--quiet`` + ``-v``, resolve
-    effective log level, install :class:`RedactingFilter` on the root
-    logger's stderr handler, set CLI binary overrides via
-    ``binaries.set_cli_overrides``, set the ``--source`` override via
-    ``source_mod.set_cli_source``, wire
+    Invocation-local state from any prior in-process call is cleared first,
+    including on validation failure. After validating output-mode
+    compatibility, resolve the effective log level, install
+    :class:`RedactingFilter` on the root logger's stderr handler, set CLI
+    binary overrides via ``binaries.set_cli_overrides``, set the ``--source``
+    override via ``source_mod.set_cli_source``, and wire
     :class:`OutputContext` onto ``ctx.obj`` for the renderer boundary.
     ``--version`` is wired as an eager callback that prints
     ``setforge.__version__`` and exits before this body runs.
     """
+    # Invocation-scoped overrides must never leak across repeated in-process
+    # calls, including calls rejected by the validation below.  Clear the
+    # previous invocation before establishing any state for this one.
+    _reset_invocation_state()
     if quiet and verbose:
         typer.echo("--quiet and --verbose/-v are mutually exclusive", err=True)
         raise typer.Exit(code=2)
+    if quiet and output_format is OutputFormat.JSON:
+        typer.echo("--quiet and --format=json are mutually exclusive", err=True)
+        raise typer.Exit(code=2)
+    output_ctx = OutputContext(format=output_format, quiet=quiet)
+    ctx.obj = output_ctx
+    if ctx.invoked_subcommand is not None:
+        _require_output_path(output_ctx, (ctx.invoked_subcommand,), allow_prefix=True)
     level = _resolve_level(verbose, quiet)
     logging.basicConfig(
         level=level,
@@ -254,16 +357,14 @@ def _root(
     github_token = os.environ.get("SETFORGE_GITHUB_TOKEN")
     if github_token:
         LOGGER.debug(f"env credential: SETFORGE_GITHUB_TOKEN={github_token}")
-    binaries.set_cli_overrides(
-        code=code_bin,
-        claude=claude_bin,
-        gitleaks=gitleaks_bin,
-        patch=patch_bin,
+    # ``stage`` supports non-default output only with ``--list``. Click may
+    # reject missing leaf arguments before the command function can validate
+    # that condition, so keep process globals neutral until that gate runs.
+    defer_state_commit = _output_requested(output_ctx) and (
+        ctx.invoked_subcommand == "stage"
     )
-    source_mod.set_cli_source(source)
-    ctx.obj = OutputContext(format=output_format)
-    global _INVOCATION_FORMAT
-    _INVOCATION_FORMAT = output_format
+    if not defer_state_commit:
+        _commit_invocation_state(ctx)
 
 
 # Subcommand modules — imported for the side effect of @app.command()
@@ -394,12 +495,24 @@ def _handle_config_validation_error(exc: ValidationError) -> None:
     sys.exit(1)
 
 
+def _handle_setforge_error(exc: SetforgeError) -> None:
+    """Render a domain error in the selected output format and exit non-zero."""
+    message = str(exc)
+    if _INVOCATION_FORMAT is OutputFormat.JSON:
+        sys.stdout.write(wrap_json("error", None, errors=[message]))
+        sys.stdout.write("\n")
+    else:
+        typer.secho(f"error: {message}", err=True, fg=typer.colors.RED)
+    sys.exit(1)
+
+
 def main() -> None:
     """Entry point that wraps ``app`` with :class:`SetforgeError` handling."""
+    global _INVOCATION_FORMAT
+    _INVOCATION_FORMAT = OutputFormat.HUMAN
     try:
         app()
     except SetforgeError as exc:
-        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
-        sys.exit(1)
+        _handle_setforge_error(exc)
     except ValidationError as exc:
         _handle_config_validation_error(exc)

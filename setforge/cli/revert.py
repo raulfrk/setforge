@@ -29,6 +29,7 @@ from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
+    _require_output_path,
     _resolve_config_arg,
     app,
 )
@@ -929,6 +930,13 @@ transitions_app: typer.Typer = typer.Typer(
     rich_markup_mode=None,
 )
 app.add_typer(transitions_app, name="transitions")
+
+
+@transitions_app.callback()
+def _transitions_output_contract(ctx: typer.Context) -> None:
+    """Enforce the global output contract before a transitions leaf runs."""
+    if ctx.invoked_subcommand is not None:
+        _require_output_path(ctx.obj, ("transitions", ctx.invoked_subcommand))
 
 
 _TRANSITIONS_LIST_PROFILE_OPTION = typer.Option(

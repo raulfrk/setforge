@@ -15,6 +15,8 @@ Coverage matrix:
   ``test_profile_show_json_envelope`` — ``--format=json`` returns the
   versioned envelope with ``schema_version`` = ``OUTPUT_SCHEMA_VERSION``,
   ``command``, ``data``.
+- The command-tree matrix proves every unsupported leaf rejects both
+  non-default modes before leaf argument parsing.
 - ``test_json_no_ansi_on_stdout`` — JSON-mode stdout parses as JSON and
   contains no ANSI escape sequences.
 - ``test_redacts_token_env`` — ``-vv`` plus a token-shaped log message
@@ -36,10 +38,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from click import Command, Group
+from typer.main import get_command
 from typer.testing import CliRunner
 
+import setforge.cli as cli_mod
+from setforge import binaries
+from setforge import source as source_mod
 from setforge._log_filter import RedactingFilter
-from setforge.cli import app
+from setforge.cli import _SUPPORTED_OUTPUT_PATHS, app
 from setforge.cli._output import (
     OUTPUT_SCHEMA_VERSION,
     OutputContext,
@@ -140,6 +147,23 @@ def test_render_json_emits_envelope_and_skips_closure(
     parsed = json.loads(captured.out)
     assert parsed["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert parsed["command"] == "compare"
+
+
+def test_render_quiet_skips_human_closure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Quiet human mode suppresses success output at the shared boundary."""
+    called: list[bool] = []
+    render(
+        OutputContext(format=OutputFormat.HUMAN, quiet=True),
+        "compare",
+        {"a": 1},
+        human_fn=lambda: called.append(True),
+    )
+    captured = capsys.readouterr()
+    assert called == []
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_render_none_ctx_always_raises() -> None:
@@ -361,19 +385,46 @@ def test_vv_sets_debug(runner: CliRunner, minimal_config: Path) -> None:
     assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
 
-def test_quiet_silences_warnings_keeps_errors(
+def test_quiet_suppresses_supported_success_output(
     runner: CliRunner, minimal_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--quiet suppresses WARNING-and-below; ERROR still surfaces."""
+    """--quiet suppresses a supported command's success output and logs."""
     monkeypatch.setenv("SETFORGE_LOG_LEVEL", "WARNING")
     result = runner.invoke(
-        app, ["--quiet", "validate", "--config", str(minimal_config), "--all"]
+        app,
+        [
+            "--quiet",
+            "compare",
+            "--config",
+            str(minimal_config),
+            "--profile",
+            "vm-headless",
+        ],
     )
     assert result.exit_code == 0, result.output
-    # No DEBUG / INFO / WARNING noise.
+    assert result.stdout == ""
     assert "DEBUG:" not in result.stderr
     assert "INFO:" not in result.stderr
     assert "WARNING:" not in result.stderr
+
+
+def test_quiet_keeps_supported_errors(runner: CliRunner, minimal_config: Path) -> None:
+    """Quiet suppresses success output, not a supported command's error."""
+    result = runner.invoke(
+        app,
+        [
+            "--quiet",
+            "inspect",
+            "missing",
+            "--config",
+            str(minimal_config),
+            "--profile",
+            "vm-headless",
+        ],
+    )
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "not a tracked file" in result.stderr
 
 
 def test_quiet_v_mutex_exits_2(runner: CliRunner, minimal_config: Path) -> None:
@@ -384,6 +435,136 @@ def test_quiet_v_mutex_exits_2(runner: CliRunner, minimal_config: Path) -> None:
     )
     assert result.exit_code == 2
     assert "mutually exclusive" in result.stderr
+
+
+def test_quiet_json_mutex_exits_2(runner: CliRunner) -> None:
+    """Quiet and JSON request contradictory success-output contracts."""
+    result = runner.invoke(app, ["--quiet", "--format=json", "compare"])
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "mutually exclusive" in result.stderr
+
+
+def _leaf_paths(command: Command, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    """Return every registered leaf path below a Click command tree."""
+    if not isinstance(command, Group):
+        return {prefix}
+    return {
+        path
+        for name, child in command.commands.items()
+        for path in _leaf_paths(child, (*prefix, name))
+    }
+
+
+_ALL_LEAF_PATHS = _leaf_paths(get_command(app))
+_EXPECTED_SUPPORTED_OUTPUT_PATHS = frozenset(
+    {
+        ("compare",),
+        ("config", "show"),
+        ("inspect",),
+        ("profile", "show"),
+        ("stage",),
+        ("status",),
+        ("transitions", "list"),
+    }
+)
+_UNSUPPORTED_OUTPUT_PATHS = sorted(_ALL_LEAF_PATHS - _EXPECTED_SUPPORTED_OUTPUT_PATHS)
+
+
+def test_output_support_registry_matches_the_independent_cli_contract() -> None:
+    """The production registry exactly matches the documented command set."""
+    assert _SUPPORTED_OUTPUT_PATHS == _EXPECTED_SUPPORTED_OUTPUT_PATHS
+    assert _EXPECTED_SUPPORTED_OUTPUT_PATHS <= _ALL_LEAF_PATHS
+
+
+@pytest.mark.parametrize(
+    "command_path",
+    _UNSUPPORTED_OUTPUT_PATHS,
+    ids=lambda path: "-".join(path),
+)
+@pytest.mark.parametrize(
+    ("mode", "label"),
+    [(["--format=json"], "--format=json"), (["--quiet"], "--quiet")],
+)
+def test_modes_reject_every_unsupported_leaf_before_argument_parsing(
+    runner: CliRunner,
+    command_path: tuple[str, ...],
+    mode: list[str],
+    label: str,
+) -> None:
+    """Every unregistered leaf rejects output modes before required arguments."""
+    checks_root_reset = command_path == ("validate",) and mode == ["--format=json"]
+    checks_nested_reset = command_path == ("config", "add") and mode == [
+        "--format=json"
+    ]
+    if checks_root_reset:
+        binaries.set_cli_overrides(code="/stale/code")
+        source_mod.set_cli_source(Path("/stale/source"))
+        cli_mod._INVOCATION_FORMAT = OutputFormat.JSON
+    invocation_mode = mode
+    if checks_nested_reset:
+        invocation_mode = [
+            *mode,
+            "--code-bin=/nested/code",
+            "--source=/nested/source",
+        ]
+
+    result = runner.invoke(app, [*invocation_mode, *command_path])
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert f"{label} is not supported" in result.stderr
+    guarded_path = (
+        command_path
+        if any(path[:1] == command_path[:1] for path in _SUPPORTED_OUTPUT_PATHS)
+        else command_path[:1]
+    )
+    assert " ".join(guarded_path) in result.stderr
+    if checks_root_reset or checks_nested_reset:
+        assert binaries._cli_overrides == {}
+        assert source_mod._cli_source is None
+        assert cli_mod._INVOCATION_FORMAT is OutputFormat.HUMAN
+
+
+@pytest.mark.parametrize("mode", [["--format=json"], ["--quiet"]])
+@pytest.mark.parametrize(
+    ("argv", "label"),
+    [
+        (["stage", "some-file", "--profile=p"], "stage without --list"),
+        (["config", "show", "--tracked"], "config show without --effective"),
+    ],
+)
+def test_conditional_output_modes_reject_before_config_access(
+    runner: CliRunner, mode: list[str], argv: list[str], label: str
+) -> None:
+    """Conditional renderer paths reject before resolving their config input."""
+    checks_invocation_reset = mode == ["--format=json"] and argv[0] == "config"
+    root_args = mode
+    if checks_invocation_reset:
+        root_args = [
+            *mode,
+            "--code-bin=/conditional/code",
+            "--source=/conditional/source",
+        ]
+    result = runner.invoke(app, [*root_args, *argv])
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    if checks_invocation_reset:
+        assert binaries._cli_overrides == {}
+        assert source_mod._cli_source is None
+        assert cli_mod._INVOCATION_FORMAT is OutputFormat.HUMAN
+    assert label in result.stderr
+
+    if mode == ["--format=json"] and argv[0] == "stage":
+        parse_error = runner.invoke(
+            app,
+            ["--format=json", "--code-bin=/stage/code", "stage", "some-file"],
+        )
+        assert parse_error.exit_code == 2
+        assert "Missing option '--profile'" in parse_error.stderr
+        assert binaries._cli_overrides == {}
+        assert source_mod._cli_source is None
+        assert cli_mod._INVOCATION_FORMAT is OutputFormat.HUMAN
 
 
 def test_setforge_log_level_env_precedence(
@@ -523,7 +704,7 @@ def test_profile_show_json_envelope(runner: CliRunner, minimal_config: Path) -> 
 
 
 def test_json_no_ansi_on_stdout(runner: CliRunner, minimal_config: Path) -> None:
-    """All four JSON-emitting commands keep stdout free of ANSI escapes."""
+    """Representative JSON renderers keep stdout free of ANSI escapes."""
     invocations = [
         [
             "--format=json",

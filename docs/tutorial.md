@@ -692,9 +692,16 @@ $ setforge completion install zsh    # install shell completion (or bash / fish)
 - `--code-bin` / `--claude-bin` / `--gitleaks-bin` / `--patch-bin` — override a
   tool binary path.
 - `-v` / `-vv` — INFO / DEBUG logging (DEBUG redacts secrets).
-- `-q` / `--quiet` — suppress non-error output (cron/CI).
-- `-o` / `--format [human|json]` — human (default) or a versioned JSON envelope.
+- `-q` / `--quiet` — suppress success output on structured read-only commands;
+  errors remain on stderr.
+- `-o` / `--format [human|json]` — human (default) or a versioned JSON envelope
+  on those commands.
 - `--version` — print the version and exit.
+
+The structured read-only set is `compare`, `status`, `inspect`, `profile show`,
+`transitions list`, `stage --list`, and `config show --effective`. Other
+commands reject `--quiet` and `--format=json` before doing work, and the two
+non-default modes cannot be combined.
 
 ---
 

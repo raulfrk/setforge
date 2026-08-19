@@ -15,10 +15,17 @@ Apply to every command (`setforge [OPTIONS] COMMAND`):
   `local.yaml`).
 - `--code-bin` / `--claude-bin` / `--gitleaks-bin` / `--patch-bin` — override
   external binary paths.
-- `-v` / `--verbose` (`-v` → INFO, `-vv` → DEBUG with secret redaction);
-  `-q` / `--quiet` (errors only).
-- `-o` / `--format [human|json]` — `json` emits a versioned envelope.
+- `-v` / `--verbose` (`-v` → INFO, `-vv` → DEBUG with secret redaction).
+- `-q` / `--quiet` suppresses success output on the structured read-only
+  commands listed below; errors remain on stderr.
+- `-o` / `--format [human|json]` selects human output or a versioned JSON
+  envelope on those same commands.
 - `--version` — print the installed version and exit.
+
+Structured output is supported by `compare`, `status`, `inspect`, `profile
+show`, `transitions list`, `stage --list`, and `config show --effective`.
+Every other command rejects `--quiet` and `--format=json` before doing work.
+`--quiet` and `--format=json` are mutually exclusive.
 
 ## Daily workflow
 

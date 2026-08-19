@@ -11,8 +11,8 @@ Two test classes:
 - 6 non-PTY / non-interactive tests cover the deterministic paths:
   git-clean-check on the tracked side, validate-before-write contract,
   round-trip preservation, the non-TTY mutate-gate, the
-  ``config show --effective`` smoke test (regression guard against
-  the round-2 ``ctx_obj=None`` crash), and the inner
+  ``config show --effective`` human/JSON output contract (including
+  fail-closed mutation), and the inner
   ``_complete_value`` callback contract invoked through ``python -c``.
 
 - 10 PTY tests cover the interactive surfaces: scalar / list arrow-key
@@ -25,6 +25,7 @@ Two test classes:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -275,6 +276,45 @@ def test_config_show_effective_smoke_non_pty(
     assert result.returncode == 0, result.stdout + result.stderr
     # The profile-show body prints the resolved profile name.
     assert "base" in result.stdout
+
+    machine = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "--format=json",
+            "config",
+            "show",
+            "--effective",
+            "--profile=base",
+        ],
+        check=False,
+    )
+    assert machine.returncode == 0, machine.stdout + machine.stderr
+    envelope = json.loads(machine.stdout)
+    assert envelope["command"] == "profile show"
+    assert envelope["data"]["profile"] == "base"
+
+    before = c.read_text(_HOME_LOCAL_YAML)
+    rejected = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "--format=json",
+            "config",
+            "add",
+            "--local",
+            "binaries.code",
+            "/tmp/never-written",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert rejected.returncode == 2
+    assert rejected.stdout == ""
+    assert "--format=json is not supported for 'config add'" in rejected.stderr
+    assert c.read_text(_HOME_LOCAL_YAML) == before
 
 
 def test_config_add_non_tty_without_yes_raises_non_pty(

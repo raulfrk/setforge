@@ -129,3 +129,51 @@ def test_main_json_validation_error_envelope(
     assert envelope["errors"]
     assert any("SCHEMA VALIDATION ERROR" in e for e in envelope["errors"])
     assert code == 1
+
+
+def test_main_json_domain_error_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Supported JSON commands render caught domain errors as one envelope."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("version: 1\ntracked_files: {}\nprofiles: {}\n", encoding="utf-8")
+    code = _run_main(
+        [
+            "setforge",
+            "--format=json",
+            "compare",
+            "--profile=missing",
+            f"--config={cfg}",
+        ],
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+    assert "error:" not in captured.err
+    envelope = json.loads(captured.out)
+    assert envelope == {
+        "schema_version": 1,
+        "command": "error",
+        "data": None,
+        "errors": ["profile not found: missing"],
+    }
+    assert code == 1
+
+
+def test_main_human_domain_error_stays_on_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Extracting the JSON branch preserves the established human diagnostic."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("version: 1\ntracked_files: {}\nprofiles: {}\n", encoding="utf-8")
+    code = _run_main(
+        ["setforge", "compare", "--profile=missing", f"--config={cfg}"],
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error: profile not found: missing" in captured.err
+    assert code == 1

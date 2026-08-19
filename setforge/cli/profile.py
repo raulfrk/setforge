@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.table import Table
 
 from setforge import reconcile_adapter
-from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
+from setforge.cli import _CONFIG_OPTION, _require_output_path, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
 from setforge.cli._output import OutputContext, render
@@ -63,6 +63,13 @@ profile_app: typer.Typer = typer.Typer(
     rich_markup_mode=None,
 )
 app.add_typer(profile_app, name="profile")
+
+
+@profile_app.callback()
+def _profile_output_contract(ctx: typer.Context) -> None:
+    """Enforce the global output contract before a profile leaf runs."""
+    if ctx.invoked_subcommand is not None:
+        _require_output_path(ctx.obj, ("profile", ctx.invoked_subcommand))
 
 
 @profile_app.command("list", epilog=PROFILE_LIST_EXAMPLES)
