@@ -19,6 +19,8 @@ from typer.testing import CliRunner
 
 from setforge import base_store, transitions
 from setforge.cli import app
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import HunkClass, file_id
 from setforge.transitions import SnapshotStore
 
 _PROFILE = "test-snapshots"
@@ -153,3 +155,85 @@ def test_store_paths_absent_from_changes_patch(repo: Path) -> None:
 
     base_rel = str(base_store.base_path(_PROFILE, _FILE_ID)).lstrip("/")
     assert base_rel not in patch_text
+
+
+def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> None:
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    fid = file_id(_FILE_ID)
+    base = reconcile_store.read_base(_PROFILE, fid)
+    local = reconcile_store.read_local(_PROFILE, fid)
+    assert base is not None
+    assert isinstance(local, bytes)
+    anchor = "sha256:retired-draft"
+    draft = b"Shareable retired draft\n"
+    reconcile_store.record(
+        _PROFILE,
+        fid,
+        base=base,
+        local=local,
+        hunks=[
+            {
+                "cls": HunkClass.SHARED_DRAFTED.value,
+                "label": "## Notes",
+                "live_hash": "sha256:live",
+                "anchor": anchor,
+                "draft_hash": reconcile_store.content_sha(draft),
+            }
+        ],
+        drafts={anchor: draft},
+    )
+    paths = {
+        SnapshotStore.BASE: base_store.base_path(_PROFILE, _FILE_ID),
+        SnapshotStore.LOCAL_CONTENT: reconcile_store.local_content_path(
+            _PROFILE, _FILE_ID
+        ),
+        SnapshotStore.LOCAL_ABSENT: reconcile_store.local_absent_path(
+            _PROFILE, _FILE_ID
+        ),
+        SnapshotStore.DRAFTS: reconcile_store.drafts_manifest_path(_PROFILE, _FILE_ID),
+        SnapshotStore.INDEX: reconcile_store.index_manifest_path(_PROFILE),
+    }
+    before = {
+        kind: path.read_bytes() if path.exists() else None
+        for kind, path in paths.items()
+    }
+
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "    tracked_files:\n      - doc\n", "    tracked_files: []\n"
+        ),
+        encoding="utf-8",
+    )
+    retired = _install(config)
+    assert retired.exit_code == 0, retired.output
+
+    assert reconcile_store.stored_file_ids(_PROFILE) == set()
+    assert reconcile_store.read_index(_PROFILE).files == {}
+    snapshots = _latest_snapshots()
+    assert {(entry.store, entry.key) for entry in snapshots} == {
+        (SnapshotStore.BASE, _FILE_ID),
+        (SnapshotStore.LOCAL_CONTENT, _FILE_ID),
+        (SnapshotStore.LOCAL_ABSENT, _FILE_ID),
+        (SnapshotStore.DRAFTS, _FILE_ID),
+        (SnapshotStore.INDEX, _PROFILE),
+    }
+    assert {entry.store: entry.payload for entry in snapshots} == before
+
+    reverted = CliRunner().invoke(
+        app,
+        [
+            "revert",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--yes",
+        ],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert {
+        kind: path.read_bytes() if path.exists() else None
+        for kind, path in paths.items()
+    } == before
+    reconcile_store.verify(_PROFILE)

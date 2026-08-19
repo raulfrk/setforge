@@ -32,18 +32,17 @@ from typing import Final, assert_never
 import typer
 
 from setforge import (
-    base_store,
+    claude_plugins as claude_plugins_mod,
+)
+from setforge import (
+    compare as compare_mod,
+)
+from setforge import (
     deploy,
     reconcile,
     reconcile_adapter,
     reconcile_apply,
     transitions,
-)
-from setforge import (
-    claude_plugins as claude_plugins_mod,
-)
-from setforge import (
-    compare as compare_mod,
 )
 from setforge import (
     vscode_extensions as vscode_extensions_mod,
@@ -83,6 +82,7 @@ from setforge.errors import (
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.provision.dispatch import ProvisioningPlan
 from setforge.reconcile import FileId
+from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
@@ -655,49 +655,42 @@ def _capture_store_snapshots(
 ) -> tuple[transitions.StateSnapshotEntry, ...]:
     """Snapshot the pre-install state of every store entry pass 2 can touch.
 
-    The ONE barrier feeding the transition's ``state_snapshots/`` payload:
-    for each regular-file record, a disposition declaration snapshots the
-    byte base AND the scalar-base manifest (the scalar store has no
-    install-path writer yet, but capturing it here means a future writer
-    is covered without a snapshot-schema change), and a span declaration
-    snapshots the spans sidecar manifest. Symlink records are skipped —
-    their deploy primitive never touches the stores. Absent entries
-    capture as ``payload=None`` so revert DELETES what this install
-    seeds. Must run at pass-2 entry, before ANY write (pass 1 is
-    read-only, so nothing can drift between the barrier and the writes).
+    The ONE barrier feeding the transition's ``state_snapshots/`` payload.
+    It covers both identities the frozen plan will write and stored identities
+    the plan has retired and will prune. Every identity snapshots base plus all
+    local/draft legs; the shared profile index is captured once, last. Absent
+    entries use ``payload=None`` so restore deletes newly seeded state. Must run
+    before any pass-2 write or prune.
     """
     entries: list[transitions.StateSnapshotEntry] = []
-    for record in pending:
-        tracked_file = record.tracked_file
-        if tracked_file.symlink is not None:
-            continue
-        # A reconcile file records its merge base in the base_store
-        # (SnapshotStore.BASE) — snapshot it so revert restores the pre-install
-        # base. Without this, a revert undoes the live file but leaves the base
-        # advanced, and the next install would treat the reverted-away file as a
-        # deliberate deletion (theirs == base) instead of re-deploying it.
-        if record.reconcile is not None:
-            # A reconcile file's install advances base AND local + index
-            # (reconcile.record), so revert must restore all of them. BASE +
-            # the local/drafts legs here; the per-profile INDEX once, below.
-            entries.append(
-                transitions.snapshot_store_state(
-                    transitions.SnapshotStore.BASE, profile, record.sub_name
-                )
+    keep_ids = _reconcile_keep_ids(pending)
+    touched_ids = reconcile_store.stored_file_ids(profile) | keep_ids
+    for fid in sorted(touched_ids, key=str):
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.BASE, profile, str(fid)
             )
-            entries.extend(
-                transitions.reconcile_file_snapshots(profile, record.sub_name)
-            )
+        )
+        entries.extend(transitions.reconcile_file_snapshots(profile, str(fid)))
     # The reconcile index is one doc per profile — snapshot it ONCE, LAST (so a
     # torn restore leaves a prunable orphan, never an index pointing at unwritten
     # local/draft bytes — parity with reconcile.record's index-last ordering).
-    if any(record.reconcile is not None for record in pending):
+    if touched_ids:
         entries.append(
             transitions.snapshot_store_state(
                 transitions.SnapshotStore.INDEX, profile, profile
             )
         )
     return tuple(entries)
+
+
+def _reconcile_keep_ids(pending: tuple[_PendingDeploy, ...]) -> set[FileId]:
+    """Return the identities this frozen install plan still manages."""
+    return {
+        reconcile.file_id(record.sub_name)
+        for record in pending
+        if record.reconcile is not None
+    }
 
 
 @dataclass(slots=True, frozen=True)
@@ -753,11 +746,7 @@ def _execute_pending_deploys(
     prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
     store_mutated = False
-    # Files whose byte base must SURVIVE the end-of-run prune: disposition
-    # files AND plain files routed through the reconcile engine (both persist
-    # a base in the shared base_store, keyed by file_id). A plain file absent
-    # from this set would have its reconcile base pruned every run.
-    base_keep_ids: set[str] = set()
+    keep_ids = _reconcile_keep_ids(pending)
     for record in pending:
         tracked_file = record.tracked_file
         if tracked_file.symlink is not None:
@@ -778,7 +767,6 @@ def _execute_pending_deploys(
             and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
         ):
             _honor_reconcile_removal(record)
-            base_keep_ids.add(record.sub_name)
             store_mutated |= _advance_reconcile_store(profile, record)
             continue
         if (
@@ -787,7 +775,6 @@ def _execute_pending_deploys(
             and not record.resolved.dst_existed
         ):
             typer.echo(f"{deploy.DeployAction.NOOP.value:>8}  {record.sub_dst}")
-            base_keep_ids.add(record.sub_name)
             continue
         result = deploy.write_resolved_deploy(record.resolved)
         if result.prior_mode is not None:
@@ -801,16 +788,14 @@ def _execute_pending_deploys(
         # lockstep, same safe-failure-direction reasoning as the disposition
         # byte base below): a base that lags live re-merges safely next run.
         if record.reconcile is not None:
-            base_keep_ids.add(record.sub_name)
             store_mutated |= _advance_reconcile_store(profile, record)
             if record.reconcile[1].kind is reconcile_apply.ReconcileKind.DEFERRED:
                 deferred_reconcile.append(record.sub_dst)
-    # PRUNE after the whole loop: bases whose file_id is not in this run's
-    # keep-set (a file left the profile, lost its disposition, or stopped
-    # being a reconcile-eligible plain file) are removed. The keep-set spans
-    # disposition + plain-reconcile files, so an engine-routed plain file's
-    # base survives instead of being pruned every run.
-    if _prune_bases_removed_any(profile, base_keep_ids):
+    # PRUNE after the whole loop: every base/local/draft/index identity absent
+    # from the frozen reconcile plan is retired. The pre-write snapshot barrier
+    # captured these identities, so both operation recovery and revert restore
+    # the deletion byte-exactly.
+    if reconcile_store.prune(profile, keep_ids):
         store_mutated = True
     return DeployOutcome(
         state_snapshots=state_snapshots,
@@ -831,13 +816,6 @@ def _deploy_pending_symlink(record: _PendingDeploy) -> deploy.DeployResult:
         source_content=record.symlink_content,
         source_mode=record.symlink_mode,
     )
-
-
-def _prune_bases_removed_any(profile: str, base_keep_ids: set[str]) -> bool:
-    """Prune outside ``base_keep_ids``; read ids first so a real drop is known."""
-    before = base_store.list_base_ids(profile)
-    base_store.prune(profile, base_keep_ids)
-    return bool(before - base_keep_ids)
 
 
 def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:

@@ -449,7 +449,7 @@ def test_prune_removes_unlisted_keeps_listed(tmp_state: Path) -> None:
     keep, drop = file_id("keep"), file_id("drop")
     _record_locked("p", keep, base=b"B1", local=b"L1")
     _record_locked("p", drop, base=b"B2", local=b"L2")
-    store.prune("p", {keep})
+    assert store.prune("p", {keep}) is True
     assert store.read_local("p", keep) == b"L1"
     assert store.read_local("p", drop) is None
     assert "drop" not in store.read_index("p").files
@@ -467,3 +467,57 @@ def test_prune_removes_absence_marker(tmp_state: Path) -> None:
     assert store.read_local("p", drop) is None  # marker gone
     assert "gone" not in store.read_index("p").files
     store.verify("p")  # store stays consistent after prune
+
+
+def test_stored_file_ids_unions_every_store_leg(tmp_state: Path) -> None:
+    from setforge.reconcile.index_model import FileEntry, Index
+
+    store.write_base("p", file_id("base-only"), b"B")
+    store.write_local("p", file_id("local-only"), b"L")
+    store.write_local("p", file_id("absent-only"), ABSENT)
+    store.write_drafts("p", file_id("draft-only"), {"anchor": b"D"})
+    store.write_index(
+        "p",
+        Index(
+            files={"index-only": FileEntry(present=False, local_hash=None, hunks=[])}
+        ),
+    )
+
+    assert store.stored_file_ids("p") == {
+        file_id("base-only"),
+        file_id("local-only"),
+        file_id("absent-only"),
+        file_id("draft-only"),
+        file_id("index-only"),
+    }
+
+
+def test_prune_removes_index_before_payloads(
+    tmp_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drop = file_id("drop")
+    _record_locked("p", drop, base=b"B", local=b"L")
+    real_unlink = Path.unlink
+    observed_index_files: list[set[str]] = []
+
+    def inspect_then_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path in {
+            store.local_content_path("p", "drop"),
+            store.local_absent_path("p", "drop"),
+            store.drafts_manifest_path("p", "drop"),
+        }:
+            observed_index_files.append(set(store.read_index("p").files))
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", inspect_then_unlink)
+
+    assert store.prune("p", set()) is True
+    assert observed_index_files
+    assert all("drop" not in files for files in observed_index_files)
+
+
+def test_prune_noop_reports_unchanged(tmp_state: Path) -> None:
+    keep = file_id("keep")
+    _record_locked("p", keep, base=b"B", local=b"L")
+
+    assert store.prune("p", {keep}) is False

@@ -258,6 +258,7 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
         install.install,
         lock.lock,
         sync.capture,
+        sync.sync,
         migrate.migrate,
         snapshot.snapshot_create,
         snapshot.snapshot_restore,

@@ -66,6 +66,7 @@ __all__ = [
     "read_local",
     "reconstruct",
     "record",
+    "stored_file_ids",
     "verify",
     "write_base",
     "write_drafts",
@@ -498,6 +499,20 @@ def _on_disk_file_ids(profile: str) -> set[FileId]:
     return found
 
 
+def stored_file_ids(profile: str) -> set[FileId]:
+    """Return every identity represented by any reconcile-store leg.
+
+    The union deliberately includes incomplete records left by an interrupted
+    index-last write. Callers planning a reversible prune must snapshot those
+    orphans too, rather than deriving retirement solely from the index.
+    """
+    return {
+        *(file_id(key) for key in base_store.list_base_ids(profile)),
+        *(file_id(key) for key in read_index(profile).files),
+        *_on_disk_file_ids(profile),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # record (index-last) + prune (lock-scoped)
 # --------------------------------------------------------------------------- #
@@ -541,26 +556,28 @@ def record(
     write_index(profile, Index(files=files))
 
 
-def prune(profile: str, live_fids: set[FileId]) -> None:
+def prune(profile: str, live_fids: set[FileId]) -> bool:
     """Drop stored base/local/index records not in ``live_fids``. Call inside
-    ``profile_lock``. Never removes a listed file-id.
+    ``profile_lock``. Never removes a listed file-id. Return whether any stored
+    identity was retired.
+
+    The index is contracted before payloads are removed. If deletion is
+    interrupted, verification therefore sees prunable orphan payloads rather
+    than an index entry pointing at missing local or draft content.
     """
     live_str = {str(f) for f in live_fids}
-    # local content + absence-marker trees + drafts manifests
-    for root in (
-        _local_root() / profile,
-        _local_absent_root() / profile,
-        _drafts_root() / profile,
-    ):
-        if not root.is_dir():
-            continue
-        for path in root.rglob("*"):
-            if path.is_file() and path.relative_to(root).as_posix() not in live_str:
-                path.unlink(missing_ok=True)
-    # base store (reuse its own prune)
-    base_store.prune(profile, live_str)
-    # index document
+    retired = stored_file_ids(profile) - live_fids
+    if not retired:
+        return False
+
     index = read_index(profile)
     kept = {fid: entry for fid, entry in index.files.items() if fid in live_str}
     if kept != index.files:
         write_index(profile, Index(files=kept))
+
+    for fid in sorted(retired, key=str):
+        local_content_path(profile, str(fid)).unlink(missing_ok=True)
+        local_absent_path(profile, str(fid)).unlink(missing_ok=True)
+        drafts_manifest_path(profile, str(fid)).unlink(missing_ok=True)
+    base_store.prune(profile, live_str)
+    return True

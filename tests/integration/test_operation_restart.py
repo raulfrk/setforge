@@ -104,6 +104,125 @@ main()
     assert not tuple((home / ".cache/setforge/operations").glob("*.json"))
 
 
+def test_retired_store_prune_recovers_after_uncatchable_process_exit(
+    tmp_path: Path,
+) -> None:
+    """A new process restores retired reconcile state after prune publishes."""
+    repo_root = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "doc.txt").write_text("tracked\n", encoding="utf-8")
+    live = home / "live" / "doc.txt"
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.0'\n"
+        "version: 1\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    src: doc.txt\n"
+        f"    dst: {live}\n"
+        "profiles:\n"
+        "  restart-prune:\n"
+        "    tracked_files: [doc]\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "SETFORGE_STATE_DIR": str(state),
+        "SETFORGE_EXPECTED_ROOT": str(repo_root),
+    }
+    install_args = [
+        sys.executable,
+        "-m",
+        "setforge.cli",
+        "install",
+        "--profile=restart-prune",
+        f"--config={config}",
+        "--no-fetch",
+        "--no-git-check",
+        "--no-secrets-scan",
+        "--no-transition",
+        "--yes",
+    ]
+    seeded = subprocess.run(
+        install_args,
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert seeded.returncode == 0, (seeded.stdout, seeded.stderr)
+    store_paths = (
+        state / "base" / "restart-prune" / "doc",
+        state / "local" / "restart-prune" / "doc",
+        state / "index" / "restart-prune.json",
+    )
+    before = tuple(path.read_bytes() for path in store_paths)
+
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "    tracked_files: [doc]\n", "    tracked_files: []\n"
+        ),
+        encoding="utf-8",
+    )
+    crash_after_prune = """
+import os
+from pathlib import Path
+import setforge
+from setforge.cli import main
+from setforge.reconcile import store
+
+expected = Path(os.environ["SETFORGE_EXPECTED_ROOT"])
+assert Path(setforge.__file__).resolve().is_relative_to(expected)
+real_prune = store.prune
+
+def crash(profile, live_fids):
+    changed = real_prune(profile, live_fids)
+    assert changed
+    os._exit(79)
+
+store.prune = crash
+main()
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_after_prune, *install_args[3:]],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert crashed.returncode == 79, (crashed.stdout, crashed.stderr)
+    assert not store_paths[0].exists()
+    assert not store_paths[1].exists()
+    assert tuple((home / ".cache/setforge/operations").glob("*.json"))
+
+    recovery = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "setforge.cli",
+            "recover",
+            "--profile=restart-prune",
+            "--apply",
+            "--yes",
+        ],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert recovery.returncode == 0, (recovery.stdout, recovery.stderr)
+    assert tuple(path.read_bytes() for path in store_paths) == before
+    assert not tuple((home / ".cache/setforge/operations").glob("*.json"))
+
+
 def test_snapshot_restore_recovers_after_uncatchable_process_exit(
     tmp_path: Path,
 ) -> None:
