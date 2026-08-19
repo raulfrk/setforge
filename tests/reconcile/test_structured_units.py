@@ -331,6 +331,27 @@ def test_classify_value_edit_keeps_class_but_flags_changed() -> None:
 
     assert out[0].cls is HunkClass.SHARED
     assert out[0].changed is True
+    assert out[0].confirmed_hash == "sha256:v16"
+    assert serialize_structured(out)[0]["value_hash"] == "sha256:v16"
+
+
+def test_classify_serialize_changed_shared_stays_changed_on_second_run() -> None:
+    stored = [_row("shared", "fontSize", "sha256:v16")]
+    second = classify_structured(
+        [KeyUnit(HunkClass.PENDING, "fontSize", "fontSize", "sha256:v18")],
+        stored,
+    )
+    assert second[0].changed is True
+
+    persisted_again = serialize_structured(second)
+    third = classify_structured(
+        [KeyUnit(HunkClass.PENDING, "fontSize", "fontSize", "sha256:v18")],
+        persisted_again,
+    )
+
+    assert third[0].cls is HunkClass.SHARED
+    assert third[0].changed is True
+    assert persisted_again[0]["value_hash"] == "sha256:v16"
 
 
 def test_classify_unmatched_path_stays_pending() -> None:

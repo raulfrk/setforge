@@ -215,6 +215,23 @@ def test_classify_anchor_stable_but_changed_keeps_class_flagged() -> None:
     wd = _by_label(fresh2)["## Host paths"]
     assert wd.cls is HunkClass.SHARED  # class survives the value edit
     assert wd.changed is True  # but it's flagged for re-confirm, not silently reset
+    assert wd.confirmed_hash == fresh1.live_hash
+    (row,) = serialize([wd])
+    assert row["live_hash"] == fresh1.live_hash
+
+
+def test_classify_serialize_changed_shared_stays_changed_on_second_run() -> None:
+    first = extract_hunks(b"old\n", b"shared once\n")[0]
+    stored = serialize([replace(first, cls=HunkClass.SHARED)])
+    second = classify(extract_hunks(b"old\n", b"edited later\n"), stored)
+    assert second[0].changed is True
+
+    persisted_again = serialize(second)
+    third = classify(extract_hunks(b"old\n", b"edited later\n"), persisted_again)
+
+    assert third[0].cls is HunkClass.SHARED
+    assert third[0].changed is True
+    assert persisted_again[0]["live_hash"] == first.live_hash
 
 
 # --------------------------------------------------------------------------- #

@@ -92,8 +92,11 @@ class KeyUnit:
     the staging classification; ``label`` is the human handle (the path itself);
     ``value_hash`` is the sha256 of ``repr()`` of the live leaf value (see
     :func:`extract_structured_units`, which hashes ``repr(live_value)``),
-    consulted to flag a value edit since the unit was classified. ``draft_hash``
-    is set only for a ``SHARED_DRAFTED`` unit.
+    consulted to flag a value edit since the unit was classified.
+    ``confirmed_hash`` transiently carries the persisted last-confirmed
+    ``value_hash`` while ``value_hash`` describes the current live value;
+    serialization preserves the former until an explicit stage decision replaces
+    it. ``draft_hash`` is set only for a ``SHARED_DRAFTED`` unit.
     """
 
     cls: HunkClass
@@ -101,6 +104,7 @@ class KeyUnit:
     path: str
     value_hash: str
     changed: bool = False
+    confirmed_hash: str | None = None
     draft_hash: str | None = None
 
     @property
@@ -264,7 +268,9 @@ def extract_structured_units(
 def serialize_structured(units: list[KeyUnit]) -> list[dict[str, object]]:
     """Project key-units to their persisted index rows (``kind:"key"``).
 
-    A key-unit row carries ``path`` + ``value_hash`` (its identity) where a line
+    A matched key-unit preserves its transient ``confirmed_hash`` as the
+    persisted ``value_hash`` until an explicit stage decision confirms the
+    current value. A key-unit row carries ``path`` + ``value_hash`` where a line
     row carries ``anchor`` + ``live_hash``; the ``kind`` discriminator lets the
     fail-closed codec validate each shape. A ``SHARED_DRAFTED`` unit additionally
     carries its ``draft_hash`` (the draft *bytes* live in the ``drafts/`` store).
@@ -276,7 +282,11 @@ def serialize_structured(units: list[KeyUnit]) -> list[dict[str, object]]:
             "cls": unit.cls.value,
             "label": unit.label,
             "path": unit.path,
-            "value_hash": unit.value_hash,
+            "value_hash": (
+                unit.confirmed_hash
+                if unit.confirmed_hash is not None
+                else unit.value_hash
+            ),
         }
         if unit.cls is HunkClass.SHARED_DRAFTED and unit.draft_hash is not None:
             row["draft_hash"] = unit.draft_hash
@@ -337,6 +347,7 @@ def classify_structured(
                     unit,
                     cls=HunkClass.SHARED_DRAFTED,
                     changed=False,
+                    confirmed_hash=str(drafted["value_hash"]),
                     draft_hash=_row_draft_hash(drafted),
                 )
             )
@@ -348,6 +359,7 @@ def classify_structured(
                     unit,
                     cls=HunkClass(str(exact["cls"])),
                     changed=False,
+                    confirmed_hash=str(exact["value_hash"]),
                     draft_hash=_row_draft_hash(exact),
                 )
             )
@@ -359,6 +371,7 @@ def classify_structured(
                     unit,
                     cls=HunkClass(str(moved["cls"])),
                     changed=True,
+                    confirmed_hash=str(moved["value_hash"]),
                     draft_hash=_row_draft_hash(moved),
                 )
             )

@@ -147,6 +147,98 @@ def test_walk_structured_shared_records_shared(
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
 
 
+def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_structured_stages(cfg, resolved, repo, profile)
+    _apply_structured(
+        profile,
+        first,
+        walk_structured(first.units, lambda u, i, t: Decision(HunkClass.SHARED)),
+    )
+    old_hash = store.read_index(profile).files["settings.yaml"].hunks[0]["value_hash"]
+    first.dst.write_bytes(b"theme: dark\nfontSize: 18\n")
+    (changed,) = collect_structured_stages(cfg, resolved, repo, profile)
+    assert changed.units[0].changed is True
+
+    skipped = walk_structured(changed.units, lambda u, i, t: None)
+    assert skipped.decided_refs == set()
+    _apply_structured(profile, changed, skipped)
+    (still_changed,) = collect_structured_stages(cfg, resolved, repo, profile)
+    assert still_changed.units[0].changed is True
+    assert (
+        store.read_index(profile).files["settings.yaml"].hunks[0]["value_hash"]
+        == old_hash
+    )
+
+    reconfirmed = walk_structured(
+        still_changed.units, lambda u, i, t: Decision(HunkClass.SHARED)
+    )
+    assert reconfirmed.decided_refs == {UnitRef.key("fontSize")}
+    _apply_structured(profile, still_changed, reconfirmed)
+    (after,) = collect_structured_stages(cfg, resolved, repo, profile)
+    assert after.units[0].changed is False
+    assert after.units[0].confirmed_hash == after.units[0].value_hash
+
+
+def test_structured_prompt_to_lock_live_race_refuses_stale_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    (stage,) = collect_structured_stages(
+        cfg, resolve_profile(cfg, profile), repo, profile
+    )
+    result = walk_structured(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
+    stage.dst.write_bytes(b"theme: dark\nfontSize: 18\n")
+
+    with pytest.raises(InvariantViolation, match="changed after it was shown"):
+        _apply_structured(profile, stage, result)
+
+    entry = store.read_index(profile).files["settings.yaml"]
+    assert entry.staged is False
+    assert entry.hunks == []
+
+
+def test_structured_apply_refuses_stale_recorded_base_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import locking
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    (stage,) = collect_structured_stages(
+        cfg, resolve_profile(cfg, profile), repo, profile
+    )
+    result = walk_structured(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
+    newer_base = b"theme: light\nfontSize: 14\n"
+    with locking.profile_lock(profile):
+        store.record(
+            profile,
+            file_id("settings.yaml"),
+            base=newer_base,
+            local=stage.live,
+        )
+    before_live = stage.dst.read_bytes()
+    before_index = store._index_path(profile).read_bytes()
+    drafts_path = store._drafts_path(profile, file_id("settings.yaml"))
+    assert not drafts_path.exists()
+
+    with pytest.raises(InvariantViolation, match=r"recorded base.*changed"):
+        _apply_structured(profile, stage, result)
+
+    assert stage.dst.read_bytes() == before_live
+    assert store.read_base(profile, file_id("settings.yaml")) == newer_base
+    assert store.read_local(profile, file_id("settings.yaml")) == stage.live
+    assert store._index_path(profile).read_bytes() == before_index
+    assert not drafts_path.exists()
+
+
 def test_walk_structured_draft_uses_typed_key_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

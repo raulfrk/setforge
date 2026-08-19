@@ -50,7 +50,10 @@ class Hunk:
     set **only** for a ``SHARED_DRAFTED`` hunk (the draft bytes themselves live in
     the ``drafts/`` store, never here — the index stays pure metadata); it is the
     draft's content identity, consulted by :func:`serialize` / ``store.verify``.
-    (A blessed ``live != tracked`` divergence avoids re-flagging because
+    ``confirmed_hash`` transiently carries the persisted last-confirmed
+    ``live_hash`` while ``live_hash`` itself describes the current live bytes;
+    serialization preserves the former until an explicit stage decision replaces
+    it. (A blessed ``live != tracked`` divergence avoids re-flagging because
     :func:`classify` matches a drafted hunk by ``unit_id`` with ``changed=False``,
     not via ``draft_hash``.) ``changed`` is a transient display flag: an
     unit-stable hunk whose live bytes changed since it was classified (keeps its
@@ -69,6 +72,7 @@ class Hunk:
     base_span: tuple[int, int]
     live_span: tuple[int, int]
     changed: bool = False
+    confirmed_hash: str | None = None
     draft_hash: str | None = None
     reloc_anchor: str | None = None
     legacy_anchor: str | None = None
@@ -281,6 +285,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                     changed=False
                     if drafted
                     else str(row["live_hash"]) != hunk.live_hash,
+                    confirmed_hash=str(row["live_hash"]),
                     draft_hash=_row_draft_hash(row),
                     reloc_anchor=_row_reloc_anchor(row),
                     legacy_unit_id=None,
@@ -305,6 +310,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                     hunk,
                     cls=HunkClass(str(row["cls"])),
                     changed=not (drafted or str(row["live_hash"]) == hunk.live_hash),
+                    confirmed_hash=str(row["live_hash"]),
                     draft_hash=_row_draft_hash(row),
                     reloc_anchor=_row_reloc_anchor(row),
                     legacy_unit_id=(
@@ -338,6 +344,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                         hunk,
                         cls=HunkClass(str(reloc_row["cls"])),
                         changed=True,
+                        confirmed_hash=str(reloc_row["live_hash"]),
                         draft_hash=_row_draft_hash(reloc_row),
                         reloc_anchor=_row_reloc_anchor(reloc_row),
                         legacy_unit_id=None,
@@ -365,6 +372,7 @@ def _with(
     *,
     cls: HunkClass,
     changed: bool,
+    confirmed_hash: str,
     draft_hash: str | None,
     reloc_anchor: str | None,
     legacy_unit_id: str | None,
@@ -380,6 +388,7 @@ def _with(
         base_span=hunk.base_span,
         live_span=hunk.live_span,
         changed=changed,
+        confirmed_hash=confirmed_hash,
         draft_hash=draft_hash,
         reloc_anchor=reloc_anchor,
         legacy_anchor=hunk.legacy_anchor,
@@ -495,7 +504,9 @@ def assert_stage_fidelity(
 def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
     """Project hunks to their persisted index rows (class + identity, no spans).
 
-    A ``SHARED_DRAFTED`` hunk additionally carries its ``draft_hash`` — the
+    A matched hunk preserves its transient ``confirmed_hash`` as the persisted
+    ``live_hash`` until an explicit stage decision confirms current bytes. A
+    ``SHARED_DRAFTED`` hunk additionally carries its ``draft_hash`` — the
     identity of its shareable draft (the draft *bytes* live in the ``drafts/``
     store, never the index). Other classes omit the key so existing rows stay
     byte-stable.
@@ -515,7 +526,11 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
         row: dict[str, object] = {
             "cls": hunk.cls.value,
             "label": hunk.label,
-            "live_hash": hunk.live_hash,
+            "live_hash": (
+                hunk.confirmed_hash
+                if hunk.confirmed_hash is not None
+                else hunk.live_hash
+            ),
             "kind": "line",
             "unit_id": hunk.unit_id,
         }

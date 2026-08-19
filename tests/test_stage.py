@@ -157,6 +157,7 @@ def test_walk_applies_choices_and_quits(
 
     assert result.hunks[0].cls is HunkClass.SHARED
     assert result.hunks[1].cls is HunkClass.PENDING  # untouched (quit before it)
+    assert result.decided_refs == {result.hunks[0].ref}
 
 
 def test_walk_skip_leaves_class_unchanged(
@@ -167,6 +168,259 @@ def test_walk_skip_leaves_class_unchanged(
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     result = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
     assert all(h.cls is HunkClass.PENDING for h in result.hunks)
+    assert result.decided_refs == set()
+
+
+def test_same_class_reconfirm_refreshes_plain_confirmed_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_stages(cfg, resolved, repo, profile)
+    _apply(
+        profile,
+        first,
+        walk(
+            first.hunks,
+            lambda h, i, n: (
+                Decision(HunkClass.SHARED) if h.label == "## Shell" else None
+            ),
+        ),
+    )
+    old_hash = next(
+        row["live_hash"]
+        for row in store.read_index(profile).files["CLAUDE.md"].hunks
+        if row["label"] == "## Shell"
+    )
+    first.dst.write_bytes(_LIVE.replace(b"Prefer zsh.", b"Prefer fish."))
+    (changed,) = collect_stages(cfg, resolved, repo, profile)
+    shell = next(h for h in changed.hunks if h.label == "## Shell")
+    assert shell.changed is True
+    result = walk(
+        changed.hunks,
+        lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
+    )
+    assert shell.ref in result.decided_refs
+
+    _apply(profile, changed, result)
+
+    (confirmed,) = collect_stages(cfg, resolved, repo, profile)
+    shell_after = next(h for h in confirmed.hunks if h.label == "## Shell")
+    assert shell_after.changed is False
+    assert shell_after.live_hash != old_hash
+    assert shell_after.confirmed_hash == shell_after.live_hash
+
+
+@pytest.mark.parametrize("choice", [None, QUIT], ids=["skip", "quit"])
+def test_skip_or_quit_does_not_refresh_plain_confirmed_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    choice: None | _Quit,
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_stages(cfg, resolved, repo, profile)
+    _apply(
+        profile,
+        first,
+        walk(first.hunks, lambda h, i, n: Decision(HunkClass.SHARED)),
+    )
+    stored_before = {
+        str(row["unit_id"]): row["live_hash"]
+        for row in store.read_index(profile).files["CLAUDE.md"].hunks
+    }
+    first.dst.write_bytes(
+        _LIVE.replace(b"Prefer zsh.", b"Prefer fish.").replace(
+            b"/home/raul", b"/home/elsewhere"
+        )
+    )
+    (changed,) = collect_stages(cfg, resolved, repo, profile)
+    result = walk(changed.hunks, lambda h, i, n: choice)
+    assert result.decided_refs == set()
+
+    _apply(profile, changed, result)
+
+    (again,) = collect_stages(cfg, resolved, repo, profile)
+    assert all(h.changed for h in again.hunks)
+    assert {
+        str(row["unit_id"]): row["live_hash"]
+        for row in store.read_index(profile).files["CLAUDE.md"].hunks
+    } == stored_before
+
+
+def test_deciding_other_plain_unit_does_not_refresh_changed_shared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_stages(cfg, resolved, repo, profile)
+    _apply(
+        profile,
+        first,
+        walk(first.hunks, lambda h, i, n: Decision(HunkClass.SHARED)),
+    )
+    first.dst.write_bytes(
+        _LIVE.replace(b"Prefer zsh.", b"Prefer fish.").replace(
+            b"/home/raul", b"/home/elsewhere"
+        )
+    )
+    (changed,) = collect_stages(cfg, resolved, repo, profile)
+    _apply(
+        profile,
+        changed,
+        walk(
+            changed.hunks,
+            lambda h, i, n: (
+                Decision(HunkClass.SHARED) if h.label == "## Shell" else None
+            ),
+        ),
+    )
+
+    (again,) = collect_stages(cfg, resolved, repo, profile)
+    by_label = {h.label: h for h in again.hunks}
+    assert by_label["## Shell"].changed is False
+    assert by_label["## Host paths"].changed is True
+
+
+def test_plain_prompt_to_lock_live_race_refuses_stale_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
+    )
+    stage.dst.write_bytes(_LIVE.replace(b"Prefer zsh.", b"Prefer fish."))
+
+    with pytest.raises(InvariantViolation, match="changed after it was shown"):
+        _apply(profile, stage, result)
+
+    entry = store.read_index(profile).files["CLAUDE.md"]
+    assert entry.staged is False
+    assert entry.hunks == []
+
+
+def test_plain_adopt_refuses_stale_recorded_base_before_live_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import locking
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    newer_base = _BASE.replace(b"Use rg not grep.", b"Use fd too.")
+    with locking.profile_lock(profile):
+        store.record(
+            profile,
+            file_id("CLAUDE.md"),
+            base=newer_base,
+            local=_LIVE,
+        )
+    before_live = stage.dst.read_bytes()
+    before_index = store._index_path(profile).read_bytes()
+    drafts_path = store._drafts_path(profile, file_id("CLAUDE.md"))
+    assert not drafts_path.exists()
+
+    with pytest.raises(InvariantViolation, match=r"recorded base.*changed"):
+        _apply(profile, stage, result)
+
+    assert stage.dst.read_bytes() == before_live
+    assert store.read_base(profile, file_id("CLAUDE.md")) == newer_base
+    assert store.read_local(profile, file_id("CLAUDE.md")) == _LIVE
+    assert store._index_path(profile).read_bytes() == before_index
+    assert not drafts_path.exists()
+
+
+def test_adopt_corrupt_index_fails_before_live_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+    from setforge.errors import CorruptIndexError
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    index_path = store._index_path(profile)
+    index_path.write_text("{corrupt", encoding="utf-8")
+    before_live = stage.dst.read_bytes()
+    before_base = store.read_base(profile, file_id("CLAUDE.md"))
+    drafts_path = store._drafts_path(profile, file_id("CLAUDE.md"))
+    assert not drafts_path.exists()
+
+    with pytest.raises(CorruptIndexError):
+        _apply(profile, stage, result)
+
+    assert stage.dst.read_bytes() == before_live
+    assert store.read_base(profile, file_id("CLAUDE.md")) == before_base
+    assert store.read_local(profile, file_id("CLAUDE.md")) == _LIVE
+    assert index_path.read_text(encoding="utf-8") == "{corrupt"
+    assert not drafts_path.exists()
+
+
+def test_adopt_corrupt_drafts_fails_before_live_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli.stage import Decision, _apply
+    from setforge.errors import ReconcileStoreError
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    drafts_path = store._drafts_path(profile, file_id("CLAUDE.md"))
+    drafts_path.parent.mkdir(parents=True, exist_ok=True)
+    drafts_path.write_text("{corrupt", encoding="utf-8")
+    before_live = stage.dst.read_bytes()
+    before_base = store.read_base(profile, file_id("CLAUDE.md"))
+    before_index = store._index_path(profile).read_bytes()
+
+    with pytest.raises(ReconcileStoreError, match=r"drafts manifest.*corrupt"):
+        _apply(profile, stage, result)
+
+    assert stage.dst.read_bytes() == before_live
+    assert store.read_base(profile, file_id("CLAUDE.md")) == before_base
+    assert store.read_local(profile, file_id("CLAUDE.md")) == _LIVE
+    assert store._index_path(profile).read_bytes() == before_index
+    assert drafts_path.read_text(encoding="utf-8") == "{corrupt"
 
 
 def test_apply_writes_classes_and_keeps_base(

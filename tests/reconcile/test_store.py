@@ -506,12 +506,13 @@ def _record_locked(
     *,
     base: bytes,
     local: bytes | Absent,
+    staged: bool | None = None,
     hunks: list[dict[str, object]] | None = None,
 ) -> None:
     from setforge import locking
 
     with locking.profile_lock(profile):
-        store.record(profile, fid, base=base, local=local, hunks=hunks)
+        store.record(profile, fid, base=base, local=local, staged=staged, hunks=hunks)
 
 
 def test_reconstruct_is_local(tmp_state: Path) -> None:
@@ -672,6 +673,21 @@ def test_record_with_no_hunks_preserves_existing(tmp_state: Path) -> None:
     assert store.read_index("p").files["f"].hunks == [_HUNK]
     _record_locked("p", fid, base=b"B2", local=b"L2")  # install-style: no hunks
     assert store.read_index("p").files["f"].hunks == [_HUNK]  # preserved
+
+
+def test_install_style_record_never_refreshes_shared_fingerprint(
+    tmp_state: Path,
+) -> None:
+    fid = file_id("f")
+    _record_locked(
+        "p", fid, base=b"base", local=b"confirmed", staged=True, hunks=[_HUNK]
+    )
+
+    _record_locked("p", fid, base=b"new base", local=b"changed live")
+
+    (row,) = store.read_index("p").files["f"].hunks
+    assert row["cls"] == "shared"
+    assert row["live_hash"] == _HUNK["live_hash"]
 
 
 def test_record_preserves_explicit_staged_participation(tmp_state: Path) -> None:

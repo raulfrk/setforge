@@ -42,7 +42,7 @@ from setforge.config import (
     load_config,
     resolve_effective_profile,
 )
-from setforge.errors import StructuredParseError
+from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.locking import mutation_locks
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import index_model
@@ -167,11 +167,22 @@ type Choice = Callable[[Hunk, int, int], Decision | None | _Quit]
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
-    """The walk's outcome: updated hunks + per-unit drafts + adopt set."""
+    """The walk's outcome, including the refs explicitly acted on."""
 
     hunks: list[Hunk]
     drafts: dict[UnitRef, bytes]
     adopt_refs: set[UnitRef]
+    decided_refs: set[UnitRef]
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistPlan:
+    """A fully validated reconcile-store publication prepared under the lock."""
+
+    local: bytes
+    staged: bool
+    hunks: list[dict[str, object]]
+    drafts: dict[UnitRef, bytes]
 
 
 def collect_stages(
@@ -303,11 +314,12 @@ type StructuredChoice = Callable[[KeyUnit, int, int], Decision | None | _Quit]
 
 @dataclass(frozen=True, slots=True)
 class StructuredWalkResult:
-    """The structured walk's outcome: updated units + per-PATH drafts + adopt set."""
+    """The structured walk's outcome, including explicitly decided refs."""
 
     units: list[KeyUnit]
     drafts: dict[UnitRef, bytes]
     adopt_refs: set[UnitRef]
+    decided_refs: set[UnitRef]
 
 
 def walk_structured(
@@ -322,6 +334,7 @@ def walk_structured(
     out = list(units)
     drafts: dict[UnitRef, bytes] = {}
     adopt_refs: set[UnitRef] = set()
+    decided_refs: set[UnitRef] = set()
     for index, unit in enumerate(units):
         decision = choose(unit, index, len(units))
         if isinstance(decision, _Quit):
@@ -329,12 +342,24 @@ def walk_structured(
         if decision is None:
             continue
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
-        out[index] = replace(unit, cls=decision.cls, draft_hash=draft_hash)
+        out[index] = replace(
+            unit,
+            cls=decision.cls,
+            changed=False,
+            confirmed_hash=unit.value_hash,
+            draft_hash=draft_hash,
+        )
+        decided_refs.add(unit.ref)
         if decision.draft is not None:
             drafts[unit.ref] = decision.draft
         if decision.adopt:
             adopt_refs.add(unit.ref)
-    return StructuredWalkResult(units=out, drafts=drafts, adopt_refs=adopt_refs)
+    return StructuredWalkResult(
+        units=out,
+        drafts=drafts,
+        adopt_refs=adopt_refs,
+        decided_refs=decided_refs,
+    )
 
 
 def _apply_structured(
@@ -353,16 +378,55 @@ def _apply_structured(
     """
     with mutation_locks(config_dir=config_dir, profile=profile):
         operations.refuse_active(profile)
-        _persist_structured(profile, stage, result, stage.live)
+        locked_live = stage.dst.read_bytes()
+        plan = _prepare_structured_persist(
+            profile, stage, result, locked_live, observed_live=locked_live
+        )
+        _commit_persist(profile, stage.fid, stage.base, plan)
 
 
-def _persist_structured(
+def _validate_structured_decisions(
+    stage: StructuredFileStage,
+    result: StructuredWalkResult,
+    observed_live: bytes,
+) -> None:
+    """Refuse a decision whose key no longer uniquely has the value shown."""
+    if not result.decided_refs:
+        return
+    observed = su_mod.extract_structured_units(stage.base, observed_live, stage.fmt)
+    for ref in result.decided_refs:
+        shown = [unit for unit in stage.units if unit.ref == ref]
+        matches = [unit for unit in observed if unit.ref == ref]
+        if (
+            len(shown) != 1
+            or len(matches) != 1
+            or shown[0].value_hash != matches[0].value_hash
+        ):
+            raise InvariantViolation(
+                f"staged unit {ref} changed after it was shown; run stage again"
+            )
+
+
+def _require_current_base(
+    profile: str, fid: FileId, expected: bytes, *, display_name: str
+) -> None:
+    """Refuse a stage collected against a base that changed before publication."""
+    if reconcile_store.read_base(profile, fid) != expected:
+        raise InvariantViolation(
+            f"recorded base for {display_name!r} changed after it was shown; "
+            "run stage again"
+        )
+
+
+def _prepare_structured_persist(
     profile: str,
     stage: StructuredFileStage,
     result: StructuredWalkResult,
     final_live: bytes,
-) -> None:
-    """Record the structured walk's key-unit classifications + drafts.
+    *,
+    observed_live: bytes | None = None,
+) -> _PersistPlan:
+    """Build a structured publication after validating every persisted input.
 
     The structured analog of :func:`_persist`: same lost-update RMW (re-read +
     re-extract with the caller's lock held, overlay ONLY the paths the host
@@ -371,44 +435,73 @@ def _persist_structured(
     it); the drafts manifest is reconciled to exactly the surviving SHARED_DRAFTED
     set.
     """
-    collect_cls = {u.path: u.cls for u in stage.units}
-    walk_by_path = {u.path: u for u in result.units}
-    decided = {
-        path
-        for path, unit in walk_by_path.items()
-        if collect_cls.get(path) != unit.cls or unit.ref in result.drafts
-    }
+    _require_current_base(profile, stage.fid, stage.base, display_name=stage.sub_name)
+    _validate_structured_decisions(
+        stage, result, final_live if observed_live is None else observed_live
+    )
+    walk_by_ref = {unit.ref: unit for unit in result.units}
     entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
     stored = entry.hunks if entry is not None else []
+    stored = index_model.require_unit_kind(stored, UnitKind.KEY)
+    # Validate the current payload/index/draft quad before publishing a rewrite.
+    reconcile_store.verify(profile, stage.fid)
     current = su_mod.classify_structured(
         su_mod.extract_structured_units(stage.base, final_live, stage.fmt),
-        index_model.require_unit_kind(stored, UnitKind.KEY),
+        stored,
     )
     merged = [
         replace(
             u,
-            cls=walk_by_path[u.path].cls,
-            draft_hash=walk_by_path[u.path].draft_hash,
+            cls=walk_by_ref[u.ref].cls,
+            changed=False,
+            confirmed_hash=u.value_hash,
+            draft_hash=walk_by_ref[u.ref].draft_hash,
         )
-        if u.path in decided
+        if u.ref in result.decided_refs
         else u
         for u in current
     ]
     pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
-    drafts = {
-        u.ref: pool[u.ref]
-        for u in merged
-        if u.cls is HunkClass.SHARED_DRAFTED and u.ref in pool
-    }
-    reconcile_store.record(
-        profile,
-        stage.fid,
-        base=stage.base,
+    drafts: dict[UnitRef, bytes] = {}
+    for unit in merged:
+        if unit.cls is not HunkClass.SHARED_DRAFTED:
+            continue
+        if unit.draft_hash is None or unit.ref not in pool:
+            raise InvariantViolation(
+                f"SHARED_DRAFTED unit {unit.ref} has no usable draft"
+            )
+        draft = pool[unit.ref]
+        if content_sha(draft) != unit.draft_hash:
+            raise InvariantViolation(
+                f"draft bytes for {unit.ref} do not match the recorded draft_hash"
+            )
+        drafts[unit.ref] = draft
+    return _PersistPlan(
         local=final_live,
-        staged=(entry.staged if entry is not None else False) or bool(decided),
+        staged=(entry.staged if entry is not None else False)
+        or bool(result.decided_refs),
         hunks=su_mod.serialize_structured(merged),
         drafts=drafts,
     )
+
+
+def _persist_structured(
+    profile: str,
+    stage: StructuredFileStage,
+    result: StructuredWalkResult,
+    final_live: bytes,
+    *,
+    observed_live: bytes | None = None,
+) -> None:
+    """Prepare and record a structured walk while the caller holds the lock."""
+    plan = _prepare_structured_persist(
+        profile,
+        stage,
+        result,
+        final_live,
+        observed_live=observed_live,
+    )
+    _commit_persist(profile, stage.fid, stage.base, plan)
 
 
 def counts(hunks: list[Hunk]) -> Counter[HunkClass]:
@@ -428,6 +521,7 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
     out = list(hunks)
     drafts: dict[UnitRef, bytes] = {}
     adopt_refs: set[UnitRef] = set()
+    decided_refs: set[UnitRef] = set()
     for index, hunk in enumerate(hunks):
         decision = choose(hunk, index, len(hunks))
         if isinstance(decision, _Quit):
@@ -435,12 +529,24 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
         if decision is None:
             continue
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
-        out[index] = replace(hunk, cls=decision.cls, draft_hash=draft_hash)
+        out[index] = replace(
+            hunk,
+            cls=decision.cls,
+            changed=False,
+            confirmed_hash=hunk.live_hash,
+            draft_hash=draft_hash,
+        )
+        decided_refs.add(hunk.ref)
         if decision.draft is not None:
             drafts[hunk.ref] = decision.draft
         if decision.adopt:
             adopt_refs.add(hunk.ref)
-    return WalkResult(hunks=out, drafts=drafts, adopt_refs=adopt_refs)
+    return WalkResult(
+        hunks=out,
+        drafts=drafts,
+        adopt_refs=adopt_refs,
+        decided_refs=decided_refs,
+    )
 
 
 def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
@@ -654,23 +760,57 @@ def _apply(
     concurrent install/sync cannot land between the write and the record and leave
     a live tree whose bytes no longer match the classifications persisted here.
     """
-    final_live = _adopt_live(stage, result)
     with mutation_locks(config_dir=config_dir, profile=profile):
         operations.refuse_active(profile)
-        if final_live != stage.live:
+        locked_live = stage.dst.read_bytes()
+        if result.adopt_refs and locked_live != stage.live:
+            raise InvariantViolation(
+                f"staged file {stage.sub_name!r} changed after it was shown; "
+                "run stage again"
+            )
+        final_live = _adopt_live(stage, result) if result.adopt_refs else locked_live
+        plan = _prepare_persist(
+            profile, stage, result, final_live, observed_live=locked_live
+        )
+        if final_live != locked_live:
             # stat() (follow) so a symlinked dst keeps its target's mode, not the
             # link's.
             mode = stat.S_IMODE(stage.dst.stat().st_mode)
             atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
-        _persist(profile, stage, result, final_live)
+        _commit_persist(profile, stage.fid, stage.base, plan)
 
 
-def _persist(
-    profile: str, stage: FileStage, result: WalkResult, final_live: bytes
+def _validate_line_decisions(
+    stage: FileStage,
+    result: WalkResult,
+    observed_live: bytes,
 ) -> None:
-    """Record the walk's classifications + drafts, merging with the current index
-    so a concurrent ``sync`` is not clobbered (lost-update RMW). The caller holds
-    the profile lock across this record AND the preceding live write.
+    """Refuse a decision whose unit no longer uniquely has the bytes shown."""
+    if not result.decided_refs:
+        return
+    observed = hunks_mod.extract_hunks(stage.base, observed_live)
+    for ref in result.decided_refs:
+        shown = [hunk for hunk in stage.hunks if hunk.ref == ref]
+        matches = [hunk for hunk in observed if hunk.ref == ref]
+        if (
+            len(shown) != 1
+            or len(matches) != 1
+            or shown[0].live_hash != matches[0].live_hash
+        ):
+            raise InvariantViolation(
+                f"staged unit {ref} changed after it was shown; run stage again"
+            )
+
+
+def _prepare_persist(
+    profile: str,
+    stage: FileStage,
+    result: WalkResult,
+    final_live: bytes,
+    *,
+    observed_live: bytes | None = None,
+) -> _PersistPlan:
+    """Build a line-unit publication after validating every persisted input.
 
     The walk read + classified the index at collect time, OUTSIDE the lock; a
     naive whole-list overwrite here would drop any classification a concurrent
@@ -685,36 +825,33 @@ def _persist(
     set: prior drafts are kept, this walk's are added, and any whose hunk demoted
     away is pruned — so a demote never leaves an orphan manifest entry.
 
-    Caveat: "explicitly decided" diffs the walk class against the collect-time
-    class, so an explicit re-confirm to the SAME class (with no draft) reads as a
-    skip — in the narrow race where a concurrent writer flips that unit meanwhile,
-    the concurrent value wins. Acceptable for a single-user CLI.
+    ``decided_refs`` records button actions directly, so choosing the same class
+    is a real re-confirmation while Skip/QUIT remain passive. Each decided ref is
+    revalidated against the live bytes observed under the caller's lock before it
+    can update its fingerprint.
     """
-    collect_cls = {h.unit_id: h.cls for h in stage.hunks}
-    walk_by_unit = {h.unit_id: h for h in result.hunks}
-    # "decided" = units the host acted on THIS walk: a class change from the
-    # collect-time class, OR a draft authored this walk. Keying the draft case on
-    # result.drafts (not a draft_hash carried forward by classify for an already-
-    # SHARED_DRAFTED hunk the host SKIPPED) keeps a skip from re-asserting a stale
-    # value over a concurrent writer.
-    decided = {
-        unit_id
-        for unit_id, hunk in walk_by_unit.items()
-        if collect_cls.get(unit_id) != hunk.cls or hunk.ref in result.drafts
-    }
+    _require_current_base(profile, stage.fid, stage.base, display_name=stage.sub_name)
+    _validate_line_decisions(
+        stage, result, final_live if observed_live is None else observed_live
+    )
+    walk_by_ref = {hunk.ref: hunk for hunk in result.hunks}
     entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
     stored = entry.hunks if entry is not None else []
+    stored = index_model.require_unit_kind(stored, UnitKind.LINE)
+    reconcile_store.verify(profile, stage.fid)
     current = hunks_mod.classify(
         hunks_mod.extract_hunks(stage.base, final_live),
-        index_model.require_unit_kind(stored, UnitKind.LINE),
+        stored,
     )
     merged = [
         replace(
             h,
-            cls=walk_by_unit[h.unit_id].cls,
-            draft_hash=walk_by_unit[h.unit_id].draft_hash,
+            cls=walk_by_ref[h.ref].cls,
+            changed=False,
+            confirmed_hash=h.live_hash,
+            draft_hash=walk_by_ref[h.ref].draft_hash,
         )
-        if h.unit_id in decided
+        if h.ref in result.decided_refs
         else h
         for h in current
     ]
@@ -724,20 +861,59 @@ def _persist(
         ),
         **result.drafts,
     }
-    drafts = {
-        h.ref: pool[h.ref]
-        for h in merged
-        if h.cls is HunkClass.SHARED_DRAFTED and h.ref in pool
-    }
-    reconcile_store.record(
-        profile,
-        stage.fid,
-        base=stage.base,
+    drafts: dict[UnitRef, bytes] = {}
+    for hunk in merged:
+        if hunk.cls is not HunkClass.SHARED_DRAFTED:
+            continue
+        if hunk.draft_hash is None or hunk.ref not in pool:
+            raise InvariantViolation(
+                f"SHARED_DRAFTED unit {hunk.ref} has no usable draft"
+            )
+        draft = pool[hunk.ref]
+        if content_sha(draft) != hunk.draft_hash:
+            raise InvariantViolation(
+                f"draft bytes for {hunk.ref} do not match the recorded draft_hash"
+            )
+        drafts[hunk.ref] = draft
+    return _PersistPlan(
         local=final_live,
-        staged=(entry.staged if entry is not None else False) or bool(decided),
+        staged=(entry.staged if entry is not None else False)
+        or bool(result.decided_refs),
         hunks=hunks_mod.serialize(merged),
         drafts=drafts,
     )
+
+
+def _commit_persist(profile: str, fid: FileId, base: bytes, plan: _PersistPlan) -> None:
+    """Publish one already validated reconcile-store plan."""
+    reconcile_store.record(
+        profile,
+        fid,
+        base=base,
+        local=plan.local,
+        staged=plan.staged,
+        hunks=plan.hunks,
+        drafts=plan.drafts,
+    )
+
+
+def _persist(
+    profile: str,
+    stage: FileStage,
+    result: WalkResult,
+    final_live: bytes,
+    *,
+    observed_live: bytes | None = None,
+) -> None:
+    """Prepare and record a line-unit walk while the caller holds the lock."""
+    plan = _prepare_persist(
+        profile,
+        stage,
+        result,
+        final_live,
+        observed_live=observed_live,
+    )
+    _commit_persist(profile, stage.fid, stage.base, plan)
 
 
 @app.command(epilog=STAGE_EXAMPLES)

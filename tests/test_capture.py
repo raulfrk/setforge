@@ -517,6 +517,7 @@ def test_staged_capture_changed_shared_held_local_with_hint(
     # into tracked/ (the security fix), AND must warn so the now-un-shared hunk
     # is not a silent surprise.
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile import store
     from setforge.reconcile.types import HunkClass, file_id
 
     repo = tmp_path / "repo"
@@ -539,6 +540,24 @@ def test_staged_capture_changed_shared_held_local_with_hint(
     assert b"Prefer fish." not in out  # the drifted bytes never reached tracked
     (result,) = [r for r in results if r.name == "CLAUDE.md"]
     assert any("re-confirm" in w for w in result.warnings)
+
+    confirmed_hash = next(
+        row["live_hash"]
+        for row in store.read_index("p").files["CLAUDE.md"].hunks
+        if row["label"] == "## Shell"
+    )
+    capture_profile(
+        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+    assert src.read_bytes() == _A5_BASE
+    assert (
+        next(
+            row["live_hash"]
+            for row in store.read_index("p").files["CLAUDE.md"].hunks
+            if row["label"] == "## Shell"
+        )
+        == confirmed_hash
+    )
 
 
 def test_staged_capture_pending_hint(
@@ -702,3 +721,44 @@ def test_staged_capture_structured_demote_uncaptures(
     assert b"theme: dark" in out  # demote restored the base value in tracked/
     assert b"theme: light" not in out  # the host's shared value is gone
     assert out == _SY_BASE  # tracked back to pure upstream base
+
+
+def test_changed_structured_shared_stays_held_across_two_captures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile import store
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    drifted = _SY_LIVE.replace(b"theme: light", b"theme: solarized")
+    _write(src, _SY_BASE.decode())
+    _write(dst, drifted.decode())
+    _stage_structured_index(
+        "p",
+        file_id("settings.yaml"),
+        _SY_BASE,
+        _SY_LIVE,
+        {"theme": HunkClass.SHARED},
+    )
+
+    before = next(
+        row["value_hash"]
+        for row in store.read_index("p").files["settings.yaml"].hunks
+        if row["path"] == "theme"
+    )
+    for _ in range(2):
+        capture_profile(
+            _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+        )
+        assert src.read_bytes() == _SY_BASE
+        assert (
+            next(
+                row["value_hash"]
+                for row in store.read_index("p").files["settings.yaml"].hunks
+                if row["path"] == "theme"
+            )
+            == before
+        )
