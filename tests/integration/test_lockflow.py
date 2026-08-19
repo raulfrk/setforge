@@ -119,6 +119,44 @@ def lockflow_env(
     monkeypatch.setenv("SETFORGE_NO_WELCOME", "1")
     monkeypatch.setattr(Path, "home", lambda: Path(os.environ["HOME"]))
 
+    fake_bin = home / "bin"
+    fake_bin.mkdir()
+    cargo_state = home / "cargo-installed.txt"
+    cargo_log = home / "cargo-argv.log"
+    cargo = fake_bin / "cargo"
+    cargo.write_text(
+        f"""#!/bin/sh
+set -eu
+if [ "$1" = "install" ] && [ "$2" = "--list" ]; then
+    if [ -f "{cargo_state}" ]; then cat "{cargo_state}"; fi
+    exit 0
+fi
+printf '%s\n' "$*" >> "{cargo_log}"
+if [ "$1" = "install" ]; then
+    version=""
+    crate=""
+    shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --version) version="$2"; shift 2 ;;
+            --) shift; crate="$1"; break ;;
+            *) shift ;;
+        esac
+    done
+    printf '%s v%s:\n    %s\n' "$crate" "$version" "$crate" > "{cargo_state}"
+    exit 0
+fi
+exit 2
+""",
+        encoding="utf-8",
+    )
+    cargo.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(
+        "setforge.provision.cargo.registry_checksum",
+        lambda _crate, _version: f"sha256:{_CRATE_SHA}",
+    )
+
     (repo / "tracked" / "note.md").write_text("locked\n", encoding="utf-8")
     config = repo / "setforge.yaml"
     config.write_text(_CONFIG_YAML, encoding="utf-8")
@@ -166,6 +204,10 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
     registry._REGISTRY.clear()
     install_res = lockflow_env(["install", "--yes"])
     assert install_res.exit_code == 0, install_res.output
+    cargo_log = Path(os.environ["HOME"]) / "cargo-argv.log"
+    assert cargo_log.read_text(encoding="utf-8").splitlines() == [
+        "install --version 1.2.3 --locked -- ripgrep"
+    ]
     installed = Path(os.environ["HOME"]) / ".setforge_lockflow" / "bin" / "toolbin"
     assert installed.exists(), (
         f"pinned github_release binary not installed:\n{install_res.output}"
@@ -174,6 +216,9 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
 
     locked_ok = lockflow_env(["install", "--locked", "--yes"])
     assert locked_ok.exit_code == 0, locked_ok.output
+    assert cargo_log.read_text(encoding="utf-8").splitlines() == [
+        "install --version 1.2.3 --locked -- ripgrep"
+    ]
 
     trimmed = parse_lock(text)
     kept = tuple(p for p in trimmed.packages if p.key != "acme/toolbin")

@@ -3,7 +3,9 @@ resolver/network calls."""
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -185,3 +187,49 @@ def test_run_provisioning_applies_lock_reaches_apply(
     )
     run_provisioning(cfg, resolved, lock=lock)
     assert applied == ["9.9.9"]
+
+
+def test_run_provisioning_cargo_lock_reaches_exact_locked_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv == ["/fake/cargo", "install", "--list"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="")
+        return subprocess.CompletedProcess(argv, 0, stdout="installed")
+
+    monkeypatch.setattr(cargo_prov, "resolve_binary", lambda _name: Path("/fake/cargo"))
+    monkeypatch.setattr(cargo_prov.subprocess, "run", _run)
+    monkeypatch.setattr(
+        cargo_prov, "registry_checksum", lambda _crate, _version: f"sha256:{'a' * 64}"
+    )
+    cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
+    resolved = ResolvedProfile(packages=["rg"])
+    lock = LockFile(
+        packages=(
+            _pin(
+                PackageType.CARGO,
+                "ripgrep",
+                "14.0.0",
+                f"sha256:{'a' * 64}",
+                IntegrityKind.CHECKSUM,
+            ),
+        )
+    )
+
+    result = run_provisioning(cfg, resolved, lock=lock)
+
+    assert [outcome.outcome for outcome in result[0].outcomes] == [Outcome.OK]
+    assert [
+        "/fake/cargo",
+        "install",
+        "--version",
+        "14.0.0",
+        "--locked",
+        "--",
+        "ripgrep",
+    ] in calls

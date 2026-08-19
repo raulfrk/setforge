@@ -9,7 +9,7 @@ REPORT-no-writes structural.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar
@@ -65,7 +65,7 @@ class ProvisionItem:
     type: str
     identity: Identity
     desired: DesiredState = DesiredState.ACTIVE
-    version: str | None = None  # pin; drift is a REPORT signal only (upgrade is later)
+    version: str | None = None  # resolved ecosystem pin
     checksum: str | None = None
     config: BaseModel = field(default_factory=_EmptyConfig)
 
@@ -112,6 +112,21 @@ class Provisioner(ABC):
         Backed by a live list OR the receipt store for list-less ecosystems.
         Never writes.
         """
+
+    def inventory_fingerprint(self, installed: set[Identity]) -> Hashable:
+        """Return the inventory state that a frozen plan must revalidate.
+
+        Identity-only provisioners inherit the default. Ecosystems whose pins
+        depend on richer probe metadata may override it after :meth:`probe`.
+        """
+        return frozenset(installed)
+
+    def plan_fingerprint(
+        self, items: Sequence[ProvisionItem], installed: set[Identity]
+    ) -> Hashable:
+        """Return all external read state that freezes a reconcile plan."""
+        del items
+        return self.inventory_fingerprint(installed)
 
     @abstractmethod
     def plan(

@@ -19,7 +19,7 @@ not.
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -43,6 +43,7 @@ class ReconcilePlan:
 
     delta: ProvisionDelta
     installed: frozenset[Identity]
+    _inventory_fingerprint: Hashable = field(repr=False)
     _executor: _ReconcileExecutor = field(repr=False, compare=False)
 
 
@@ -52,6 +53,7 @@ class _ReconcileExecutor:
 
     provisioner: Provisioner
     items: tuple[_FrozenProvisionItem, ...]
+    declared_items: tuple[_FrozenProvisionItem, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,15 +97,20 @@ def plan_reconcile(
 ) -> ReconcilePlan:
     """Probe once and freeze the resulting apply selection."""
     installed = provisioner.probe()
+    inventory_fingerprint = provisioner.plan_fingerprint(items, installed)
     delta = provisioner.plan(items, installed)
     return ReconcilePlan(
         delta=delta,
         installed=frozenset(installed),
+        _inventory_fingerprint=inventory_fingerprint,
         _executor=_ReconcileExecutor(
             provisioner=provisioner,
             items=tuple(
                 _FrozenProvisionItem.from_item(item)
                 for item in _items_to_apply(delta, items)
+            ),
+            declared_items=tuple(
+                _FrozenProvisionItem.from_item(item) for item in items
             ),
         ),
     )
@@ -111,7 +118,10 @@ def plan_reconcile(
 
 def validate_reconcile(plan: ReconcilePlan) -> None:
     """Refuse when the global provisioner inventory changed after planning."""
-    if frozenset(plan._executor.provisioner.probe()) != plan.installed:
+    provisioner = plan._executor.provisioner
+    installed = provisioner.probe()
+    items = tuple(item.thaw() for item in plan._executor.declared_items)
+    if provisioner.plan_fingerprint(items, installed) != plan._inventory_fingerprint:
         raise SetforgeError("package inventory changed after planning; retry")
 
 
