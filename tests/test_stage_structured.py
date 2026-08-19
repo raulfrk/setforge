@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -145,6 +147,88 @@ def test_walk_structured_shared_records_shared(
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
+
+
+def test_render_list_json_reports_structured_drafted_and_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from setforge.cli._output import OutputContext, OutputFormat
+    from setforge.cli.stage import _render_list
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_structured_stages(cfg, resolved, repo, profile)
+    _apply_structured(
+        profile,
+        first,
+        walk_structured(
+            first.units,
+            lambda u, i, t: Decision(HunkClass.SHARED_DRAFTED, draft=b"18"),
+        ),
+    )
+    first.dst.write_bytes(b"theme: dark\nfontSize: 16\nnewKey: host\n")
+    (changed,) = collect_structured_stages(cfg, resolved, repo, profile)
+    changed = replace(
+        changed,
+        units=[
+            replace(unit, changed=True)
+            if unit.cls is HunkClass.SHARED_DRAFTED
+            else unit
+            for unit in changed.units
+        ],
+    )
+
+    _render_list(OutputContext(OutputFormat.JSON), [], [changed])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "stage"
+    assert payload["schema_version"] == 1
+    assert payload["data"] == [
+        {
+            "name": "settings.yaml",
+            "participating": True,
+            "shared": 0,
+            "shared_promotable": 0,
+            "drafted": 1,
+            "reconfirm_required": 0,
+            "local": 0,
+            "pending": 1,
+            "blockers": [
+                "1 pending unit(s): run `setforge stage settings.yaml` to classify"
+            ],
+        }
+    ]
+
+
+def test_render_list_json_changed_structured_local_needs_no_reconfirm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from setforge.cli._output import OutputContext, OutputFormat
+    from setforge.cli.stage import _render_list
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    (stage,) = collect_structured_stages(
+        cfg, resolve_profile(cfg, profile), repo, profile
+    )
+    local = replace(stage.units[0], cls=HunkClass.LOCAL, changed=True)
+
+    _render_list(
+        OutputContext(OutputFormat.JSON),
+        [],
+        [replace(stage, participating=True, units=[local])],
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    (row,) = payload["data"]
+    assert row["shared"] == 0
+    assert row["reconfirm_required"] == 0
+    assert row["local"] == 1
+    assert row["blockers"] == []
 
 
 def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(

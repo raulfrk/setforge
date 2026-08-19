@@ -12,6 +12,7 @@ tracked, ``keep-tracked`` refuses it); the per-tracked_file writeback then
 applies the host-state strip above.
 """
 
+import json
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
-from setforge.reconcile.types import HunkClass, UnitKind, file_id
+from setforge.reconcile.types import HunkClass, UnitKind, UnitRef, content_sha, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 
@@ -115,6 +116,211 @@ class CaptureResult:
     action: CaptureAction
     reason: str = ""
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CapturePreview:
+    """Read-only projection of one file's exact capture outcome."""
+
+    name: str
+    src: Path
+    dst: Path
+    action: CaptureAction
+    reason: str = ""
+    warnings: tuple[str, ...] = ()
+    proposed_hash: str | None = None
+    tracked_hash: str | None = None
+    live_hash: str | None = None
+    base_hash: str | None = None
+    index_hash: str | None = None
+    drafts: tuple[tuple[str, str, str], ...] = ()
+    route: str = "whole-file"
+    store_update: bool = False
+
+
+def _preview_result(
+    name: str,
+    src: Path,
+    dst: Path,
+    proposed: bytes | None,
+    *,
+    reason: str = "",
+    warnings: tuple[str, ...] = (),
+    live: bytes | None = None,
+    base: bytes | None = None,
+    entry: object | None = None,
+    drafts: Mapping[UnitRef, bytes] | None = None,
+    route: str = "whole-file",
+    store_update: bool = False,
+) -> CapturePreview:
+    current = src.read_bytes() if src.exists() else None
+    if proposed is None:
+        action = CaptureAction.SKIPPED
+    else:
+        action = CaptureAction.NOOP if current == proposed else CaptureAction.UPDATED
+    return CapturePreview(
+        name=name,
+        src=src,
+        dst=dst,
+        action=action,
+        reason=reason,
+        warnings=warnings,
+        proposed_hash=content_sha(proposed) if proposed is not None else None,
+        tracked_hash=content_sha(current) if current is not None else None,
+        live_hash=content_sha(live) if live is not None else None,
+        base_hash=content_sha(base) if base is not None else None,
+        index_hash=(
+            content_sha(
+                json.dumps(
+                    {
+                        "present": getattr(entry, "present", None),
+                        "local_hash": getattr(entry, "local_hash", None),
+                        "staged": getattr(entry, "staged", None),
+                        "hunks": getattr(entry, "hunks", None),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            if entry is not None
+            else None
+        ),
+        drafts=tuple(
+            sorted(
+                (
+                    ref.kind.value,
+                    ref.identity,
+                    content_sha(data),
+                )
+                for ref, data in (drafts or {}).items()
+            )
+        ),
+        route=route,
+        store_update=store_update,
+    )
+
+
+def preview_capture_profile(
+    config: Config,
+    profile_name: str,
+    repo_root: Path,
+    *,
+    resolved: ResolvedProfile,
+) -> tuple[CapturePreview, ...]:
+    """Return the exact per-file capture projection without writing anything."""
+    previews: list[CapturePreview] = []
+    for name in resolved.tracked_files:
+        tracked_file = config.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            fmt = su_mod.structured_format(sub_dst)
+            if not sub_dst.exists():
+                previews.append(
+                    _preview_result(
+                        sub_name,
+                        sub_src,
+                        sub_dst,
+                        None,
+                        reason="live missing",
+                        route=fmt.value if fmt is not None else "whole-file",
+                    )
+                )
+                continue
+            fid = file_id(sub_name)
+            entry = reconcile_store.read_index(profile_name).files.get(str(fid))
+            if entry is not None and entry.staged:
+                _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
+                base = reconcile_store.read_base(profile_name, fid)
+                assert base is not None
+                live = sub_dst.read_bytes()
+                stored_drafts = reconcile_store.read_drafts(profile_name, fid)
+                drafts = stored_drafts
+                warnings: list[str] = []
+                if fmt is None:
+                    stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
+                    line_units = reconcile_hunks.classify(
+                        reconcile_hunks.extract_hunks(base, live), stored
+                    )
+                    drafts = reconcile_hunks.bind_drafts(line_units, drafts)
+                    proposed = reconcile_hunks.reconstruct(
+                        base, live, line_units, drafts
+                    )
+                    if any(unit.cls is HunkClass.PENDING for unit in line_units):
+                        warnings.append(
+                            f"{sub_src.name}: unstaged local changes kept host-only — "
+                            f"run `setforge stage {sub_src.name}` to share any of them"
+                        )
+                    if any(
+                        unit.changed and unit.cls is HunkClass.SHARED
+                        for unit in line_units
+                    ):
+                        warnings.append(
+                            f"{sub_src.name}: a previously-staged hunk changed and "
+                            "was kept host-only — re-run "
+                            f"`setforge stage {sub_src.name}` to re-confirm it"
+                        )
+                else:
+                    stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
+                    key_units = su_mod.classify_structured(
+                        su_mod.extract_structured_units(base, live, fmt), stored
+                    )
+                    proposed = su_mod.reconstruct_structured(
+                        base, live, key_units, drafts, fmt
+                    )
+                    if any(unit.cls is HunkClass.PENDING for unit in key_units):
+                        warnings.append(
+                            f"{sub_src.name}: unstaged local changes kept host-only — "
+                            f"run `setforge stage {sub_src.name}` to share any of them"
+                        )
+                    if any(
+                        unit.changed and unit.cls is HunkClass.SHARED
+                        for unit in key_units
+                    ):
+                        warnings.append(
+                            f"{sub_src.name}: a previously-staged key changed and was "
+                            "kept host-only — re-run "
+                            f"`setforge stage {sub_src.name}` to re-confirm it"
+                        )
+                previews.append(
+                    _preview_result(
+                        sub_name,
+                        sub_src,
+                        sub_dst,
+                        proposed,
+                        warnings=tuple(warnings),
+                        live=live,
+                        base=base,
+                        entry=entry,
+                        drafts=drafts,
+                        route=fmt.value if fmt is not None else "line",
+                        store_update=(
+                            not entry.present
+                            or entry.local_hash != content_sha(live)
+                            or entry.hunks
+                            != (
+                                reconcile_hunks.serialize(line_units)
+                                if fmt is None
+                                else su_mod.serialize_structured(key_units)
+                            )
+                            or stored_drafts != drafts
+                        ),
+                    )
+                )
+                continue
+            proposed = sub_dst.read_bytes()
+            previews.append(
+                _preview_result(
+                    sub_name,
+                    sub_src,
+                    sub_dst,
+                    proposed,
+                    live=proposed,
+                    entry=entry,
+                    route=fmt.value if fmt is not None else "whole-file",
+                )
+            )
+    return tuple(previews)
 
 
 def capture_tracked_file(
@@ -267,7 +473,7 @@ def _capture_staged_plain(
     # A previously-classified hunk whose content drifted is held at base (NOT
     # auto-promoted, NOT silently kept) — tell the host so a shared hunk that
     # just dropped out of tracked/ is not a surprise.
-    if any(hunk.changed for hunk in hunks):
+    if any(hunk.changed and hunk.cls is HunkClass.SHARED for hunk in hunks):
         warnings.append(
             f"{src.name}: a previously-staged hunk changed and was kept host-only "
             f"— re-run `setforge stage {src.name}` to re-confirm it"
@@ -341,7 +547,7 @@ def _capture_staged_structured(
             f"{src.name}: unstaged local changes kept host-only — run "
             f"`setforge stage {src.name}` to share any of them"
         )
-    if any(unit.changed for unit in units):
+    if any(unit.changed and unit.cls is HunkClass.SHARED for unit in units):
         warnings.append(
             f"{src.name}: a previously-staged key changed and was kept host-only "
             f"— re-run `setforge stage {src.name}` to re-confirm it"

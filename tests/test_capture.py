@@ -8,8 +8,9 @@ from setforge.capture import (
     CaptureAction,
     capture_profile,
     capture_tracked_file,
+    preview_capture_profile,
 )
-from setforge.config import Config, Profile, TrackedFile
+from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation
 
 
@@ -531,8 +532,16 @@ def test_staged_capture_changed_shared_held_local_with_hint(
     # staged the ORIGINAL Shell content as SHARED (its live_hash != the drift's).
     _stage_index("p", fid, _A5_BASE, _A5_LIVE, {"## Shell": HunkClass.SHARED})
 
+    config = _a5_config(dst)
+    (preview,) = preview_capture_profile(
+        config, "p", repo, resolved=resolve_profile(config, "p")
+    )
+    assert preview.action is CaptureAction.NOOP
+    assert preview.store_update is True
+    assert any("re-confirm" in warning for warning in preview.warnings)
+
     results = capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
     )
 
     out = src.read_bytes()
@@ -558,6 +567,39 @@ def test_staged_capture_changed_shared_held_local_with_hint(
         )
         == confirmed_hash
     )
+
+
+def test_staged_capture_changed_local_has_no_reconfirm_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only changed SHARED units need explicit re-confirmation."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    drifted = _A5_LIVE.replace(b"workdir: /home/raul", b"workdir: /srv/private")
+    _write(src, _A5_BASE.decode())
+    _write(dst, drifted.decode())
+    _stage_index(
+        "p",
+        file_id("CLAUDE.md"),
+        _A5_BASE,
+        _A5_LIVE,
+        {"## Host paths": HunkClass.LOCAL},
+    )
+
+    config = _a5_config(dst)
+    (preview,) = preview_capture_profile(
+        config, "p", repo, resolved=resolve_profile(config, "p")
+    )
+    assert not any("re-confirm" in warning for warning in preview.warnings)
+    (result,) = capture_profile(
+        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+    assert not any("re-confirm" in warning for warning in result.warnings)
+    assert src.read_bytes() == _A5_BASE
 
 
 def test_staged_capture_pending_hint(
@@ -762,3 +804,36 @@ def test_changed_structured_shared_stays_held_across_two_captures(
             )
             == before
         )
+
+
+def test_changed_structured_local_has_no_reconfirm_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed LOCAL key stays host-only without a SHARED warning."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    drifted = _SY_LIVE.replace(b"/home/raul", b"/srv/private")
+    _write(src, _SY_BASE.decode())
+    _write(dst, drifted.decode())
+    _stage_structured_index(
+        "p",
+        file_id("settings.yaml"),
+        _SY_BASE,
+        _SY_LIVE,
+        {"workdir": HunkClass.LOCAL},
+    )
+
+    config = _sy_config(dst)
+    (preview,) = preview_capture_profile(
+        config, "p", repo, resolved=resolve_profile(config, "p")
+    )
+    assert not any("re-confirm" in warning for warning in preview.warnings)
+    (result,) = capture_profile(
+        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+    assert not any("re-confirm" in warning for warning in result.warnings)
+    assert src.read_bytes() == _SY_BASE

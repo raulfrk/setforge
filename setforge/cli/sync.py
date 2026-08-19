@@ -8,10 +8,12 @@
 
 import stat
 import sys
+from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
 
 import typer
+from click import ClickException
 
 from setforge import (
     atomicio,
@@ -21,9 +23,6 @@ from setforge import (
 )
 from setforge import (
     capture as capture_mod,
-)
-from setforge import (
-    compare as compare_mod,
 )
 from setforge import (
     source as source_mod,
@@ -50,10 +49,6 @@ from setforge.cli._helpers import (
     _iter_all_tracked_files,
     _parse_capture_auto,
     _refuse_duplicate_section_names,
-    _resolve_drift_paths,
-)
-from setforge.cli._install_helpers import (
-    _load_validated_host_local_sections,
 )
 from setforge.config import (
     Config,
@@ -66,49 +61,155 @@ from setforge.errors import ExtensionToolMissing
 from setforge.locking import mutation_locks
 from setforge.overlay_provenance import ResolvedExtension
 from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.types import file_id
+from setforge.reconcile.types import content_sha, file_id
+
+
+@dataclass(frozen=True, slots=True)
+class _CaptureSnapshot:
+    """Whole-profile inputs and exact outputs frozen for one confirmation."""
+
+    config_hash: str
+    effective_hash: str
+    preview: tuple[capture_mod.CapturePreview, ...]
 
 
 def _build_capture_plan(
     *,
-    drift_report: compare_mod.CompareReport,
+    preview: tuple[capture_mod.CapturePreview, ...],
     ctx: ProfileContext,
 ) -> AutoPlan:
-    """Build an AutoPlan for the live → tracked capture path (sync --auto=use-live).
-
-    Joins the ``CompareReport.entries`` (entries marked DRIFTED with a
-    diff or mode drift) against the tracked_file path map. Direction is
-    always LIVE_TO_TRACKED — sync absorbs live edits.
-    """
-    file_changes: list[FileChange] = []
-    # sync absorbs ANY drift on use-live (not just unexpected) — the
-    # capture writes everything that differs into tracked. The shared
-    # ``_resolve_drift_paths`` helper already filters to entries with
-    # ``diff or mode_drift``, which matches sync's intent.
-    for _entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
-        file_changes.append(
-            FileChange(
-                source=sub_dst,
-                dest=sub_src,
-                changed=1,
-            ),
+    """Build a truthful live → tracked plan from exact capture projections."""
+    file_changes = [
+        FileChange(source=item.dst, dest=item.src, changed=1)
+        for item in preview
+        if item.action is capture_mod.CaptureAction.UPDATED
+    ]
+    blockers = [warning for item in preview for warning in item.warnings]
+    blockers += [
+        f"{item.name}: {item.reason}"
+        for item in preview
+        if item.action is capture_mod.CaptureAction.SKIPPED and item.reason
+    ]
+    store_updates = sum(item.store_update for item in preview)
+    risks: list[str] = []
+    if file_changes:
+        risk = (
+            f"{len(file_changes)} tracked-side file(s) will be updated with the "
+            "promotable capture projection"
         )
-    if not file_changes:
+        if blockers:
+            risk += "; blocked units listed below remain host-only and are not absorbed"
+        risks.append(risk)
+    if store_updates:
+        risks.append(
+            f"reconciliation state for {store_updates} file(s) will be refreshed"
+        )
+    if not risks:
         return AutoPlan(
             direction=AutoDirection.LIVE_TO_TRACKED,
             file_changes=(),
             risks=(),
             revert_command=f"setforge revert --profile={ctx.profile}",
+            blockers=tuple(blockers),
         )
     return AutoPlan(
         direction=AutoDirection.LIVE_TO_TRACKED,
         file_changes=tuple(file_changes),
-        risks=(
-            f"tracked-side files on {len(file_changes)} file(s) will be overwritten "
-            "with live edits — propagates to all hosts via the tracked repo",
-        ),
+        risks=tuple(risks),
         revert_command=f"setforge revert --profile={ctx.profile}",
+        blockers=tuple(blockers),
     )
+
+
+def _load_capture_preview(
+    config: Path, profile: str, repo_root: Path, *, verb: str
+) -> tuple[ProfileContext, _CaptureSnapshot, tuple[ResolvedExtension, ...]]:
+    """Reload effective configuration and build an exact read-only capture plan."""
+    cfg = load_config(config)
+    refuse_unmigrated_host_local_leak(cfg, verb=verb, profile=profile)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    resolved = effective.resolved
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    if verb == "sync":
+        _refuse_duplicate_section_names(ctx, command="sync")
+    preview = capture_mod.preview_capture_profile(
+        cfg, profile, repo_root, resolved=resolved
+    )
+    return (
+        ctx,
+        _CaptureSnapshot(
+            config_hash=content_sha(config.read_bytes()),
+            effective_hash=content_sha(repr(effective).encode("utf-8")),
+            preview=preview,
+        ),
+        tuple(effective.local_overlay.extensions),
+    )
+
+
+def _confirm_capture_plan(
+    *,
+    command: str,
+    ctx: ProfileContext,
+    snapshot: _CaptureSnapshot,
+    auto_enum: capture_mod.CaptureAuto | None,
+    yes: bool,
+) -> None:
+    """Apply the shared bare/use-live confirmation contract outside locks."""
+    plan = _build_capture_plan(preview=snapshot.preview, ctx=ctx)
+    if not plan.file_changes and not plan.risks:
+        return
+    if not yes and not sys.stdin.isatty():
+        if auto_enum is None:
+            raise ClickException(
+                f"setforge {command} found actionable live drift; use "
+                "--auto=use-live --yes to capture it or "
+                "--auto=keep-tracked to refuse it"
+            )
+        raise ClickException(
+            f"setforge {command} --auto=use-live requires --yes when stdin is not a TTY"
+        )
+    if not confirm_auto_operation(
+        command=command,
+        profile=ctx.profile,
+        plan=plan,
+        yes=yes,
+    ):
+        raise typer.Exit(0)
+
+
+def _render_keep_tracked(
+    preview: tuple[capture_mod.CapturePreview, ...],
+) -> None:
+    """Render the non-mutating keep-tracked refusal without taking locks."""
+    results = [
+        capture_mod.CaptureResult(
+            name=item.name,
+            action=(
+                capture_mod.CaptureAction.SKIPPED
+                if item.action is capture_mod.CaptureAction.UPDATED or item.store_update
+                else item.action
+            ),
+            reason="keep-tracked"
+            if item.action is capture_mod.CaptureAction.UPDATED or item.store_update
+            else item.reason,
+            warnings=item.warnings,
+        )
+        for item in preview
+    ]
+    _render_capture_results(results)
+
+
+def _require_same_preview(
+    before: _CaptureSnapshot,
+    locked: _CaptureSnapshot,
+) -> None:
+    if locked != before:
+        raise ClickException(
+            "capture plan changed after confirmation; no files were written — "
+            "run the command again"
+        )
 
 
 @app.command(epilog=CAPTURE_EXAMPLES)
@@ -124,6 +225,12 @@ def capture(
             "behavior), 'keep-tracked' rejects all drift."
         ),
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Confirm --auto=use-live without an interactive prompt.",
+    ),
 ) -> None:
     """Capture live → tracked for every tracked_file in the profile.
 
@@ -133,17 +240,39 @@ def capture(
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
+    if yes and auto_enum is None:
+        raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
     with mutation_locks(config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
-        cfg = load_config(config)
-        refuse_unmigrated_host_local_leak(cfg, verb="capture", profile=profile)
-        effective = resolve_effective_profile(cfg, profile, repo_root)
-        resolved = effective.resolved
+        initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
+            config, profile, repo_root, verb="capture"
+        )
+    if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
+        _render_keep_tracked(initial_snapshot.preview)
+        return
+    _confirm_capture_plan(
+        command="capture",
+        ctx=initial_ctx,
+        snapshot=initial_snapshot,
+        auto_enum=auto_enum,
+        yes=yes,
+    )
+    with mutation_locks(config_dir=repo_root, profile=profile):
+        operations.refuse_active(profile)
+        locked_ctx, locked_snapshot, _locked_extensions = _load_capture_preview(
+            config, profile, repo_root, verb="capture"
+        )
+        _require_same_preview(initial_snapshot, locked_snapshot)
         try:
             results = _run_capture(
-                cfg, profile, repo_root, config, auto_enum, resolved=resolved
+                locked_ctx.cfg,
+                profile,
+                repo_root,
+                config,
+                auto_enum,
+                resolved=locked_ctx.resolved,
             )
         except KeyboardInterrupt:
             # Plain ``capture`` takes no snapshot (only ``sync`` records a
@@ -193,26 +322,38 @@ def sync(
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
+    if yes and auto_enum is None:
+        raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
+    with mutation_locks(config_dir=repo_root, profile=profile):
+        operations.refuse_active(profile)
+        initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
+            config, profile, repo_root, verb="sync"
+        )
+    if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
+        _render_keep_tracked(initial_snapshot.preview)
+        return
+    _confirm_capture_plan(
+        command="sync",
+        ctx=initial_ctx,
+        snapshot=initial_snapshot,
+        auto_enum=auto_enum,
+        yes=yes,
+    )
     with (
         mutation_locks(config_dir=repo_root, profile=profile),
         operations.recover_on_error(profile, "sync"),
     ):
         operations.refuse_active(profile)
-        cfg = load_config(config)
-        # Same host-local leak gate as install (see install.py).
-        refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
-        effective = resolve_effective_profile(cfg, profile, repo_root)
-        resolved = effective.resolved
-        ctx = ProfileContext(
-            cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+        ctx, locked_snapshot, locked_extensions = _load_capture_preview(
+            config, profile, repo_root, verb="sync"
         )
-        _refuse_duplicate_section_names(ctx, command="sync")
+        _require_same_preview(initial_snapshot, locked_snapshot)
+        cfg = ctx.cfg
+        resolved = ctx.resolved
         if not no_transition:
             transitions.ensure_state_dir_writable()
-
-        _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
 
         src_paths = _sync_snapshot_paths(ctx, config)
         file_pre = transitions.snapshot_paths(src_paths)
@@ -248,7 +389,7 @@ def sync(
             _capture_extensions(
                 config,
                 profile,
-                overlay_extensions=effective.local_overlay.extensions,
+                overlay_extensions=list(locked_extensions),
             )
         except (KeyboardInterrupt, OSError) as exc:
             # capture_profile writes tracked srcs and re-baselines stores
@@ -290,41 +431,6 @@ def sync(
                 state_snapshots=state_pre,
             )
         operations.complete(journal)
-
-
-def _run_capture_confirm_gate(
-    ctx: ProfileContext,
-    *,
-    auto_enum: capture_mod.CaptureAuto | None,
-    yes: bool,
-) -> None:
-    """Run the auto-confirm ``sync --auto=use-live`` drift-confirm gate.
-
-    No-op unless ``auto_enum`` is :attr:`CaptureAuto.USE_LIVE`. Compares
-    live vs tracked with the host_local_sections overlay threaded
-    (round-2 so injected host-local sections do not
-    inflate the drift count), renders the auto-operation confirm panel,
-    and exits 0 cleanly when the user declines.
-    """
-    if auto_enum is not capture_mod.CaptureAuto.USE_LIVE:
-        return
-    host_local_sections_map = _load_validated_host_local_sections(
-        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
-    )
-    drift_report = compare_mod.compare_profile(
-        ctx.cfg,
-        ctx.profile,
-        ctx.repo_root,
-        host_local_sections=host_local_sections_map,
-    )
-    plan = _build_capture_plan(drift_report=drift_report, ctx=ctx)
-    if not confirm_auto_operation(
-        command="sync --auto=use-live",
-        profile=ctx.profile,
-        plan=plan,
-        yes=yes,
-    ):
-        raise typer.Exit(0)
 
 
 def _capture_sync_store_snapshots(
@@ -472,7 +578,8 @@ def _render_capture_results(results: list[capture_mod.CaptureResult]) -> None:
     keep it apart from the action listing.
     """
     for result in results:
-        typer.echo(f"{result.action.value:>8}  {result.name}")
+        reason = f" ({result.reason})" if result.reason else ""
+        typer.echo(f"{result.action.value:>8}  {result.name}{reason}")
         for warning in result.warnings:
             typer.secho(f"warning: {warning}", err=True, fg=typer.colors.YELLOW)
 

@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import typer
 from rich.console import Console
@@ -127,6 +127,7 @@ class FileStage:
     base: bytes
     live: bytes
     hunks: list[Hunk]
+    participating: bool = False
 
 
 class _Quit:
@@ -234,7 +235,18 @@ def collect_stages(
                 hunks_mod.extract_hunks(base, live),
                 stored,
             )
-            stages.append(FileStage(sub_name, fid, sub_src, sub_dst, base, live, hunks))
+            stages.append(
+                FileStage(
+                    sub_name,
+                    fid,
+                    sub_src,
+                    sub_dst,
+                    base,
+                    live,
+                    hunks,
+                    entry.staged if entry is not None else False,
+                )
+            )
     return stages
 
 
@@ -250,6 +262,7 @@ class StructuredFileStage:
     live: bytes
     fmt: StructuredFormat
     units: list[KeyUnit]
+    participating: bool = False
 
 
 def collect_structured_stages(
@@ -302,7 +315,15 @@ def collect_structured_stages(
             units = su_mod.classify_structured(fresh, stored)
             stages.append(
                 StructuredFileStage(
-                    sub_name, fid, sub_src, sub_dst, base, live, fmt, units
+                    sub_name,
+                    fid,
+                    sub_src,
+                    sub_dst,
+                    base,
+                    live,
+                    fmt,
+                    units,
+                    entry.staged if entry is not None else False,
                 )
             )
     return stages
@@ -1007,24 +1028,46 @@ def _render_list(
     stages: list[FileStage],
     struct: list[StructuredFileStage] | None = None,
 ) -> None:
-    """Render the read-only per-file class table (line hunks + structured keys)."""
-    data = [
-        {
-            "name": stage.sub_name,
-            "shared": counts(stage.hunks)[HunkClass.SHARED],
-            "local": counts(stage.hunks)[HunkClass.LOCAL],
-            "pending": counts(stage.hunks)[HunkClass.PENDING],
+    """Render durable participation and capture-actionability diagnostics."""
+
+    def row(
+        name: str, units: list[Hunk] | list[KeyUnit], participating: bool
+    ) -> dict[str, Any]:
+        tally = Counter(unit.cls for unit in units)
+        reconfirm = sum(unit.changed and unit.cls is HunkClass.SHARED for unit in units)
+        promotable = sum(
+            not unit.changed and unit.cls is HunkClass.SHARED for unit in units
+        )
+        pending = tally[HunkClass.PENDING]
+        blockers: list[str] = []
+        if reconfirm:
+            blockers.append(
+                f"{reconfirm} shared unit(s) changed: run `setforge stage {name}` "
+                "to re-confirm"
+            )
+        if pending:
+            blockers.append(
+                f"{pending} pending unit(s): run `setforge stage {name}` to classify"
+            )
+        return {
+            "name": name,
+            "participating": participating,
+            # Schema v1 compatibility: ``shared`` remains the total durable
+            # SHARED classification count.  The additive fields below explain
+            # which of those rows are currently promotable versus blocked on
+            # explicit re-confirmation.
+            "shared": tally[HunkClass.SHARED],
+            "shared_promotable": promotable,
+            "drafted": tally[HunkClass.SHARED_DRAFTED],
+            "reconfirm_required": reconfirm,
+            "local": tally[HunkClass.LOCAL],
+            "pending": pending,
+            "blockers": blockers,
         }
-        for stage in stages
-    ]
+
+    data = [row(stage.sub_name, stage.hunks, stage.participating) for stage in stages]
     data += [
-        {
-            "name": s.sub_name,
-            "shared": _struct_counts(s.units)[HunkClass.SHARED],
-            "local": _struct_counts(s.units)[HunkClass.LOCAL],
-            "pending": _struct_counts(s.units)[HunkClass.PENDING],
-        }
-        for s in (struct or [])
+        row(item.sub_name, item.units, item.participating) for item in (struct or [])
     ]
 
     def _human() -> None:
@@ -1035,8 +1078,12 @@ def _render_list(
         for row in data:
             console.print(
                 f"{row['name']}: "
-                f"{row['shared']} shared  {row['local']} local  "
-                f"{row['pending']} pending"
+                f"participating={str(row['participating']).lower()}  "
+                f"{row['shared_promotable']} shared-promotable  "
+                f"{row['drafted']} drafted  {row['reconfirm_required']} "
+                f"reconfirm-required  {row['local']} local  {row['pending']} pending"
             )
+            for blocker in row["blockers"]:
+                console.print(f"  blocked: {blocker}")
 
     render(ctx_obj, "stage", data, human_fn=_human)

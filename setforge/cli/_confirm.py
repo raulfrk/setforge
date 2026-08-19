@@ -165,6 +165,7 @@ class AutoPlan:
     file_changes: tuple[FileChange, ...]
     risks: tuple[str, ...]
     revert_command: str
+    blockers: tuple[str, ...] = ()
 
 
 def _render_panel(
@@ -181,10 +182,7 @@ def _render_panel(
     if plan.file_changes:
         table = Table(
             title="file changes",
-            caption=(
-                "counts are sections for shared-section drift, "
-                "keys for unexpected-drift entries"
-            ),
+            caption="counts are operation-specific changed units",
             show_lines=False,
         )
         table.add_column("source")
@@ -202,6 +200,11 @@ def _render_panel(
         console.print("[bold red]RISKS:[/bold red]")
         for risk in plan.risks:
             console.print(f"  • {risk}")
+
+    if plan.blockers:
+        console.print("[bold yellow]BLOCKED / SKIPPED:[/bold yellow]")
+        for blocker in plan.blockers:
+            console.print(f"  • {blocker}")
 
     console.print(
         "[bold]REVERT:[/bold] if you change your mind after applying:\n"
@@ -227,7 +230,7 @@ def confirm_auto_operation(
     """
     if yes:
         return True
-    if not plan.file_changes and not plan.risks:
+    if not plan.file_changes and not plan.risks and not plan.blockers:
         return True
     # TTY check FIRST — non-TTY callers see only the global handler's
     # ``error: ... requires --yes`` line, not a long panel printed

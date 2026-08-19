@@ -25,6 +25,7 @@ index-based and deterministic. Keys sort by dotted path, so ``theme`` precedes
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -52,6 +53,8 @@ _LIVE_BODY = (
     "theme: light\n"
     "workdir: /home/tester\n"
 )
+_LIVE_RECONFIRM_BODY = _LIVE_BODY.replace("theme: light", "theme: solarized")
+_TRACKED_RECONFIRM_BODY = _BASE_BODY.replace("theme: dark", "theme: solarized")
 # Draft-journey live edit: change ONLY the host-specific workdir → exactly one
 # per-key unit, so the post-sync SHARED_DRAFTED divergence is the only drift and
 # `compare --check` stays clean (an unstaged PENDING theme would be raw drift).
@@ -123,14 +126,73 @@ def test_structured_walk_shares_one_key_then_demotes(
     s.expect_in_display("1 shared", timeout=30.0)  # summary: 1 shared  1 local
     s.wait_for_exit(timeout=60, expected_code=0)
 
-    assert _prof(c, "sync", "-y")[0] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
     tracked = c.read_text(_TRACKED)
     assert "theme: light" in tracked  # SHARED key promoted
     assert "workdir: /home/generic" in tracked  # LOCAL key held at base value
     assert "/home/tester" not in tracked  # host value never leaked upstream
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host value
 
-    # --- walk 2: demote the now-SHARED theme back to LOCAL.
+    c.write_text(_LIVE, _LIVE_RECONFIRM_BODY)
+    rc, _out, err = _prof(c, "capture", "--auto=use-live", "--yes")
+    assert rc == 0, err
+    assert err.strip() == (
+        "warning: settings.yaml: a previously-staged key changed and was kept "
+        "host-only — re-run `setforge stage settings.yaml` to re-confirm it"
+    )
+    assert c.read_text(_TRACKED) == _BASE_BODY
+
+    rc, out, err = _setforge(
+        c,
+        [
+            "-o",
+            "json",
+            "stage",
+            "--list",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    assert rc == 0, err
+    envelope = json.loads(out)
+    assert envelope["schema_version"] == 1
+    (row,) = envelope["data"]
+    assert row["shared"] == 1
+    assert row["shared_promotable"] == 0
+    assert row["reconfirm_required"] == 1
+    assert (row["local"], row["pending"]) == (1, 0)
+
+    # Re-confirm the changed theme as the same SHARED class.
+    s_reconfirm = _stage_session(pyte_pty_session, c)
+    s_reconfirm.expect_in_display(_FRAME_GLYPH, timeout=60.0)
+    s_reconfirm.expect_in_display("theme", timeout=30.0)
+    s_reconfirm.send_keys("\r")
+    s_reconfirm.expect_in_display("Verbatim", timeout=30.0)
+    s_reconfirm.send_keys("\x1b[C\r")
+    s_reconfirm.expect_in_display("workdir", timeout=30.0)
+    s_reconfirm.send_keys("\r")
+    s_reconfirm.expect_in_display("1 shared", timeout=30.0)
+    s_reconfirm.wait_for_exit(timeout=60, expected_code=0)
+
+    rc, out, err = _setforge(
+        c,
+        [
+            "-o",
+            "json",
+            "stage",
+            "--list",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    assert rc == 0, err
+    (row,) = json.loads(out)["data"]
+    assert row["shared_promotable"] == 1
+    assert row["reconfirm_required"] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
+    assert c.read_text(_TRACKED) == _TRACKED_RECONFIRM_BODY
+
+    # --- walk 3: demote the now-SHARED theme back to LOCAL.
     s2 = _stage_session(pyte_pty_session, c)
     s2.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s2.expect_in_display("theme", timeout=30.0)
@@ -140,7 +202,7 @@ def test_structured_walk_shares_one_key_then_demotes(
     s2.expect_in_display("0 shared", timeout=30.0)  # summary: 0 shared  2 local
     s2.wait_for_exit(timeout=60, expected_code=0)
 
-    assert _prof(c, "sync", "-y")[0] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
     # Both keys now LOCAL → tracked is byte-restored to the base fixture.
     assert c.read_text(_TRACKED) == _BASE_BODY
 
@@ -172,7 +234,7 @@ def test_structured_walk_draft_type_confined_scalar(
     s.expect_in_display("1 drafted", timeout=30.0)
     s.wait_for_exit(timeout=60, expected_code=0)
 
-    assert _prof(c, "sync", "-y")[0] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
     tracked = c.read_text(_TRACKED)
     assert f"workdir: {_DRAFT_SCALAR}" in tracked  # the drafted scalar promoted
     assert "/home/tester" not in tracked  # host value NEVER leaked into tracked

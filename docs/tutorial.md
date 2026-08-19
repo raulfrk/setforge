@@ -346,7 +346,7 @@ back into your tracked files (and reconciles extensions), the inverse of
 `install`:
 
 ```console
-$ setforge sync --profile=default --yes
+$ setforge sync --profile=default --auto=use-live --yes
 ```
 
 `sync` records its own transition, so it too is revertable. (`capture` is the

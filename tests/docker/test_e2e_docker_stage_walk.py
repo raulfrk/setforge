@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -54,6 +55,12 @@ _LIVE_BODY = (
     "## Host paths\n"
     "workdir: /home/tester\n"
 )
+_LIVE_RECONFIRM_BODY = _LIVE_BODY.replace(
+    "Prefer zsh over bash.", "Prefer fish over bash."
+)
+_TRACKED_RECONFIRM_BODY = _BASE_BODY.replace(
+    "\n## Host paths", "\n## Shell\nPrefer fish over bash.\n\n## Host paths"
+)
 
 _FRAME_GLYPH = "┌"  # ┌ — the bar's top-rule corner; the render fence.
 
@@ -71,8 +78,43 @@ def _install(c: ContainerHandle) -> tuple[int, str, str]:
 
 def _sync(c: ContainerHandle) -> tuple[int, str, str]:
     return _setforge(
-        c, ["sync", f"--profile={_PROFILE}", f"--config={CONFIG_FIXTURE}", "-y"]
+        c,
+        [
+            "sync",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+            "--auto=use-live",
+            "--yes",
+        ],
     )
+
+
+def _capture(c: ContainerHandle) -> tuple[int, str, str]:
+    return _setforge(
+        c,
+        [
+            "capture",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+            "--auto=use-live",
+            "--yes",
+        ],
+    )
+
+
+def _stage_list(c: ContainerHandle) -> tuple[int, dict[str, Any], str]:
+    rc, out, err = _setforge(
+        c,
+        [
+            "-o",
+            "json",
+            "stage",
+            "--list",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    return rc, json.loads(out), err
 
 
 def _stage_session(
@@ -125,7 +167,48 @@ def test_stage_walk_shares_one_hunk_then_demotes(
     assert "/home/tester" not in tracked  # host bytes never leaked upstream
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host edit
 
-    # --- walk 2: demote the now-SHARED Shell hunk back to LOCAL.
+    # Editing an already-SHARED hunk is held at base until the host explicitly
+    # re-confirms that exact content.  This is the real installed CLI journey
+    # behind the preview/result diagnostic and the additive schema-v1 fields.
+    c.write_text(_LIVE, _LIVE_RECONFIRM_BODY)
+    rc, _out, err = _capture(c)
+    assert rc == 0, err
+    assert err.strip() == (
+        "warning: notes.md: a previously-staged hunk changed and was kept "
+        "host-only — re-run `setforge stage notes.md` to re-confirm it"
+    )
+    assert c.read_text(_TRACKED) == _BASE_BODY
+
+    rc, envelope, err = _stage_list(c)
+    assert rc == 0, err
+    assert envelope["schema_version"] == 1
+    (row,) = envelope["data"]
+    assert row["shared"] == 1  # stable schema-v1 compatibility projection
+    assert row["shared_promotable"] == 0
+    assert row["reconfirm_required"] == 1
+    assert (row["local"], row["pending"]) == (1, 0)
+
+    # --- walk 2: choose SHARED again for the changed Shell bytes.
+    s_reconfirm = _stage_session(pyte_pty_session, c)
+    s_reconfirm.expect_in_display(_FRAME_GLYPH, timeout=60.0)
+    s_reconfirm.expect_in_display("Shell", timeout=30.0)
+    s_reconfirm.send_keys("\r")
+    s_reconfirm.expect_in_display("Verbatim", timeout=30.0)
+    s_reconfirm.send_keys("\x1b[C\r")
+    s_reconfirm.expect_in_display("Host paths", timeout=30.0)
+    s_reconfirm.send_keys("\r")  # already-LOCAL focus stays on Keep local
+    s_reconfirm.expect_in_display("1 shared", timeout=30.0)
+    s_reconfirm.wait_for_exit(timeout=60, expected_code=0)
+
+    rc, envelope, err = _stage_list(c)
+    assert rc == 0, err
+    (row,) = envelope["data"]
+    assert row["shared_promotable"] == 1
+    assert row["reconfirm_required"] == 0
+    assert _sync(c)[0] == 0
+    assert c.read_text(_TRACKED) == _TRACKED_RECONFIRM_BODY
+
+    # --- walk 3: demote the now-SHARED Shell hunk back to LOCAL.
     s2 = _stage_session(pyte_pty_session, c)
     s2.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s2.expect_in_display("Shell", timeout=30.0)
@@ -165,19 +248,9 @@ def test_stage_walk_skip_then_quit_classifies_nothing(
     s.wait_for_exit(timeout=60, expected_code=0)
 
     # Skip + Quit recorded no classification: both hunks are still PENDING.
-    rc, out, err = _setforge(
-        c,
-        [
-            "-o",
-            "json",
-            "stage",
-            "--list",
-            f"--profile={_PROFILE}",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-    )
+    rc, envelope, err = _stage_list(c)
     assert rc == 0, err
-    (row,) = json.loads(out)["data"]
+    (row,) = envelope["data"]
     assert (row["shared"], row["local"], row["pending"]) == (0, 0, 2), row
 
 
@@ -209,23 +282,16 @@ def test_stage_list_json_projection(
     assert _install(c)[0] == 0
     c.write_text(_LIVE, _LIVE_BODY)  # two unclassified (PENDING) hunks
 
-    rc, out, err = _setforge(
-        c,
-        [
-            "-o",
-            "json",
-            "stage",
-            "--list",
-            f"--profile={_PROFILE}",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-    )
+    rc, envelope, err = _stage_list(c)
     assert rc == 0, err
-    envelope = json.loads(out)
     assert envelope["command"] == "stage"
+    assert envelope["schema_version"] == 1
     rows = {row["name"]: row for row in envelope["data"]}
     assert len(rows) == 1, envelope
     (row,) = rows.values()
     assert row["pending"] == 2  # both hunks unclassified
     assert row["shared"] == 0
+    assert row["shared_promotable"] == 0
+    assert row["drafted"] == 0
+    assert row["reconfirm_required"] == 0
     assert row["local"] == 0

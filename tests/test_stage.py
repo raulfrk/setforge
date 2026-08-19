@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -169,6 +171,76 @@ def test_walk_skip_leaves_class_unchanged(
     result = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
     assert all(h.cls is HunkClass.PENDING for h in result.hunks)
     assert result.decided_refs == set()
+
+
+def test_render_list_human_reports_participation_and_actionable_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dataclasses import replace
+
+    from setforge.cli._output import OutputContext, OutputFormat
+    from setforge.cli.stage import _render_list
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (first,) = collect_stages(cfg, resolved, repo, profile)
+    shell = next(hunk for hunk in first.hunks if hunk.label == "## Shell")
+    host = next(hunk for hunk in first.hunks if hunk.label == "## Host paths")
+    changed = replace(
+        first,
+        participating=True,
+        hunks=[
+            replace(shell, cls=HunkClass.SHARED, changed=True),
+            replace(host, cls=HunkClass.LOCAL, changed=True),
+            replace(
+                shell,
+                cls=HunkClass.PENDING,
+                label="new pending",
+                unit_id="sha256:new-pending",
+            ),
+        ],
+    )
+
+    _render_list(OutputContext(OutputFormat.HUMAN), [changed])
+
+    output = capsys.readouterr().out
+    assert "participating=true" in output
+    assert "0 shared-promotable" in output
+    assert "0 drafted" in output
+    assert "reconfirm-required" in output
+    assert "1 local" in output
+    assert "1 pending" in output
+    assert "blocked:" in output
+    assert "re-confirm" in output
+    assert "to classify" in output
+
+
+def test_render_list_json_changed_local_needs_no_reconfirm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from setforge.cli._output import OutputContext, OutputFormat
+    from setforge.cli.stage import _render_list
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    local = replace(stage.hunks[0], cls=HunkClass.LOCAL, changed=True)
+
+    _render_list(
+        OutputContext(OutputFormat.JSON),
+        [replace(stage, participating=True, hunks=[local])],
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    (row,) = payload["data"]
+    assert row["shared"] == 0
+    assert row["reconfirm_required"] == 0
+    assert row["local"] == 1
+    assert row["blockers"] == []
 
 
 def test_same_class_reconfirm_refreshes_plain_confirmed_hash(

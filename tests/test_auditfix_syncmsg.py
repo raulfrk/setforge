@@ -243,6 +243,7 @@ def test_capture_ctrl_c_message_not_false_restore(
         f"--profile={_PROFILE}",
         f"--config={config}",
         "--auto=use-live",
+        "--yes",
     ]
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 130, result.output

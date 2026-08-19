@@ -118,7 +118,7 @@ def test_share_draft_keep_local_shares_draft_keeps_host_live(
     s.expect_in_display("1 drafted", timeout=30.0)
     s.wait_for_exit(timeout=60, expected_code=0)
 
-    assert _prof(c, "sync", "-y")[0] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
     tracked = c.read_text(_TRACKED)
     assert _DRAFT_MARKER in tracked  # the draft promoted upstream
     assert "/home/tester" not in tracked  # host bytes NEVER leaked into tracked
@@ -151,7 +151,7 @@ def test_share_draft_adopt_rewrites_live_and_tracked(
     assert _DRAFT_MARKER in live  # live adopted the draft
     assert "/home/tester" not in live  # the host original is gone
 
-    assert _prof(c, "sync", "-y")[0] == 0
+    assert _prof(c, "sync", "--auto=use-live", "--yes")[0] == 0
     tracked = c.read_text(_TRACKED)
     assert _DRAFT_MARKER in tracked
     assert "/home/tester" not in tracked
