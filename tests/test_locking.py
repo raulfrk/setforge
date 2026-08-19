@@ -24,6 +24,7 @@ from setforge.transitions import state_root
 class _MutationLockKwargs(TypedDict, total=False):
     resources: bool
     config_dir: Path
+    config_dirs: tuple[Path, ...]
     profile: str
 
 
@@ -608,6 +609,25 @@ def test_mutation_locks_acquire_canonical_order(
         "exit:resources",
         "exit:mutation",
     ]
+
+
+def test_mutation_locks_acquire_multiple_config_dirs_in_sorted_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired: list[Path] = []
+
+    @contextmanager
+    def recording_config(config_dir: Path, timeout: float | None = None):
+        del timeout
+        acquired.append(config_dir)
+        yield
+
+    monkeypatch.setattr("setforge.locking.lockfile_lock", recording_config)
+
+    with mutation_locks(config_dirs=(tmp_path / "z", tmp_path / "a", tmp_path / "z")):
+        pass
+
+    assert acquired == [(tmp_path / "a").resolve(), (tmp_path / "z").resolve()]
 
 
 def test_direct_lock_order_inversion_refuses(

@@ -8,7 +8,12 @@ into a per-test tmp dir so snapshot writes land in the sandbox.
 from __future__ import annotations
 
 import io
+import json
+import os
+import shutil
+import stat
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +21,7 @@ from click.testing import Result
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
+from setforge import operations
 from setforge import snapshots as snap_mod
 from setforge.cli import app
 from setforge.cli import snapshot as cli_snap
@@ -36,6 +42,7 @@ def config_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "config-repo"
     (repo / "tracked" / "claude").mkdir(parents=True)
     (repo / "tracked" / "claude" / "CLAUDE.md").write_text("# Tracked CLAUDE.md body\n")
+    (repo / "tracked" / "claude" / "SECOND.md").write_text("# Second body\n")
     cfg = {
         "version": 1,
         "schema_version": "1.0",
@@ -44,10 +51,17 @@ def config_repo(tmp_path: Path) -> Path:
                 "src": "claude/CLAUDE.md",
                 "dst": str(tmp_path / "live" / "CLAUDE.md"),
             },
+            "second_md": {
+                "src": "claude/SECOND.md",
+                "dst": str(tmp_path / "live" / "SECOND.md"),
+            },
         },
         "profiles": {
             "test-profile": {
-                "tracked_files": ["claude_md"],
+                "tracked_files": ["claude_md", "second_md"],
+            },
+            "other-profile": {
+                "tracked_files": ["claude_md", "second_md"],
             },
         },
     }
@@ -97,6 +111,13 @@ def _seed_live_file(home: Path) -> Path:
     dst = home / "live" / "CLAUDE.md"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("live body\n")
+    return dst
+
+
+def _seed_second_live_file(home: Path) -> Path:
+    dst = home / "live" / "SECOND.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text("second live body\n")
     return dst
 
 
@@ -204,6 +225,262 @@ def test_snapshot_restore_yes_overlays_files(
     assert result.exit_code == 0, result.output
     assert dst.read_text() == "live body\n", "additive overlay restored snapshot body"
     assert sibling.read_text() == "sibling body\n", "live-only file untouched"
+
+
+def test_snapshot_restore_recreates_deleted_destination_tree(
+    fake_home: Path, config_repo: Path
+) -> None:
+    dst = _seed_live_file(fake_home)
+    _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "deleted-tree",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    shutil.rmtree(dst.parent)
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "deleted-tree",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert result.exit_code == 0, _outerr(result)
+    assert dst.read_text() == "live body\n"
+
+
+def test_snapshot_restore_rejects_snapshot_from_another_profile(
+    fake_home: Path, config_repo: Path
+) -> None:
+    dst = _seed_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "owned",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    dst.write_text("must remain drifted\n")
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "owned",
+            "--profile=other-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert "profile" in _outerr(result)
+    assert dst.read_text() == "must remain drifted\n"
+
+
+def test_snapshot_restore_preflights_every_mirror_before_first_write(
+    fake_home: Path, config_repo: Path
+) -> None:
+    first = _seed_live_file(fake_home)
+    second = _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "two-files",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    meta = snap_mod.resolve_snapshot("two-files")
+    broken_mirror = (
+        snap_mod.snapshots_root() / meta.snapshot_id / second.relative_to("/")
+    )
+    broken_mirror.unlink()
+    first.write_text("first drift\n")
+    second.write_text("second drift\n")
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "two-files",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert "missing on disk" in _outerr(result)
+    assert first.read_text() == "first drift\n"
+    assert second.read_text() == "second drift\n"
+
+
+def test_snapshot_restore_rolls_back_a_mid_apply_failure(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _seed_live_file(fake_home)
+    second = _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "rollback",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    first.write_text("first before failed restore\n")
+    first.chmod(0o640)
+    second.write_text("second before failed restore\n")
+    first_mtime_ns = 1_700_000_000_111_111_111
+    second_mtime_ns = 1_700_000_000_222_222_222
+    os.utime(first, ns=(first_mtime_ns, first_mtime_ns))
+    os.utime(second, ns=(second_mtime_ns, second_mtime_ns))
+    real_write = snap_mod._write_restored_file
+    live_writes = 0
+
+    def fail_second_live_write(
+        source: snap_mod._FrozenSnapshotFile,
+        guard_identities: dict[Path, tuple[int, int, int] | None],
+    ) -> None:
+        nonlocal live_writes
+        destination = source.path
+        if destination in {first, second}:
+            live_writes += 1
+            if live_writes == 2:
+                raise OSError("simulated second restore write failure")
+        real_write(source, guard_identities)
+
+    monkeypatch.setattr(snap_mod, "_write_restored_file", fail_second_live_write)
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "rollback",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, OSError)
+    assert live_writes == 2
+    assert first.read_text() == "first before failed restore\n"
+    assert stat.S_IMODE(first.stat().st_mode) == 0o640
+    assert first.stat().st_mtime_ns == first_mtime_ns
+    assert second.read_text() == "second before failed restore\n"
+    assert second.stat().st_mtime_ns == second_mtime_ns
+    assert operations.active("test-profile") is None
+
+
+def test_snapshot_restore_preserves_preflight_error_when_cleanup_fails(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_live_file(fake_home)
+    _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "cleanup-error",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    primary = RuntimeError("second preflight failed")
+    real_validate = snap_mod._validate_restore_plan
+    validations = 0
+
+    def fail_second_validation(plan: snap_mod._RestorePlan) -> None:
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            raise primary
+        real_validate(plan)
+
+    monkeypatch.setattr(snap_mod, "_validate_restore_plan", fail_second_validation)
+    monkeypatch.setattr(
+        operations,
+        "complete",
+        lambda _journal: (_ for _ in ()).throw(OSError("cleanup failed")),
+    )
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "cleanup-error",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert result.exception is primary
+    assert any("cleanup failed" in note for note in primary.__notes__)
+
+
+def test_snapshot_restore_rejects_destination_removed_from_effective_profile(
+    fake_home: Path, config_repo: Path
+) -> None:
+    first = _seed_live_file(fake_home)
+    _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "stale-destination",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, create.output
+    first.write_text("must survive\n")
+    yaml = YAML(typ="safe")
+    cfg = yaml.load(config_repo.read_text(encoding="utf-8"))
+    cfg["profiles"]["test-profile"]["tracked_files"] = ["second_md"]
+    buf = io.StringIO()
+    yaml.dump(cfg, buf)
+    config_repo.write_text(buf.getvalue(), encoding="utf-8")
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "stale-destination",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert "no longer managed" in _outerr(result)
+    assert first.read_text() == "must survive\n"
 
 
 def test_snapshot_restore_non_interactive_no_tty_required(
@@ -338,6 +615,139 @@ def test_snapshot_restore_choice_cancel_via_button_bar(
     )
     assert _effective_exit_code(result) == 1
     assert "aborted" in _outerr(result)
+
+
+def test_snapshot_restore_refuses_metadata_change_after_confirmation(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = _seed_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "confirmed",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0
+    created = snap_mod.resolve_snapshot("confirmed")
+    live.write_text("must survive\n")
+
+    def confirm_then_change(meta: snap_mod.SnapshotMeta, **_kwargs: object):
+        meta_path = snap_mod.snapshots_root() / meta.snapshot_id / "_meta.json"
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        raw["label"] = "changed-after-confirmation"
+        meta_path.write_text(json.dumps(raw), encoding="utf-8")
+        return cli_snap.RestoreChoice.RESTORE
+
+    monkeypatch.setattr(cli_snap, "_prompt_restore_choice", confirm_then_change)
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            created.snapshot_id,
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert "selection changed after confirmation" in _outerr(result)
+    assert live.read_text() == "must survive\n"
+
+
+def test_snapshot_restore_prewrite_topology_failure_clears_no_effect_journal(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = _seed_live_file(fake_home)
+    _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "topology-race",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0
+    live.write_text("must survive\n")
+    real_validate = snap_mod._validate_restore_plan
+    calls = 0
+
+    def fail_after_publication(plan: snap_mod._RestorePlan) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise SetforgeError("topology changed after journal publication")
+        real_validate(plan)
+
+    from setforge.errors import SetforgeError
+
+    monkeypatch.setattr(snap_mod, "_validate_restore_plan", fail_after_publication)
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "topology-race",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert calls == 2
+    assert live.read_text() == "must survive\n"
+    assert operations.active("test-profile") is None
+
+
+def test_snapshot_restore_rejects_operation_journal_destination(
+    fake_home: Path, config_repo: Path
+) -> None:
+    yaml = YAML(typ="safe")
+    cfg = yaml.load(config_repo.read_text(encoding="utf-8"))
+    destination = operations.journal_path("test-profile")
+    cfg["tracked_files"]["claude_md"]["dst"] = str(destination)
+    cfg["profiles"]["test-profile"]["tracked_files"] = ["claude_md"]
+    buf = io.StringIO()
+    yaml.dump(cfg, buf)
+    config_repo.write_text(buf.getvalue(), encoding="utf-8")
+    snapshot_id = "20260819T120000Z-journal-alias"
+    snapshot_dir = snap_mod.snapshots_root() / snapshot_id
+    mirror = snapshot_dir / destination.relative_to("/")
+    mirror.parent.mkdir(parents=True)
+    mirror.write_text("captured payload\n", encoding="utf-8")
+    snap_mod._write_meta(
+        snapshot_dir,
+        snap_mod.SnapshotMeta(
+            snapshot_id=snapshot_id,
+            label="journal-alias",
+            created_at=datetime(2026, 8, 19, 12, 0, tzinfo=UTC),
+            profile="test-profile",
+            files=(destination,),
+        ),
+    )
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "journal-alias",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert _effective_exit_code(result) == 1
+    assert "overlaps SetForge control path" in _outerr(result)
+    assert not destination.exists()
 
 
 def test_snapshot_restore_choice_pre_snapshot_first(

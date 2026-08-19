@@ -93,6 +93,7 @@ def test_recover_locks_every_profile_named_by_state_snapshots(
         command="revert",
         profile="migrate",
         config_dir=tmp_path,
+        config_dirs=(tmp_path / "host-local",),
         resources_lock=False,
         command_line=("revert",),
         paths=(),
@@ -104,12 +105,12 @@ def test_recover_locks_every_profile_named_by_state_snapshots(
         kind=operations.CheckpointKind.REVERSIBLE,
         recovery="restore stores",
     )
-    acquired: list[tuple[str, ...]] = []
+    acquired: list[tuple[tuple[str, ...], tuple[Path, ...]]] = []
     real_locks = locking.mutation_locks
 
     @contextmanager
     def recording_locks(**kwargs: Any) -> Iterator[None]:
-        acquired.append(kwargs["profiles"])
+        acquired.append((kwargs["profiles"], kwargs["config_dirs"]))
         with real_locks(**kwargs):
             yield
 
@@ -117,7 +118,17 @@ def test_recover_locks_every_profile_named_by_state_snapshots(
 
     recover_cli._apply_recovery(journal)
 
-    assert acquired == [("actual", "migrate")]
+    assert acquired == [
+        (
+            ("actual", "migrate"),
+            tuple(
+                sorted(
+                    (tmp_path.resolve(), (tmp_path / "host-local").resolve()),
+                    key=str,
+                )
+            ),
+        )
+    ]
     assert operations.active("migrate") is None
 
 

@@ -39,12 +39,26 @@ def _prepare(
     )
 
 
+def _path_guards(path: Path) -> tuple[operations.PathGuard, ...]:
+    guards = []
+    for ancestor in path.parents:
+        if ancestor == Path("/"):
+            continue
+        info = ancestor.stat()
+        guards.append(
+            operations.PathGuard(ancestor, info.st_dev, info.st_ino, info.st_mode)
+        )
+    return tuple(guards)
+
+
 def test_prepare_round_trips_exact_path_and_store_state(
     tmp_path: Path, operation_state: Path
 ) -> None:
     file_path = tmp_path / "live.txt"
     file_path.write_bytes(b"before\x00\n")
     file_path.chmod(0o640)
+    file_mtime_ns = 1_700_000_000_123_456_789
+    os.utime(file_path, ns=(file_mtime_ns, file_mtime_ns))
     link_path = tmp_path / "link"
     link_path.symlink_to("live.txt")
     directory = tmp_path / "directory"
@@ -67,6 +81,7 @@ def test_prepare_round_trips_exact_path_and_store_state(
     )
 
     assert operations.load("p") == journal
+    assert journal.paths[0].mtime_ns == file_mtime_ns
     assert operations.journal_path("p").stat().st_mode & 0o777 == 0o600
     assert tmp_path / "home" / ".cache" / "setforge" / "operations" in (
         operations.journal_path("p").parents
@@ -149,6 +164,12 @@ def test_recover_files_restores_file_symlink_directory_and_absence(
     directory = tmp_path / "kept-dir"
     directory.mkdir(mode=0o750)
     directory.chmod(0o750)
+    file_mtime_ns = 1_700_000_000_111_111_111
+    link_mtime_ns = 1_700_000_000_222_222_222
+    directory_mtime_ns = 1_700_000_000_333_333_333
+    os.utime(file_path, ns=(file_mtime_ns, file_mtime_ns))
+    os.utime(link, ns=(link_mtime_ns, link_mtime_ns), follow_symlinks=False)
+    os.utime(directory, ns=(directory_mtime_ns, directory_mtime_ns))
     created = tmp_path / "created"
     journal = operations.begin_checkpoint(
         _prepare(tmp_path, paths=(file_path, link, directory, created)),
@@ -168,12 +189,560 @@ def test_recover_files_restores_file_symlink_directory_and_absence(
 
     assert file_path.read_text(encoding="utf-8") == "before"
     assert file_path.stat().st_mode & 0o777 == 0o640
+    assert file_path.stat().st_mtime_ns == file_mtime_ns
     assert link.readlink() == Path("target")
+    assert link.lstat().st_mtime_ns == link_mtime_ns
     assert directory.stat().st_mode & 0o777 == 0o750
+    assert directory.stat().st_mtime_ns == directory_mtime_ns
     assert not created.exists()
     assert recovered.phase is operations.OperationPhase.RECOVERING
     operations.complete(recovered)
     assert operations.active("p") is None
+
+
+def test_recovery_round_trips_pre_epoch_mtime(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "pre-epoch"
+    path.write_text("before", encoding="utf-8")
+    expected_mtime_ns = -1_000_000_000
+    os.utime(path, ns=(expected_mtime_ns, expected_mtime_ns))
+    journal = operations.begin_checkpoint(
+        _prepare(tmp_path, paths=(path,)),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+
+    operations.recover_files(journal)
+
+    assert path.read_text(encoding="utf-8") == "before"
+    assert path.stat().st_mtime_ns == expected_mtime_ns
+
+
+def test_snapshot_restore_recovery_refuses_retargeted_parent_symlink(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="restore-files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("restored snapshot", encoding="utf-8")
+    original_parent = tmp_path / "original-live"
+    parent.rename(original_parent)
+    external = tmp_path / "external"
+    external.mkdir()
+    parent.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="journaled path parent changed"):
+        operations.recover_files(journal)
+
+    assert not (external / "file").exists()
+    assert (original_parent / "file").read_text(encoding="utf-8") == (
+        "restored snapshot"
+    )
+    assert operations.active("p") is not None
+
+
+def test_snapshot_restore_recovery_refuses_replaced_parent_directory(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="restore-files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("restored snapshot", encoding="utf-8")
+    original_parent = tmp_path / "original-live"
+    parent.rename(original_parent)
+    parent.mkdir()
+    path.write_text("unrelated replacement", encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="journaled path parent changed"):
+        operations.recover_files(journal)
+
+    assert path.read_text(encoding="utf-8") == "unrelated replacement"
+    assert (original_parent / "file").read_text(encoding="utf-8") == (
+        "restored snapshot"
+    )
+    assert operations.active("p") is not None
+
+
+def test_prepare_round_trips_config_reservations_and_path_guards(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / ".config" / "setforge" / "local.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("before", encoding="utf-8")
+    extra_config = path.parent
+    guards = _path_guards(path)
+
+    journal = operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        config_dirs=(extra_config,),
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=guards,
+    )
+    loaded = operations.load("p")
+
+    assert loaded == journal
+    assert operations.locked_config_dirs(loaded) == tuple(
+        sorted((tmp_path.resolve(), extra_config.resolve()), key=str)
+    )
+    assert loaded.path_guards == tuple(sorted(guards, key=lambda item: str(item.path)))
+    assert operations.conflicting_journals(
+        resources=False,
+        config_dir=extra_config,
+        profile=None,
+    ) == (loaded,)
+
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw["reserved_config_dirs"] = [str(tmp_path.resolve())]
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(SetforgeError, match="invalid operation journal"):
+        operations.load("p")
+
+
+def test_snapshot_restore_allows_tracked_path_with_local_config_suffix(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "project" / ".config" / "setforge" / "local.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("tracked", encoding="utf-8")
+
+    journal = operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+
+    assert operations.load("p") == journal
+    assert operations.locked_config_dirs(journal) == (tmp_path.resolve(),)
+
+
+def test_schema_one_legacy_journal_fields_remain_recoverable(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        _prepare(tmp_path, paths=(path,)),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw.pop("path_guards")
+    raw.pop("reserved_config_dirs")
+    raw.pop("reserved_config_dirs_digest")
+    for row in raw["paths"]:
+        row.pop("mtime_ns")
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+    path.write_text("after", encoding="utf-8")
+
+    loaded = operations.load("p")
+    operations.recover_files(loaded)
+
+    assert loaded.operation_id == journal.operation_id
+    assert loaded.path_guards == ()
+    assert operations.locked_config_dirs(loaded) == (tmp_path.resolve(),)
+    assert path.read_text(encoding="utf-8") == "before"
+
+
+def test_snapshot_restore_journal_cannot_drop_path_guards(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "live" / "file"
+    path.parent.mkdir()
+    path.write_text("before", encoding="utf-8")
+    operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw.pop("path_guards")
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="invalid operation journal"):
+        operations.load("p")
+
+
+def test_snapshot_restore_journal_cannot_drop_config_reservations(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "live" / "file"
+    path.parent.mkdir()
+    path.write_text("before", encoding="utf-8")
+    operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw.pop("reserved_config_dirs")
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="invalid operation journal"):
+        operations.load("p")
+
+
+def test_recovery_refuses_parent_swap_after_preflight(
+    tmp_path: Path,
+    operation_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        operations.prepare(
+            command="snapshot restore",
+            profile="p",
+            config_dir=tmp_path,
+            resources_lock=False,
+            command_line=("snapshot", "restore"),
+            paths=(path,),
+            path_guards=_path_guards(path),
+        ),
+        name="restore-files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("snapshot-applied", encoding="utf-8")
+    real_validate = operations._validate_snapshot_restore_parents
+
+    def validate_then_swap(candidate: operations.OperationJournal) -> None:
+        real_validate(candidate)
+        parent.rename(tmp_path / "original-live")
+        parent.mkdir()
+        path.write_text("unrelated replacement", encoding="utf-8")
+
+    monkeypatch.setattr(
+        operations, "_validate_snapshot_restore_parents", validate_then_swap
+    )
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations.recover_files(journal)
+
+    assert path.read_text(encoding="utf-8") == "unrelated replacement"
+    assert (tmp_path / "original-live" / "file").read_text(encoding="utf-8") == (
+        "snapshot-applied"
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", [operations.SnapshotKind.FILE, operations.SnapshotKind.SYMLINK]
+)
+def test_anchored_restore_refuses_parent_swap_after_descriptor_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: operations.SnapshotKind,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("unrelated original", encoding="utf-8")
+    identities = operations._guard_identities(_path_guards(path))
+    real_verify = operations._verify_parent_binding
+    swapped = False
+
+    def swap_then_verify(parent_fd: int, lexical_parent: Path) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(tmp_path / "original-live")
+            parent.mkdir()
+            path.write_text("unrelated replacement", encoding="utf-8")
+        real_verify(parent_fd, lexical_parent)
+
+    monkeypatch.setattr(operations, "_verify_parent_binding", swap_then_verify)
+    snapshot = operations.PathSnapshot(
+        path=path,
+        kind=kind,
+        mode=0o600 if kind is operations.SnapshotKind.FILE else 0o777,
+        payload=b"restored" if kind is operations.SnapshotKind.FILE else None,
+        link_target="target" if kind is operations.SnapshotKind.SYMLINK else None,
+    )
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(snapshot, guard_identities=identities)
+
+    assert path.read_text(encoding="utf-8") == "unrelated replacement"
+    assert (tmp_path / "original-live" / "file").read_text(encoding="utf-8") == (
+        "unrelated original"
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", [operations.SnapshotKind.FILE, operations.SnapshotKind.SYMLINK]
+)
+def test_anchored_restore_refuses_parent_swap_during_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: operations.SnapshotKind,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    identities = operations._guard_identities(_path_guards(path))
+    real_remove = operations._remove_replaceable_at
+    swapped = False
+
+    def remove_then_swap(parent_fd: int, name: str, destination: Path) -> None:
+        nonlocal swapped
+        real_remove(parent_fd, name, destination)
+        if not swapped:
+            swapped = True
+            parent.rename(tmp_path / "moved-live")
+            parent.mkdir()
+            path.write_text("unrelated replacement", encoding="utf-8")
+
+    monkeypatch.setattr(operations, "_remove_replaceable_at", remove_then_swap)
+    snapshot = operations.PathSnapshot(
+        path=path,
+        kind=kind,
+        mode=0o600 if kind is operations.SnapshotKind.FILE else 0o777,
+        payload=b"restored" if kind is operations.SnapshotKind.FILE else None,
+        link_target="target" if kind is operations.SnapshotKind.SYMLINK else None,
+    )
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(snapshot, guard_identities=identities)
+
+    assert path.read_text(encoding="utf-8") == "unrelated replacement"
+    moved = tmp_path / "moved-live" / "file"
+    if kind is operations.SnapshotKind.FILE:
+        assert moved.read_bytes() == b"restored"
+    else:
+        assert moved.readlink() == Path("target")
+
+
+@pytest.mark.parametrize(
+    "kind", [operations.SnapshotKind.ABSENT, operations.SnapshotKind.DIRECTORY]
+)
+def test_anchored_recovery_kind_refuses_parent_swap_during_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: operations.SnapshotKind,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "entry"
+    if kind is operations.SnapshotKind.ABSENT:
+        path.write_text("operation-created", encoding="utf-8")
+    else:
+        path.mkdir()
+    identities = operations._guard_identities(_path_guards(path))
+    real_fsync = operations.os.fsync
+    swapped = False
+
+    def fsync_then_swap(descriptor: int) -> None:
+        nonlocal swapped
+        real_fsync(descriptor)
+        if not swapped:
+            swapped = True
+            parent.rename(tmp_path / "moved-live")
+            parent.mkdir()
+            (parent / "unrelated").write_text("replacement", encoding="utf-8")
+
+    monkeypatch.setattr(operations.os, "fsync", fsync_then_swap)
+    snapshot = operations.PathSnapshot(
+        path=path,
+        kind=kind,
+        mode=0o700 if kind is operations.SnapshotKind.DIRECTORY else None,
+    )
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            snapshot,
+            guard_identities=identities,
+            permit_existing_absent=True,
+        )
+
+    assert (parent / "unrelated").read_text(encoding="utf-8") == "replacement"
+    moved = tmp_path / "moved-live" / "entry"
+    if kind is operations.SnapshotKind.ABSENT:
+        assert not moved.exists()
+    else:
+        assert moved.is_dir()
+
+
+@pytest.mark.parametrize("permit_existing_absent", [False, True])
+def test_anchored_restore_never_recreates_expected_existing_parent(
+    tmp_path: Path,
+    permit_existing_absent: bool,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    identities = operations._guard_identities(_path_guards(path))
+    parent.rename(tmp_path / "moved-live")
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            operations.PathSnapshot(
+                path=path,
+                kind=operations.SnapshotKind.FILE,
+                mode=0o600,
+                payload=b"restored",
+            ),
+            guard_identities=identities,
+            permit_existing_absent=permit_existing_absent,
+        )
+
+    assert not parent.exists()
+    assert (tmp_path / "moved-live" / "file").read_text(encoding="utf-8") == ("before")
+
+
+def test_anchored_restore_normalizes_failure_opening_created_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "new-parent"
+    path = parent / "file"
+    identities = operations._guard_identities(
+        (
+            *_path_guards(tmp_path / "placeholder"),
+            operations.PathGuard(parent, None, None, None),
+        )
+    )
+    real_open = operations.os.open
+    parent_opens = 0
+
+    def fail_second_parent_open(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal parent_opens
+        if target == parent.name and dir_fd is not None:
+            parent_opens += 1
+            if parent_opens == 2:
+                raise PermissionError("simulated post-mkdir open failure")
+        return real_open(target, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(operations.os, "open", fail_second_parent_open)
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            operations.PathSnapshot(
+                path=path,
+                kind=operations.SnapshotKind.FILE,
+                mode=0o600,
+                payload=b"restored",
+            ),
+            guard_identities=identities,
+        )
+
+    assert parent_opens == 2
+    assert not path.exists()
+
+
+def test_anchored_restore_closes_created_parent_when_fstat_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "new-parent"
+    path = parent / "file"
+    identities = operations._guard_identities(
+        (
+            *_path_guards(tmp_path / "placeholder"),
+            operations.PathGuard(parent, None, None, None),
+        )
+    )
+    real_open = operations.os.open
+    real_fstat = operations.os.fstat
+    created_parent_fd: int | None = None
+
+    def record_created_parent_open(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal created_parent_fd
+        descriptor = real_open(target, flags, mode, dir_fd=dir_fd)
+        if target == parent.name and dir_fd is not None:
+            created_parent_fd = descriptor
+        return descriptor
+
+    def fail_created_parent_fstat(descriptor: int) -> os.stat_result:
+        if descriptor == created_parent_fd:
+            raise OSError("simulated post-mkdir fstat failure")
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(operations.os, "open", record_created_parent_open)
+    monkeypatch.setattr(operations.os, "fstat", fail_created_parent_fstat)
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            operations.PathSnapshot(
+                path=path,
+                kind=operations.SnapshotKind.FILE,
+                mode=0o600,
+                payload=b"restored",
+            ),
+            guard_identities=identities,
+        )
+
+    assert created_parent_fd is not None
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        real_fstat(created_parent_fd)
 
 
 def test_recovery_refuses_nonempty_created_directory(
@@ -631,14 +1200,24 @@ def _make_path_noncanonical(raw: dict[str, object], key: str) -> None:
     raw[key] = f"{value}/child/.."
 
 
+def _add_invalid_path_guard(raw: dict[str, object]) -> None:
+    paths = raw["paths"]
+    path = Path(paths[0]["path"]).parent  # type: ignore[index]
+    raw["path_guards"] = [
+        {"path": str(path), "device": 0, "inode": 0, "mode": 0o100644}
+    ]
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
         lambda raw: _set_nested(raw, "paths", 0, "path", "relative"),
         lambda raw: _set_nested(raw, "paths", 0, "mode", True),
         lambda raw: _set_nested(raw, "paths", 0, "mode", 0o10000),
+        lambda raw: _set_nested(raw, "paths", 0, "mtime_ns", True),
         lambda raw: _set_nested(raw, "paths", 0, "payload", None),
         lambda raw: _duplicate_row(raw, "paths"),
+        _add_invalid_path_guard,
         lambda raw: _set_nested(raw, "state_snapshots", 0, "store", "unknown"),
         lambda raw: _set_nested(raw, "state_snapshots", 0, "key", "../escape"),
         lambda raw: _set_nested(raw, "state_snapshots", 0, "key", "."),
@@ -655,6 +1234,8 @@ def _make_path_noncanonical(raw: dict[str, object], key: str) -> None:
         lambda raw: raw.update(state_dir="relative"),
         lambda raw: _make_path_noncanonical(raw, "config_dir"),
         lambda raw: _make_path_noncanonical(raw, "state_dir"),
+        lambda raw: raw.update(reserved_config_dirs=[]),
+        lambda raw: raw.update(reserved_config_dirs=["relative"]),
         lambda raw: raw.update(resources_lock="yes"),
         lambda raw: raw.update(resources_lock=False),
         lambda raw: raw.update(reserved_profiles=[]),

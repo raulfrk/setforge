@@ -263,6 +263,7 @@ def mutation_locks(
     *,
     resources: bool = False,
     config_dir: Path | None = None,
+    config_dirs: tuple[Path, ...] = (),
     profile: str | None = None,
     profiles: tuple[str, ...] = (),
     timeout: float | None = None,
@@ -280,8 +281,17 @@ def mutation_locks(
         stack.enter_context(_mutation_gate_lock(timeout=timeout))
         if resources:
             stack.enter_context(install_resources_lock(timeout=timeout))
-        if config_dir is not None:
-            stack.enter_context(lockfile_lock(config_dir, timeout=timeout))
+        requested_config_dirs = tuple(
+            sorted(
+                {
+                    *(path.resolve() for path in config_dirs),
+                    *((config_dir.resolve(),) if config_dir is not None else ()),
+                },
+                key=str,
+            )
+        )
+        for requested_config_dir in requested_config_dirs:
+            stack.enter_context(lockfile_lock(requested_config_dir, timeout=timeout))
         requested_profiles = tuple(
             sorted({*profiles, *((profile,) if profile is not None else ())})
         )
@@ -291,9 +301,16 @@ def mutation_locks(
 
         operations.refuse_conflicting_mutation(
             resources=resources,
-            config_dir=config_dir,
+            config_dir=None,
             profile=profile,
             profiles=requested_profiles,
             allow_operation_id=allow_operation_id,
         )
+        for requested_config_dir in requested_config_dirs:
+            operations.refuse_conflicting_mutation(
+                resources=False,
+                config_dir=requested_config_dir,
+                profile=None,
+                allow_operation_id=allow_operation_id,
+            )
         yield

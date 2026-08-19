@@ -11,7 +11,7 @@ import os
 import shutil
 import stat
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -68,6 +68,22 @@ class PathSnapshot:
     mode: int | None = None
     payload: bytes | None = None
     link_target: str | None = None
+    mtime_ns: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PathGuard:
+    """Stable identity, or expected absence, above a journaled path."""
+
+    path: Path
+    device: int | None
+    inode: int | None
+    mode: int | None
+
+    @property
+    def exists(self) -> bool:
+        """Return whether this guard records an existing directory."""
+        return self.device is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +128,8 @@ class OperationJournal:
     adapters: tuple[AdapterSnapshot, ...] = ()
     checkpoints: tuple[OperationCheckpoint, ...] = ()
     transition_names_before: tuple[str, ...] = ()
+    reserved_config_dirs: tuple[Path, ...] = ()
+    path_guards: tuple[PathGuard, ...] = ()
 
 
 def locked_profiles(journal: OperationJournal) -> tuple[str, ...]:
@@ -121,6 +139,19 @@ def locked_profiles(journal: OperationJournal) -> tuple[str, ...]:
     return tuple(
         sorted({journal.profile, *(item.profile for item in journal.state_snapshots)})
     )
+
+
+def locked_config_dirs(journal: OperationJournal) -> tuple[Path, ...]:
+    """Return every canonical config namespace reserved by ``journal``."""
+    if journal.reserved_config_dirs:
+        return journal.reserved_config_dirs
+    return (journal.config_dir,) if journal.config_dir is not None else ()
+
+
+def _config_dirs_digest(config_dirs: tuple[Path, ...]) -> str:
+    """Return an integrity witness for one exact config-lock envelope."""
+    payload = json.dumps([str(path) for path in config_dirs], separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def journals_root() -> Path:
@@ -187,6 +218,7 @@ def snapshot_path(path: Path) -> PathSnapshot:
                 kind=SnapshotKind.SYMLINK,
                 mode=stat.S_IMODE(info.st_mode),
                 link_target=link_target,
+                mtime_ns=info.st_mtime_ns,
             )
         if stat.S_ISREG(info.st_mode):
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -207,6 +239,7 @@ def snapshot_path(path: Path) -> PathSnapshot:
                 kind=SnapshotKind.FILE,
                 mode=stat.S_IMODE(opened.st_mode),
                 payload=payload,
+                mtime_ns=opened.st_mtime_ns,
             )
         if stat.S_ISDIR(info.st_mode):
             if not _same_snapshot_stat(info, path.lstat()):
@@ -215,6 +248,7 @@ def snapshot_path(path: Path) -> PathSnapshot:
                 path=path,
                 kind=SnapshotKind.DIRECTORY,
                 mode=stat.S_IMODE(info.st_mode),
+                mtime_ns=info.st_mtime_ns,
             )
     except OSError as exc:
         raise SetforgeError(
@@ -253,6 +287,8 @@ def prepare(
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     adapters: tuple[AdapterSnapshot, ...] = (),
     profiles: tuple[str, ...] = (),
+    config_dirs: tuple[Path, ...] = (),
+    path_guards: tuple[PathGuard, ...] = (),
 ) -> OperationJournal:
     """Durably publish a complete prepared journal or refuse an active one."""
     with _registry_lock():
@@ -287,6 +323,16 @@ def prepare(
             ),
             adapters=adapters,
             transition_names_before=_committed_transition_names(),
+            reserved_config_dirs=tuple(
+                sorted(
+                    {
+                        *(path.resolve() for path in config_dirs),
+                        *((config_dir.resolve(),) if config_dir is not None else ()),
+                    },
+                    key=str,
+                )
+            ),
+            path_guards=tuple(sorted(path_guards, key=lambda item: str(item.path))),
         )
         _write(journal, create=True)
         return journal
@@ -412,7 +458,10 @@ def conflicting_journals(
         journal
         for journal in _load_all()
         if (resources and journal.resources_lock)
-        or (expected_config is not None and journal.config_dir == expected_config)
+        or (
+            expected_config is not None
+            and expected_config in locked_config_dirs(journal)
+        )
         or bool(expected_profiles.intersection(locked_profiles(journal)))
     )
 
@@ -421,7 +470,7 @@ def refuse_config_mutation(config_dir: Path) -> None:
     """Refuse a config write covered by any unfinished operation journal."""
     expected = config_dir.resolve()
     for journal in _load_all():
-        if journal.config_dir == expected:
+        if expected in locked_config_dirs(journal):
             raise SetforgeError(
                 f"unfinished {journal.command} operation {journal.operation_id} "
                 "blocks this config mutation; run "
@@ -511,15 +560,24 @@ def finish_checkpoint(journal: OperationJournal) -> OperationJournal:
 def recover_files(journal: OperationJournal) -> OperationJournal:
     """Restore path/store snapshots and durably enter recovery state."""
     _require_matching_state_root(journal)
+    _validate_path_guards(journal)
+    _validate_snapshot_restore_parents(journal)
     recovering = replace(journal, phase=OperationPhase.RECOVERING)
     _write(recovering)
     scoped_paths = {path for item in recovering.checkpoints for path in item.paths}
+    guard_identities = (
+        _guard_identities(journal.path_guards) if journal.path_guards else None
+    )
     for snapshot in sorted(
         (item for item in recovering.paths if str(item.path) in scoped_paths),
         key=lambda item: len(item.path.parts),
         reverse=True,
     ):
-        _restore_path(snapshot)
+        _restore_path(
+            snapshot,
+            guard_identities=guard_identities,
+            permit_existing_absent=True,
+        )
     if any(item.restore_state for item in recovering.checkpoints):
         transitions.restore_state_snapshots(recovering.state_snapshots)
     if any(item.restore_transitions for item in recovering.checkpoints):
@@ -612,6 +670,8 @@ def recover_adapters(journal: OperationJournal) -> None:
 def validate_recovery(journal: OperationJournal) -> None:
     """Validate the recovery environment before the first compensating effect."""
     _require_matching_state_root(journal)
+    _validate_path_guards(journal)
+    _validate_snapshot_restore_parents(journal)
     for snapshot in journal.adapters:
         try:
             payload = json.loads(snapshot.payload_json)
@@ -621,6 +681,84 @@ def validate_recovery(journal: OperationJournal) -> None:
             _validate_adapter_payload(snapshot.kind, payload)
         except (TypeError, ValueError) as exc:
             raise SetforgeError(f"invalid adapter recovery baseline: {exc}") from exc
+
+
+def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
+    """Refuse recovery through a parent symlink created after snapshot planning."""
+    if journal.command != "snapshot restore":
+        return
+    scoped_paths = {path for item in journal.checkpoints for path in item.paths}
+    checked: set[Path] = set()
+    for raw_path in scoped_paths:
+        path = Path(raw_path)
+        for parent in path.parents:
+            if parent == Path("/") or parent in checked:
+                continue
+            checked.add(parent)
+            try:
+                info = parent.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise SetforgeError(
+                    f"snapshot restore parent changed before recovery: {parent}"
+                ) from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise SetforgeError(
+                    "snapshot restore refuses recovery through symlinked parent: "
+                    f"{parent}"
+                )
+            if not stat.S_ISDIR(info.st_mode):
+                raise SetforgeError(
+                    f"snapshot restore parent is not a directory: {parent}"
+                )
+
+
+def _validate_path_guards(journal: OperationJournal) -> None:
+    """Fail before recovery effects when a guarded directory was replaced."""
+    journal_paths = {item.path for item in journal.paths}
+    absent_paths = {
+        item.path for item in journal.paths if item.kind is SnapshotKind.ABSENT
+    }
+    for guard in journal.path_guards:
+        try:
+            info = guard.path.lstat()
+        except FileNotFoundError:
+            if not guard.exists:
+                continue
+            raise SetforgeError(
+                f"journaled path parent changed before recovery: {guard.path}"
+            ) from None
+        except OSError as exc:
+            raise SetforgeError(
+                f"journaled path parent changed before recovery: {guard.path}"
+            ) from exc
+        if not guard.exists:
+            try:
+                has_untracked_content = any(
+                    item not in journal_paths for item in guard.path.rglob("*")
+                )
+            except OSError as exc:
+                raise SetforgeError(
+                    f"journaled absent parent changed before recovery: {guard.path}"
+                ) from exc
+            if (
+                guard.path not in absent_paths
+                or not stat.S_ISDIR(info.st_mode)
+                or has_untracked_content
+            ):
+                raise SetforgeError(
+                    f"journaled absent parent changed before recovery: {guard.path}"
+                )
+            continue
+        if (info.st_dev, info.st_ino, info.st_mode) != (
+            guard.device,
+            guard.inode,
+            guard.mode,
+        ):
+            raise SetforgeError(
+                f"journaled path parent changed before recovery: {guard.path}"
+            )
 
 
 def mark_manual(journal: OperationJournal) -> OperationJournal:
@@ -653,7 +791,288 @@ def _require_matching_state_root(journal: OperationJournal) -> None:
         )
 
 
-def _restore_path(snapshot: PathSnapshot) -> None:
+def _guard_identities(
+    guards: tuple[PathGuard, ...],
+) -> dict[Path, tuple[int, int, int] | None]:
+    """Return the mutable identity map used by one anchored write sequence."""
+    return {
+        guard.path: (
+            cast(tuple[int, int, int], (guard.device, guard.inode, guard.mode))
+            if guard.exists
+            else None
+        )
+        for guard in guards
+    }
+
+
+@contextmanager
+def _open_guarded_parent(  # noqa: C901
+    path: Path,
+    guard_identities: dict[Path, tuple[int, int, int] | None],
+    *,
+    create_missing: bool,
+    permit_existing_absent: bool,
+) -> Iterator[int | None]:
+    """Yield ``path.parent`` as a verified, non-symlink directory descriptor."""
+    path = path.expanduser().absolute()
+    if not path.is_absolute():  # pragma: no cover - absolute() is defensive
+        raise SetforgeError(f"recovery path must be absolute: {path}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    current_path = Path("/")
+    try:
+        current_fd = os.open("/", flags)
+        descriptors.append(current_fd)
+        for component in path.relative_to("/").parts[:-1]:
+            current_path /= component
+            if current_path not in guard_identities:
+                raise SetforgeError(
+                    f"journaled path parent lacks an identity guard: {current_path}"
+                )
+            expected = guard_identities[current_path]
+            try:
+                child_fd = os.open(component, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                if expected is not None:
+                    raise SetforgeError(
+                        f"journaled path parent changed before write: {current_path}"
+                    ) from None
+                if not create_missing:
+                    yield None
+                    return
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                except OSError as exc:
+                    raise SetforgeError(
+                        f"journaled path parent changed before write: {current_path}"
+                    ) from exc
+                try:
+                    child_fd = os.open(component, flags, dir_fd=current_fd)
+                except OSError as exc:
+                    raise SetforgeError(
+                        f"journaled path parent changed before write: {current_path}"
+                    ) from exc
+                try:
+                    info = os.fstat(child_fd)
+                except OSError as exc:
+                    os.close(child_fd)
+                    raise SetforgeError(
+                        f"journaled path parent changed before write: {current_path}"
+                    ) from exc
+                guard_identities[current_path] = (
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_mode,
+                )
+                expected = guard_identities[current_path]
+            except OSError as exc:
+                raise SetforgeError(
+                    f"journaled path parent changed before write: {current_path}"
+                ) from exc
+            descriptors.append(child_fd)
+            info = os.fstat(child_fd)
+            actual = (info.st_dev, info.st_ino, info.st_mode)
+            if expected is None:
+                if not permit_existing_absent:
+                    os.close(child_fd)
+                    descriptors.pop()
+                    raise SetforgeError(
+                        f"journaled absent parent changed before write: {current_path}"
+                    )
+                guard_identities[current_path] = actual
+            elif actual != expected:
+                raise SetforgeError(
+                    f"journaled path parent changed before write: {current_path}"
+                )
+            current_fd = child_fd
+        yield current_fd
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _remove_replaceable_at(parent_fd: int, name: str, path: Path) -> None:
+    """Remove one final path component without following it."""
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            os.rmdir(name, dir_fd=parent_fd)
+        except OSError as exc:
+            raise SetforgeError(
+                f"refusing to replace non-empty directory during recovery: {path}"
+            ) from exc
+    else:
+        os.unlink(name, dir_fd=parent_fd)
+
+
+def _verify_parent_binding(parent_fd: int, parent: Path) -> None:
+    """Confirm the held descriptor is still the destination's lexical parent."""
+    try:
+        lexical = parent.lstat()
+        opened = os.fstat(parent_fd)
+    except OSError as exc:
+        raise SetforgeError(
+            f"journaled path parent changed before write: {parent}"
+        ) from exc
+    if (lexical.st_dev, lexical.st_ino, lexical.st_mode) != (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_mode,
+    ):
+        raise SetforgeError(f"journaled path parent changed before write: {parent}")
+
+
+def _atomic_write_at(
+    parent_fd: int, name: str, payload: bytes, *, mode: int, mtime_ns: int | None
+) -> None:
+    """Atomically publish bytes relative to a held directory descriptor."""
+    temporary = f".{name}.setforge-{uuid4().hex}"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            mode,
+            dir_fd=parent_fd,
+        )
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written == 0:  # pragma: no cover - defensive kernel contract
+                raise OSError("short write while publishing recovered file")
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        if mtime_ns is not None:
+            os.utime(
+                name,
+                ns=(mtime_ns, mtime_ns),
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        published = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            os.fsync(published)
+        finally:
+            os.close(published)
+        os.fsync(parent_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        with suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=parent_fd)
+
+
+def _restore_path_anchored(  # noqa: C901
+    snapshot: PathSnapshot,
+    guard_identities: dict[Path, tuple[int, int, int] | None],
+    *,
+    permit_existing_absent: bool,
+) -> None:
+    """Restore one path relative to a verified parent descriptor."""
+    create_missing = snapshot.kind is not SnapshotKind.ABSENT
+    with _open_guarded_parent(
+        snapshot.path,
+        guard_identities,
+        create_missing=create_missing,
+        permit_existing_absent=permit_existing_absent,
+    ) as parent_fd:
+        if parent_fd is None:
+            return
+        _verify_parent_binding(parent_fd, snapshot.path.parent)
+        name = snapshot.path.name
+        if snapshot.kind is SnapshotKind.ABSENT:
+            _remove_replaceable_at(parent_fd, name, snapshot.path)
+            os.fsync(parent_fd)
+            _verify_parent_binding(parent_fd, snapshot.path.parent)
+            return
+        if snapshot.kind is SnapshotKind.DIRECTORY:
+            try:
+                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                os.mkdir(name, mode=snapshot.mode or 0o700, dir_fd=parent_fd)
+            else:
+                if not stat.S_ISDIR(info.st_mode):
+                    raise SetforgeError(
+                        "refusing to replace non-directory during recovery: "
+                        f"{snapshot.path}"
+                    )
+            directory_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            try:
+                if snapshot.mode is not None:
+                    os.fchmod(directory_fd, snapshot.mode)
+                if snapshot.mtime_ns is not None:
+                    os.utime(
+                        directory_fd,
+                        ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                    )
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            os.fsync(parent_fd)
+            _verify_parent_binding(parent_fd, snapshot.path.parent)
+            return
+        _remove_replaceable_at(parent_fd, name, snapshot.path)
+        if snapshot.kind is SnapshotKind.FILE:
+            assert snapshot.payload is not None
+            mode = snapshot.mode if snapshot.mode is not None else 0o600
+            _atomic_write_at(
+                parent_fd,
+                name,
+                snapshot.payload,
+                mode=mode,
+                mtime_ns=snapshot.mtime_ns,
+            )
+            _verify_parent_binding(parent_fd, snapshot.path.parent)
+            return
+        if snapshot.kind is SnapshotKind.SYMLINK:
+            assert snapshot.link_target is not None
+            os.symlink(snapshot.link_target, name, dir_fd=parent_fd)
+            if snapshot.mtime_ns is not None:
+                os.utime(
+                    name,
+                    ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            os.fsync(parent_fd)
+            _verify_parent_binding(parent_fd, snapshot.path.parent)
+            return
+        raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
+
+
+def _restore_path(
+    snapshot: PathSnapshot,
+    *,
+    guard_identities: dict[Path, tuple[int, int, int] | None] | None = None,
+    permit_existing_absent: bool = False,
+) -> None:
+    if guard_identities is not None:
+        _restore_path_anchored(
+            snapshot,
+            guard_identities,
+            permit_existing_absent=permit_existing_absent,
+        )
+        return
     path = snapshot.path
     if snapshot.kind is SnapshotKind.ABSENT:
         _restore_absent(path)
@@ -667,10 +1086,24 @@ def _restore_path(snapshot: PathSnapshot) -> None:
         assert snapshot.payload is not None
         mode = snapshot.mode if snapshot.mode is not None else 0o600
         atomicio.atomic_write_bytes(path, snapshot.payload, mode=mode)
+        if snapshot.mtime_ns is not None:
+            os.utime(
+                path,
+                ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                follow_symlinks=False,
+            )
+            atomicio.fsync_path(path, strict=True)
         return
     if snapshot.kind is SnapshotKind.SYMLINK:
         assert snapshot.link_target is not None
         path.symlink_to(snapshot.link_target)
+        if snapshot.mtime_ns is not None:
+            os.utime(
+                path,
+                ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                follow_symlinks=False,
+            )
+        atomicio.fsync_dir(path.parent)
         return
     raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
 
@@ -696,6 +1129,13 @@ def _restore_directory(snapshot: PathSnapshot) -> None:
     path.mkdir(exist_ok=True)
     if snapshot.mode is not None:
         path.chmod(snapshot.mode)
+    if snapshot.mtime_ns is not None:
+        os.utime(
+            path,
+            ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+            follow_symlinks=False,
+        )
+    atomicio.fsync_dir(path.parent)
 
 
 def _remove_replaceable(path: Path) -> None:
@@ -743,6 +1183,8 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
         "command": journal.command,
         "profile": journal.profile,
         "config_dir": str(journal.config_dir) if journal.config_dir else None,
+        "reserved_config_dirs": [str(path) for path in locked_config_dirs(journal)],
+        "reserved_config_dirs_digest": _config_dirs_digest(locked_config_dirs(journal)),
         "state_dir": str(journal.state_dir),
         "reserved_profiles": list(locked_profiles(journal)),
         "resources_lock": journal.resources_lock,
@@ -756,8 +1198,18 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
                 "mode": item.mode,
                 "payload": _b64(item.payload),
                 "link_target": item.link_target,
+                "mtime_ns": item.mtime_ns,
             }
             for item in journal.paths
+        ],
+        "path_guards": [
+            {
+                "path": str(item.path),
+                "device": item.device,
+                "inode": item.inode,
+                "mode": item.mode,
+            }
+            for item in journal.path_guards
         ],
         "state_snapshots": [
             {
@@ -791,21 +1243,27 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
 
 
 def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
+    command = _require_str(raw, "command")
     profile = _require_str(raw, "profile")
     resources_lock = _require_bool(raw, "resources_lock")
     reserved_profiles = _require_str_tuple(raw, "reserved_profiles")
     path_rows = raw["paths"]
+    path_guard_rows = raw.get("path_guards", [])
+    has_reserved_config_dirs = "reserved_config_dirs" in raw
     state_rows = raw["state_snapshots"]
     checkpoint_rows = raw["checkpoints"]
     adapter_rows = raw.get("adapters", [])
     if not isinstance(path_rows, list) or not isinstance(state_rows, list):
         raise TypeError("paths/state_snapshots must be lists")
+    if not isinstance(path_guard_rows, list):
+        raise TypeError("path_guards must be a list")
     if not isinstance(checkpoint_rows, list):
         raise TypeError("checkpoints must be a list")
     if not isinstance(adapter_rows, list):
         raise TypeError("adapters must be a list")
     for label, rows in (
         ("paths", path_rows),
+        ("path_guards", path_guard_rows),
         ("state_snapshots", state_rows),
         ("checkpoints", checkpoint_rows),
         ("adapters", adapter_rows),
@@ -814,6 +1272,26 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
             raise TypeError(f"{label} entries must be objects")
     paths = tuple(_parse_path_snapshot(row) for row in path_rows)
     _require_unique((str(item.path) for item in paths), "path snapshot")
+    path_guards = tuple(_parse_path_guard(row) for row in path_guard_rows)
+    _require_unique((str(item.path) for item in path_guards), "path guard")
+    if any(
+        not any(item.path in snapshot.path.parents for snapshot in paths)
+        for item in path_guards
+    ):
+        raise ValueError("path guards must be ancestors of journaled paths")
+    if command == "snapshot restore":
+        if not has_reserved_config_dirs:
+            raise ValueError("snapshot restore journal requires reserved_config_dirs")
+        expected_guards = {
+            parent
+            for snapshot in paths
+            for parent in snapshot.path.parents
+            if parent != Path("/")
+        }
+        if {item.path for item in path_guards} != expected_guards:
+            raise ValueError(
+                "snapshot restore path guards must cover every destination parent"
+            )
     states = tuple(_parse_state_snapshot(row) for row in state_rows)
     required_profiles = {profile, *(item.profile for item in states)}
     if (
@@ -855,6 +1333,15 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     if config_raw is not None and not isinstance(config_raw, str):
         raise TypeError("config_dir must be an absolute path or null")
     config_dir = Path(config_raw) if config_raw is not None else None
+    config_dir_rows = raw.get(
+        "reserved_config_dirs", [str(config_dir)] if config_dir is not None else []
+    )
+    if not isinstance(config_dir_rows, list) or not all(
+        isinstance(item, str) for item in config_dir_rows
+    ):
+        raise TypeError("reserved_config_dirs must be a list of paths")
+    reserved_config_dirs = tuple(Path(item) for item in config_dir_rows)
+    config_dirs_digest = raw.get("reserved_config_dirs_digest")
     state_dir = Path(_require_str(raw, "state_dir"))
     if config_dir is not None and not config_dir.is_absolute():
         raise ValueError("config_dir must be absolute")
@@ -862,11 +1349,32 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         raise ValueError("state_dir must be absolute")
     if config_dir is not None and config_dir != config_dir.resolve():
         raise ValueError("config_dir must be canonical")
+    if (
+        tuple(sorted(set(reserved_config_dirs), key=str)) != reserved_config_dirs
+        or any(
+            not path.is_absolute() or path != path.resolve()
+            for path in reserved_config_dirs
+        )
+        or (config_dir is not None and config_dir not in reserved_config_dirs)
+    ):
+        raise ValueError(
+            "reserved_config_dirs must be sorted, unique, canonical, and include "
+            "config_dir"
+        )
+    if config_dirs_digest is not None and (
+        not isinstance(config_dirs_digest, str)
+        or config_dirs_digest != _config_dirs_digest(reserved_config_dirs)
+    ):
+        raise ValueError("reserved_config_dirs integrity witness does not match")
+    if command == "snapshot restore" and config_dirs_digest is None:
+        raise ValueError(
+            "snapshot restore journal requires a config reservation witness"
+        )
     if state_dir != state_dir.resolve():
         raise ValueError("state_dir must be canonical")
     return OperationJournal(
         operation_id=_require_str(raw, "operation_id"),
-        command=_require_str(raw, "command"),
+        command=command,
         profile=profile,
         config_dir=config_dir,
         state_dir=state_dir,
@@ -880,7 +1388,37 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         adapters=adapters,
         checkpoints=checkpoints,
         transition_names_before=_optional_str_tuple(raw, "transition_names_before"),
+        reserved_config_dirs=reserved_config_dirs,
+        path_guards=path_guards,
     )
+
+
+def _parse_path_guard(row: dict[object, object]) -> PathGuard:
+    path_raw = row.get("path")
+    if not isinstance(path_raw, str):
+        raise TypeError("path guard path must be text")
+    path = Path(path_raw)
+    if (
+        not path.is_absolute()
+        or path == Path("/")
+        or ".." in path.parts
+        or path_raw != str(path)
+    ):
+        raise ValueError("path guard path must be canonical and absolute")
+    fields = tuple(row.get(key) for key in ("device", "inode", "mode"))
+    if all(value is None for value in fields):
+        return PathGuard(path, None, None, None)
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in fields):
+        raise TypeError("path guard identity fields must be all integers or all null")
+    device, inode, mode = fields
+    assert isinstance(device, int)
+    assert isinstance(inode, int)
+    assert isinstance(mode, int)
+    if device < 0 or inode < 0 or mode < 0:
+        raise ValueError("path guard identity fields must be non-negative")
+    if not stat.S_ISDIR(mode):
+        raise ValueError("path guard must describe a directory")
+    return PathGuard(path, device, inode, mode)
 
 
 def _parse_path_snapshot(  # noqa: C901
@@ -902,8 +1440,18 @@ def _parse_path_snapshot(  # noqa: C901
     link_target = row.get("link_target")
     if link_target is not None and not isinstance(link_target, str):
         raise TypeError("snapshot link_target must be text or null")
+    mtime_ns = row.get("mtime_ns")
+    if mtime_ns is not None and (
+        isinstance(mtime_ns, bool) or not isinstance(mtime_ns, int)
+    ):
+        raise TypeError("snapshot mtime_ns must be an integer or null")
     if kind is SnapshotKind.ABSENT:
-        if mode is not None or payload is not None or link_target is not None:
+        if (
+            mode is not None
+            or payload is not None
+            or link_target is not None
+            or mtime_ns is not None
+        ):
             raise ValueError("absent snapshot cannot carry metadata")
     elif kind is SnapshotKind.FILE:
         if mode is None or payload is None or link_target is not None:
@@ -913,7 +1461,14 @@ def _parse_path_snapshot(  # noqa: C901
             raise ValueError("symlink snapshot requires mode/link_target only")
     elif mode is None or payload is not None or link_target is not None:
         raise ValueError("directory snapshot requires mode only")
-    return PathSnapshot(Path(path_raw), kind, mode, payload, link_target)
+    return PathSnapshot(
+        path=Path(path_raw),
+        kind=kind,
+        mode=mode,
+        payload=payload,
+        link_target=link_target,
+        mtime_ns=mtime_ns,
+    )
 
 
 def _parse_state_snapshot(

@@ -4,7 +4,8 @@ Thin typer subgroup over :mod:`setforge.snapshots`: each command parses
 flags, builds a :class:`ProfileContext` when needed, calls the domain
 helper, and renders the result. Restore presents an arrow-key three-way
 choice (abort / restore / restore-with-pre-snapshot); ``--yes`` /
-``--non-interactive`` short-circuits to plain "restore".
+``--non-interactive`` short-circuits to plain "restore". Restore plans
+are profile-scoped and journaled before the first live write.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from rich.table import Table
 
 from setforge import operations
 from setforge import snapshots as snap_mod
+from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -272,14 +274,16 @@ def snapshot_restore(
     """Overlay a snapshot's captured files onto live (ADDITIVE per Q6).
 
     Live-only files added since the snapshot are left untouched; only
-    files that exist in the snapshot are overlaid. Interactive runs
+    files that exist in the snapshot are overlaid. The snapshot must
+    belong to the requested effective profile, and a partial failure is
+    recovered from the durable pre-write journal. Interactive runs
     present a three-option arrow-key confirm (abort / restore /
     restore+pre-restore-snapshot); non-interactive runs (``--yes`` /
     ``--non-interactive``) bypass the wizard and do a plain restore
     (no pre-restore snapshot — opt into that via the interactive
     choice).
     """
-    target = snap_mod.resolve_snapshot(snapshot)
+    target = snap_mod.resolve_snapshot(snapshot, profile=profile)
     skip_prompt = yes or non_interactive
     console = Console()
     if skip_prompt:
@@ -290,27 +294,76 @@ def snapshot_restore(
         console.print("[red]aborted[/red] — no live mutations applied")
         raise typer.Exit(code=1)
     resolved_config = _resolve_config_arg(config)
-    with mutation_locks(config_dir=resolved_config.resolve().parent, profile=profile):
-        operations.refuse_active(profile)
+    config_dirs = {
+        resolved_config.resolve().parent,
+        *(
+            (snap_mod.LOCAL_CONFIG_PATH.parent,)
+            if snap_mod.LOCAL_CONFIG_PATH in target.files
+            else ()
+        ),
+    }
+    with (
+        mutation_locks(
+            config_dirs=tuple(config_dirs),
+            profile=profile,
+        ),
+        operations.recover_on_error(profile, "snapshot restore"),
+    ):
         ctx = _build_profile_ctx(profile, resolved_config)
-        refreshed = snap_mod.resolve_snapshot(snapshot)
-        if refreshed.snapshot_id != target.snapshot_id:
+        plan = snap_mod._plan_restore_snapshot(
+            snapshot,
+            cfg=ctx.cfg,
+            resolved=ctx.resolved,
+            repo_root=ctx.repo_root,
+            profile=ctx.profile,
+        )
+        if plan.target != target:
             raise SetforgeError("snapshot selection changed after confirmation; retry")
+        snap_mod._validate_restore_plan(plan)
         match choice:
             case RestoreChoice.RESTORE:
-                snap_mod.restore_snapshot(target.snapshot_id, pre_snapshot=False)
-                _emit_restore_summary(target, console=console)
+                pass
             case RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT:
-                snap_mod.restore_snapshot(
-                    target.snapshot_id,
-                    pre_snapshot=True,
-                    pre_snapshot_ctx=snap_mod.PreSnapshotCtx(
-                        cfg=ctx.cfg,
-                        resolved=ctx.resolved,
-                        repo_root=ctx.repo_root,
-                        profile=ctx.profile,
-                    ),
+                snap_mod.create_snapshot(
+                    ctx.cfg,
+                    ctx.resolved,
+                    ctx.repo_root,
+                    ctx.profile,
+                    f"pre-restore-{target.snapshot_id}",
                 )
-                _emit_restore_summary(target, console=console)
             case _:  # pragma: no cover — exhaustive over StrEnum
                 assert_never(choice)
+        journal = operations.prepare(
+            command="snapshot restore",
+            profile=profile,
+            config_dir=resolved_config.resolve().parent,
+            config_dirs=tuple(config_dirs),
+            resources_lock=False,
+            command_line=tuple(redact_argv(sys.argv[1:])),
+            paths=tuple(file.path for file in plan.files),
+            path_guards=plan.destination_ancestors,
+        )
+        journal = operations.begin_checkpoint(
+            journal,
+            name="restore-files",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore every live path captured before snapshot restore",
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(),
+        )
+        try:
+            snap_mod._validate_restore_plan(plan)
+        except BaseException as primary:
+            try:
+                operations.complete(journal)
+            except BaseException as cleanup_error:
+                primary.add_note(
+                    "snapshot restore journal cleanup failed after a no-effect "
+                    f"preflight refusal: {cleanup_error}"
+                )
+            raise
+        snap_mod._apply_restore_plan(plan, validate=False)
+        journal = operations.finish_checkpoint(journal)
+        operations.complete(journal)
+        _emit_restore_summary(plan.target, console=console)

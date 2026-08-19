@@ -14,13 +14,18 @@ of mocking them out.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from setforge import snapshots as snap_mod
 from setforge.config import (
@@ -137,6 +142,30 @@ def test_create_snapshot_writes_meta_last_for_atomicity(
     assert loaded["snapshot_id"] == meta.snapshot_id
 
 
+def test_create_snapshot_fsyncs_commit_marker_directory_before_publication(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("body\n")
+    synced: list[Path] = []
+    real_fsync_dir = snap_mod.atomicio.fsync_dir
+
+    def recording_fsync_dir(path: Path) -> None:
+        synced.append(path)
+        real_fsync_dir(path)
+
+    monkeypatch.setattr(snap_mod.atomicio, "fsync_dir", recording_fsync_dir)
+
+    meta = _create(ctx, "durable-marker")
+    partial = snap_mod.snapshots_root() / f"{meta.snapshot_id}.partial"
+    root = snap_mod.snapshots_root()
+
+    assert partial in synced
+    assert root in synced
+    assert synced.index(partial) < synced.index(root)
+
+
 def test_create_snapshot_partial_dir_removed_on_failure(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -232,10 +261,64 @@ def test_create_snapshot_captures_local_yaml_when_present(
     assert mirror.read_text() == "binaries: {}\n"
 
 
+def test_create_snapshot_writes_only_the_frozen_capture_plan(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx, _, first = _build_ctx(fake_home)
+    second_name = "second_text"
+    second = fake_home / "live" / "second.txt"
+    ctx.cfg.tracked_files[second_name] = TrackedFile.model_validate(
+        {
+            "src": "minimal/second.txt",
+            "dst": str(second),
+            "template": False,
+        }
+    )
+    ctx.resolved.tracked_files.append(second_name)
+    first.parent.mkdir(parents=True)
+    first.write_text("first frozen\n")
+    second.write_text("second frozen\n")
+    real_write = snap_mod._write_frozen_file
+    writes = 0
+
+    def mutate_second_after_first_write(
+        source: snap_mod._FrozenSnapshotFile, destination: Path
+    ) -> None:
+        nonlocal writes
+        real_write(source, destination)
+        writes += 1
+        if writes == 1:
+            second.write_text("second changed after planning\n")
+
+    monkeypatch.setattr(
+        snap_mod,
+        "_write_frozen_file",
+        mutate_second_after_first_write,
+    )
+
+    meta = _create(ctx, "frozen-create")
+
+    second_mirror = (
+        snap_mod.snapshots_root() / meta.snapshot_id / second.relative_to("/")
+    )
+    assert second_mirror.read_text() == "second frozen\n"
+
+
 def test_create_snapshot_rejects_empty_label(fake_home: Path) -> None:
     ctx, _, _ = _build_ctx(fake_home)
     with pytest.raises(SetforgeError, match="non-empty"):
         _create(ctx, "")
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["../escape", "nested/name", ".", "..", "hidden.partial", "line\nbreak"],
+)
+def test_create_snapshot_rejects_unsafe_label(fake_home: Path, label: str) -> None:
+    ctx, _, _ = _build_ctx(fake_home)
+    with pytest.raises(SetforgeError, match="safe non-empty name"):
+        _create(ctx, label)
 
 
 def test_create_snapshot_rejects_negative_keep(fake_home: Path) -> None:
@@ -334,6 +417,250 @@ def test_resolve_snapshot_matches_by_id(fake_home: Path) -> None:
     assert resolved.snapshot_id == meta.snapshot_id
 
 
+def test_resolve_snapshot_scopes_same_label_to_requested_profile(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_ctx, _, first_dst = _build_ctx(fake_home, profile="first")
+    second_ctx, _, second_dst = _build_ctx(
+        fake_home,
+        profile="second",
+        tracked_file_name="second_text",
+        dst_template=str(fake_home / "live" / "second.txt"),
+    )
+    first_dst.parent.mkdir(parents=True)
+    first_dst.write_text("first\n")
+    second_dst.write_text("second\n")
+    times = iter(
+        (
+            datetime(2026, 5, 18, 21, 0, 0, tzinfo=UTC),
+            datetime(2026, 5, 18, 21, 0, 1, tzinfo=UTC),
+        )
+    )
+    monkeypatch.setattr(snap_mod, "now_utc", lambda: next(times))
+    first = _create(first_ctx, "shared")
+    _create(second_ctx, "shared")
+
+    resolved = snap_mod.resolve_snapshot("shared", profile="first")
+
+    assert resolved.snapshot_id == first.snapshot_id
+
+
+def test_load_meta_rejects_noncanonical_destination(fake_home: Path) -> None:
+    snapshot_id = "20260518T210000Z-unsafe"
+    snapshot_dir = snap_mod.snapshots_root() / snapshot_id
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "_meta.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": snapshot_id,
+                "label": "unsafe",
+                "created_at": "2026-05-18T21:00:00+00:00",
+                "profile": "test",
+                "files": ["/tmp/../outside"],
+            }
+        )
+    )
+
+    with pytest.raises(SetforgeError, match="canonical absolute"):
+        snap_mod._load_meta(snapshot_dir)
+
+
+def test_load_meta_rejects_symlinked_snapshot_directory(fake_home: Path) -> None:
+    root = snap_mod.snapshots_root()
+    root.mkdir(parents=True)
+    outside = fake_home / "outside-snapshot"
+    outside.mkdir()
+    linked = root / "20260518T210000Z-linked"
+    linked.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="unsafe snapshot directory"):
+        snap_mod._load_meta(linked)
+
+
+def test_load_meta_rejects_metadata_id_mismatch(fake_home: Path) -> None:
+    snapshot_dir = snap_mod.snapshots_root() / "20260518T210000Z-directory"
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "_meta.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "20260518T210000Z-other",
+                "label": "other",
+                "created_at": "2026-05-18T21:00:00+00:00",
+                "profile": "test",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SetforgeError, match="does not match its directory"):
+        snap_mod._load_meta(snapshot_dir)
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+def test_load_meta_rejects_unsafe_metadata_file(fake_home: Path, kind: str) -> None:
+    snapshot_dir = snap_mod.snapshots_root() / f"20260518T210000Z-{kind}"
+    snapshot_dir.mkdir(parents=True)
+    meta_path = snapshot_dir / "_meta.json"
+    if kind == "directory":
+        meta_path.mkdir()
+    else:
+        target = fake_home / "outside-meta.json"
+        target.write_text("{}", encoding="utf-8")
+        meta_path.symlink_to(target)
+
+    with pytest.raises(SetforgeError, match=r"corrupt _meta\.json"):
+        snap_mod._load_meta(snapshot_dir)
+
+
+def test_load_meta_normalizes_invalid_utf8(fake_home: Path) -> None:
+    snapshot_dir = snap_mod.snapshots_root() / "20260518T210000Z-invalid-utf8"
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "_meta.json").write_bytes(b"\xff")
+
+    with pytest.raises(SetforgeError, match=r"corrupt _meta\.json"):
+        snap_mod._load_meta(snapshot_dir)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("snapshot_id", "", "non-empty text"),
+        ("created_at", "not-a-timestamp", "invalid 'created_at'"),
+        ("created_at", "2026-05-18T21:00:00", "include a timezone"),
+        ("files", "not-a-list", "must be a list"),
+        ("files", [42], "canonical absolute text"),
+    ],
+)
+def test_snapshot_meta_rejects_invalid_field_shapes(
+    field: str, value: object, match: str
+) -> None:
+    raw: dict[str, object] = {
+        "snapshot_id": "20260518T210000Z-property",
+        "label": "property",
+        "created_at": "2026-05-18T21:00:00+00:00",
+        "profile": "test",
+        "files": ["/managed/file"],
+    }
+    raw[field] = value
+
+    with pytest.raises(SetforgeError, match=match):
+        snap_mod.SnapshotMeta.from_dict(raw)
+
+
+def test_snapshot_meta_rejects_unknown_fields() -> None:
+    raw: dict[str, object] = {
+        "snapshot_id": "20260518T210000Z-property",
+        "label": "property",
+        "created_at": "2026-05-18T21:00:00+00:00",
+        "profile": "test",
+        "files": ["/managed/file"],
+        "unexpected": True,
+    }
+
+    with pytest.raises(SetforgeError, match="expected exactly"):
+        snap_mod.SnapshotMeta.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    ("profile", "created_at", "match"),
+    [
+        ("", datetime(2026, 5, 18, 21, 0, tzinfo=UTC), "profile"),
+        ("test", datetime(2026, 5, 18, 21, 0), "timezone"),
+    ],
+)
+def test_snapshot_meta_direct_construction_enforces_persisted_schema(
+    profile: str, created_at: datetime, match: str
+) -> None:
+    with pytest.raises(SetforgeError, match=match):
+        snap_mod.SnapshotMeta(
+            snapshot_id="20260518T210000Z-direct",
+            label="direct",
+            created_at=created_at,
+            profile=profile,
+            files=(Path("/managed/file"),),
+        )
+
+
+def test_snapshot_meta_rejects_tzinfo_without_utc_offset() -> None:
+    class NoOffset(tzinfo):
+        def utcoffset(self, _dt: datetime | None):
+            return None
+
+        def dst(self, _dt: datetime | None):
+            return None
+
+        def tzname(self, _dt: datetime | None):
+            return "no-offset"
+
+    with pytest.raises(SetforgeError, match="timezone"):
+        snap_mod.SnapshotMeta(
+            snapshot_id="20260518T210000Z-direct",
+            label="direct",
+            created_at=datetime(2026, 5, 18, 21, 0, tzinfo=NoOffset()),
+            profile="test",
+            files=(Path("/managed/file"),),
+        )
+
+
+def test_snapshot_meta_rejects_nul_destination() -> None:
+    raw: dict[str, object] = {
+        "snapshot_id": "20260518T210000Z-property",
+        "label": "property",
+        "created_at": "2026-05-18T21:00:00+00:00",
+        "profile": "test",
+        "files": ["/managed/bad\x00path"],
+    }
+
+    with pytest.raises(SetforgeError, match="canonical absolute"):
+        snap_mod.SnapshotMeta.from_dict(raw)
+
+
+@given(
+    st.lists(
+        st.text(
+            alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-",
+            min_size=1,
+            max_size=16,
+        ),
+        unique=True,
+        max_size=8,
+    )
+)
+def test_snapshot_meta_round_trips_canonical_paths(parts: list[str]) -> None:
+    meta = snap_mod.SnapshotMeta(
+        snapshot_id="20260518T210000Z-property",
+        label="property",
+        created_at=datetime(2026, 5, 18, 21, 0, 0, tzinfo=UTC),
+        profile="test",
+        files=tuple(Path("/managed") / part for part in parts),
+    )
+
+    assert snap_mod.SnapshotMeta.from_dict(meta.to_dict()) == meta
+
+
+@given(
+    st.text(
+        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-",
+        min_size=1,
+        max_size=16,
+    )
+)
+def test_snapshot_meta_rejects_duplicate_destination(component: str) -> None:
+    path = f"/managed/{component}"
+    raw: dict[str, object] = {
+        "snapshot_id": "20260518T210000Z-property",
+        "label": "property",
+        "created_at": "2026-05-18T21:00:00+00:00",
+        "profile": "test",
+        "files": [path, path],
+    }
+
+    with pytest.raises(SetforgeError, match="duplicate file path"):
+        snap_mod.SnapshotMeta.from_dict(raw)
+
+
 def test_resolve_snapshot_missing_raises(fake_home: Path) -> None:
     with pytest.raises(SetforgeError, match="not found"):
         snap_mod.resolve_snapshot("does-not-exist")
@@ -360,6 +687,398 @@ def test_restore_snapshot_overlays_only_files_in_snapshot(
     snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
     assert dst.read_text() == "original\n"
     assert sibling.read_text() == "untouched live-only body\n"
+
+
+def test_restore_plan_does_not_reread_changed_mirror(fake_home: Path) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("planned body\n")
+    meta = _create(ctx, "freeze-restore")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    mirror = snap_mod.snapshots_root() / meta.snapshot_id / dst.relative_to("/")
+    mirror.write_text("changed mirror body\n")
+    dst.write_text("live drift\n")
+
+    snap_mod._apply_restore_plan(plan)
+
+    assert dst.read_text() == "planned body\n"
+
+
+def test_restore_plan_refuses_destination_parent_retarget_before_write(
+    fake_home: Path,
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "parent-retarget")
+    dst.write_text("pre-restore body\n")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    original_parent = fake_home / "original-live"
+    dst.parent.rename(original_parent)
+    external_parent = fake_home / "external-live"
+    external_parent.mkdir()
+    dst.parent.symlink_to(external_parent, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="symlinked destination parent"):
+        snap_mod._apply_restore_plan(plan)
+
+    assert not (external_parent / dst.name).exists()
+    assert (original_parent / dst.name).read_text() == "pre-restore body\n"
+
+
+def test_restore_plan_refuses_replaced_destination_directory_before_write(
+    fake_home: Path,
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "parent-replaced")
+    dst.write_text("pre-restore body\n")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    original_parent = fake_home / "original-live"
+    dst.parent.rename(original_parent)
+    dst.parent.mkdir()
+    (dst.parent / dst.name).write_text("unrelated replacement\n")
+
+    with pytest.raises(SetforgeError, match="topology changed"):
+        snap_mod._apply_restore_plan(plan)
+
+    assert (dst.parent / dst.name).read_text() == "unrelated replacement\n"
+    assert (original_parent / dst.name).read_text() == "pre-restore body\n"
+
+
+@pytest.mark.parametrize("as_symlink", [False, True])
+def test_restore_write_refuses_parent_swap_after_preflight(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    as_symlink: bool,
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    if as_symlink:
+        (dst.parent / "target").write_text("snapshot target\n")
+        dst.symlink_to("target")
+    else:
+        dst.write_text("snapshot body\n")
+    meta = _create(ctx, "mid-write-parent-swap")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    real_write = snap_mod._write_restored_file
+    swapped = False
+
+    def swap_then_write(
+        frozen: snap_mod._FrozenSnapshotFile,
+        guard_identities: dict[Path, tuple[int, int, int] | None],
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            dst.parent.rename(fake_home / "original-live")
+            dst.parent.mkdir()
+            (dst.parent / dst.name).write_text("unrelated replacement\n")
+        real_write(frozen, guard_identities)
+
+    monkeypatch.setattr(snap_mod, "_write_restored_file", swap_then_write)
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        snap_mod._apply_restore_plan(plan)
+
+    assert (dst.parent / dst.name).read_text() == "unrelated replacement\n"
+
+
+def test_restore_plan_allows_unrelated_sibling_change(fake_home: Path) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "sibling-change")
+    dst.write_text("pre-restore body\n")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    (fake_home / "unrelated-sibling").write_text("unrelated\n")
+
+    snap_mod._apply_restore_plan(plan)
+
+    assert dst.read_text() == "snapshot body\n"
+
+
+def test_restore_plan_recreates_deleted_destination_tree(fake_home: Path) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "deleted-tree")
+    shutil.rmtree(dst.parent)
+
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    snap_mod._apply_restore_plan(plan)
+
+    assert dst.read_text() == "snapshot body\n"
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        lambda: snap_mod.operations.journals_root(),
+        lambda: snap_mod.operations.journals_root() / "journal.json",
+        lambda: snap_mod.operations.journals_root().parent,
+        lambda: (
+            snap_mod.operations.journals_root().parent / "locks" / "mutation-gate.lock"
+        ),
+        lambda: snap_mod.snapshots_root(),
+        lambda: snap_mod.transitions.transitions_root() / "record" / "meta.json",
+    ],
+)
+def test_restore_rejects_control_path_overlap(
+    fake_home: Path, destination: Callable[[], Path]
+) -> None:
+    meta = snap_mod.SnapshotMeta(
+        snapshot_id="20260518T210000Z-control",
+        label="control",
+        created_at=datetime(2026, 5, 18, 21, 0, tzinfo=UTC),
+        profile="test",
+        files=(destination(),),
+    )
+
+    with pytest.raises(SetforgeError, match="overlaps SetForge control path"):
+        snap_mod._require_safe_restore_destinations(meta)
+
+
+def test_restore_rejects_resolved_control_path_alias(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = fake_home / "state"
+    state_root.mkdir()
+    monkeypatch.setattr(snap_mod.transitions, "state_root", lambda: state_root)
+    alias = fake_home / "state-alias"
+    alias.symlink_to(state_root, target_is_directory=True)
+    meta = snap_mod.SnapshotMeta(
+        snapshot_id="20260518T210000Z-control-alias",
+        label="control-alias",
+        created_at=datetime(2026, 5, 18, 21, 0, tzinfo=UTC),
+        profile="test",
+        files=(alias / "transitions" / "record" / "meta.json",),
+    )
+
+    with pytest.raises(SetforgeError, match="overlaps SetForge control path"):
+        snap_mod._require_safe_restore_destinations(meta)
+
+
+def test_restore_plan_rejects_live_symlink_parent(fake_home: Path) -> None:
+    target_parent = fake_home / "target-parent"
+    target_parent.mkdir()
+    linked_parent = fake_home / "linked-parent"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+    ctx, _, dst = _build_ctx(fake_home, dst_template=str(linked_parent / "text.txt"))
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "linked-live-parent")
+
+    with pytest.raises(SetforgeError, match="symlinked destination parent"):
+        snap_mod._plan_restore_snapshot(
+            meta.snapshot_id,
+            cfg=ctx.cfg,
+            resolved=ctx.resolved,
+            repo_root=ctx.repo_root,
+            profile=ctx.profile,
+        )
+
+
+def test_freeze_file_refuses_metadata_change_during_capture(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = fake_home / "changing.txt"
+    path.write_text("stable bytes\n")
+    real_snapshot_path = snap_mod.operations.snapshot_path
+
+    def capture_then_touch(candidate: Path) -> snap_mod.operations.PathSnapshot:
+        captured = real_snapshot_path(candidate)
+        current = candidate.stat().st_mtime_ns
+        os.utime(candidate, ns=(current + 1_000_000, current + 1_000_000))
+        return captured
+
+    monkeypatch.setattr(snap_mod.operations, "snapshot_path", capture_then_touch)
+
+    with pytest.raises(SetforgeError, match="changed while planning"):
+        snap_mod._freeze_file(path)
+
+
+def test_freeze_file_refuses_disappearance_during_capture(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = fake_home / "disappearing.txt"
+    path.write_text("present before capture\n")
+
+    def disappear(candidate: Path) -> snap_mod.operations.PathSnapshot:
+        candidate.unlink()
+        return snap_mod.operations.PathSnapshot(
+            path=candidate,
+            kind=snap_mod.operations.SnapshotKind.ABSENT,
+        )
+
+    monkeypatch.setattr(snap_mod.operations, "snapshot_path", disappear)
+
+    with pytest.raises(SetforgeError, match="changed while planning"):
+        snap_mod._freeze_file(path)
+
+
+def test_freeze_file_refuses_directory(fake_home: Path) -> None:
+    directory = fake_home / "directory"
+    directory.mkdir()
+
+    with pytest.raises(SetforgeError, match="non-regular non-symlink"):
+        snap_mod._freeze_file(directory)
+
+
+def test_restore_plan_requires_complete_effective_context(fake_home: Path) -> None:
+    with pytest.raises(SetforgeError, match="incomplete effective-profile context"):
+        snap_mod._plan_restore_snapshot("missing", profile="test")
+
+
+@pytest.mark.parametrize("parent_kind", ["symlink", "file"])
+def test_restore_plan_rejects_unsafe_mirror_parent(
+    fake_home: Path, parent_kind: str
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("captured\n")
+    meta = _create(ctx, "unsafe-parent")
+    snapshot_dir = snap_mod.snapshots_root() / meta.snapshot_id
+    first_component = snapshot_dir / dst.relative_to("/").parts[0]
+    if parent_kind == "symlink":
+        relocated = snapshot_dir / "relocated"
+        first_component.rename(relocated)
+        first_component.symlink_to(relocated, target_is_directory=True)
+    else:
+        shutil.rmtree(first_component)
+        first_component.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="unsafe mirror parent"):
+        snap_mod._plan_restore_snapshot(
+            meta.snapshot_id,
+            cfg=ctx.cfg,
+            resolved=ctx.resolved,
+            repo_root=ctx.repo_root,
+            profile=ctx.profile,
+        )
+
+
+@pytest.mark.parametrize("symlink_first", [True, False])
+def test_capture_rejects_overlapping_symlink_ancestor_without_escape(
+    fake_home: Path, symlink_first: bool
+) -> None:
+    external = fake_home / "external"
+    external.mkdir()
+    escaped = external / "escaped.txt"
+    escaped.write_text("outside stays unchanged\n", encoding="utf-8")
+    link = fake_home / "live-link"
+    link.symlink_to(external, target_is_directory=True)
+    partial = fake_home / "partial"
+    partial.mkdir()
+    paths: tuple[Path, ...] = (link, link / "escaped.txt")
+    if not symlink_first:
+        paths = tuple(reversed(paths))
+
+    with pytest.raises(SetforgeError, match=r"unsafe mirror parent|mirror directory"):
+        snap_mod._capture_files(partial, paths)
+
+    assert escaped.read_text(encoding="utf-8") == "outside stays unchanged\n"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [snap_mod.operations.SnapshotKind.FILE, snap_mod.operations.SnapshotKind.SYMLINK],
+)
+def test_capture_rejects_commit_marker_mirror_identity(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: snap_mod.operations.SnapshotKind,
+) -> None:
+    partial = fake_home / "partial"
+    partial.mkdir()
+    live_path = Path("/_meta.json")
+    frozen = snap_mod._FrozenSnapshotFile(
+        path=live_path,
+        kind=kind,
+        mode=0o600,
+        payload=b"body" if kind is snap_mod.operations.SnapshotKind.FILE else None,
+        link_target=(
+            "target" if kind is snap_mod.operations.SnapshotKind.SYMLINK else None
+        ),
+        mtime_ns=1,
+    )
+    monkeypatch.setattr(snap_mod, "_freeze_file", lambda _path: frozen)
+
+    with pytest.raises(SetforgeError, match="unsafe live path"):
+        snap_mod._capture_files(partial, (live_path,))
+
+
+def test_restore_plan_preserves_frozen_mode_and_mtime(fake_home: Path) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("mode body\n")
+    dst.chmod(0o640)
+    expected_mtime_ns = 1_700_000_000_123_456_789
+    os.utime(dst, ns=(expected_mtime_ns, expected_mtime_ns))
+    meta = _create(ctx, "mode-restore")
+    dst.write_text("drift\n")
+    dst.chmod(0o600)
+
+    snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
+
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o640
+    assert dst.stat().st_mtime_ns == expected_mtime_ns
+
+
+def test_restore_plan_recreates_frozen_symlink(fake_home: Path) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    target = fake_home / "target.txt"
+    target.write_text("target\n")
+    dst.symlink_to(target)
+    expected_mtime_ns = 1_700_000_000_444_444_444
+    os.utime(dst, ns=(expected_mtime_ns, expected_mtime_ns), follow_symlinks=False)
+    meta = _create(ctx, "symlink-restore")
+    dst.unlink()
+    dst.write_text("regular drift\n")
+
+    snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
+
+    assert dst.is_symlink()
+    assert dst.readlink() == target
+    assert dst.lstat().st_mtime_ns == expected_mtime_ns
 
 
 def test_resolve_snapshot_skips_meta_missing_dirs(
@@ -500,6 +1219,48 @@ def test_create_then_prune_fires_after_successful_create(
     monkeypatch.setattr(snap_mod, "_write_meta", real_write_meta)
     labels = [s.label for s in snap_mod.list_snapshots()]
     assert labels == ["good"], "prior good snapshot must survive a failed create"
+
+
+def test_create_reports_success_when_post_commit_pruning_fails(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("committed body\n")
+
+    def fail_prune(_keep: int) -> int:
+        raise OSError("retention filesystem unavailable")
+
+    monkeypatch.setattr(snap_mod, "prune_snapshots", fail_prune)
+
+    meta = _create(ctx, "committed")
+
+    assert snap_mod.resolve_snapshot(meta.snapshot_id) == meta
+    assert "was created, but retention pruning failed" in caplog.text
+
+
+def test_create_success_survives_diagnostic_logger_failure(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("committed body\n")
+    monkeypatch.setattr(
+        snap_mod,
+        "prune_snapshots",
+        lambda _keep: (_ for _ in ()).throw(OSError("prune failed")),
+    )
+    monkeypatch.setattr(
+        snap_mod._LOGGER,
+        "warning",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("log failed")),
+    )
+
+    meta = _create(ctx, "committed")
+
+    assert snap_mod.resolve_snapshot(meta.snapshot_id) == meta
 
 
 def test_auto_prune_on_create_keeps_keep_value(

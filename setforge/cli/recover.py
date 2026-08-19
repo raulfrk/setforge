@@ -69,7 +69,7 @@ def _acknowledge_manual(journal: operations.OperationJournal, *, yes: bool) -> N
         )
     with mutation_locks(
         resources=journal.resources_lock,
-        config_dir=journal.config_dir,
+        config_dirs=operations.locked_config_dirs(journal),
         profiles=operations.locked_profiles(journal),
         allow_operation_id=journal.operation_id,
     ):
@@ -81,7 +81,7 @@ def _apply_recovery(journal: operations.OperationJournal) -> None:
     """Recover one confirmed journal under its recorded lock envelope."""
     with mutation_locks(
         resources=journal.resources_lock,
-        config_dir=journal.config_dir,
+        config_dirs=operations.locked_config_dirs(journal),
         profiles=operations.locked_profiles(journal),
         allow_operation_id=journal.operation_id,
     ):

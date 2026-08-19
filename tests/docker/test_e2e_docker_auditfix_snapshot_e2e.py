@@ -31,6 +31,7 @@ pytestmark = pytest.mark.e2e_docker
 _PROFILE = "test-minimal"
 _LIVE = "/home/tester/.setforge_e2e/minimal/text.txt"
 _LIVE_ONLY = "/home/tester/.setforge_e2e/minimal/live-only.txt"
+_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
 _SNAP_ROOT = "/home/tester/.local/share/setforge/snapshots"
 # Canonical tracked body (matches tests/fixtures/e2e/tracked/minimal/text.txt).
 _TRACKED_BODY = "hello from test-minimal\n"
@@ -118,6 +119,7 @@ def test_snapshot_restore_yes_overlays_live_additively(
     c = docker_container()
     rc, _out, err = _install(c)
     assert rc == 0, err
+    c.write_text(_LOCAL_YAML, "tracked_files: {}\n")
 
     rc, _out, err = _snapshot(
         c,
@@ -146,6 +148,39 @@ def test_snapshot_restore_yes_overlays_live_additively(
     assert c.read_text(_LIVE) == _TRACKED_BODY
     assert _exists(c, _LIVE_ONLY), "additive restore must leave live-only files alone"
     assert c.read_text(_LIVE_ONLY) == "live-only survivor\n"
+
+    rc, _out, err = _snapshot(
+        c,
+        [
+            "create",
+            "preflight",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    assert rc == 0, err
+    preflight_dir = next(
+        name for name in _snapshot_dirs(c) if name.endswith("-preflight")
+    )
+    c.exec(["rm", f"{_SNAP_ROOT}/{preflight_dir}{_LOCAL_YAML}"], check=True)
+    c.write_text(_LIVE, "PRECHECK LIVE DRIFT\n")
+    c.write_text(_LOCAL_YAML, "tracked_files: {}\n# precheck drift\n")
+
+    rc, out, err = _snapshot(
+        c,
+        [
+            "restore",
+            "preflight",
+            "--yes",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+
+    assert rc != 0, (out, err)
+    assert "missing on disk" in out + err
+    assert c.read_text(_LIVE) == "PRECHECK LIVE DRIFT\n"
+    assert c.read_text(_LOCAL_YAML) == "tracked_files: {}\n# precheck drift\n"
 
 
 @pytest.mark.xdist_group("docker_daemon")
