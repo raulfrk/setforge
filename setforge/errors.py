@@ -43,6 +43,18 @@ class SetforgeError(Exception):
     """Base class for all setforge recoverable failures."""
 
 
+class OwnershipError(SetforgeError):
+    """Raised when durable ownership state is invalid or a CAS is refused."""
+
+
+class OwnershipCollisionError(OwnershipError):
+    """Raised when a resource is already claimed by an incompatible owner."""
+
+
+class CorruptOwnershipState(OwnershipError):
+    """Raised when persisted ownership state cannot be trusted."""
+
+
 class ConfigError(SetforgeError):
     """Raised when the YAML config is malformed, fails schema validation,
     or has an invalid profile chain (e.g. a cycle in extends:)."""

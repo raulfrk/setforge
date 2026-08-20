@@ -3,6 +3,8 @@
 import ast
 import fcntl
 import inspect
+import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,11 +14,14 @@ import pytest
 
 from setforge.errors import SetforgeError
 from setforge.locking import (
+    LockRank,
+    TargetLockRequest,
     _profile_lock_path,
     install_resources_lock,
     lockfile_lock,
     mutation_locks,
     profile_lock,
+    target_locks,
 )
 from setforge.transitions import state_root
 
@@ -139,7 +144,158 @@ def test_global_resource_lock_ignores_transition_state_override(
     with install_resources_lock():
         lock_path = Path.home() / ".cache/setforge/locks/install-resources.lock"
         assert lock_path.exists()
-        assert lock_path.parent != state_dir / "locks"
+    assert lock_path.parent != state_dir / "locks"
+
+
+def test_target_lock_coordinate_survives_creation(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    target = parent / "demo"
+
+    with target_locks((TargetLockRequest(target),)) as guards:
+        guards[0].mkdir()
+
+    with target_locks((TargetLockRequest(target),), timeout=0.01):
+        assert target.is_dir()
+
+
+def test_target_lock_symlink_alias_uses_object_identity(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+
+    with target_locks((TargetLockRequest(target), TargetLockRequest(alias))):
+        assert alias.resolve() == target
+
+
+def test_target_lock_refuses_parent_or_target_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    target = parent / "demo"
+    original = __import__("setforge.locking", fromlist=["_global_named_lock"])
+    real_lock = original._global_named_lock
+
+    @contextmanager
+    def replacing_lock(
+        *, rank: LockRank, key: str, prefix: str, timeout: float | None
+    ) -> Iterator[None]:
+        with real_lock(rank=rank, key=key, prefix=prefix, timeout=timeout):
+            if not target.exists():
+                target.mkdir()
+            yield
+
+    monkeypatch.setattr("setforge.locking._global_named_lock", replacing_lock)
+    with (
+        pytest.raises(SetforgeError, match="target changed"),
+        target_locks((TargetLockRequest(target),)),
+    ):
+        pass
+
+
+def test_target_lock_refuses_dangling_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "dangling"
+    target.symlink_to(tmp_path / "missing", target_is_directory=True)
+
+    with (
+        pytest.raises(SetforgeError, match="dangling symlink"),
+        target_locks((TargetLockRequest(target),)),
+    ):
+        pass
+
+
+def test_target_guard_anchors_publication_and_detects_parent_swap(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "projects"
+    displaced = tmp_path / "displaced"
+    parent.mkdir()
+    target = parent / "demo"
+
+    def swap_and_publish() -> None:
+        with target_locks((TargetLockRequest(target),)) as guards:
+            parent.rename(displaced)
+            parent.mkdir()
+            guards[0].mkdir()
+
+    with pytest.raises(SetforgeError, match="parent binding changed"):
+        swap_and_publish()
+
+    assert not (displaced / "demo").exists()
+    assert not target.exists()
+
+
+def test_mutation_locks_exposes_prepublication_target_guards(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    displaced = tmp_path / "displaced"
+    parent.mkdir()
+    target = parent / "demo"
+    published: list[bool] = []
+
+    def attempt_publication() -> None:
+        with mutation_locks(target_roots=(target,)) as guards:
+            parent.rename(displaced)
+            parent.mkdir()
+            guards.verify_targets()
+            published.append(True)
+
+    with pytest.raises(SetforgeError, match="parent binding changed"):
+        attempt_publication()
+    assert published == []
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_created_target_is_bound_until_lock_exit(tmp_path: Path, replace: bool) -> None:
+    target = tmp_path / "demo"
+
+    def create_then_change() -> None:
+        with target_locks((TargetLockRequest(target),)) as guards:
+            guards[0].mkdir()
+            target.rmdir()
+            if replace:
+                target.mkdir()
+
+    with pytest.raises(SetforgeError, match="target changed"):
+        create_then_change()
+
+
+def test_target_guard_binds_opened_parent_before_entering_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "projects"
+    displaced = tmp_path / "displaced"
+    parent.mkdir()
+    target = parent / "demo"
+    real_open = os.open
+    swapped = False
+    entered: list[bool] = []
+
+    def swap_before_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if not swapped and path == parent and dir_fd is None:
+            swapped = True
+            parent.rename(displaced)
+            parent.mkdir()
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("setforge.locking.os.open", swap_before_open)
+
+    def acquire() -> None:
+        with target_locks((TargetLockRequest(target),)):
+            entered.append(True)
+
+    with pytest.raises(SetforgeError, match="before descriptor binding"):
+        acquire()
+    assert entered == []
+    assert not target.exists()
 
 
 @pytest.mark.parametrize(
