@@ -231,6 +231,8 @@ def collect_stages(
     stages: list[FileStage] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
+        if tracked_file.generated is not None:
+            continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
@@ -314,6 +316,8 @@ def collect_structured_stages(
     stages: list[StructuredFileStage] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
+        if tracked_file.generated is not None:
+            continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
@@ -1083,6 +1087,27 @@ def _commit_persist(profile: str, fid: FileId, base: bytes, plan: _PersistPlan) 
     )
 
 
+def _refuse_generated_stage_target(
+    cfg: Config, resolved: ResolvedProfile, file: str
+) -> None:
+    """Refuse staging when ``file`` names generated one-way output."""
+    matched = any(
+        cfg.tracked_files[name].generated is not None
+        and file
+        in {
+            name,
+            str(resolve_dst(cfg.tracked_files[name])),
+            resolve_dst(cfg.tracked_files[name]).name,
+        }
+        for name in resolved.tracked_files
+    )
+    if matched:
+        raise typer.BadParameter(
+            f"{file!r} is generated one-way output and cannot be staged; "
+            "edit its tracked template or host-input declaration"
+        )
+
+
 def _persist(
     profile: str,
     stage: FileStage,
@@ -1143,6 +1168,8 @@ def stage(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2)
+
+    _refuse_generated_stage_target(cfg, resolved, file)
 
     stages = collect_stages(cfg, resolved, repo_root, profile, only=file)
     struct = collect_structured_stages(cfg, resolved, repo_root, profile, only=file)

@@ -388,6 +388,27 @@ def test_install_template_dst_jinja2(
     content = c.read_text(matches[0])
     assert content == "templated file (dst path was Jinja2-rendered)\n"
 
+    generated = c.read_text("/home/tester/.setforge_e2e/template/generated.txt")
+    assert generated == ("home=/home/tester\ncode=/home/tester/.config/Code/User\n")
+    source = "tests/fixtures/e2e/tracked/template/generated.txt.j2"
+    before = c.read_text(source)
+    capture = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "capture",
+            "--profile=test-template",
+            f"--config={CONFIG_FIXTURE}",
+            "--auto=use-live",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert capture.returncode != 0
+    assert "one-way output" in capture.stderr
+    assert c.read_text(source) == before
+
 
 # --- Variant K ------------------------------------------------------------
 
@@ -1783,7 +1804,7 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (6.0)
+    A config already pinned to the build's current expected schema (6.1)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
     surface the full 1.0 → … → 6.0 chain) is covered in

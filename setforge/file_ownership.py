@@ -248,6 +248,7 @@ def publish_file_claim_locked(
     owner_id: uuid.UUID,
     declaration_ref: str,
     acquisition: str,
+    provenance: tuple[ProvenanceFact, ...] = (),
 ) -> OwnershipClaim:
     """Publish one exact observed container claim under the resources lock."""
     if not decision.observation.present:
@@ -259,6 +260,7 @@ def publish_file_claim_locked(
         provenance=(
             ProvenanceFact(ProvenanceFactKind.ORIGIN, "filesystem"),
             ProvenanceFact(ProvenanceFactKind.ACQUISITION, acquisition),
+            *provenance,
         ),
         locator=decision.observation.locator,
         fingerprint=decision.observation.fingerprint,

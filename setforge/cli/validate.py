@@ -48,6 +48,7 @@ from setforge.errors import (
     SetforgeError,
     ValidationErrorWithContext,
 )
+from setforge.generated import resolve_generated
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.locking import mutation_locks
 from setforge.migrations._local_yaml import guard_local_yaml_schema, strip_retired_keys
@@ -103,6 +104,7 @@ def _check_profile(
         if not _check_jinja_templates(tracked_file, dot_ctx, failures):
             continue
         _check_tracked_srcs(tracked_file, repo_root, dot_ctx, failures)
+        _check_generated_templates(tracked_file, repo_root, dot_ctx, failures)
         _check_no_markers_remain(tracked_file, repo_root, dot_ctx, failures)
 
     _check_package_refs(cfg, prof_name, ctx, failures)
@@ -250,6 +252,32 @@ def _check_tracked_srcs(
     src = resolve_src(tracked_file, repo_root)
     if not src.exists():
         failures.append(f"{dot_ctx}: src {tracked_file.src} does not exist")
+
+
+def _check_generated_templates(
+    tracked_file: TrackedFile,
+    repo_root: Path,
+    dot_ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Validate generated source templates against resolved declared inputs."""
+    if tracked_file.generated is None:
+        return
+    src = resolve_src(tracked_file, repo_root)
+    if not src.exists():
+        return
+    sources = (
+        sorted(path for path in src.rglob("*") if path.is_file())
+        if src.is_dir()
+        else [src]
+    )
+    for source in sources:
+        try:
+            resolve_generated(
+                source.read_text(encoding="utf-8"), tracked_file.generated
+            )
+        except (OSError, UnicodeDecodeError, SetforgeError) as exc:
+            failures.append(f"{dot_ctx}: {source}: {exc}")
 
 
 def _check_no_markers_remain(

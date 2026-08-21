@@ -67,7 +67,7 @@ loads. Everything else has a default:
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
 | `version` | no | `1` | Config format version. |
-| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.0"`. |
+| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.1"`. |
 | `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |
 | `claude_plugins` | no | `{}` | Top-level Claude plugin defaults. |
@@ -91,8 +91,8 @@ real config.
 
 <!-- setforge-doc-example: configuration-full-schema6 -->
 ```yaml
-schema_version: "6.0"
-minimum_version: "6.0"
+schema_version: "6.1"
+minimum_version: "6.1"
 tracked_files:
   shell:
     src: shell/zshrc
@@ -161,13 +161,41 @@ tracked_files:
 
 Optional per-entry keys:
 
-- `template` — render the source through Jinja2 before deploying.
+- `template` — render Jinja2 expressions in `dst` (it does not render content).
+- `generated` — render the tracked source as one-way Jinja2 output from an
+  explicit map of typed host inputs. Generated output cannot be staged or
+  captured back into `tracked/`.
 - `mode` — file mode, written as a **YAML-1.2 octal literal** (`0o755`, not
   `0755` or `755`). Omit to preserve the source file's mode.
 - `symlink` — deploy as a symlink instead of copying.
 
 `src` must exist on disk under `<config-repo>/tracked/` — `setforge validate`
 checks this.
+
+Generated resources keep portable intent in the repository while resolving
+host facts only in the frozen install plan:
+
+```yaml
+schema_version: "6.1"
+minimum_version: "6.1"
+tracked_files:
+  code-settings:
+    src: code-settings.json.j2
+    dst: ~/.config/Code/User/settings.json
+    generated:
+      inputs:
+        home: home
+        code_dir: vscode-user-dir
+```
+
+The source template reads those declared values as `{{ host.home }}` and
+`{{ host.code_dir }}`. The closed resolver set is `home` and
+`vscode-user-dir`; arbitrary environment variables, commands, secrets, and
+network lookups are not available. Rendering uses strict undefined values, so
+misspelled or undeclared input names fail before any install write. Templates
+are deliberately expression-only: function and method calls, filters, and
+tests are rejected so rendering stays deterministic and confined to declared
+values.
 
 ### Profiles
 

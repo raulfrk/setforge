@@ -483,7 +483,7 @@ def test_pin_rejects_unknown_version_real_registry(tmp_path: Path) -> None:
 
 
 def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
-    """B-M5: lists the real 1.0→1.1→1.2→2.0→2.1→3.0→4.0→5.0→6.0 chain on 1.0."""
+    """B-M5: lists the complete real migration chain from schema 1.0."""
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
@@ -491,7 +491,7 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
-    assert "8 migration(s) available" in result.output
+    assert "9 migration(s) available" in result.output
     assert "1.0 → 1.1" in result.output
     assert "1.1 → 1.2" in result.output
     assert "1.2 → 2.0" in result.output
@@ -500,6 +500,7 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     assert "3.0 → 4.0" in result.output
     assert "4.0 → 5.0" in result.output
     assert "5.0 → 6.0" in result.output
+    assert "6.0 → 6.1" in result.output
 
 
 def test_to_five_zero_from_four_zero_is_schema_only_and_round_trips(

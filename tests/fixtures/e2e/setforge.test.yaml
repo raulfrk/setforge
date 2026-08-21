@@ -11,7 +11,8 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
-schema_version: '6.0'
+schema_version: '6.1'
+minimum_version: '6.1'
 version: 1
 
 # ----------------------------------------------------------------------
@@ -77,6 +78,13 @@ tracked_files:
     src: template/template.txt
     dst: "{{ vscode_user_dir }}/setforge-e2e-template.txt"
     template: true
+  generated_body:
+    src: template/generated.txt.j2
+    dst: ~/.setforge_e2e/template/generated.txt
+    generated:
+      inputs:
+        home: home
+        code_dir: vscode-user-dir
 
   # Three-level chain tracked files (one per chain layer for distinguishable
   # parent-first-dedup ordering in test_install_chain_resolution).
@@ -309,6 +317,7 @@ profiles:
   test-template:
     tracked_files:
       - template_path
+      - generated_body
 
   # ---- Chain profiles (3 entries: grandparent + base + child) ----------
   # The chain ancestors are profile entries in their own right — they're

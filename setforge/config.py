@@ -84,6 +84,35 @@ class ReconcilePolicy(StrEnum):
     REPORT = "report"
 
 
+class HostInputKind(StrEnum):
+    """Closed host facts available to generated tracked-file templates."""
+
+    HOME = "home"
+    VSCODE_USER_DIR = "vscode-user-dir"
+
+
+class GeneratedContent(BaseModel):
+    """Portable generator intent for one tracked-file source template."""
+
+    model_config = _STRICT
+
+    inputs: dict[str, HostInputKind]
+
+    @field_validator("inputs")
+    @classmethod
+    def _validate_inputs(
+        cls, value: dict[str, HostInputKind]
+    ) -> dict[str, HostInputKind]:
+        if not value:
+            raise ValueError("generated inputs must not be empty")
+        for name in value:
+            if not name.isidentifier() or name.startswith("_"):
+                raise ValueError(
+                    f"generated input name {name!r} must be a public identifier"
+                )
+        return value
+
+
 class MarketplaceSourceKind(StrEnum):
     GITHUB = "github"
     PATH = "path"
@@ -228,6 +257,7 @@ class TrackedFile(BaseModel):
     src: Path
     dst: str
     template: bool = False
+    generated: GeneratedContent | None = None
     mode: int | None = None
     """POSIX file-mode bits (chmod) for the live dst.
 
@@ -557,6 +587,7 @@ class FileComponent(BaseModel):
     dst: str
     mode: int | None = None
     template: bool = False
+    generated: GeneratedContent | None = None
     symlink: str | None = None
     allow_outside_home: bool = False
 
@@ -867,6 +898,7 @@ def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
         dst=fc.dst,
         mode=fc.mode,
         template=fc.template,
+        generated=fc.generated,
         symlink=fc.symlink,
         allow_outside_home=fc.allow_outside_home,
     )
@@ -1072,8 +1104,30 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _validate_mcp_references(config)
     _validate_package_references(config)
     _validate_section_slot_references(config)
+    _guard_generated_resources(config, path)
     _warn_on_schema_mismatch(config)
     return config
+
+
+def _guard_generated_resources(config: Config, path: Path) -> None:
+    """Require the 6.1 reader floor before accepting generated intent."""
+    direct = any(item.generated is not None for item in config.tracked_files.values())
+    bundled = any(
+        component.file is not None and component.file.generated is not None
+        for bundle in config.bundles.values()
+        for component in bundle.components
+    )
+    if not direct and not bundled:
+        return
+    if not _meets_floor(config.schema_version, "6.1") or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: generated tracked files require schema_version and "
+            "minimum_version >= '6.1'"
+        )
+    if not _meets_floor(config.minimum_version, "6.1"):
+        raise ConfigError(
+            f"{path}: generated tracked files require minimum_version >= '6.1'"
+        )
 
 
 def _validate_tolerant(data: object) -> Config:

@@ -18,7 +18,7 @@ so the ``migrate`` CLI's backup + multi-file diff preview + atomic
 rollback cover the whole footprint, not just ``setforge.yaml``.
 
 The registry :data:`MIGRATIONS` holds the version-stamp chain
-1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0. Future migrations
+1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0 → 6.1. Future migrations
 are appended in ``from_version`` order so :func:`find_migration_path`
 can walk the chain forward.
 """
@@ -183,6 +183,7 @@ __all__ = [
     "MIGRATIONS",
     "Contract20Migration",
     "DispositionRetireMigration",
+    "GeneratedResourcesMigration",
     "ManifestEntry",
     "ManifestType",
     "MarkerRetireMigration",
@@ -204,7 +205,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "6.0"
+current_expected_schema_version: Final[str] = "6.1"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -635,6 +636,9 @@ from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
 from setforge.migrations._disposition_retire import (  # noqa: E402
     DispositionRetireMigration,
 )
+from setforge.migrations._generated_resources import (  # noqa: E402
+    GeneratedResourcesMigration,
+)
 from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
 from setforge.migrations._profile_fields_retire import (  # noqa: E402
     ProfileFieldsRetireMigration,
@@ -655,6 +659,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     SpanSurfaceRetireMigration(),
     SpanTypesRetireMigration(),
     ProfileFieldsRetireMigration(),
+    GeneratedResourcesMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 
@@ -663,7 +668,8 @@ Holds the version-stamp chain 1.0 → 1.1 (:class:`VersionStampMigration`)
 breaking preserve_* contraction) → 2.1 (:class:`MarkerRetireMigration`)
 → 3.0 (:class:`DispositionRetireMigration`) → 4.0
 (:class:`SpanSurfaceRetireMigration`) → 5.0 (:class:`SpanTypesRetireMigration`)
-→ 6.0 (:class:`ProfileFieldsRetireMigration`). Future migrations are
+→ 6.0 (:class:`ProfileFieldsRetireMigration`) → 6.1
+(:class:`GeneratedResourcesMigration`). Future migrations are
 appended in ``from_version`` order so :func:`find_migration_path` can
 walk the chain forward. Each migration's reverse is attached to its
 forward instance, never added here — that would make the forward walk

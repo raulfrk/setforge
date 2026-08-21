@@ -79,6 +79,7 @@ from setforge.errors import (
     PluginToolMissing,
     SetforgeError,
 )
+from setforge.generated import GeneratedResolution, resolve_generated
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.provision.dispatch import ProvisioningPlan
 from setforge.reconcile import FileId
@@ -564,6 +565,11 @@ def _resolve_one_pending(
     A binary / non-utf8 / deletion-edge file the reconcile engine cannot
     classify falls back to a verbatim tracked deploy.
     """
+    generated = (
+        resolve_generated(sub_src.read_text(encoding="utf-8"), tracked_file.generated)
+        if tracked_file.generated is not None
+        else None
+    )
     if tracked_file.symlink is not None:
         # Symlink-deployed: freeze content/mode now and defer only the writes
         # to pass 2 (resolved=None). The link lands at ``sub_dst`` and the
@@ -577,12 +583,32 @@ def _resolve_one_pending(
             tracked_file=tracked_file,
             host_local=host_local,
             resolved=None,
-            symlink_content=sub_src.read_text(encoding="utf-8"),
+            symlink_content=(
+                generated.rendered
+                if generated is not None
+                else sub_src.read_text(encoding="utf-8")
+            ),
             symlink_mode=(
                 tracked_file.mode
                 if tracked_file.mode is not None
                 else stat.S_IMODE(sub_src.stat().st_mode)
             ),
+            generated=generated,
+        )
+    if generated is not None:
+        resolved = deploy.resolve_deploy(
+            sub_src,
+            sub_dst,
+            mode=tracked_file.mode,
+        )
+        return _PendingDeploy(
+            sub_name=sub_name,
+            sub_src=sub_src,
+            sub_dst=sub_dst,
+            tracked_file=tracked_file,
+            host_local=None,
+            resolved=replace(resolved, content=generated.rendered),
+            generated=generated,
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
     # (a local edit merges against the recorded base rather than being silently
@@ -647,6 +673,7 @@ class _PendingDeploy:
     preview_action: deploy.DeployAction | None = None
     symlink_content: str | None = None
     symlink_mode: int | None = None
+    generated: GeneratedResolution | None = None
 
 
 def _capture_store_snapshots(

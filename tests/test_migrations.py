@@ -48,14 +48,14 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_six_zero() -> None:
-    """The build now expects schema 6.0 after the profile-fields-retire bump."""
-    assert current_expected_schema_version == "6.0"
+def test_current_expected_schema_version_is_six_one() -> None:
+    """The build expects schema 6.1 after generated resources landed."""
+    assert current_expected_schema_version == "6.1"
 
 
 def test_migrations_registry_has_the_version_stamp_chain() -> None:
     """The registry ships the 1.0→1.1→…→5.0→6.0 chain, in order."""
-    assert len(MIGRATIONS) == 8
+    assert len(MIGRATIONS) == 9
     assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
     assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
     assert (MIGRATIONS[2].from_version, MIGRATIONS[2].to_version) == ("1.2", "2.0")
@@ -64,6 +64,7 @@ def test_migrations_registry_has_the_version_stamp_chain() -> None:
     assert (MIGRATIONS[5].from_version, MIGRATIONS[5].to_version) == ("3.0", "4.0")
     assert (MIGRATIONS[6].from_version, MIGRATIONS[6].to_version) == ("4.0", "5.0")
     assert (MIGRATIONS[7].from_version, MIGRATIONS[7].to_version) == ("5.0", "6.0")
+    assert (MIGRATIONS[8].from_version, MIGRATIONS[8].to_version) == ("6.0", "6.1")
     # Appended in from_version order so the forward walk never has to sort.
     assert isinstance(MIGRATIONS[1], RestampMigration)
 
@@ -837,7 +838,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "6.0" in captured.err
+    assert "6.1" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1130,8 +1131,8 @@ def test_span_types_retire_is_registered() -> None:
     assert len(span_steps) == 1
     assert (span_steps[0].from_version, span_steps[0].to_version) == ("4.0", "5.0")
 
-    assert isinstance(MIGRATIONS[-1], ProfileFieldsRetireMigration)
-    assert (MIGRATIONS[-1].from_version, MIGRATIONS[-1].to_version) == ("5.0", "6.0")
+    assert isinstance(MIGRATIONS[-2], ProfileFieldsRetireMigration)
+    assert (MIGRATIONS[-2].from_version, MIGRATIONS[-2].to_version) == ("5.0", "6.0")
     assert MIGRATIONS[-1].to_version == current_expected_schema_version
 
 

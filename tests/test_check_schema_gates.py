@@ -235,11 +235,11 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_six_zero() -> None:
-    """The build now expects schema 6.0 after the profile-fields-retire bump."""
+def test_current_expected_is_six_one() -> None:
+    """The build expects schema 6.1 after generated resources landed."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "6.0"
+    assert current_expected_schema_version == "6.1"
 
 
 def test_schema_major_is_six() -> None:

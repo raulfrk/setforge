@@ -1244,11 +1244,11 @@ _E2E_FIXTURE_TRACKED = _E2E_FIXTURE_DIR / "tracked"
 
 
 def _rethread_comprehensive_to_packages(yaml_path: Path) -> None:
-    """Rewrite the copied fixture's plugin/extension bindings to schema-3.0.
+    """Rewrite the copied fixture's plugin/extension bindings to packages.
 
     The shared on-disk fixture still declares the retired profile-level
     ``claude_plugins:`` / ``extensions:`` keys (the Docker e2e ring keeps
-    exercising that legacy corpus). The strict schema-3.0 model rejects those
+    exercising that legacy corpus). The current strict schema model rejects those
     keys, so this inner CliRunner ring rewrites its OWN copy in place:
 
     * mint top-level ``packages`` entries — a ``PluginPackage`` for
@@ -1266,7 +1266,8 @@ def _rethread_comprehensive_to_packages(yaml_path: Path) -> None:
     yaml = YAML()
     yaml.preserve_quotes = True
     data = yaml.load(yaml_path.read_text(encoding="utf-8"))
-    data["schema_version"] = "3.0"
+    data["schema_version"] = "6.1"
+    data["minimum_version"] = "6.1"
 
     packages = data.setdefault("packages", {})
     packages["superpowers"] = {"type": "plugin", "plugin": "superpowers"}
@@ -1288,7 +1289,7 @@ def _copy_e2e_fixture(tmp_path: Path) -> Path:
     """Materialize the e2e fixture inside ``tmp_path`` and return the
     yaml path. Mirror of ``test_cli_e2e.fixture_repo``.
 
-    The copy is rethreaded to the schema-3.0 packages/reconcile surface
+    The copy is rethreaded to the current packages/reconcile surface
     (:func:`_rethread_comprehensive_to_packages`) so the plugin/extension
     bindings resolve under the strict model while the shared on-disk fixture
     stays legacy for the Docker ring."""

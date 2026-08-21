@@ -44,6 +44,7 @@ from setforge.config import (
 )
 from setforge.errors import BaseStoreError, ConfigError
 from setforge.file_ownership import FileAction, decide_file, observe_file
+from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
@@ -546,6 +547,7 @@ def warn_if_dst_outside_home(tracked_file: TrackedFile, dst: Path) -> None:
 def diff_file(
     src: Path,
     dst: Path,
+    tracked_file: TrackedFile | None = None,
 ) -> str:
     """Return the unified diff between ``src`` (tracked) and ``dst`` (live).
 
@@ -556,7 +558,9 @@ def diff_file(
         return ""
 
     dst_text = dst.read_text(encoding="utf-8")
-    rendered_src = src.read_text(encoding="utf-8")
+    rendered_src = rendered_source(
+        src, tracked_file.generated if tracked_file is not None else None
+    )
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),
@@ -752,7 +756,7 @@ def _compare_one(
             True,
         )
 
-    diff = diff_file(src, dst)
+    diff = diff_file(src, dst, tracked_file)
 
     mode_drift = False
     live_mode: int | None = None
@@ -842,6 +846,8 @@ def _classify_drifted(
     metadata drift). ``profile=None`` (direct unit-scope calls) also
     skips them — the stored base is keyed by profile.
     """
+    if tracked_file is not None and tracked_file.generated is not None:
+        return DriftClass.UNEXPECTED, "generated output differs from rendered intent"
     # Slot 3 — STALE: live still equals the stored base while tracked
     # advanced; the next install fast-forwards live.
     if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
@@ -1103,7 +1109,7 @@ def _compare_symlinked(
     target_path = Path(expected).expanduser()
     # Symlinked targets deploy verbatim (no host-local overlay injection), so a
     # plain diff against the tracked source is correct.
-    target_diff = diff_file(src, target_path)
+    target_diff = diff_file(src, target_path, tracked_file)
     if target_diff:
         entry = FileCompare(
             name=name,
@@ -1111,7 +1117,12 @@ def _compare_symlinked(
             diff=target_diff,
         )
         return _classify_entry(
-            entry, profile=profile, src=src, dst=dst, probe_stale=False
+            entry,
+            profile=profile,
+            src=src,
+            dst=dst,
+            tracked_file=tracked_file,
+            probe_stale=False,
         )
 
     return (

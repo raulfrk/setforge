@@ -1178,8 +1178,8 @@ verbs = ["install"]
 [tests."tests/docker/test_e2e_docker.py::test_install_template_dst_jinja2"]
 verdict = "keep"
 smoke = false
-signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
-verbs = ["install"]
+signal = "real host-path resolution renders owned output and capture refuses reverse flow"
+verbs = ["install", "capture"]
 
 [tests."tests/docker/test_e2e_docker.py::test_install_text_sections_no_live"]
 verdict = "keep"

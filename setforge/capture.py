@@ -243,6 +243,11 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     previews: list[CapturePreview] = []
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
+        if tracked_file.generated is not None:
+            raise InvariantViolation(
+                f"generated tracked file {name!r} is one-way output and cannot "
+                "be captured; edit its tracked template or host-input declaration"
+            )
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
@@ -658,7 +663,7 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
     effective = (
         resolved if resolved is not None else resolve_profile(config, profile_name)
     )
-    work: list[tuple[str, Path, Path, frozenset[HostLocalSectionName]]] = []
+    work: list[tuple[str, Path, Path, frozenset[HostLocalSectionName], bool]] = []
     for name in effective.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
@@ -670,12 +675,27 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
         # directly in tracked carries through unchanged.
         host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            work.append((sub_name, sub_src, sub_dst, host_local_names))
+            work.append(
+                (
+                    sub_name,
+                    sub_src,
+                    sub_dst,
+                    host_local_names,
+                    tracked_file.generated is not None,
+                )
+            )
 
     # Validate every participating file before the first tracked/store write. A
     # later invalid participant can therefore never leave earlier files captured.
     participating: set[str] = set()
-    for sub_name, _sub_src, sub_dst, host_local_names in work:
+    generated_names = [sub_name for sub_name, *_rest, generated in work if generated]
+    if generated_names:
+        names = ", ".join(generated_names)
+        raise InvariantViolation(
+            f"generated tracked file(s) {names} are one-way output and cannot be "
+            "captured; edit their tracked templates or host-input declarations"
+        )
+    for sub_name, _sub_src, sub_dst, host_local_names, _generated in work:
         # Legacy local.yaml overlays are injected as marker pairs outside the
         # unit model. Keep their historical name-scoped strip path authoritative;
         # otherwise a staged SHARED unit could promote the injected host body.
@@ -692,7 +712,7 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
                 )
             participating.add(sub_name)
 
-    for sub_name, sub_src, sub_dst, host_local_names in work:
+    for sub_name, sub_src, sub_dst, host_local_names, _generated in work:
         fmt = su_mod.structured_format(sub_dst)
         if sub_name in participating and not host_local_names:
             if fmt is not None:
