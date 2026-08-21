@@ -87,6 +87,22 @@ def test_staged_shared_local_drift_is_expected(tmp_path: Path) -> None:
     assert report.has_unexpected_drift is False
 
 
+def test_git_backed_staged_drift_without_container_claim_is_unexpected(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    hunks = _stage({"## Shell": HunkClass.SHARED, "## Paths": HunkClass.LOCAL})
+    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {})
+    config, repo = _config(tmp_path, tracked)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+
+    report = compare_profile(config, "p", repo)
+
+    assert report.entries[0].drift_class is DriftClass.UNEXPECTED
+    assert report.has_unexpected_drift is True
+
+
 def test_staged_drafted_divergence_is_expected(tmp_path: Path) -> None:
     # Paths SHARED_DRAFTED: tracked has the shareable draft, live keeps host bytes.
     paths = next(

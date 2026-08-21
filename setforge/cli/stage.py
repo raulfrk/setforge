@@ -19,11 +19,12 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
+from uuid import UUID
 
 import typer
 from rich.console import Console
 
-from setforge import atomicio, operations
+from setforge import atomicio, operations, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -43,7 +44,20 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import InvariantViolation, StructuredParseError
+from setforge.file_ownership import (
+    FileAction,
+    FileDecision,
+    decide_file,
+    observe_file,
+    publish_file_claim_locked,
+)
 from setforge.locking import mutation_locks
+from setforge.ownership import (
+    OwnershipError,
+    OwnershipStore,
+    load_or_create_owner_id,
+    read_owner_id,
+)
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
@@ -128,6 +142,19 @@ class FileStage:
     live: bytes
     hunks: list[Hunk]
     participating: bool = False
+    ownership: FileDecision | None = None
+
+
+def _file_ownership(repo_root: Path, dst: Path) -> FileDecision:
+    """Build one read-only container decision for stage/list diagnostics."""
+    observation = observe_file(dst)
+    store = OwnershipStore()
+    claim = store.read(observation.resource_id)
+    try:
+        owner_id = read_owner_id(repo_root)
+    except OwnershipError:
+        owner_id = claim.owner_id if claim is not None else UUID(int=0)
+    return decide_file(observation, claim, owner_id=owner_id)
 
 
 class _Quit:
@@ -245,6 +272,7 @@ def collect_stages(
                     live,
                     hunks,
                     entry.staged if entry is not None else False,
+                    _file_ownership(repo_root, sub_dst),
                 )
             )
     return stages
@@ -263,6 +291,7 @@ class StructuredFileStage:
     fmt: StructuredFormat
     units: list[KeyUnit]
     participating: bool = False
+    ownership: FileDecision | None = None
 
 
 def collect_structured_stages(
@@ -324,6 +353,7 @@ def collect_structured_stages(
                     fmt,
                     units,
                     entry.staged if entry is not None else False,
+                    _file_ownership(repo_root, sub_dst),
                 )
             )
     return stages
@@ -389,6 +419,7 @@ def _apply_structured(
     result: StructuredWalkResult,
     *,
     config_dir: Path | None = None,
+    owner_id: UUID | None = None,
 ) -> None:
     """Persist a structured walk's classifications + drafts under ONE profile lock.
 
@@ -397,13 +428,36 @@ def _apply_structured(
     whole record here (and, once adopt-locally lands, its live write too) —
     mirroring :func:`_apply` so a concurrent install/sync cannot interleave.
     """
-    with mutation_locks(config_dir=config_dir, profile=profile):
+    with (
+        operations.recover_on_error(profile, "stage"),
+        mutation_locks(
+            resources=owner_id is not None,
+            config_dir=config_dir,
+            target_roots=(stage.dst.parent,),
+            profile=profile,
+        ),
+    ):
         operations.refuse_active(profile)
         locked_live = stage.dst.read_bytes()
         plan = _prepare_structured_persist(
             profile, stage, result, locked_live, observed_live=locked_live
         )
-        _commit_persist(profile, stage.fid, stage.base, plan)
+        if owner_id is None:
+            _commit_persist(profile, stage.fid, stage.base, plan)
+        else:
+            _commit_owned_persist(
+                profile,
+                stage,
+                plan,
+                owner_id=owner_id,
+                config_dir=config_dir,
+                refresh_claim=(
+                    stage.ownership is not None
+                    and stage.ownership.action is FileAction.ADOPT
+                )
+                or bool(result.decided_refs),
+                live_payload=None,
+            )
 
 
 def _validate_structured_decisions(
@@ -778,6 +832,7 @@ def _apply(
     result: WalkResult,
     *,
     config_dir: Path | None = None,
+    owner_id: UUID | None = None,
 ) -> None:
     """Apply the walk under ONE profile lock: rewrite live for any Adopt (atomic,
     captured mode), then persist the classifications + drafts.
@@ -787,7 +842,15 @@ def _apply(
     concurrent install/sync cannot land between the write and the record and leave
     a live tree whose bytes no longer match the classifications persisted here.
     """
-    with mutation_locks(config_dir=config_dir, profile=profile):
+    with (
+        operations.recover_on_error(profile, "stage"),
+        mutation_locks(
+            resources=owner_id is not None,
+            config_dir=config_dir,
+            target_roots=(stage.dst.parent,),
+            profile=profile,
+        ),
+    ):
         operations.refuse_active(profile)
         locked_live = stage.dst.read_bytes()
         if result.adopt_refs and locked_live != stage.live:
@@ -799,12 +862,108 @@ def _apply(
         plan = _prepare_persist(
             profile, stage, result, final_live, observed_live=locked_live
         )
-        if final_live != locked_live:
-            # stat() (follow) so a symlinked dst keeps its target's mode, not the
-            # link's.
-            mode = stat.S_IMODE(stage.dst.stat().st_mode)
-            atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
+        if owner_id is None:
+            if final_live != locked_live:
+                mode = stat.S_IMODE(stage.dst.stat().st_mode)
+                atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
+            _commit_persist(profile, stage.fid, stage.base, plan)
+        else:
+            _commit_owned_persist(
+                profile,
+                stage,
+                plan,
+                owner_id=owner_id,
+                config_dir=config_dir,
+                refresh_claim=(
+                    stage.ownership is not None
+                    and stage.ownership.action is FileAction.ADOPT
+                )
+                or bool(result.decided_refs),
+                live_payload=final_live if final_live != locked_live else None,
+            )
+
+
+def _store_snapshots(
+    profile: str, fid: FileId
+) -> tuple[transitions.StateSnapshotEntry, ...]:
+    """Capture one reconcile entry in index-last restoration order."""
+    return (
+        transitions.snapshot_store_state(
+            transitions.SnapshotStore.BASE, profile, str(fid)
+        ),
+        *transitions.reconcile_file_snapshots(profile, str(fid)),
+        transitions.snapshot_store_state(
+            transitions.SnapshotStore.INDEX, profile, profile
+        ),
+    )
+
+
+def _commit_owned_persist(
+    profile: str,
+    stage: FileStage | StructuredFileStage,
+    plan: _PersistPlan,
+    *,
+    owner_id: UUID,
+    config_dir: Path | None,
+    refresh_claim: bool = True,
+    live_payload: bytes | None = None,
+) -> None:
+    """Publish a metadata claim and its reconcile record as one recovery unit."""
+    expected = stage.ownership
+    if expected is None or expected.action is FileAction.HOLD:
+        raise InvariantViolation("stage ownership decision was not usable")
+    observed = observe_file(stage.dst)
+    store = OwnershipStore()
+    current = store.read(observed.resource_id)
+    locked = decide_file(observed, current, owner_id=owner_id)
+    if locked != expected:
+        raise InvariantViolation(
+            f"ownership inputs for {stage.sub_name!r} changed after confirmation; "
+            "run stage again"
+        )
+    if not refresh_claim:
         _commit_persist(profile, stage.fid, stage.base, plan)
+        return
+    claim_path = store.claim_path(observed.resource_id)
+    paths = (claim_path, *((stage.dst,) if live_payload is not None else ()))
+    journal = operations.prepare(
+        command="stage",
+        profile=profile,
+        config_dir=config_dir,
+        resources_lock=True,
+        command_line=tuple(sys.argv[1:]),
+        paths=paths,
+        state_snapshots=_store_snapshots(profile, stage.fid),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="file-adoption",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore the file ownership claim and reconcile record",
+        paths=paths,
+        restore_state=True,
+        restore_transitions=False,
+        adapters=(),
+    )
+    if live_payload is not None:
+        mode = stat.S_IMODE(stage.dst.stat().st_mode)
+        atomicio.atomic_write_bytes(stage.dst, live_payload, mode=mode)
+        observed = observe_file(stage.dst)
+        locked = decide_file(observed, current, owner_id=owner_id)
+    publish_file_claim_locked(
+        store,
+        locked,
+        owner_id=owner_id,
+        declaration_ref=f"tracked_files.{stage.sub_name}",
+        acquisition=(
+            "adopted-external"
+            if expected.action is FileAction.ADOPT
+            else "observed-local"
+        ),
+    )
+    _commit_persist(profile, stage.fid, stage.base, plan)
+    journal = operations.finish_checkpoint(journal)
+    operations.complete(journal)
 
 
 def _validate_line_decisions(
@@ -1000,8 +1159,15 @@ def stage(
     for stage_item in stages:
         if not stage_item.hunks:
             continue
+        owner_id = _confirm_file_ownership(stage_item, repo_root)
         result = walk(stage_item.hunks, _interactive_choice(stage_item))
-        _apply(profile, stage_item, result, config_dir=repo_root)
+        _apply(
+            profile,
+            stage_item,
+            result,
+            config_dir=repo_root,
+            owner_id=owner_id,
+        )
         tally = counts(result.hunks)
         drafted = tally[HunkClass.SHARED_DRAFTED]
         drafted_note = f"  {drafted} drafted" if drafted else ""
@@ -1014,10 +1180,17 @@ def stage(
     for struct_item in struct:
         if not struct_item.units:
             continue
+        owner_id = _confirm_file_ownership(struct_item, repo_root)
         sresult = walk_structured(
             struct_item.units, _structured_interactive_choice(struct_item)
         )
-        _apply_structured(profile, struct_item, sresult, config_dir=repo_root)
+        _apply_structured(
+            profile,
+            struct_item,
+            sresult,
+            config_dir=repo_root,
+            owner_id=owner_id,
+        )
         stally = _struct_counts(sresult.units)
         sdrafted = stally[HunkClass.SHARED_DRAFTED]
         sdrafted_note = f"  {sdrafted} drafted" if sdrafted else ""
@@ -1029,6 +1202,32 @@ def stage(
         )
 
 
+def _confirm_file_ownership(
+    stage: FileStage | StructuredFileStage, repo_root: Path
+) -> UUID | None:
+    """Confirm a missing container claim separately from unit decisions."""
+    decision = stage.ownership
+    if decision is None:
+        raise InvariantViolation("stage did not collect a file ownership decision")
+    if decision.action is FileAction.HOLD:
+        raise InvariantViolation(f"cannot stage {stage.sub_name!r}: {decision.detail}")
+    if decision.action is FileAction.ADOPT and not typer.confirm(
+        f"Manage existing tracked file {stage.sub_name!r} without changing its bytes?",
+        default=False,
+    ):
+        raise InvariantViolation("file ownership adoption declined; no changes applied")
+    try:
+        return load_or_create_owner_id(repo_root)
+    except OwnershipError:
+        typer.secho(
+            "warning: staged file remains without durable ownership because "
+            "the configuration is not Git-backed",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return None
+
+
 def _render_list(
     ctx_obj: OutputContext | None,
     stages: list[FileStage],
@@ -1037,7 +1236,10 @@ def _render_list(
     """Render durable participation and capture-actionability diagnostics."""
 
     def row(
-        name: str, units: list[Hunk] | list[KeyUnit], participating: bool
+        name: str,
+        units: list[Hunk] | list[KeyUnit],
+        participating: bool,
+        ownership: FileDecision | None,
     ) -> dict[str, Any]:
         tally = Counter(unit.cls for unit in units)
         reconfirm = sum(unit.changed and unit.cls is HunkClass.SHARED for unit in units)
@@ -1055,6 +1257,14 @@ def _render_list(
             blockers.append(
                 f"{pending} pending unit(s): run `setforge stage {name}` to classify"
             )
+        ownership_status = (
+            ownership.action.value if ownership is not None else "unknown"
+        )
+        if ownership is not None and ownership.action in {
+            FileAction.ADOPT,
+            FileAction.HOLD,
+        }:
+            blockers.append(f"container ownership: {ownership.detail}")
         return {
             "name": name,
             "participating": participating,
@@ -1069,11 +1279,16 @@ def _render_list(
             "local": tally[HunkClass.LOCAL],
             "pending": pending,
             "blockers": blockers,
+            "ownership": ownership_status,
         }
 
-    data = [row(stage.sub_name, stage.hunks, stage.participating) for stage in stages]
+    data = [
+        row(stage.sub_name, stage.hunks, stage.participating, stage.ownership)
+        for stage in stages
+    ]
     data += [
-        row(item.sub_name, item.units, item.participating) for item in (struct or [])
+        row(item.sub_name, item.units, item.participating, item.ownership)
+        for item in (struct or [])
     ]
 
     def _human() -> None:
@@ -1088,6 +1303,7 @@ def _render_list(
                 f"{row['shared_promotable']} shared-promotable  "
                 f"{row['drafted']} drafted  {row['reconfirm_required']} "
                 f"reconfirm-required  {row['local']} local  {row['pending']} pending"
+                f"  ownership={row['ownership']}"
             )
             for blocker in row["blockers"]:
                 console.print(f"  blocked: {blocker}")

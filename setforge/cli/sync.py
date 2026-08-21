@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
+from uuid import UUID
 
 import typer
 from click import ClickException
@@ -58,8 +59,10 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import ExtensionToolMissing
+from setforge.file_ownership import FileAction, FileDecision, decide_file, observe_file
 from setforge.locking import mutation_locks
 from setforge.overlay_provenance import ResolvedExtension
+from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import content_sha, file_id
 
@@ -70,7 +73,49 @@ class _CaptureSnapshot:
 
     config_hash: str
     effective_hash: str
+    ownership: tuple[FileDecision, ...]
+    ownership_authorized: tuple[tuple[str, bool], ...]
     preview: tuple[capture_mod.CapturePreview, ...]
+
+
+def _read_capture_owner_id(repo_root: Path) -> UUID | None:
+    try:
+        return read_owner_id(repo_root)
+    except OwnershipError:
+        return None
+
+
+def _capture_ownership(
+    ctx: ProfileContext, owner_id: UUID | None
+) -> tuple[tuple[FileDecision, ...], dict[str, bool]]:
+    """Read exact claims under the resources lock without reacquiring owner locks."""
+    if owner_id is None and not (ctx.repo_root / ".git").exists():
+        return (), {
+            name: True for _tf, name, _src, _dst in _iter_all_tracked_files(ctx)
+        }
+    planning_owner = owner_id or UUID(int=0)
+    store = OwnershipStore()
+    decisions = tuple(
+        decide_file(
+            observation,
+            store.read(observation.resource_id),
+            owner_id=planning_owner,
+        )
+        for tracked, _name, _src, destination in _iter_all_tracked_files(ctx)
+        if tracked.symlink is None
+        for observation in (observe_file(destination),)
+    )
+    by_locator = {decision.observation.locator: decision for decision in decisions}
+    authorized = {
+        name: (
+            True
+            if tracked.symlink is not None
+            else by_locator[str(destination.absolute())].action
+            not in {FileAction.ADOPT, FileAction.HOLD}
+        )
+        for tracked, name, _src, destination in _iter_all_tracked_files(ctx)
+    }
+    return decisions, authorized
 
 
 def _build_capture_plan(
@@ -122,7 +167,12 @@ def _build_capture_plan(
 
 
 def _load_capture_preview(
-    config: Path, profile: str, repo_root: Path, *, verb: str
+    config: Path,
+    profile: str,
+    repo_root: Path,
+    *,
+    verb: str,
+    owner_id: UUID | None,
 ) -> tuple[ProfileContext, _CaptureSnapshot, tuple[ResolvedExtension, ...]]:
     """Reload effective configuration and build an exact read-only capture plan."""
     cfg = load_config(config)
@@ -134,14 +184,21 @@ def _load_capture_preview(
     )
     if verb == "sync":
         _refuse_duplicate_section_names(ctx, command="sync")
+    ownership, authorized = _capture_ownership(ctx, owner_id)
     preview = capture_mod.preview_capture_profile(
-        cfg, profile, repo_root, resolved=resolved
+        cfg,
+        profile,
+        repo_root,
+        resolved=resolved,
+        ownership_authorized=authorized,
     )
     return (
         ctx,
         _CaptureSnapshot(
             config_hash=content_sha(config.read_bytes()),
             effective_hash=content_sha(repr(effective).encode("utf-8")),
+            ownership=ownership,
+            ownership_authorized=tuple(sorted(authorized.items())),
             preview=preview,
         ),
         tuple(effective.local_overlay.extensions),
@@ -244,10 +301,11 @@ def capture(
         raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
-    with mutation_locks(config_dir=repo_root, profile=profile):
+    owner_id = _read_capture_owner_id(repo_root)
+    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
-            config, profile, repo_root, verb="capture"
+            config, profile, repo_root, verb="capture", owner_id=owner_id
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
         _render_keep_tracked(initial_snapshot.preview)
@@ -259,10 +317,10 @@ def capture(
         auto_enum=auto_enum,
         yes=yes,
     )
-    with mutation_locks(config_dir=repo_root, profile=profile):
+    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         locked_ctx, locked_snapshot, _locked_extensions = _load_capture_preview(
-            config, profile, repo_root, verb="capture"
+            config, profile, repo_root, verb="capture", owner_id=owner_id
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
         try:
@@ -273,6 +331,7 @@ def capture(
                 config,
                 auto_enum,
                 resolved=locked_ctx.resolved,
+                ownership_authorized=dict(locked_snapshot.ownership_authorized),
             )
         except KeyboardInterrupt:
             # Plain ``capture`` takes no snapshot (only ``sync`` records a
@@ -326,10 +385,11 @@ def sync(
         raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
-    with mutation_locks(config_dir=repo_root, profile=profile):
+    owner_id = _read_capture_owner_id(repo_root)
+    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
-            config, profile, repo_root, verb="sync"
+            config, profile, repo_root, verb="sync", owner_id=owner_id
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
         _render_keep_tracked(initial_snapshot.preview)
@@ -342,12 +402,12 @@ def sync(
         yes=yes,
     )
     with (
-        mutation_locks(config_dir=repo_root, profile=profile),
+        mutation_locks(resources=True, config_dir=repo_root, profile=profile),
         operations.recover_on_error(profile, "sync"),
     ):
         operations.refuse_active(profile)
         ctx, locked_snapshot, locked_extensions = _load_capture_preview(
-            config, profile, repo_root, verb="sync"
+            config, profile, repo_root, verb="sync", owner_id=owner_id
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
         cfg = ctx.cfg
@@ -382,7 +442,13 @@ def sync(
 
         try:
             results = _run_capture(
-                cfg, profile, repo_root, config, auto_enum, resolved=resolved
+                cfg,
+                profile,
+                repo_root,
+                config,
+                auto_enum,
+                resolved=resolved,
+                ownership_authorized=dict(locked_snapshot.ownership_authorized),
             )
             _render_capture_results(results)
 
@@ -592,6 +658,7 @@ def _run_capture(
     auto_enum: capture_mod.CaptureAuto | None,
     *,
     resolved: ResolvedProfile,
+    ownership_authorized: dict[str, bool],
 ) -> list[capture_mod.CaptureResult]:
     """Run ``capture_profile``.
 
@@ -614,6 +681,7 @@ def _run_capture(
         setforge_yaml_path=config.resolve(),
         auto=auto_enum,
         resolved=resolved,
+        ownership_authorized=ownership_authorized,
     )
 
 

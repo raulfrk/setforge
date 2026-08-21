@@ -247,7 +247,14 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
     reconcile pass for cost; use ``setforge compare`` for the
     authoritative per-unit drift state.
     """
-    report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
+    report = compare_mod.compare_profile(
+        ctx.cfg,
+        ctx.profile,
+        ctx.repo_root,
+        ownership_authorized=compare_mod.file_authorization_map(
+            ctx.cfg, ctx.resolved, ctx.repo_root
+        ),
+    )
     drifted = 0
     for entry in report.entries:
         if entry.status is not CompareStatus.DRIFTED:

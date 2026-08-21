@@ -30,6 +30,8 @@ from setforge import (
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_profile
 from setforge.errors import InvariantViolation, StructuredParseError
+from setforge.file_ownership import FileAction, decide_file, observe_file
+from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
@@ -108,6 +110,35 @@ def _preflight_staged_file(
     units = su_mod.classify_structured(fresh, entry.hunks, fmt)
     su_mod.reconstruct_structured(base, live, units, drafts, fmt)
     return True
+
+
+def _require_capture_authority(
+    repo_root: Path, sub_name: str, destination: Path
+) -> None:
+    """Refuse unit publication when the container has no current owner claim."""
+    try:
+        owner_id = read_owner_id(repo_root)
+    except OwnershipError:
+        # Preserve the legacy non-Git API surface: without a durable config
+        # identity no claim can be compared or transferred. Git-backed
+        # configurations enforce the authority boundary below.
+        if not (repo_root / ".git").exists():
+            return
+        owner_id = None
+    observation = observe_file(destination)
+    claim = OwnershipStore().read(observation.resource_id)
+    action = (
+        FileAction.ADOPT
+        if owner_id is None and claim is None
+        else FileAction.HOLD
+        if owner_id is None
+        else decide_file(observation, claim, owner_id=owner_id).action
+    )
+    if action in {FileAction.ADOPT, FileAction.HOLD}:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} has no current container ownership claim; "
+            f"run `setforge stage {sub_name}` to adopt it"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,12 +231,13 @@ def _preview_result(
     )
 
 
-def preview_capture_profile(
+def preview_capture_profile(  # noqa: C901 - exact per-route immutable projection
     config: Config,
     profile_name: str,
     repo_root: Path,
     *,
     resolved: ResolvedProfile,
+    ownership_authorized: Mapping[str, bool] | None = None,
 ) -> tuple[CapturePreview, ...]:
     """Return the exact per-file capture projection without writing anything."""
     previews: list[CapturePreview] = []
@@ -230,6 +262,13 @@ def preview_capture_profile(
             fid = file_id(sub_name)
             entry = reconcile_store.read_index(profile_name).files.get(str(fid))
             if entry is not None and entry.staged:
+                if ownership_authorized is None:
+                    _require_capture_authority(repo_root, sub_name, sub_dst)
+                elif not ownership_authorized[sub_name]:
+                    raise InvariantViolation(
+                        f"staged file {sub_name!r} has no current container "
+                        f"ownership claim; run `setforge stage {sub_name}` to adopt it"
+                    )
                 _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
                 base = reconcile_store.read_base(profile_name, fid)
                 assert base is not None
@@ -557,7 +596,7 @@ def _capture_staged_structured(
     return CaptureResult(name=sub_name, action=result.action, warnings=tuple(warnings))
 
 
-def capture_profile(
+def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
     config: Config,
     profile_name: str,
     repo_root: Path,
@@ -567,6 +606,7 @@ def capture_profile(
     snapshot_base: Path | None = None,
     console: Console | None = None,
     resolved: ResolvedProfile | None = None,
+    ownership_authorized: Mapping[str, bool] | None = None,
     host_local_sections_map: (
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
@@ -643,6 +683,13 @@ def capture_profile(
             continue
         fmt = su_mod.structured_format(sub_dst)
         if _preflight_staged_file(profile_name, sub_name, sub_dst, fmt):
+            if ownership_authorized is None:
+                _require_capture_authority(repo_root, sub_name, sub_dst)
+            elif not ownership_authorized[sub_name]:
+                raise InvariantViolation(
+                    f"staged file {sub_name!r} has no current container ownership "
+                    f"claim; run `setforge stage {sub_name}` to adopt it"
+                )
             participating.add(sub_name)
 
     for sub_name, sub_src, sub_dst, host_local_names in work:

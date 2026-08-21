@@ -620,7 +620,7 @@ verbs = ["init"]
 [tests."tests/docker/test_e2e_docker_interactive_conflict.py::test_interactive_conflict_keep_ours_keeps_host"]
 verdict = "keep"
 smoke = false
-signal = "interactive conflict wizard theirs/ours"
+signal = "TTY file adoption then interactive conflict wizard keeps host bytes"
 verbs = ["install", "reconcile"]
 
 [tests."tests/docker/test_e2e_docker_interactive_conflict.py::test_interactive_conflict_take_theirs_writes_upstream"]

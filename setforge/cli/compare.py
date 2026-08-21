@@ -75,6 +75,7 @@ def compare(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_duplicate_section_names(profile_ctx, command="compare")
+    ownership_authorized = compare_mod.file_authorization_map(cfg, resolved, repo_root)
 
     with profile_lock(profile):
         # Load + validate the local.yaml host_local_sections overlay so
@@ -92,6 +93,7 @@ def compare(
             transitions_dir=transitions.transitions_root(),
             ignored=load_ignored_orphans(),
             host_local_sections=host_local_sections_map,
+            ownership_authorized=ownership_authorized,
         )
 
     console = Console()

@@ -353,6 +353,16 @@ $ setforge sync --profile=default --auto=use-live --yes
 narrower form — tracked files only, no extension reconcile.) Commit the updated
 `tracked/` in your config repo afterward.
 
+For a Git-backed configuration, SetForge also records which checkout owns each
+tracked destination. A pre-existing file is adopted only after confirmation
+(`--yes` in automation), without replacing its bytes. `stage` then decides
+publication per hunk or structured key: SHARED units may flow back to tracked,
+while LOCAL and PENDING units remain host-only. The container claim and those
+unit choices are separate—a SHARED classification cannot claim a file, and
+adopting a mixed file does not make its LOCAL hunks portable. `capture` and
+`compare` fail closed when a staged Git-backed file has no current container
+claim.
+
 **When to use:** when the host is the source of truth for a change and you want
 it back in the repo.
 

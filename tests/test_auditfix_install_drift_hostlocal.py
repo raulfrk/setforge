@@ -127,6 +127,7 @@ def test_install_drift_gate_threads_host_local_overlay(
         repo_root: Path,
         *,
         host_local_sections: HostLocalOverlay | None = None,
+        ownership_authorized: Mapping[str, bool] | None = None,
     ) -> CompareReport:
         # Record only the FIRST call (the install drift gate at install.py).
         captured.setdefault("host_local_sections", host_local_sections)
@@ -135,6 +136,7 @@ def test_install_drift_gate_threads_host_local_overlay(
             profile_name,
             repo_root,
             host_local_sections=host_local_sections,
+            ownership_authorized=ownership_authorized,
         )
 
     monkeypatch.setattr(install_mod.compare_mod, "compare_profile", _spy)
@@ -185,6 +187,7 @@ def test_dry_run_pipeline_threads_host_local_overlay(
         repo_root: Path,
         *,
         host_local_sections: HostLocalOverlay | None = None,
+        ownership_authorized: Mapping[str, bool] | None = None,
     ) -> CompareReport:
         captured.setdefault("host_local_sections", host_local_sections)
         return real_compare_profile(
@@ -192,6 +195,7 @@ def test_dry_run_pipeline_threads_host_local_overlay(
             profile_name,
             repo_root,
             host_local_sections=host_local_sections,
+            ownership_authorized=ownership_authorized,
         )
 
     monkeypatch.setattr(install_helpers_mod.compare_mod, "compare_profile", _spy)

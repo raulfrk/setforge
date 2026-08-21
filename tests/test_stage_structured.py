@@ -196,8 +196,10 @@ def test_render_list_json_reports_structured_drafted_and_pending(
             "local": 0,
             "pending": 1,
             "blockers": [
-                "1 pending unit(s): run `setforge stage settings.yaml` to classify"
+                "1 pending unit(s): run `setforge stage settings.yaml` to classify",
+                "container ownership: present, external, unowned",
             ],
+            "ownership": "adopt",
         }
     ]
 
@@ -228,7 +230,8 @@ def test_render_list_json_changed_structured_local_needs_no_reconfirm(
     assert row["shared"] == 0
     assert row["reconfirm_required"] == 0
     assert row["local"] == 1
-    assert row["blockers"] == []
+    assert row["ownership"] == "adopt"
+    assert row["blockers"] == ["container ownership: present, external, unowned"]
 
 
 def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(

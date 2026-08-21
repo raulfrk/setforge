@@ -43,7 +43,9 @@ from setforge.config import (
     resolve_and_expand,
 )
 from setforge.errors import BaseStoreError, ConfigError
+from setforge.file_ownership import FileAction, decide_file, observe_file
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
+from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -592,6 +594,7 @@ def compare_profile(
     host_local_sections: (
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
+    ownership_authorized: Mapping[str, bool] | None = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
@@ -637,6 +640,11 @@ def compare_profile(
                 tracked_file,
                 profile=profile_name,
                 host_local_sections=host_local,
+                ownership_authorized=(
+                    ownership_authorized.get(sub_name, False)
+                    if ownership_authorized is not None
+                    else _has_file_authority(repo_root, sub_dst)
+                ),
             )
             entries.append(entry)
             if sub_unexpected:
@@ -668,6 +676,46 @@ def compare_profile(
     )
 
 
+def file_authorization_map(
+    config: Config, resolved: ResolvedProfile, repo_root: Path
+) -> dict[str, bool]:
+    """Project container authority before callers acquire profile locks."""
+    try:
+        owner_id = read_owner_id(repo_root)
+    except OwnershipError:
+        legacy = not (repo_root / ".git").exists()
+        return {
+            sub_name: legacy
+            for name in resolved.tracked_files
+            for sub_name, _src, _dst in expand_tracked_file(
+                name,
+                resolve_src(config.tracked_files[name], repo_root),
+                resolve_dst(config.tracked_files[name]),
+            )
+        }
+    store = OwnershipStore()
+    result: dict[str, bool] = {}
+    for name in resolved.tracked_files:
+        tracked = config.tracked_files[name]
+        for sub_name, _src, destination in expand_tracked_file(
+            name, resolve_src(tracked, repo_root), resolve_dst(tracked)
+        ):
+            if tracked.symlink is not None:
+                result[sub_name] = True
+                continue
+            observation = observe_file(destination)
+            decision = decide_file(
+                observation,
+                store.read(observation.resource_id),
+                owner_id=owner_id,
+            )
+            result[sub_name] = decision.action not in {
+                FileAction.ADOPT,
+                FileAction.HOLD,
+            }
+    return result
+
+
 def _compare_one(
     name: str,
     src: Path,
@@ -676,6 +724,7 @@ def _compare_one(
     *,
     profile: str | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
+    ownership_authorized: bool = True,
 ) -> tuple[FileCompare, bool]:
 
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
@@ -728,7 +777,12 @@ def _compare_one(
         tracked_mode=tracked_mode,
     )
     return _classify_entry(
-        entry, profile=profile, src=src, dst=dst, tracked_file=tracked_file
+        entry,
+        profile=profile,
+        src=src,
+        dst=dst,
+        tracked_file=tracked_file,
+        ownership_authorized=ownership_authorized,
     )
 
 
@@ -740,6 +794,7 @@ def _classify_entry(
     dst: Path,
     tracked_file: TrackedFile | None = None,
     probe_stale: bool = True,
+    ownership_authorized: bool = True,
 ) -> tuple[FileCompare, bool]:
     """Attach the drift class to a ``DRIFTED`` entry and derive its
     unexpected flag.
@@ -760,6 +815,7 @@ def _classify_entry(
         dst=dst,
         tracked_file=tracked_file,
         probe_stale=probe_stale,
+        ownership_authorized=ownership_authorized,
     )
     entry = replace(entry, drift_class=drift_class, reason=reason)
     is_unexpected = drift_class is DriftClass.UNEXPECTED
@@ -774,6 +830,7 @@ def _classify_drifted(
     dst: Path,
     tracked_file: TrackedFile | None = None,
     probe_stale: bool = True,
+    ownership_authorized: bool = True,
 ) -> tuple[DriftClass, str | None]:
     """Classify a ``DRIFTED`` entry; first matching slot wins.
 
@@ -799,11 +856,27 @@ def _classify_drifted(
         probe_stale
         and profile is not None
         and tracked_file is not None
+        and ownership_authorized
         and _reconcile_staged_expected(profile, entry.name, src, dst)
     ):
         return DriftClass.EXPECTED, _STAGED_REASON
     # Slot 5 — UNEXPECTED: drift nothing above explains.
     return DriftClass.UNEXPECTED, None
+
+
+def _has_file_authority(repo_root: Path, destination: Path) -> bool:
+    """Return whether staged units can explain shared tracked/live drift."""
+    try:
+        owner_id = read_owner_id(repo_root)
+    except OwnershipError:
+        return not (repo_root / ".git").exists()
+    observation = observe_file(destination)
+    decision = decide_file(
+        observation,
+        OwnershipStore().read(observation.resource_id),
+        owner_id=owner_id,
+    )
+    return decision.action not in {FileAction.ADOPT, FileAction.HOLD}
 
 
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:

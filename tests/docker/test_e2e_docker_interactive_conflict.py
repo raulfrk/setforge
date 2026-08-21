@@ -37,6 +37,7 @@ pytestmark = pytest.mark.e2e_docker
 _PROFILE = "test-minimal"
 _TRACKED = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
 _LIVE = "/home/tester/.setforge_e2e/minimal/text.txt"
+_STATE = "/tmp/setforge-interactive-conflict-state"
 
 # The conflict recipe (mirrors tests/test_install_wizard.py::_seed_conflict):
 # install seeds base = _BASE; the host diverges line 2 one way, upstream the
@@ -58,6 +59,8 @@ def _prof(c: ContainerHandle, verb: str, *extra: str) -> tuple[int, str, str]:
     """Run a non-interactive ``setforge <verb>`` against the e2e profile."""
     result = c.exec(
         [
+            "env",
+            f"SETFORGE_STATE_DIR={_STATE}",
             "uv",
             "run",
             "setforge",
@@ -83,6 +86,42 @@ def _seed_conflict(c: ContainerHandle) -> None:
     c.write_text(_TRACKED, _UPSTREAM_EDIT)  # upstream edit → conflict on line 2
 
 
+def _seed_conflict_through_file_adoption(
+    pyte_pty_session: Callable[..., PyteSession], c: ContainerHandle
+) -> None:
+    """Claim a pre-existing container through the real TTY, then diverge it."""
+    initialized = c.exec(
+        ["git", "init", "-b", "main", "/workspace/tests/fixtures/e2e"],
+        check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    c.write_text(_TRACKED, _BASE)
+    c.write_text(_LIVE, _BASE)
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "env",
+            f"SETFORGE_STATE_DIR={_STATE}",
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+            "--no-secrets-scan",
+            "--no-transition",
+            "--no-git-check",
+        ],
+        timeout=120.0,
+    )
+    session.expect_in_display("Manage existing tracked file(s)", timeout=30)
+    session.send_keys("y\r")
+    session.wait_for_exit(timeout=60, expected_code=0)
+    assert c.read_text(_LIVE) == _BASE
+    c.write_text(_LIVE, _LIVE_EDIT)
+    c.write_text(_TRACKED, _UPSTREAM_EDIT)
+
+
 def _conflict_session(
     pyte_pty_session: Callable[..., PyteSession], c: ContainerHandle
 ) -> PyteSession:
@@ -90,6 +129,8 @@ def _conflict_session(
     return pyte_pty_session(
         container=c.cid,
         cmd=[
+            "env",
+            f"SETFORGE_STATE_DIR={_STATE}",
             "uv",
             "run",
             "setforge",
@@ -131,7 +172,7 @@ def test_interactive_conflict_keep_ours_keeps_host(
 ) -> None:
     """Choosing ``Ours`` (focused first) keeps the host live-edit verbatim."""
     c = docker_container()
-    _seed_conflict(c)
+    _seed_conflict_through_file_adoption(pyte_pty_session, c)
 
     s = _conflict_session(pyte_pty_session, c)
     s.expect_in_display(_FRAME_GLYPH, timeout=_FRAME_TIMEOUT_S)

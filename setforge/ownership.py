@@ -1050,12 +1050,20 @@ def _git_common_dir(config_dir: Path) -> Path:
     if result.returncode != 0:
         raise OwnershipError("ownership requires a Git-backed config checkout")
     try:
-        rendered = result.stdout.decode("utf-8", errors="strict").strip()
-    except UnicodeDecodeError as exc:
+        stdout = result.stdout
+        rendered = (
+            stdout.decode("utf-8", errors="strict")
+            if isinstance(stdout, bytes)
+            else stdout
+        ).strip()
+    except (AttributeError, UnicodeDecodeError) as exc:
         raise OwnershipError("Git returned an invalid common-directory path") from exc
     if not rendered:
         raise OwnershipError("Git returned an empty common-directory path")
-    common_dir = Path(rendered).resolve(strict=True)
+    try:
+        common_dir = Path(rendered).resolve(strict=True)
+    except OSError as exc:
+        raise OwnershipError("Git returned an invalid common-directory path") from exc
     if not common_dir.is_dir():
         raise OwnershipError("Git common directory is not a directory")
     return common_dir

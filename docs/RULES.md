@@ -59,6 +59,7 @@ Part 2(b)).
 | INV-9 | Bundle DAG is acyclic and `depends_on` order is honored. | DETERMINISTIC | `@invariant` + a cycle/ref lint on the bundle model |
 | INV-10 | Store index ↔ on-disk consistent: no orphan classification. | DETERMINISTIC | `@invariant`; store tests |
 | INV-11 | Package presence and provenance never imply authority: adoption is metadata-only, and upgrade/removal require the current checkout's exact managed claim and live fingerprint. | DETERMINISTIC | ownership planner + install/cleanup integration tests |
+| INV-12 | Tracked-file container authority and unit publication intent are independent: existing files require explicit metadata-only adoption, and SHARED/LOCAL/PENDING classifications never create or transfer the container claim. | DETERMINISTIC | file ownership planner + stage/capture/compare integration tests |
 
 ---
 

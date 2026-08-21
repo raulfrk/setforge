@@ -540,6 +540,33 @@ def begin_checkpoint(
     return updated
 
 
+def extend_paths(
+    journal: OperationJournal, paths: tuple[Path, ...]
+) -> OperationJournal:
+    """Durably add untouched paths discovered after an earlier effect.
+
+    Callers must invoke this only between completed checkpoints and before the
+    newly named paths are mutated. This supports identities whose final claim
+    pathname can be derived only after creating their target object.
+    """
+    if journal.checkpoints and not journal.checkpoints[-1].completed:
+        raise SetforgeError("cannot extend paths during an uncertain checkpoint")
+    existing = {item.path for item in journal.paths}
+    additions = tuple(
+        path.expanduser().absolute()
+        for path in paths
+        if path.expanduser().absolute() not in existing
+    )
+    if not additions:
+        return journal
+    snapshots = _snapshot_paths_with_missing_ancestors(additions)
+    if any(item.path in existing for item in snapshots):
+        snapshots = tuple(item for item in snapshots if item.path not in existing)
+    updated = replace(journal, paths=(*journal.paths, *snapshots))
+    _write(updated)
+    return updated
+
+
 def finish_checkpoint(journal: OperationJournal) -> OperationJournal:
     """Durably mark the most recent checkpoint completed."""
     if not journal.checkpoints:
@@ -562,6 +589,15 @@ def recover_files(journal: OperationJournal) -> OperationJournal:
     _require_matching_state_root(journal)
     _validate_path_guards(journal)
     _validate_snapshot_restore_parents(journal)
+    if journal.resources_lock:
+        # Ownership moves have their own index-last durable intent. Complete
+        # that transaction first so restoring this operation's old/new claim
+        # snapshots cannot strand an intent that blocks every later read.
+        from setforge.ownership import OwnershipStore
+
+        ownership = OwnershipStore()
+        if ownership.intents_root.exists():
+            ownership.recover_moves_locked()
     recovering = replace(journal, phase=OperationPhase.RECOVERING)
     _write(recovering)
     scoped_paths, blocked_paths = _recovery_paths(recovering)

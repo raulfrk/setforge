@@ -423,6 +423,41 @@ def test_unstaged_file_falls_back_to_legacy_absorb(
     assert store.read_base("p", fid) == _A5_BASE
 
 
+def test_git_backed_staged_capture_requires_container_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    from setforge.errors import InvariantViolation
+    from setforge.reconcile.types import HunkClass, file_id
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, _A5_BASE.decode())
+    _write(dst, _A5_LIVE.decode())
+    _stage_index(
+        "p",
+        file_id("CLAUDE.md"),
+        _A5_BASE,
+        _A5_LIVE,
+        {"## Shell": HunkClass.SHARED},
+    )
+
+    with pytest.raises(InvariantViolation, match="container ownership claim"):
+        capture_profile(
+            _a5_config(dst),
+            "p",
+            repo,
+            setforge_yaml_path=tmp_path / "setforge.yaml",
+        )
+
+    assert src.read_bytes() == _A5_BASE
+
+
 def test_participating_file_with_invalidated_identity_never_wholesale_captures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -240,7 +240,8 @@ def test_render_list_json_changed_local_needs_no_reconfirm(
     assert row["shared"] == 0
     assert row["reconfirm_required"] == 0
     assert row["local"] == 1
-    assert row["blockers"] == []
+    assert row["ownership"] == "adopt"
+    assert row["blockers"] == ["container ownership: present, external, unowned"]
 
 
 def test_same_class_reconfirm_refreshes_plain_confirmed_hash(
@@ -370,6 +371,7 @@ def test_plain_prompt_to_lock_live_race_refuses_stale_decision(
 
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    assert stage.ownership is not None
     result = walk(
         stage.hunks,
         lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
@@ -520,6 +522,113 @@ def test_apply_writes_classes_and_keeps_base(
     assert classes == {"## Shell": "shared", "## Host paths": "local"}
     assert store.read_base(profile, file_id("CLAUDE.md")) == _BASE  # base unchanged
     assert store.reconstruct(profile, file_id("CLAUDE.md")) == _LIVE  # full live
+
+
+def test_apply_adopts_container_without_rewriting_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from setforge.cli.stage import Decision, _apply
+    from setforge.ownership import Authority, ClaimLifecycle, OwnershipStore
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    assert stage.ownership is not None
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED)
+            if h.label == "## Shell"
+            else Decision(HunkClass.LOCAL)
+        ),
+    )
+    before = stage.dst.read_bytes()
+    owner_id = uuid4()
+
+    _apply(profile, stage, result, owner_id=owner_id)
+
+    claim = OwnershipStore().read(stage.ownership.observation.resource_id)
+    assert claim is not None
+    assert claim.owner_id == owner_id
+    assert claim.authority is Authority.MANAGE
+    assert claim.lifecycle is ClaimLifecycle.CLAIMED
+    assert stage.dst.read_bytes() == before
+
+
+def test_apply_adoption_failure_recovers_claim_and_reconcile_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from setforge.cli.stage import Decision, _apply
+    from setforge.ownership import OwnershipStore
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    assert stage.ownership is not None
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: Decision(HunkClass.SHARED),
+    )
+    index_before = store._index_path(profile).read_bytes()
+    real_commit = stage_mod._commit_persist
+
+    def fail_after_claim(*args: object, **kwargs: object) -> None:
+        real_commit(*args, **kwargs)  # type: ignore[arg-type]
+        raise OSError("injected post-record failure")
+
+    monkeypatch.setattr(stage_mod, "_commit_persist", fail_after_claim)
+
+    with pytest.raises(OSError, match="injected post-record failure"):
+        _apply(profile, stage, result, owner_id=uuid4())
+
+    assert OwnershipStore().read(stage.ownership.observation.resource_id) is None
+    assert store._index_path(profile).read_bytes() == index_before
+
+
+def test_owned_adopt_live_failure_restores_file_claim_and_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from setforge.cli.stage import Decision, _apply
+    from setforge.ownership import OwnershipStore
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    assert stage.ownership is not None
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(
+                HunkClass.SHARED_DRAFTED,
+                draft=b"## Shell\nportable\n\n",
+                adopt=True,
+            )
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    live_before = stage.dst.read_bytes()
+    index_before = store._index_path(profile).read_bytes()
+    real_commit = stage_mod._commit_persist
+
+    def fail_after_record(*args: object, **kwargs: object) -> None:
+        real_commit(*args, **kwargs)  # type: ignore[arg-type]
+        raise OSError("injected owned-adopt failure")
+
+    monkeypatch.setattr(stage_mod, "_commit_persist", fail_after_record)
+
+    with pytest.raises(OSError, match="owned-adopt failure"):
+        _apply(profile, stage, result, owner_id=uuid4())
+
+    assert stage.dst.read_bytes() == live_before
+    assert OwnershipStore().read(stage.ownership.observation.resource_id) is None
+    assert store._index_path(profile).read_bytes() == index_before
+    assert not store._drafts_path(profile, stage.fid).exists()
 
 
 def test_apply_merges_concurrent_classification(

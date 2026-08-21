@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -16,6 +17,16 @@ from hypothesis import strategies as st
 
 from setforge import operations, transitions
 from setforge.errors import SetforgeError
+from setforge.locking import install_resources_lock
+from setforge.ownership import (
+    OwnershipClaim,
+    OwnershipStore,
+    ProvenanceFact,
+    ProvenanceFactKind,
+    ResourceId,
+    ResourceScope,
+    ScopeKind,
+)
 
 
 @pytest.fixture
@@ -149,6 +160,90 @@ def test_checkpoint_intent_is_durable_before_completion(
     completed = operations.finish_checkpoint(applying)
     assert operations.load("p") == completed
     assert completed.checkpoints[-1].completed
+
+
+def test_extend_paths_snapshots_late_identity_before_publication(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journal = _prepare(tmp_path)
+    first = operations.begin_checkpoint(
+        journal,
+        name="create-target",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore target",
+    )
+    completed = operations.finish_checkpoint(first)
+    late = tmp_path / "late-claim.json"
+
+    extended = operations.extend_paths(completed, (late,))
+    applying = operations.begin_checkpoint(
+        extended,
+        name="publish-claim",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="remove claim",
+        paths=(late,),
+    )
+    late.write_text("claim", encoding="utf-8")
+
+    operations.recover_files(applying)
+
+    assert not late.exists()
+
+
+def test_recover_files_resolves_ownership_move_before_restoring_claims(
+    tmp_path: Path,
+    operation_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = OwnershipStore()
+    owner = uuid.uuid4()
+    scope = ResourceScope(ScopeKind.USER_HOST, "current-user")
+    source = ResourceId("package", "cargo", "source", scope)
+    destination = ResourceId("package", "cargo", "destination", scope)
+    with install_resources_lock():
+        claim = store.claim_locked(
+            resource_id=source,
+            owner_id=owner,
+            declaration_refs=("packages.cargo.source",),
+            provenance=(ProvenanceFact(ProvenanceFactKind.ORIGIN, "test"),),
+            locator="source",
+            fingerprint="before",
+            expected_generation=None,
+        )
+    journal = _prepare(
+        tmp_path,
+        paths=(store.claim_path(source), store.claim_path(destination)),
+    )
+    applying = operations.begin_checkpoint(
+        journal,
+        name="move-claim",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore claim identity",
+    )
+    real_unlink = store._unlink_intent
+
+    def crash_after_move(
+        intent_id: uuid.UUID, *, directory_fd: int | None = None
+    ) -> None:
+        raise OSError("crash after move")
+
+    monkeypatch.setattr(store, "_unlink_intent", crash_after_move)
+    with install_resources_lock(), pytest.raises(OSError, match="crash after move"):
+        store.move_locked(
+            source,
+            destination,
+            expected_owner=owner,
+            expected_generation=claim.generation,
+        )
+    monkeypatch.setattr(store, "_unlink_intent", real_unlink)
+
+    with install_resources_lock():
+        operations.recover_files(applying)
+
+    restored = store.read(source)
+    assert isinstance(restored, OwnershipClaim)
+    assert store.read(destination) is None
+    assert not tuple(store.intents_root.glob("*.json"))
 
 
 def test_recover_files_restores_file_symlink_directory_and_absence(
