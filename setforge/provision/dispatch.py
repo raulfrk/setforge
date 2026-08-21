@@ -17,8 +17,13 @@ from setforge.config import (
     PluginPackage,
     ResolvedProfile,
 )
+from setforge.errors import SetforgeError
 from setforge.lockfile import LockFile
-from setforge.provision.bundle import execute_bundle
+from setforge.provision.bundle import execute_bundle, validate_bundle
+from setforge.provision.capability_graph import (
+    CapabilityGraph,
+    combine_capability_graphs,
+)
 from setforge.provision.driver import (
     ReconcilePlan,
     apply_reconcile,
@@ -42,7 +47,15 @@ class ProvisioningPlan:
 
     cfg_json: str
     bundles: tuple[str, ...]
+    bundle_graphs: tuple[CapabilityGraph, ...]
     batches: tuple[ReconcilePlan, ...]
+
+    @property
+    def capability_graph(self) -> CapabilityGraph:
+        """Return selected bundle graphs in one globally unique namespace."""
+        return combine_capability_graphs(
+            tuple(zip(self.bundles, self.bundle_graphs, strict=True))
+        )
 
 
 def plan_provisioning(
@@ -60,9 +73,12 @@ def plan_provisioning(
     for _type, group_iter in groupby(items, key=lambda it: it.type):
         group = list(group_iter)
         batches.append(plan_reconcile(build(group[0]), group))
+    bundles = tuple(resolved.bundles)
+    bundle_graphs = tuple(validate_bundle(cfg.bundles[name], cfg) for name in bundles)
     return ProvisioningPlan(
         cfg_json=cfg.model_dump_json(),
-        bundles=tuple(resolved.bundles),
+        bundles=bundles,
+        bundle_graphs=bundle_graphs,
         batches=tuple(batches),
     )
 
@@ -70,7 +86,10 @@ def plan_provisioning(
 def apply_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
     """Apply a package plan without re-probing top-level provisioners."""
     cfg = Config.model_validate_json(plan.cfg_json)
-    results = [execute_bundle(cfg.bundles[name], cfg) for name in plan.bundles]
+    results = [
+        execute_bundle(cfg.bundles[name], cfg, graph=graph)
+        for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
+    ]
     results.extend(apply_reconcile(batch) for batch in plan.batches)
     return results
 
@@ -79,8 +98,8 @@ def report_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
     """Return report-only results from the same frozen package plan."""
     cfg = Config.model_validate_json(plan.cfg_json)
     results = [
-        execute_bundle(cfg.bundles[name], cfg, report_only=True)
-        for name in plan.bundles
+        execute_bundle(cfg.bundles[name], cfg, report_only=True, graph=graph)
+        for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
     ]
     results.extend(
         ReconcileResult(delta=batch.delta, outcomes=(), reported=True)
@@ -91,6 +110,12 @@ def report_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
 
 def validate_provisioning(plan: ProvisioningPlan) -> None:
     """Refuse when any top-level package inventory changed after planning."""
+    cfg = Config.model_validate_json(plan.cfg_json)
+    current_graphs = tuple(
+        validate_bundle(cfg.bundles[name], cfg) for name in plan.bundles
+    )
+    if current_graphs != plan.bundle_graphs:
+        raise SetforgeError("frozen bundle capability graph changed; retry")
     for batch in plan.batches:
         validate_reconcile(batch)
 

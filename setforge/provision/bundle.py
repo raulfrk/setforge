@@ -7,6 +7,11 @@ from setforge.config import (
     Package,
 )
 from setforge.errors import ConfigError, ProvisionItemFailed
+from setforge.provision.capability_graph import (
+    CapabilityGraph,
+    CapabilityTargetKind,
+    build_capability_graph,
+)
 from setforge.provision.identity import package_identity
 from setforge.provision.protocol import (
     Identity,
@@ -58,67 +63,11 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
     )
 
 
-def validate_bundle(bundle: BundleSpec, cfg: Config) -> None:
-    ids: list[str] = [c.id for c in bundle.components]
-    seen: set[str] = set()
-    for cid in ids:
-        if cid in seen:
-            raise ConfigError(f"bundle has a duplicate component id: {cid!r}")
-        seen.add(cid)
-
-    by_id = {c.id: c for c in bundle.components}
-    for component in bundle.components:
-        for dep in component.depends_on:
-            if dep not in by_id:
-                raise ConfigError(
-                    f"bundle component {component.id!r} depends_on unknown id {dep!r}"
-                )
-        if component.package is not None and component.package not in cfg.packages:
-            raise ConfigError(
-                f"bundle component {component.id!r} references unknown "
-                f"package {component.package!r}"
-            )
-        if component.plugin is not None:
-            raise ConfigError(
-                f"bundle component {component.id!r} uses a 'plugin' source, "
-                f"which is not yet supported for bundle components"
-            )
-        if _is_file_component(component) and component.depends_on:
-            # A file component is deploy-only: it is expanded into a synthetic
-            # tracked_file and deployed by the tracked-file pipeline, never
-            # reaching the provisioner driver (execute_bundle skips it). So it
-            # cannot gate on a provisioner prerequisite — a depends_on on it is
-            # silently unhonored. Refuse the nonsensical shape up front rather
-            # than accept a dependency the deploy side structurally ignores.
-            raise ConfigError(
-                f"bundle component {component.id!r} is a file component and "
-                f"must not declare depends_on: a file component is deploy-only "
-                f"(handled by the tracked-file pipeline) and never participates "
-                f"in the provisioner dependency gate"
-            )
-
-    _reject_cycle(bundle, by_id)
-
-
-def _reject_cycle(bundle: BundleSpec, by_id: dict[str, BundleComponent]) -> None:
-    """3-color DFS: edge into a GRAY (on-stack) node is a cycle (self-edge included)."""
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {cid: WHITE for cid in by_id}
-
-    def visit(cid: str) -> None:
-        color[cid] = GRAY
-        for dep in by_id[cid].depends_on:
-            if color[dep] == GRAY:
-                raise ConfigError(
-                    f"bundle has a dependency cycle involving {cid!r} and {dep!r}"
-                )
-            if color[dep] == WHITE:
-                visit(dep)
-        color[cid] = BLACK
-
-    for component in bundle.components:
-        if color[component.id] == WHITE:
-            visit(component.id)
+def validate_bundle(bundle: BundleSpec, cfg: Config) -> CapabilityGraph:
+    """Resolve and validate a bundle's complete typed capability graph."""
+    graph = build_capability_graph(bundle, cfg)
+    graph.groups()
+    return graph
 
 
 def topo_order(bundle: BundleSpec) -> list[BundleComponent]:
@@ -154,19 +103,25 @@ def execute_bundle(
     *,
     provisioner: Provisioner | None = None,
     report_only: bool = False,
+    graph: CapabilityGraph | None = None,
 ) -> ReconcileResult:
-    validate_bundle(bundle, cfg)
+    validated = validate_bundle(bundle, cfg)
+    if graph is not None and graph != validated:
+        raise ConfigError("bundle capability graph changed after planning; retry")
+    graph = validated if graph is None else graph
     if report_only:
-        return _report_bundle(bundle, cfg)
+        return _report_bundle(bundle, cfg, graph=graph)
     outcomes: list[ProvisionOutcome] = []
     installed: list[Identity] = []
     # satisfied=OK or dedup no-op; skip of an unsatisfied dep propagates transitively.
     satisfied: set[str] = set()
     applied_keys: set[str] = set()
+    components = {component.id: component for component in bundle.components}
 
-    for component in topo_order(bundle):
-        if _is_file_component(component):
-            # Deploy-only; mark satisfied so downstream package deps proceed.
+    for node in graph.ordered():
+        component = components[node.id]
+        if node.target_kind is not CapabilityTargetKind.PACKAGE:
+            # The install capability executor activates these target groups.
             satisfied.add(component.id)
             continue
         blocked = any(dep not in satisfied for dep in component.depends_on)
@@ -203,11 +158,15 @@ def execute_bundle(
     )
 
 
-def _report_bundle(bundle: BundleSpec, cfg: Config) -> ReconcileResult:
+def _report_bundle(
+    bundle: BundleSpec, cfg: Config, *, graph: CapabilityGraph
+) -> ReconcileResult:
     installed: list[Identity] = []
     seen: set[str] = set()
-    for component in topo_order(bundle):
-        if _is_file_component(component):
+    components = {component.id: component for component in bundle.components}
+    for node in graph.ordered():
+        component = components[node.id]
+        if node.target_kind is not CapabilityTargetKind.PACKAGE:
             continue
         identity = _resolve_item(component, cfg).identity
         if identity.key in seen:

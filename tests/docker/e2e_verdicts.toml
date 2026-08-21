@@ -74,7 +74,7 @@ verbs = ["install", "revert"]
 [tests."tests/docker/test_e2e_docker_bundle_file.py::test_bundle_file_e2e_deploys_executable"]
 verdict = "keep"
 smoke = false
-signal = "bundle file component deploys at dst with +x mode"
+signal = "bundle file then dependent local package activate in typed graph order"
 verbs = ["install"]
 
 [tests."tests/docker/test_e2e_docker_bundle_file.py::test_bundle_file_e2e_hand_edit_survives_reinstall"]

@@ -15,13 +15,22 @@ pytestmark = pytest.mark.e2e_docker
 _WORKDIR = "/home/tester/bundle-file-e2e"
 _CFG = f"{_WORKDIR}/setforge.yaml"
 _SRC = f"{_WORKDIR}/tracked/launch.sh"
+_HELPER_SRC = f"{_WORKDIR}/tracked/helper"
 _DST = "/home/tester/.claude/plugins/data/revdiff/scripts/launch.sh"
+_HELPER_DST = "/home/tester/.local/bin/helper"
 
 _LAUNCHER_BODY = "#!/bin/sh\necho revdiff launcher\n"
 
 _CFG_TEXT = (
     "version: 1\n"
     "tracked_files: {}\n"
+    "packages:\n"
+    "  helper:\n"
+    "    type: local\n"
+    "    path: helper\n"
+    "    binary: helper\n"
+    "    install: ~/.local/bin\n"
+    "    extract: false\n"
     "bundles:\n"
     "  revdiff:\n"
     "    components:\n"
@@ -30,6 +39,9 @@ _CFG_TEXT = (
     "          src: launch.sh\n"
     f"          dst: {_DST}\n"
     "          mode: 0o755\n"
+    "      - id: helper\n"
+    "        package: helper\n"
+    "        depends_on: [launcher]\n"
     "profiles:\n"
     "  test-bundle-file:\n"
     "    bundles:\n"
@@ -41,6 +53,7 @@ def _bootstrap(c: ContainerHandle) -> None:
     c.exec(["mkdir", "-p", f"{_WORKDIR}/tracked"], check=True)
     c.write_text(_CFG, _CFG_TEXT)
     c.write_text(_SRC, _LAUNCHER_BODY)
+    c.write_text(_HELPER_SRC, "#!/bin/sh\necho helper\n")
 
 
 def _setforge(
@@ -49,7 +62,10 @@ def _setforge(
     *,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    return c.exec(["uv", "run", "setforge", *args], check=check)
+    return c.exec(
+        ["env", f"SETFORGE_SOURCE={_WORKDIR}", "uv", "run", "setforge", *args],
+        check=check,
+    )
 
 
 def _install(c: ContainerHandle) -> subprocess.CompletedProcess[str]:
@@ -66,6 +82,7 @@ def test_bundle_file_e2e_deploys_executable(
 
     result = _install(c)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "capabilities: file=active, package=active" in result.stdout
 
     assert c.exec(["test", "-f", _DST], check=False).returncode == 0, "dst missing"
     assert c.exec(["cat", _DST], check=True).stdout == _LAUNCHER_BODY
@@ -75,6 +92,7 @@ def test_bundle_file_e2e_deploys_executable(
     )
     perms = c.exec(["stat", "-c", "%a", _DST], check=True).stdout.strip()
     assert perms == "755", f"expected mode 755, got {perms}"
+    assert c.exec(["test", "-x", _HELPER_DST], check=False).returncode == 0
 
 
 def test_bundle_file_e2e_hand_edit_survives_reinstall(

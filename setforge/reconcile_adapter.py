@@ -18,10 +18,25 @@ from setforge.config import (
 from setforge.errors import ConfigError
 
 
+def _effective_package_refs(cfg: Config, resolved: ResolvedProfile) -> list[str]:
+    """Project profile and selected-bundle package references in stable order."""
+    refs = list(resolved.packages)
+    for bundle_id in resolved.bundles:
+        bundle = cfg.bundles.get(bundle_id)
+        if bundle is None:
+            continue
+        refs.extend(
+            component.package
+            for component in bundle.components
+            if component.package is not None
+        )
+    return refs
+
+
 def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
     return [
         pkg.plugin
-        for ref in resolved.packages
+        for ref in _effective_package_refs(cfg, resolved)
         if isinstance(pkg := cfg.packages.get(ref), PluginPackage)
     ]
 
@@ -49,7 +64,7 @@ def plugin_policy(resolved: ResolvedProfile) -> ReconcilePolicy:
 def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
     include = [
         pkg.extension
-        for ref in resolved.packages
+        for ref in _effective_package_refs(cfg, resolved)
         if isinstance(pkg := cfg.packages.get(ref), ExtensionPackage)
     ]
     exclude = list(resolved.reconcile.extensions.exclude)
@@ -60,7 +75,7 @@ def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
 def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
     return [
         pkg.crate.strip()
-        for ref in resolved.packages
+        for ref in _effective_package_refs(cfg, resolved)
         if isinstance(pkg := cfg.packages.get(ref), CargoPackage)
         if pkg.crate.strip()
     ]

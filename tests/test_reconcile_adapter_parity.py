@@ -40,6 +40,22 @@ _PKG_YAML = _HEAD + (
 )
 
 
+_BUNDLE_PKG_YAML = _HEAD + (
+    "packages:\n"
+    "  sp-pkg: {type: plugin, plugin: sp}\n"
+    "  ext-pkg: {type: extension, extension: Vendor.Ext}\n"
+    "bundles:\n"
+    "  application:\n"
+    "    components:\n"
+    "      - {id: plugin, package: sp-pkg}\n"
+    "      - {id: extension, package: ext-pkg}\n"
+    "profiles:\n"
+    "  p:\n"
+    "    tracked_files: [t]\n"
+    "    bundles: [application]\n"
+)
+
+
 def _load(yaml_text: str) -> Config:
     d = Path(tempfile.mkdtemp())
     (d / "setforge.yaml").write_text(yaml_text, encoding="utf-8")
@@ -67,6 +83,15 @@ def test_validate_and_lock_paths_enumerate_the_same_set() -> None:
     agree on the same plugin + extension identities from one config."""
     cfg = _load(_PKG_YAML)
     resolved = resolve_profile(cfg, "p")
+    assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
+    assert adapter.extensions_input(cfg, resolved).include == ["Vendor.Ext"]
+    assert _lock_key_set(cfg) == {("plugin", "sp@mp"), ("extension", "Vendor.Ext")}
+
+
+def test_bundle_adapter_refs_join_the_effective_adapter_inventory() -> None:
+    cfg = _load(_BUNDLE_PKG_YAML)
+    resolved = resolve_profile(cfg, "p")
+
     assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
     assert adapter.extensions_input(cfg, resolved).include == ["Vendor.Ext"]
     assert _lock_key_set(cfg) == {("plugin", "sp@mp"), ("extension", "Vendor.Ext")}

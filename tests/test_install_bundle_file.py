@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.provision.protocol import ProvisionDelta, ReconcileResult
 
 _PROFILE = "bundle-file-test"
 
@@ -102,6 +104,62 @@ def test_bundle_file_deploys_with_mode(repo: Path) -> None:
     mode = stat.S_IMODE(live.stat().st_mode)
     assert mode == 0o755, oct(mode)
     assert mode & stat.S_IXUSR, "launcher must be executable"
+
+
+def test_bundle_graph_orders_file_before_dependent_package(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real install shell consumes cross-target graph ordering."""
+    _write_launcher(repo)
+    (repo / "tracked" / "helper").write_bytes(b"#!/bin/sh\nexit 0\n")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.0'\n"
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "packages:\n"
+        "  helper:\n"
+        "    type: local\n"
+        "    path: helper\n"
+        "    binary: helper\n"
+        "    install: ~/.local/bin\n"
+        "bundles:\n"
+        "  app:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/.local/share/rd/launch.sh\n"
+        "      - id: helper\n"
+        "        package: helper\n"
+        "        depends_on: [launcher]\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    bundles: [app]\n",
+        encoding="utf-8",
+    )
+    import setforge.cli.install as install_mod
+
+    order: list[str] = []
+    real_apply_files = install_mod.install_helpers_mod._apply_tracked_file_plan
+
+    def apply_files(*args: Any, **kwargs: Any) -> Any:
+        order.append("file")
+        return real_apply_files(*args, **kwargs)
+
+    def apply_packages(*args: object, **kwargs: object) -> list[ReconcileResult]:
+        order.append("package")
+        return [ReconcileResult(delta=ProvisionDelta())]
+
+    monkeypatch.setattr(
+        install_mod.install_helpers_mod, "_apply_tracked_file_plan", apply_files
+    )
+    monkeypatch.setattr(install_mod, "reconcile_packages", apply_packages)
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert order == ["file", "package"]
+    assert "capabilities: file=active, package=active" in result.output
+    assert _launcher_live().read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
 
 
 def test_bundle_file_hand_edit_survives_reinstall(repo: Path) -> None:

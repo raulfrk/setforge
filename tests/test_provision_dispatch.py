@@ -15,7 +15,7 @@ Two layers:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -25,6 +25,8 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.config import (
+    BundleComponent,
+    BundleSpec,
     CargoPackage,
     Config,
     ExtensionPackage,
@@ -38,12 +40,13 @@ from setforge.config import (
     TrackedFile,
     load_config,
 )
-from setforge.errors import ConfigError, UnknownProvisionerType
+from setforge.errors import ConfigError, SetforgeError, UnknownProvisionerType
 from setforge.provision.dispatch import (
     has_hard_failure,
     plan_provisioning,
     resolve_provision_items,
     run_provisioning,
+    validate_provisioning,
 )
 from setforge.provision.protocol import (
     Identity,
@@ -157,6 +160,49 @@ def test_provisioning_plan_detaches_mutable_config(
 
     frozen = Config.model_validate_json(plan.cfg_json)
     assert "rg" in frozen.packages
+
+
+def test_provisioning_plan_detaches_bundle_capability_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="ripgrep", cargo=CargoPackage(crate="rg"))
+                ]
+            )
+        }
+    )
+    plan = plan_provisioning(cfg, ResolvedProfile(bundles=["tools"]))
+
+    cfg.bundles["tools"].components[0].id = "mutated"
+
+    assert plan.bundle_graphs[0].nodes[0].id == "ripgrep"
+
+
+def test_provisioning_validation_refuses_a_tampered_frozen_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="ripgrep", cargo=CargoPackage(crate="rg"))
+                ]
+            )
+        }
+    )
+    plan = plan_provisioning(cfg, ResolvedProfile(bundles=["tools"]))
+
+    with pytest.raises(SetforgeError, match="capability graph changed"):
+        validate_provisioning(replace(plan, bundle_graphs=()))
 
 
 def test_provisioning_plan_detaches_selected_item_models(

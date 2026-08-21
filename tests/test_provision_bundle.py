@@ -9,12 +9,14 @@ from setforge.config import (
     BundleSpec,
     CargoPackage,
     Config,
+    ExtensionPackage,
     FileComponent,
     Profile,
     TrackedFile,
 )
 from setforge.errors import ConfigError
 from setforge.provision.bundle import execute_bundle, topo_order, validate_bundle
+from setforge.provision.capability_graph import CapabilityTargetKind
 from setforge.provision.driver import exit_code
 from setforge.provision.protocol import Identity, Outcome
 from setforge.provision.reference import InMemoryProvisioner
@@ -91,6 +93,13 @@ def test_plugin_source_rejected() -> None:
         validate_bundle(bundle, _cfg())
 
 
+def test_adapter_package_ref_is_typed_for_cross_target_executor() -> None:
+    cfg = _cfg(packages={"theme": ExtensionPackage(extension="example.theme")})
+    bundle = BundleSpec(components=[BundleComponent(id="theme", package="theme")])
+    graph = validate_bundle(bundle, cfg)
+    assert graph.nodes[0].target_kind is CapabilityTargetKind.EXTENSION
+
+
 def _file_comp(id_: str, *, dst: str = "~/.local/bin/x") -> BundleComponent:
     return BundleComponent(id=id_, file=FileComponent(src=Path("launcher"), dst=dst))
 
@@ -100,11 +109,7 @@ def test_file_source_accepted() -> None:
     validate_bundle(bundle, _cfg())
 
 
-def test_file_component_with_depends_on_rejected() -> None:
-    # A file component is deploy-only (deployed by the tracked-file pipeline,
-    # never reaching the provisioner driver), so it cannot gate on a
-    # provisioner prerequisite. Declaring depends_on on it is nonsensical and
-    # silently ignored at execute time — refuse it at config-shape time.
+def test_file_component_with_depends_on_is_typed() -> None:
     bundle = BundleSpec(
         components=[
             _comp("pkg", crate="ripgrep"),
@@ -115,8 +120,11 @@ def test_file_component_with_depends_on_rejected() -> None:
             ),
         ]
     )
-    with pytest.raises(ConfigError, match="must not declare depends_on"):
-        validate_bundle(bundle, _cfg())
+    graph = validate_bundle(bundle, _cfg())
+    assert [group.target_kind for group in graph.groups()] == [
+        CapabilityTargetKind.PACKAGE,
+        CapabilityTargetKind.FILE,
+    ]
 
 
 def test_execute_bundle_skips_file_component() -> None:
@@ -140,16 +148,18 @@ def test_execute_bundle_mixed_package_and_file() -> None:
     assert ok_keys == ["ripgrep"]
 
 
-def test_execute_bundle_package_depends_on_file_proceeds() -> None:
+def test_package_dependency_on_file_orders_target_groups() -> None:
     bundle = BundleSpec(
         components=[
             _file_comp("launcher"),
             _comp("pkg", depends_on=["launcher"], crate="ripgrep"),
         ]
     )
-    result = execute_bundle(bundle, _cfg(), provisioner=InMemoryProvisioner())
-    by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
-    assert by_key["ripgrep"] is Outcome.OK
+    graph = validate_bundle(bundle, _cfg())
+    assert [group.target_kind for group in graph.groups()] == [
+        CapabilityTargetKind.FILE,
+        CapabilityTargetKind.PACKAGE,
+    ]
 
 
 def test_duplicate_id_rejected() -> None:

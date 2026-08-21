@@ -92,6 +92,14 @@ from setforge.config import (
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import mutation_locks
+from setforge.provision.capability_graph import (
+    CapabilityActivation,
+    CapabilityGraph,
+    CapabilityNode,
+    CapabilityStatus,
+    CapabilityTargetAction,
+    CapabilityTargetKind,
+)
 from setforge.provision.dispatch import (
     ProvisioningPlan,
     has_hard_failure,
@@ -129,6 +137,20 @@ class InstallPlan:
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CapabilityApplyResult:
+    """Outputs of the four application capability target phases."""
+
+    journal: operations.OperationJournal
+    provision_results: tuple[ReconcileResult, ...]
+    deploy_outcome: install_helpers_mod.DeployOutcome
+    seeded: tuple[str, ...]
+    ext_delta: transitions.ExtensionDelta | None
+    ext_outcomes: tuple[transitions.ReconcileOutcome, ...]
+    plugin_delta: transitions.PluginDelta | None
+    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...]
 
 
 def _provisioning_plan_has_work(plan: ProvisioningPlan) -> bool:
@@ -485,6 +507,226 @@ def _apply_plugin_plan(
         yes=yes,
         pins=plugin_pins(lock),
         plan=plan.plugins,
+    )
+
+
+def _apply_capability_targets(  # noqa: C901 - one closure per frozen target phase
+    plan: InstallPlan,
+    journal: operations.OperationJournal,
+    *,
+    profile: str,
+    active_lock: LockFile | None,
+    tracked_checkpoint_paths: tuple[Path, ...],
+    adapter_kinds: set[operations.AdapterKind],
+    retry_failed: bool,
+    yes: bool,
+) -> _CapabilityApplyResult:
+    """Apply frozen target plans in the selected bundles' graph order."""
+    cfg = plan.ctx.cfg
+    resolved = plan.ctx.resolved
+    provision_results: tuple[ReconcileResult, ...] = ()
+    deploy_outcome: install_helpers_mod.DeployOutcome | None = None
+    seeded: tuple[str, ...] = ()
+    ext_delta: transitions.ExtensionDelta | None = None
+    ext_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
+    plugin_delta: transitions.PluginDelta | None = None
+    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
+    retry_failed_ids = (
+        _collect_retry_failed_ids(profile) if retry_failed else frozenset()
+    )
+
+    def apply_packages() -> CapabilityActivation:
+        nonlocal journal, provision_results
+        has_work = _provisioning_plan_has_work(plan.provisioning)
+        if has_work:
+            journal = operations.begin_checkpoint(
+                journal,
+                name="packages",
+                kind=operations.CheckpointKind.IRREVERSIBLE,
+                recovery=(
+                    "inspect package-manager output and receipts; SetForge will not "
+                    "guess an uninstall for potentially user-owned software"
+                ),
+                paths=(),
+                restore_state=False,
+                restore_transitions=False,
+                adapters=(),
+            )
+        provision_results = tuple(
+            reconcile_packages(cfg, resolved, lock=active_lock, plan=plan.provisioning)
+        )
+        if has_work:
+            journal = operations.finish_checkpoint(journal)
+        return CapabilityActivation(
+            status=(
+                CapabilityStatus.FAILED
+                if has_hard_failure(provision_results)
+                and bool(plan.provisioning.bundle_graphs)
+                else CapabilityStatus.ACTIVE
+            ),
+            changed=any(not result.delta.is_empty() for result in provision_results),
+            detail="package provisioning reported a hard failure"
+            if has_hard_failure(provision_results)
+            else "",
+        )
+
+    def apply_files() -> CapabilityActivation:
+        nonlocal journal, deploy_outcome, seeded
+        journal = operations.begin_checkpoint(
+            journal,
+            name="tracked-files-and-stores",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore captured paths and reconcile-store snapshots",
+            paths=tracked_checkpoint_paths,
+            restore_state=True,
+            restore_transitions=False,
+            adapters=(),
+        )
+        deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
+            profile, plan.deploys
+        )
+        seeded = tuple(
+            host_local_record.seed_section_slots_to_store(
+                cfg, resolved, plan.ctx.repo_root, profile
+            )
+        )
+        if seeded:
+            typer.secho(
+                f"seeded host-local section template(s): {', '.join(sorted(seeded))}",
+                err=True,
+                fg=typer.colors.GREEN,
+            )
+        journal = operations.finish_checkpoint(journal)
+        return CapabilityActivation(status=CapabilityStatus.ACTIVE, changed=True)
+
+    def apply_extensions() -> CapabilityActivation:
+        nonlocal journal, ext_delta, ext_outcomes
+        journal = operations.begin_checkpoint(
+            journal,
+            name="extensions",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore the frozen pre-install extension inventory",
+            paths=(),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(operations.AdapterKind.EXTENSIONS,)
+            if operations.AdapterKind.EXTENSIONS in adapter_kinds
+            else (),
+        )
+        ext_delta, ext_outcomes = _apply_extension_plan(
+            plan,
+            retry_failed_ids=retry_failed_ids,
+            yes=yes,
+            lock=active_lock,
+        )
+        journal = operations.finish_checkpoint(journal)
+        failed = any(
+            outcome.status in {ReconcileStatus.SKIPPED, ReconcileStatus.ABORTED}
+            for outcome in ext_outcomes
+        )
+        return CapabilityActivation(
+            status=(
+                CapabilityStatus.FAILED
+                if failed and bool(plan.provisioning.bundle_graphs)
+                else CapabilityStatus.ACTIVE
+            ),
+            changed=ext_delta is not None,
+            detail="extension reconciliation left a capability inactive"
+            if failed
+            else "",
+        )
+
+    def apply_plugins() -> CapabilityActivation:
+        nonlocal journal, plugin_delta, plugin_outcomes
+        journal = operations.begin_checkpoint(
+            journal,
+            name="plugins-and-marketplaces",
+            kind=operations.CheckpointKind.COMPENSATABLE,
+            recovery="restore frozen plugin and marketplace inventories",
+            paths=(),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(operations.AdapterKind.PLUGINS,)
+            if operations.AdapterKind.PLUGINS in adapter_kinds
+            else (),
+        )
+        plugin_delta, plugin_outcomes = _apply_plugin_plan(
+            plan,
+            retry_failed_ids=retry_failed_ids,
+            yes=yes,
+            lock=active_lock,
+        )
+        journal = operations.finish_checkpoint(journal)
+        failed = any(
+            outcome.status in {ReconcileStatus.SKIPPED, ReconcileStatus.ABORTED}
+            for outcome in plugin_outcomes
+        )
+        return CapabilityActivation(
+            status=(
+                CapabilityStatus.FAILED
+                if failed and bool(plan.provisioning.bundle_graphs)
+                else CapabilityStatus.ACTIVE
+            ),
+            changed=plugin_delta is not None,
+            detail="plugin reconciliation left a capability inactive" if failed else "",
+        )
+
+    phase_nodes = tuple(
+        CapabilityNode(f"@profile:{kind.value}", kind, ())
+        for kind in (
+            CapabilityTargetKind.PACKAGE,
+            CapabilityTargetKind.FILE,
+            CapabilityTargetKind.EXTENSION,
+            CapabilityTargetKind.PLUGIN,
+        )
+    )
+    graph = CapabilityGraph((*phase_nodes, *plan.provisioning.capability_graph.nodes))
+    activators = {
+        CapabilityTargetKind.PACKAGE: apply_packages,
+        CapabilityTargetKind.FILE: apply_files,
+        CapabilityTargetKind.EXTENSION: apply_extensions,
+        CapabilityTargetKind.PLUGIN: apply_plugins,
+    }
+    outcomes = graph.execute(
+        tuple(
+            CapabilityTargetAction(kind, lambda: None, activators[kind])
+            for kind in activators
+        )
+    )
+    if plan.provisioning.bundle_graphs:
+        typer.echo(
+            "capabilities: "
+            + ", ".join(
+                f"{outcome.target_kind.value}={outcome.status.value}"
+                for outcome in outcomes
+            )
+        )
+    failed = tuple(
+        outcome
+        for outcome in outcomes
+        if outcome.status
+        in {
+            CapabilityStatus.FAILED,
+            CapabilityStatus.BLOCKED,
+            CapabilityStatus.RECOVERY_REQUIRED,
+        }
+    )
+    if failed and plan.provisioning.bundle_graphs:
+        summary = ", ".join(
+            f"{outcome.target_kind.value}={outcome.status.value}" for outcome in failed
+        )
+        raise SetforgeError(f"capability graph activation failed: {summary}")
+    if deploy_outcome is None:  # pragma: no cover - profile file phase is synthetic
+        raise AssertionError("capability graph omitted the tracked-file target")
+    return _CapabilityApplyResult(
+        journal=journal,
+        provision_results=tuple(provision_results),
+        deploy_outcome=deploy_outcome,
+        seeded=seeded,
+        ext_delta=ext_delta,
+        ext_outcomes=ext_outcomes,
+        plugin_delta=plugin_delta,
+        plugin_outcomes=plugin_outcomes,
     )
 
 
@@ -845,30 +1087,6 @@ def install(
             checkpoint_paths=secrets_checkpoint_paths,
         )
 
-        # SOFT failures warn but never gate; HARD gates after the transition.
-        if _provisioning_plan_has_work(plan.provisioning):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="packages",
-                kind=operations.CheckpointKind.IRREVERSIBLE,
-                recovery=(
-                    "inspect package-manager output and receipts; SetForge will not "
-                    "guess an uninstall for potentially user-owned software"
-                ),
-                paths=(),
-                restore_state=False,
-                restore_transitions=False,
-                adapters=(),
-            )
-            provision_results = reconcile_packages(
-                cfg, resolved, lock=active_lock, plan=plan.provisioning
-            )
-            journal = operations.finish_checkpoint(journal)
-        else:
-            provision_results = reconcile_packages(
-                cfg, resolved, lock=active_lock, plan=plan.provisioning
-            )
-
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
         # path itself: GNU patch refuses to patch a symlink as a regular
@@ -882,78 +1100,24 @@ def install(
 
         file_pre = dict(plan.file_pre)
 
-        # Interactive reconcile: resolve conflicts through the reconcile
-        # engine's per-region wizard ONLY when this install is in
-        # interactive-reconcile mode AND stdout is a tty (the same gate the
-        # shared user-section wizard uses). Non-tty / --auto ⇒ False, so the
-        # driver keeps the bare warn-and-defer / auto behavior.
-        journal = operations.begin_checkpoint(
-            journal,
-            name="tracked-files-and-stores",
-            kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore captured paths and reconcile-store snapshots",
-            paths=tracked_checkpoint_paths,
-            restore_state=True,
-            restore_transitions=False,
-            adapters=(),
-        )
-        deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
-            profile, plan.deploys
-        )
-
-        # Seed AFTER deploy so its pre-install snapshot is the revert baseline.
-        seeded = host_local_record.seed_section_slots_to_store(
-            cfg, resolved, repo_root, profile
-        )
-        if seeded:
-            typer.secho(
-                f"seeded host-local section template(s): {', '.join(sorted(seeded))}",
-                err=True,
-                fg=typer.colors.GREEN,
-            )
-        journal = operations.finish_checkpoint(journal)
-
-        retry_failed_ids = (
-            _collect_retry_failed_ids(profile) if retry_failed else frozenset()
-        )
-        journal = operations.begin_checkpoint(
-            journal,
-            name="extensions",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore the frozen pre-install extension inventory",
-            paths=(),
-            restore_state=False,
-            restore_transitions=False,
-            adapters=(operations.AdapterKind.EXTENSIONS,)
-            if operations.AdapterKind.EXTENSIONS in adapter_kinds
-            else (),
-        )
-        ext_delta, ext_outcomes = _apply_extension_plan(
+        capability_result = _apply_capability_targets(
             plan,
-            retry_failed_ids=retry_failed_ids,
-            yes=yes,
-            lock=active_lock,
-        )
-        journal = operations.finish_checkpoint(journal)
-        journal = operations.begin_checkpoint(
             journal,
-            name="plugins-and-marketplaces",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore frozen plugin and marketplace inventories",
-            paths=(),
-            restore_state=False,
-            restore_transitions=False,
-            adapters=(operations.AdapterKind.PLUGINS,)
-            if operations.AdapterKind.PLUGINS in adapter_kinds
-            else (),
-        )
-        plugin_delta, plugin_outcomes = _apply_plugin_plan(
-            plan,
-            retry_failed_ids=retry_failed_ids,
+            profile=profile,
+            active_lock=active_lock,
+            tracked_checkpoint_paths=tracked_checkpoint_paths,
+            adapter_kinds=adapter_kinds,
+            retry_failed=retry_failed,
             yes=yes,
-            lock=active_lock,
         )
-        journal = operations.finish_checkpoint(journal)
+        journal = capability_result.journal
+        provision_results = list(capability_result.provision_results)
+        deploy_outcome = capability_result.deploy_outcome
+        seeded = capability_result.seeded
+        ext_delta = capability_result.ext_delta
+        ext_outcomes = capability_result.ext_outcomes
+        plugin_delta = capability_result.plugin_delta
+        plugin_outcomes = capability_result.plugin_outcomes
         journal = operations.begin_checkpoint(
             journal,
             name="mcp-servers",
