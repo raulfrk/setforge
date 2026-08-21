@@ -191,6 +191,28 @@ def test_apply_skips_present_module_without_install(fake_go) -> None:
     assert _install_calls(cli) == []
 
 
+def test_apply_upgrades_present_module_when_receipt_version_differs(fake_go) -> None:
+    prov, cli, store, gobin = fake_go()
+    ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
+    gobin.mkdir(parents=True, exist_ok=True)
+    (gobin / "tool").write_text("", encoding="utf-8")
+    store.record(
+        ident,
+        version="1",
+        checksum=None,
+        path=str(gobin / "tool"),
+        provider="go",
+    )
+
+    outcome = prov.apply_one(_item("github.com/o/tool", version="2"))
+
+    assert outcome.outcome is Outcome.OK
+    assert ["/fake/go", "install", "--", "github.com/o/tool@2"] in cli.calls
+    entry = store.entry_for(ident, "go")
+    assert entry is not None
+    assert entry.version == "2"
+
+
 def test_apply_skip_writes_no_receipt(fake_go) -> None:
     prov, _cli, store, gobin = fake_go()
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
@@ -252,7 +274,7 @@ def test_uninstall_removes_receipt_and_binary(fake_go) -> None:
     gobin.mkdir(parents=True, exist_ok=True)
     binary = gobin / "tool"
     binary.write_text("", encoding="utf-8")
-    store.record(ident, version="1", checksum=None, path=str(binary))
+    store.record(ident, version="1", checksum=None, path=str(binary), provider="go")
     prov.uninstall_one(ident)
     assert store.installed() == set()
     assert not binary.exists()
@@ -261,7 +283,13 @@ def test_uninstall_removes_receipt_and_binary(fake_go) -> None:
 def test_uninstall_tolerates_missing_binary(fake_go) -> None:
     prov, _cli, store, gobin = fake_go()
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
-    store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
+    store.record(
+        ident,
+        version="1",
+        checksum=None,
+        path=str(gobin / "tool"),
+        provider="go",
+    )
     prov.uninstall_one(ident)
     assert store.installed() == set()
 

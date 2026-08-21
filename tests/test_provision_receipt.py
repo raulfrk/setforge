@@ -174,6 +174,80 @@ def test_remove_only_targets_named_receipt(tmp_path: Path) -> None:
     assert store.installed() == {_ident("b", "B")}
 
 
+def test_provider_qualified_receipts_do_not_collide(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident("tool", "Tool")
+    store.record(identity, version="1", checksum=None, provider="cargo")
+    store.record(identity, version="2", checksum=None, provider="python")
+    assert store.installed_for("cargo") == {identity}
+    assert store.installed_for("python") == {identity}
+    assert len(tuple(tmp_path.glob("*.json"))) == 2
+
+
+def test_typed_read_falls_back_to_legacy_receipt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="1", checksum="abc")
+    entry = store.entry_for(identity, "cargo")
+    assert entry is not None
+    assert entry.provider is None
+    assert entry.version == "1"
+
+
+def test_typed_removal_does_not_delete_unverified_legacy_receipt(
+    tmp_path: Path,
+) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="old", checksum=None)
+    store.record(identity, version="new", checksum=None, provider="cargo")
+    with pytest.raises(CorruptReceiptError):
+        store.entry_for(identity, "cargo")
+    store.remove(identity, provider="cargo")
+    entry = store.entry_for(identity, "cargo")
+    assert entry is not None
+    assert entry.provider is None
+    assert entry.version == "old"
+
+
+def test_unique_legacy_receipt_migrates_to_provider_qualified_path(
+    tmp_path: Path,
+) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    installed = tmp_path / "bin"
+    store.record(
+        identity,
+        version="1",
+        checksum="abc",
+        path=installed,
+        source_digest="source",
+    )
+
+    migrated = store.migrate_legacy(identity, provider="go")
+
+    assert migrated.provider == "go"
+    assert migrated.version == "1"
+    assert migrated.path == installed
+    assert migrated.source_digest == "source"
+    assert not store.receipt_path(identity, provider=None).exists()
+    assert store.receipt_path(identity, provider="go").exists()
+
+
+def test_typed_and_legacy_coexistence_fails_closed_for_every_provider(
+    tmp_path: Path,
+) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="legacy", checksum=None)
+    store.record(identity, version="typed", checksum=None, provider="cargo")
+
+    with pytest.raises(CorruptReceiptError):
+        store.entry_for(identity, "cargo")
+    with pytest.raises(CorruptReceiptError):
+        store.entry_for(identity, "python")
+
+
 def test_receipt_root_distinct_from_lockfile(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     from setforge.locking import state_root

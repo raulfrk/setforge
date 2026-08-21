@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from setforge.atomicio import atomic_write_text
+from setforge.atomicio import atomic_write_text, fsync_dir
 from setforge.errors import CorruptReceiptError
 from setforge.provision.protocol import Identity
 from setforge.transitions import state_root
@@ -32,6 +32,10 @@ class ReceiptEntry:
     identity: Identity | None
     path: Path | None
     corrupt_path: Path | None
+    provider: str | None = None
+    version: str | None = None
+    checksum: str | None = None
+    source_digest: str | None = None
 
 
 def default_receipt_root() -> Path:
@@ -44,14 +48,15 @@ def default_receipt_root() -> Path:
     return state_root() / "receipts"
 
 
-def _receipt_name(identity: Identity) -> str:
+def _receipt_name(identity: Identity, provider: str | None = None) -> str:
     """Derive a filesystem-safe receipt filename from an identity key.
 
     The key is hashed so arbitrary key characters (slashes, spaces) can
     never escape the receipt directory. One key maps to one filename, so a
     re-record replaces the same file.
     """
-    digest = hashlib.sha256(identity.key.encode("utf-8")).hexdigest()
+    coordinate = identity.key if provider is None else f"{provider}\0{identity.key}"
+    digest = hashlib.sha256(coordinate.encode("utf-8")).hexdigest()
     return f"{digest}{_RECEIPT_SUFFIX}"
 
 
@@ -70,6 +75,7 @@ class ReceiptStore:
         checksum: str | None,
         path: Path | str | None = None,
         source_digest: str | None = None,
+        provider: str | None = None,
     ) -> None:
         """Write one receipt for ``identity`` atomically, replacing any prior.
 
@@ -85,6 +91,8 @@ class ReceiptStore:
         """
         self._root.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": "2.0" if provider is not None else "1.0",
+            "provider": provider,
             "key": identity.key,
             "display": identity.display,
             "version": version,
@@ -93,17 +101,42 @@ class ReceiptStore:
             "source_digest": source_digest,
         }
         atomic_write_text(
-            self._root / _receipt_name(identity),
+            self._root / _receipt_name(identity, provider),
             json.dumps(payload, sort_keys=True) + "\n",
         )
 
-    def remove(self, identity: Identity) -> None:
+    def remove(self, identity: Identity, *, provider: str | None = None) -> None:
         # Idempotent: cleanup's crash-consistent retry must not raise if already reaped.
-        receipt = self._root / _receipt_name(identity)
-        try:
-            receipt.unlink()
-        except FileNotFoundError:
-            return
+        names = [_receipt_name(identity, provider)]
+        for name in names:
+            try:
+                (self._root / name).unlink()
+            except FileNotFoundError:
+                continue
+            fsync_dir(self._root)
+
+    def receipt_path(self, identity: Identity, *, provider: str | None) -> Path:
+        """Return the exact journal path for one typed or legacy receipt."""
+        return self._root / _receipt_name(identity, provider)
+
+    def migrate_legacy(self, identity: Identity, *, provider: str) -> ReceiptEntry:
+        """Upgrade one unambiguous legacy receipt to provider-qualified schema."""
+        entry = self.entry_for(identity, provider)
+        if entry is None or entry.provider is not None:
+            raise CorruptReceiptError(self._root)
+        self.record(
+            identity,
+            version=entry.version,
+            checksum=entry.checksum,
+            path=entry.path,
+            source_digest=entry.source_digest,
+            provider=provider,
+        )
+        self.remove(identity)
+        migrated = self.entry_for(identity, provider)
+        if migrated is None or migrated.provider != provider:  # pragma: no cover
+            raise CorruptReceiptError(self._root)
+        return migrated
 
     def installed(self) -> set[Identity]:
         """Return every recorded identity, read fresh from disk.
@@ -128,6 +161,14 @@ class ReceiptStore:
                 raise CorruptReceiptError(path) from exc
         return result
 
+    def installed_for(self, provider: str) -> set[Identity]:
+        """Return current typed receipts plus unambiguous legacy receipts."""
+        return {
+            entry.identity
+            for entry in self.iter_receipts()
+            if entry.identity is not None and entry.provider in {None, provider}
+        }
+
     def iter_receipts(self) -> Iterator[ReceiptEntry]:
         # Unlike installed(), a corrupt file yields a corrupt_path entry, not a raise.
         if not self._root.is_dir():
@@ -144,16 +185,63 @@ class ReceiptStore:
                 yield ReceiptEntry(identity=None, path=None, corrupt_path=path)
                 continue
             bin_path = Path(recorded) if recorded is not None else None
-            yield ReceiptEntry(identity=identity, path=bin_path, corrupt_path=None)
+            yield ReceiptEntry(
+                identity=identity,
+                path=bin_path,
+                corrupt_path=None,
+                provider=(
+                    data.get("provider")
+                    if isinstance(data.get("provider"), str)
+                    else None
+                ),
+                version=(
+                    data.get("version")
+                    if isinstance(data.get("version"), str)
+                    else None
+                ),
+                checksum=(
+                    data.get("checksum")
+                    if isinstance(data.get("checksum"), str)
+                    else None
+                ),
+                source_digest=(
+                    data.get("source_digest")
+                    if isinstance(data.get("source_digest"), str)
+                    else None
+                ),
+            )
 
-    def digest_for(self, identity: Identity) -> str | None:
+    def entry_for(self, identity: Identity, provider: str) -> ReceiptEntry | None:
+        """Read one provider-qualified receipt, falling back to legacy evidence."""
+        identity_matches = [
+            entry for entry in self.iter_receipts() if entry.identity == identity
+        ]
+        if any(entry.provider is None for entry in identity_matches) and any(
+            entry.provider is not None for entry in identity_matches
+        ):
+            raise CorruptReceiptError(self._root)
+        matches = [
+            entry for entry in identity_matches if entry.provider in {None, provider}
+        ]
+        typed = [entry for entry in matches if entry.provider == provider]
+        if len(matches) > 1:
+            raise CorruptReceiptError(self._root)
+        if len(typed) == 1:
+            return typed[0]
+        if len(typed) > 1:
+            raise CorruptReceiptError(self._root)
+        return matches[0] if matches else None
+
+    def digest_for(
+        self, identity: Identity, *, provider: str | None = None
+    ) -> str | None:
         """Return the recorded ``source_digest``, or None when there is none.
 
         None covers three cases the caller must treat alike: no receipt, a
         receipt written before this field existed, and a provisioner that does
         not record one. All three mean "cannot prove the source is unchanged".
         """
-        receipt = self._root / _receipt_name(identity)
+        receipt = self._lookup_path(identity, provider)
         if not receipt.is_file():
             return None
         try:
@@ -166,9 +254,11 @@ class ReceiptStore:
         recorded = data.get("source_digest")
         return recorded if isinstance(recorded, str) else None
 
-    def path_for(self, identity: Identity) -> Path | None:
+    def path_for(
+        self, identity: Identity, *, provider: str | None = None
+    ) -> Path | None:
         # Only source of an UNDECLARED item's install path (needed to unlink it).
-        receipt = self._root / _receipt_name(identity)
+        receipt = self._lookup_path(identity, provider)
         if not receipt.is_file():
             return None
         try:
@@ -180,3 +270,23 @@ class ReceiptStore:
             return Path(recorded) if recorded is not None else None
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise CorruptReceiptError(receipt) from exc
+
+    def _lookup_path(self, identity: Identity, provider: str | None) -> Path:
+        typed = self._root / _receipt_name(identity, provider)
+        if typed.is_file():
+            return typed
+        legacy = self._root / _receipt_name(identity)
+        if provider is not None or legacy.is_file():
+            return legacy
+        matches: list[Path] = []
+        if self._root.is_dir():
+            for candidate in self._root.glob(f"*{_RECEIPT_SUFFIX}"):
+                try:
+                    raw = json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if raw.get("key") == identity.key:
+                    matches.append(candidate)
+        if len(matches) > 1:
+            raise CorruptReceiptError(self._root)
+        return matches[0] if matches else legacy

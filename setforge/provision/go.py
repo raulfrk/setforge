@@ -11,7 +11,9 @@ from pathlib import Path
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -63,8 +65,8 @@ class GoProvisioner(Provisioner):
             return set()
         gobin = self._gobin_dir()
         present: set[Identity] = set()
-        for identity in self._receipts.installed():
-            recorded = self._receipts.path_for(identity)
+        for identity in self._receipts.installed_for(self.type):
+            recorded = self._receipts.path_for(identity, provider=self.type)
             binary = (
                 recorded if recorded is not None else gobin / _binary_name(identity.key)
             )
@@ -85,6 +87,25 @@ class GoProvisioner(Provisioner):
             )
         )
 
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        result: list[PackageObservation] = []
+        for identity in sorted(installed, key=lambda value: value.key):
+            entry = self._receipts.entry_for(identity, self.type)
+            if entry is None:
+                continue
+            result.append(
+                PackageObservation(
+                    identity,
+                    ObservationOrigin.CURRENT_RECEIPT
+                    if entry.provider is not None
+                    else ObservationOrigin.LEGACY_RECEIPT,
+                    version=entry.version,
+                    locator=str(entry.path) if entry.path is not None else None,
+                    checksum=entry.checksum,
+                )
+            )
+        return tuple(result)
+
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         go = self._resolve()
         module = item.identity.display
@@ -97,7 +118,13 @@ class GoProvisioner(Provisioner):
                     "https://go.dev/dl/ to enable this module"
                 ),
             )
-        if item.identity in self.probe():
+        entry = self._receipts.entry_for(item.identity, self.type)
+        if (
+            item.identity in self.probe()
+            and entry is not None
+            and (item.version is None or entry.version == item.version)
+            and (item.checksum is None or entry.checksum == item.checksum)
+        ):
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
         spec = f"{module}@{item.version}" if item.version else f"{module}@{_LATEST}"
         try:
@@ -119,12 +146,16 @@ class GoProvisioner(Provisioner):
         # Receipt is the LAST step — written only after exit-0.
         binary = self._gobin_dir() / _binary_name(item.identity.key)
         self._receipts.record(
-            item.identity, version=item.version, checksum=item.checksum, path=binary
+            item.identity,
+            version=item.version,
+            checksum=item.checksum,
+            path=binary,
+            provider=self.type,
         )
         return ProvisionOutcome(item=item, outcome=Outcome.OK, detail="installed")
 
     def uninstall_one(self, identity: Identity) -> None:
-        recorded = self._receipts.path_for(identity)
+        recorded = self._receipts.path_for(identity, provider=self.type)
         binary = (
             recorded
             if recorded is not None
@@ -134,7 +165,7 @@ class GoProvisioner(Provisioner):
             binary.unlink(missing_ok=True)
         except OSError as exc:
             LOGGER.warning("could not unlink go binary %s: %s", binary, exc)
-        self._receipts.remove(identity)
+        self._receipts.remove(identity, provider=self.type)
 
     def _gobin_dir(self) -> Path:
         # Precedence: GOBIN, else first GOPATH entry + /bin, else ~/go/bin.

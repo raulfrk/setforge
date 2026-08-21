@@ -203,6 +203,16 @@ class ResourceId:
     coordinate: str
     scope: ResourceScope
 
+    @classmethod
+    def package(cls, provider: str, coordinate: str) -> ResourceId:
+        """Create a canonical user-host package identity for ``provider``."""
+        return cls(
+            kind="package",
+            provider=provider,
+            coordinate=_canonical_package_coordinate(provider, coordinate),
+            scope=ResourceScope(ScopeKind.USER_HOST, "current-user"),
+        )
+
     def __post_init__(self) -> None:
         _require_component(self.kind, field="resource kind")
         _require_component(self.provider, field="resource provider")
@@ -386,6 +396,10 @@ class OwnershipStore:
         """Read one claim, refusing while any identity move is unresolved."""
         self._refuse_unresolved_intents()
         return self._read_path(self._claim_path(resource_id), expected=resource_id)
+
+    def claim_path(self, resource_id: ResourceId) -> Path:
+        """Return the deterministic ledger path for journal snapshots."""
+        return self._claim_path(resource_id)
 
     def list_claims(self) -> tuple[OwnershipClaim, ...]:
         """Return every validated claim in canonical identity order."""

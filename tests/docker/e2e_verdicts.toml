@@ -740,7 +740,7 @@ verbs = ["install"]
 [tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_cargo_skip_if_present_does_not_invoke_install"]
 verdict = "keep"
 smoke = false
-signal = "MCP register + cargo-binary install/skip"
+signal = "MCP register + cargo metadata-only adoption + managed second-run skip"
 verbs = ["install"]
 
 [tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_mcp_register_revert_reinstall"]

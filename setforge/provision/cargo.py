@@ -15,7 +15,9 @@ from setforge.binaries import resolve_binary, stderr_of
 from setforge.errors import ResolveError
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -104,6 +106,18 @@ class CargoProvisioner(Provisioner):
         del installed
         inventory = self._inventory
         return inventory is not None, inventory or ()
+
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        del installed
+        return tuple(
+            PackageObservation(
+                Identity(key=_crate_key(record.name), display=record.name),
+                ObservationOrigin.EXTERNAL,
+                version=record.version,
+                source=record.source or "crates.io",
+            )
+            for record in self._inventory or ()
+        )
 
     def plan_fingerprint(
         self, items: Sequence[ProvisionItem], installed: set[Identity]

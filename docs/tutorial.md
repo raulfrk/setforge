@@ -511,8 +511,16 @@ quick index.
 <a id="cleanup-orphans"></a>
 ### cleanup and cleanup-orphans
 
-`setforge cleanup --profile=default` reviews undeclared provisioned binaries
-using provisioner receipts. It is separate from filesystem orphan handling.
+`setforge cleanup --profile=default` reviews undeclared provisioned packages.
+Current typed receipts and live package-manager inventories are eligible only
+when they match this checkout's durable ownership claim. Legacy receipts and
+drifted or foreign claims are shown as unowned and cannot be deleted. A package
+that already exists on the first `install` is adopted only after confirmation
+(`--yes` in automation); that adoption records metadata and does not reinstall
+the package. When its evidence is one unambiguous legacy receipt, adoption also
+migrates that receipt to the provider-qualified format in the same reversible
+metadata transaction. Later upgrades and cleanup are allowed only through the
+same current claim. Cleanup is separate from filesystem orphan handling.
 
 Without `--scan`, this is the legacy, transition-history-attributed mode: it
 finds live files attributed to removed `tracked_files` entries. It is a dry-run

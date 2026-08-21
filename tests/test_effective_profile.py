@@ -20,6 +20,7 @@ from setforge.overlay_provenance import OverlayOrigin
 _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("compare.py", "compare"),
     ("install.py", "_load_install_context"),
+    ("install.py", "_preview_package_ownership"),
     ("sync.py", "_load_capture_preview"),
     ("inspect.py", "inspect"),
     ("status.py", "status"),
@@ -27,6 +28,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("stage.py", "stage"),
     ("lock.py", "lock"),
     ("cleanup.py", "_resolve_declared"),
+    ("cleanup.py", "_resolve_declared_resources"),
     ("orphans.py", "_detect_orphans_live"),
     ("orphans.py", "_detect_scan_live"),
     ("ext.py", "ext_list"),

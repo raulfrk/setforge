@@ -13,9 +13,10 @@ import json
 import stat
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
+from uuid import UUID
 
 import typer
 
@@ -92,6 +93,13 @@ from setforge.config import (
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import mutation_locks
+from setforge.ownership import (
+    OwnershipError,
+    OwnershipStore,
+    load_or_create_owner_id,
+    read_owner_id,
+)
+from setforge.provision.bundle import resolve_bundle_items
 from setforge.provision.capability_graph import (
     CapabilityActivation,
     CapabilityGraph,
@@ -104,10 +112,18 @@ from setforge.provision.dispatch import (
     ProvisioningPlan,
     has_hard_failure,
     plan_provisioning,
+    publish_installed_package_claims_locked,
+    resolve_provision_items,
     validate_provisioning,
 )
 from setforge.provision.lock_apply import extension_pins, plugin_pins
-from setforge.provision.protocol import Outcome, ReconcileResult
+from setforge.provision.ownership import (
+    PackageAction,
+    PackageDecision,
+    publish_claim_locked,
+)
+from setforge.provision.protocol import ObservationOrigin, Outcome, ReconcileResult
+from setforge.provision.receipt import ReceiptStore, default_receipt_root
 from setforge.reconcile import host_local_record
 from setforge.secrets import SecretAction, SecretsScanResult
 from setforge.transitions import (
@@ -134,6 +150,7 @@ class InstallPlan:
     live_paths: tuple[tuple[Path, _LivePathFingerprint], ...]
     file_pre: Mapping[Path, str | None]
     provisioning: ProvisioningPlan
+    package_owner_id: UUID | None
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
@@ -312,6 +329,7 @@ def _build_install_plan(
     transition: bool,
     input_baseline: tuple[tuple[Path, bytes | None], ...],
     auto: bool,
+    package_owner_id: UUID | None = None,
 ) -> InstallPlan:
     """Compute every tracked-file decision before the first install write."""
     tracked_entries = tuple(_iter_all_tracked_files(ctx))
@@ -387,7 +405,7 @@ def _build_install_plan(
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-    provisioning = plan_provisioning(ctx.cfg, ctx.resolved, lock=lock)
+    provisioning = _plan_owned_provisioning(ctx, lock=lock, owner_id=package_owner_id)
     mcp = plan_mcp_servers(ctx.cfg, ctx.resolved)
     planned_entries = tuple(
         (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
@@ -420,9 +438,22 @@ def _build_install_plan(
         live_paths=live_path_snapshot,
         file_pre=file_pre,
         provisioning=provisioning,
+        package_owner_id=package_owner_id,
         mcp=mcp,
         extensions=extensions,
         plugins=plugins,
+    )
+
+
+def _plan_owned_provisioning(
+    ctx: ProfileContext, *, lock: LockFile | None, owner_id: UUID | None
+) -> ProvisioningPlan:
+    return plan_provisioning(
+        ctx.cfg,
+        ctx.resolved,
+        lock=lock,
+        ownership_store=OwnershipStore(),
+        owner_id=owner_id,
     )
 
 
@@ -538,6 +569,11 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     def apply_packages() -> CapabilityActivation:
         nonlocal journal, provision_results
         has_work = _provisioning_plan_has_work(plan.provisioning)
+        claim_paths = tuple(
+            OwnershipStore().claim_path(decision.resource_id)
+            for decision in plan.provisioning.ownership
+            if decision.action in {PackageAction.INSTALL, PackageAction.UPGRADE}
+        )
         if has_work:
             journal = operations.begin_checkpoint(
                 journal,
@@ -547,7 +583,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                     "inspect package-manager output and receipts; SetForge will not "
                     "guess an uninstall for potentially user-owned software"
                 ),
-                paths=(),
+                paths=claim_paths,
                 restore_state=False,
                 restore_transitions=False,
                 adapters=(),
@@ -555,6 +591,16 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         provision_results = tuple(
             reconcile_packages(cfg, resolved, lock=active_lock, plan=plan.provisioning)
         )
+        if any(
+            outcome.outcome is Outcome.OK
+            for result in provision_results
+            for outcome in result.outcomes
+        ):
+            owner_id = _package_owner_id(plan)
+            if owner_id is not None:
+                publish_installed_package_claims_locked(
+                    plan.provisioning, provision_results, owner_id=owner_id
+                )
         if has_work:
             journal = operations.finish_checkpoint(journal)
         return CapabilityActivation(
@@ -820,6 +866,179 @@ def _gate_on_lock_coverage(
     raise typer.Exit(code=1)
 
 
+def _confirm_package_adoptions(
+    decisions: tuple[PackageDecision, ...], *, yes: bool
+) -> None:
+    """Confirm metadata-only ownership claims before the first effect."""
+    decisions = tuple(
+        decision for decision in decisions if decision.action is PackageAction.ADOPT
+    )
+    if not decisions or yes:
+        return
+    names = ", ".join(decision.item.identity.display for decision in decisions)
+    if not sys.stdin.isatty():
+        raise SetforgeError(
+            f"package adoption requires confirmation for {names}; rerun with --yes"
+        )
+    if not typer.confirm(
+        f"Manage existing package(s) without reinstalling: {names}?",
+        default=False,
+    ):
+        raise SetforgeError("package adoption declined; no package changes applied")
+
+
+def _prepare_package_owner_id(
+    repo_root: Path, decisions: tuple[PackageDecision, ...]
+) -> UUID | None:
+    """Mint the checkout owner before the lower-ranked install lock scope."""
+    if not decisions:
+        return None
+    try:
+        return load_or_create_owner_id(repo_root)
+    except OwnershipError:
+        return None
+
+
+def _read_package_owner_id(repo_root: Path) -> UUID | None:
+    """Read an established owner without making dry-run metadata changes."""
+    try:
+        return read_owner_id(repo_root)
+    except OwnershipError:
+        return None
+
+
+def _publish_package_adoptions(plan: InstallPlan) -> None:
+    """Publish confirmed claims after exact locked plan revalidation."""
+    decisions = tuple(
+        decision
+        for decision in plan.provisioning.ownership
+        if decision.action is PackageAction.ADOPT
+    )
+    if not decisions:
+        return
+    owner_id = plan.package_owner_id
+    if owner_id is None:
+        typer.secho(
+            "warning: existing packages remain unowned because the configuration "
+            "is not Git-backed",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+    store = OwnershipStore()
+    receipts = ReceiptStore(default_receipt_root())
+    for decision in decisions:
+        if store.read(decision.resource_id) != decision.claim:
+            raise SetforgeError("package ownership changed after confirmation; retry")
+        claimed_decision = decision
+        if (
+            decision.observation is not None
+            and decision.observation.origin is ObservationOrigin.LEGACY_RECEIPT
+        ):
+            receipts.migrate_legacy(decision.item.identity, provider=decision.item.type)
+            claimed_decision = replace(
+                decision,
+                observation=replace(
+                    decision.observation, origin=ObservationOrigin.CURRENT_RECEIPT
+                ),
+            )
+        publish_claim_locked(
+            store,
+            claimed_decision,
+            owner_id=owner_id,
+            declaration_ref=(
+                f"packages.{decision.item.type}.{decision.item.identity.key}"
+            ),
+            acquisition="adopted-external",
+        )
+        typer.echo(
+            f"adopted package ownership: {decision.item.identity.display} "
+            "(no package bytes changed)"
+        )
+
+
+def _publish_adoptions_checkpoint(
+    plan: InstallPlan, journal: operations.OperationJournal
+) -> operations.OperationJournal:
+    """Journal and publish metadata-only adoption claims."""
+    claim_paths = tuple(
+        OwnershipStore().claim_path(decision.resource_id)
+        for decision in plan.provisioning.ownership
+        if decision.action is PackageAction.ADOPT
+    )
+    if not claim_paths:
+        return journal
+    receipt_paths = _legacy_adoption_receipt_paths(plan)
+    applying = operations.begin_checkpoint(
+        journal,
+        name="package-adoption",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore package ownership claims and migrated receipts",
+        paths=(*claim_paths, *receipt_paths),
+        restore_state=False,
+        restore_transitions=False,
+        adapters=(),
+    )
+    _publish_package_adoptions(plan)
+    return operations.finish_checkpoint(applying)
+
+
+def _legacy_adoption_receipt_paths(plan: InstallPlan) -> tuple[Path, ...]:
+    """Return both old and new receipt paths for journaled adoption migration."""
+    receipts = ReceiptStore(default_receipt_root())
+    return tuple(
+        path
+        for decision in plan.provisioning.ownership
+        if decision.action is PackageAction.ADOPT
+        and decision.observation is not None
+        and decision.observation.origin is ObservationOrigin.LEGACY_RECEIPT
+        for path in (
+            receipts.receipt_path(decision.item.identity, provider=None),
+            receipts.receipt_path(decision.item.identity, provider=decision.item.type),
+        )
+    )
+
+
+def _preview_package_ownership(
+    config: Path, profile: str, *, locked: bool
+) -> tuple[PackageDecision, ...]:
+    """Build the consent surface without holding mutation locks."""
+    cfg = load_config(config)
+    resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
+    direct_items = resolve_provision_items(cfg, resolved)
+    bundle_items = tuple(
+        item
+        for name in resolved.bundles
+        for item in resolve_bundle_items(cfg.bundles[name], cfg)
+    )
+    if not direct_items and not bundle_items:
+        return ()
+    active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
+    try:
+        owner_id = read_owner_id(config.parent)
+    except OwnershipError:
+        owner_id = None
+    return plan_provisioning(
+        cfg,
+        resolved,
+        lock=active_lock,
+        ownership_store=OwnershipStore(),
+        owner_id=owner_id,
+    ).ownership
+
+
+def _package_owner_id(plan: InstallPlan):
+    """Return the config owner, preserving non-Git installs as unverified."""
+    if plan.package_owner_id is None:
+        typer.secho(
+            "warning: package installed without an ownership claim because the "
+            "configuration is not Git-backed",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+    return plan.package_owner_id
+
+
 @app.command(epilog=INSTALL_EXAMPLES)
 def install(
     profile: str = _PROFILE_OPTION,
@@ -952,6 +1171,7 @@ def install(
         ctx, active_lock, _local_overlay, input_baseline = _load_install_context(
             config, profile, repo_root, locked=locked
         )
+        package_owner_id = _read_package_owner_id(repo_root)
         plan = _build_install_plan(
             ctx,
             section_auto=section_auto,
@@ -960,6 +1180,7 @@ def install(
             transition=not no_transition,
             input_baseline=input_baseline,
             auto=True,
+            package_owner_id=package_owner_id,
         )
         scan_result = secrets_mod.run_pre_deploy_scan(
             tracked_root=config.parent / "tracked",
@@ -967,6 +1188,13 @@ def install(
         )
         _render_install_plan(plan, scan_result)
         return
+
+    ownership_config = config.read_bytes()
+    ownership_preview = _preview_package_ownership(config, profile, locked=locked)
+    if config.read_bytes() != ownership_config:
+        raise SetforgeError("install configuration changed while loading; retry")
+    _confirm_package_adoptions(ownership_preview, yes=yes)
+    package_owner_id = _prepare_package_owner_id(repo_root, ownership_preview)
 
     with (
         mutation_locks(
@@ -998,6 +1226,7 @@ def install(
             transition=not no_transition,
             input_baseline=input_baseline,
             auto=yes,
+            package_owner_id=package_owner_id,
         )
         scan_result = secrets_mod.run_pre_deploy_scan(
             tracked_root=config.parent / "tracked",
@@ -1021,6 +1250,10 @@ def install(
             auto_accept_live=auto_accept_live,
             yes=yes,
         )
+        if plan.provisioning.ownership != ownership_preview:
+            raise SetforgeError(
+                "package ownership inputs changed after confirmation; retry"
+            )
 
         # Refuse-before-write: pre-flight the symlink-dst clobber refusal.
         # deploy_symlinked_file() raises when a regular file or directory
@@ -1051,12 +1284,21 @@ def install(
             *plan.bootstrap,
             *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
         )
+        ownership_paths = tuple(
+            OwnershipStore().claim_path(decision.resource_id)
+            for decision in plan.provisioning.ownership
+            if decision.action
+            in {PackageAction.ADOPT, PackageAction.INSTALL, PackageAction.UPGRADE}
+        )
+        adoption_receipt_paths = _legacy_adoption_receipt_paths(plan)
         journal_paths = tuple(
             dict.fromkeys(
                 (
                     *plan.dst_paths,
                     *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
                     *secrets_checkpoint_paths,
+                    *ownership_paths,
+                    *adoption_receipt_paths,
                 )
             )
         )
@@ -1086,6 +1328,7 @@ def install(
             bootstrap=plan.bootstrap,
             checkpoint_paths=secrets_checkpoint_paths,
         )
+        journal = _publish_adoptions_checkpoint(plan, journal)
 
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link

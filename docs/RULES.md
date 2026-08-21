@@ -58,6 +58,7 @@ Part 2(b)).
 | INV-8 | Stage fidelity: install deploys exactly the `share`d hunks, nothing else. | DETERMINISTIC | `@invariant`; staging tests |
 | INV-9 | Bundle DAG is acyclic and `depends_on` order is honored. | DETERMINISTIC | `@invariant` + a cycle/ref lint on the bundle model |
 | INV-10 | Store index ↔ on-disk consistent: no orphan classification. | DETERMINISTIC | `@invariant`; store tests |
+| INV-11 | Package presence and provenance never imply authority: adoption is metadata-only, and upgrade/removal require the current checkout's exact managed claim and live fingerprint. | DETERMINISTIC | ownership planner + install/cleanup integration tests |
 
 ---
 
@@ -86,7 +87,7 @@ Part 2(b)).
 | SAFE-6 | Forward-tolerant reading: an older engine ignores unknown fields within a major (warns, never crashes); refuses cleanly across a major. | DETERMINISTIC | reader tests + e2e |
 | SAFE-7 | First install on divergence with no recorded base **never silently overwrites** — it fires the seed-base prompt (the F1/F2 kill). | DETERMINISTIC | e2e + `@invariant` (INV-1) |
 | SAFE-8 | `github_release` downloads are checksum-verified; a bad checksum **aborts** (no install). | DETERMINISTIC | bad-checksum-abort test (the `github_release` provisioner) |
-| SAFE-9 | Binaries are **never auto-pruned**; removal only via the explicit `cleanup` wizard. | ADVISORY | `design-invariant-reviewer` + e2e |
+| SAFE-9 | Binaries are **never auto-pruned**; removal only via the explicit `cleanup` wizard after a current typed ownership claim and live fingerprint are revalidated. | ADVISORY | `design-invariant-reviewer` + e2e |
 | SAFE-10 | A tool may **abort/flag** rather than force a green result; gates **ratchet up only** (never loosen). | ADVISORY | human gate (gate-config review) |
 
 ---

@@ -58,6 +58,7 @@ def _item(pkg: GitHubReleasePackage) -> ProvisionItem:
         type="github_release",
         identity=Identity(key=pkg.repo, display=pkg.repo),
         config=pkg,
+        version=pkg.tag,
         checksum=pkg.checksum,
     )
 
@@ -121,6 +122,24 @@ def test_rerun_is_skip_and_writes_no_new_receipt(tmp_path: Path, monkeypatch) ->
     assert first.outcome is Outcome.OK
     second = prov.apply_one(_item(pkg))
     assert second.outcome is Outcome.SKIP
+
+
+def test_version_change_reinstalls_and_updates_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    install_dir = tmp_path / "bin"
+    data = _tar_gz({"tool": b"payload"})
+    first_pkg = _pkg(install_dir, checksum=_sha256(data))
+    prov = _provisioner(tmp_path, data, monkeypatch)
+    assert prov.apply_one(_item(first_pkg)).outcome is Outcome.OK
+    upgraded_pkg = first_pkg.model_copy(update={"tag": "v2.0.0"})
+
+    outcome = prov.apply_one(_item(upgraded_pkg))
+
+    assert outcome.outcome is Outcome.OK
+    entry = prov._receipts.entry_for(_item(upgraded_pkg).identity, "github_release")
+    assert entry is not None
+    assert entry.version == "v2.0.0"
 
 
 def test_plan_is_pure_and_skips_installed(tmp_path: Path, monkeypatch) -> None:

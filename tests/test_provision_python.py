@@ -196,11 +196,13 @@ def test_apply_passes_version_pin_on_initial_install(fake_uv) -> None:
     assert ["/fake/uv", "tool", "install", "--", "ruff==0.5.0"] in cli.calls
 
 
-def test_apply_skips_present_even_on_version_mismatch(fake_uv) -> None:
+def test_apply_upgrades_present_package_on_version_mismatch(fake_uv) -> None:
     cli = fake_uv(installed={"ruff"})
     outcome = prov_python.PythonProvisioner().apply_one(_item("ruff", version="99.0.0"))
-    assert outcome.outcome is Outcome.SKIP
-    assert _install_calls(cli) == []
+    assert outcome.outcome is Outcome.OK
+    assert _install_calls(cli) == [
+        ["/fake/uv", "tool", "install", "--", "ruff==99.0.0"]
+    ]
 
 
 def test_second_run_yields_empty_delta(fake_uv) -> None:

@@ -35,3 +35,11 @@ def package_identity(pkg: Package) -> Identity:
         case _:  # pragma: no cover - Plugin/Extension route elsewhere
             raise AssertionError(f"no identity mapping for package {pkg!r}")
     return Identity(key=name, display=name)
+
+
+def package_version(pkg: Package) -> str | None:
+    """Return the provider's desired version in the shared item protocol."""
+    if isinstance(pkg, GitHubReleasePackage):
+        return pkg.tag
+    value = getattr(pkg, "version", None)
+    return value if isinstance(value, str) else None

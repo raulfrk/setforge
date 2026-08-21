@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -19,11 +20,33 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
-from setforge.config import load_config, resolve_effective_profile
+from setforge.config import (
+    Config,
+    ResolvedProfile,
+    load_config,
+    resolve_effective_profile,
+)
+from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks
+from setforge.ownership import (
+    Authority,
+    ClaimLifecycle,
+    OwnershipError,
+    OwnershipStore,
+    ResourceId,
+    read_owner_id,
+)
+from setforge.provision.bundle import resolve_bundle_items
 from setforge.provision.dispatch import resolve_provision_items
-from setforge.provision.protocol import Identity
+from setforge.provision.ownership import observation_fingerprint, package_resource_id
+from setforge.provision.protocol import (
+    Identity,
+    ObservationOrigin,
+    PackageObservation,
+    ProvisionItem,
+)
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
+from setforge.provision.registry import build
 
 __all__ = [
     "CleanupAction",
@@ -61,6 +84,11 @@ class CleanupAction(StrEnum):
 class CleanupItem:
     identity: Identity
     path: Path | None
+    provider: str | None = None
+    managed: bool = True
+    refusal: str = ""
+    owner_id: uuid.UUID | None = None
+    claim_generation: int | None = None
 
 
 def _receipt_store() -> ReceiptStore:
@@ -88,10 +116,17 @@ def load_ignored_provisioned() -> frozenset[str]:
 
 
 def discover_cleanup_items(
-    store: ReceiptStore, *, declared: set[Identity], console: Console
+    store: ReceiptStore,
+    *,
+    declared: set[Identity],
+    console: Console,
+    ownership_store: OwnershipStore | None = None,
+    owner_id: uuid.UUID | None = None,
+    declared_resources: frozenset[ResourceId] = frozenset(),
 ) -> list[CleanupItem]:
     # Receipt-scoped only (no $PATH/FS scan); a corrupt receipt is skipped, not fatal.
     items: list[CleanupItem] = []
+    represented: set[ResourceId] = set()
     for entry in store.iter_receipts():
         if entry.corrupt_path is not None:
             console.print(
@@ -100,9 +135,110 @@ def discover_cleanup_items(
             )
             continue
         assert entry.identity is not None
-        if entry.identity in declared:
+        if entry.provider is None and entry.identity in declared:
             continue
-        items.append(CleanupItem(identity=entry.identity, path=entry.path))
+        managed = ownership_store is None
+        refusal = ""
+        claim_generation: int | None = None
+        if ownership_store is not None:
+            if entry.provider is None:
+                managed = False
+                refusal = "legacy receipt is unverified"
+            else:
+                resource_id = package_resource_id(
+                    ProvisionItem(type=entry.provider, identity=entry.identity)
+                )
+                if resource_id in declared_resources:
+                    continue
+                represented.add(resource_id)
+                claim = ownership_store.read(resource_id)
+                observation = PackageObservation(
+                    entry.identity,
+                    ObservationOrigin.CURRENT_RECEIPT,
+                    version=entry.version,
+                    locator=str(entry.path) if entry.path is not None else None,
+                    fingerprint=entry.source_digest,
+                    checksum=entry.checksum,
+                )
+                managed = bool(
+                    claim is not None
+                    and claim.owner_id == owner_id
+                    and claim.authority is Authority.MANAGE
+                    and claim.lifecycle is ClaimLifecycle.CLAIMED
+                    and claim.fingerprint == observation_fingerprint(observation)
+                )
+                if not managed:
+                    refusal = "no current matching ownership claim"
+                elif claim is not None:
+                    claim_generation = claim.generation
+        items.append(
+            CleanupItem(
+                identity=entry.identity,
+                path=entry.path,
+                provider=entry.provider,
+                managed=managed,
+                refusal=refusal,
+                owner_id=owner_id if managed else None,
+                claim_generation=claim_generation,
+            )
+        )
+    if ownership_store is None:
+        return items
+    items.extend(
+        _discover_claim_items(
+            ownership_store,
+            owner_id=owner_id,
+            declared=declared,
+            declared_resources=declared_resources,
+            represented=represented,
+        )
+    )
+    return items
+
+
+def _discover_claim_items(
+    ownership_store: OwnershipStore,
+    *,
+    owner_id: uuid.UUID | None,
+    declared: set[Identity],
+    declared_resources: frozenset[ResourceId],
+    represented: set[ResourceId],
+) -> list[CleanupItem]:
+    items: list[CleanupItem] = []
+    for claim in ownership_store.list_claims():
+        resource_id = claim.resource_id
+        if (
+            resource_id.kind != "package"
+            or resource_id in represented
+            or resource_id in declared_resources
+            or claim.owner_id != owner_id
+            or claim.authority is not Authority.MANAGE
+            or claim.lifecycle is not ClaimLifecycle.CLAIMED
+        ):
+            continue
+        identity = Identity(resource_id.coordinate, resource_id.coordinate)
+        provider = build(ProvisionItem(type=resource_id.provider, identity=identity))
+        installed = provider.probe()
+        observations = {
+            observation.identity: observation
+            for observation in provider.observations(installed)
+        }
+        observation = observations.get(identity)
+        managed = bool(
+            observation is not None
+            and claim.fingerprint == observation_fingerprint(observation)
+        )
+        items.append(
+            CleanupItem(
+                identity=identity,
+                path=Path(claim.locator) if claim.locator else None,
+                provider=resource_id.provider,
+                managed=managed,
+                refusal="" if managed else "managed package evidence drifted",
+                owner_id=owner_id if managed else None,
+                claim_generation=claim.generation if managed else None,
+            )
+        )
     return items
 
 
@@ -141,16 +277,21 @@ def delete_provisioned(
     confine_root: Path,
     console: Console,
 ) -> None:
+    if not item.managed:
+        raise ConfinementError(
+            f"refusing to delete unowned package {item.identity.display}: "
+            f"{item.refusal}"
+        )
     # Binary-unlink precedes receipt-drop so a crash mid-delete can't strand a gap.
     if item.path is None:
         console.print(
             f"[yellow]warning:[/yellow] receipt has no recorded path, "
             f"dropping receipt only: {item.identity.display}"
         )
-        store.remove(item.identity)
+        store.remove(item.identity, provider=item.provider)
         return
     _confined_unlink(item.path, confine_root=confine_root, console=console)
-    store.remove(item.identity)
+    store.remove(item.identity, provider=item.provider)
 
 
 def mark_orphan(identity: Identity, *, console: Console) -> None:
@@ -175,9 +316,47 @@ def _resolve_declared(config_path: Path, profile: str) -> set[Identity]:
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    declared = {item.identity for item in resolve_provision_items(cfg, resolved)}
+    declared = {item.identity for item in _declared_package_items(cfg, resolved)}
     declared |= {Identity(key=key, display=key) for key in load_ignored_provisioned()}
     return declared
+
+
+def _resolve_declared_resources(
+    config_path: Path, profile: str
+) -> frozenset[ResourceId]:
+    cfg = load_config(config_path)
+    repo_root = config_path.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    return frozenset(
+        package_resource_id(item) for item in _declared_package_items(cfg, resolved)
+    )
+
+
+def _declared_package_items(
+    cfg: Config, resolved: ResolvedProfile
+) -> list[ProvisionItem]:
+    """Return direct and selected-bundle package declarations for cleanup."""
+    direct = resolve_provision_items(cfg, resolved)
+    bundle_items = [
+        item
+        for name in resolved.bundles
+        for item in resolve_bundle_items(cfg.bundles[name], cfg)
+    ]
+    by_key: dict[tuple[str, str], ProvisionItem] = {}
+    for item in (*direct, *bundle_items):
+        key = (item.type, item.identity.key)
+        previous = by_key.get(key)
+        if previous is not None and (
+            previous.version != item.version
+            or previous.checksum != item.checksum
+            or previous.config.model_dump_json() != item.config.model_dump_json()
+        ):
+            raise SetforgeError(
+                f"package identity collision for {item.type}:{item.identity.key}; "
+                "declarations disagree on source or integrity"
+            )
+        by_key[key] = item
+    return list(by_key.values())
 
 
 def _pick_action(item: CleanupItem) -> CleanupAction:
@@ -185,12 +364,12 @@ def _pick_action(item: CleanupItem) -> CleanupAction:
     from setforge.ui.widgets import CANCEL, Button
 
     where = str(item.path) if item.path is not None else "(no recorded path)"
+    buttons = [Button("skip (default)", CleanupAction.SKIP)]
+    if item.managed:
+        buttons.append(Button("delete managed package", CleanupAction.DELETE))
+    buttons.append(Button("mark orphan (keep package)", CleanupAction.MARK_ORPHAN))
     choice = _self.button_bar(
-        [
-            Button("skip (default)", CleanupAction.SKIP),
-            Button("delete binary + receipt", CleanupAction.DELETE),
-            Button("mark orphan (keep binary)", CleanupAction.MARK_ORPHAN),
-        ],
+        buttons,
         title=f"setforge cleanup — {item.identity.display}",
         body=f"Undeclared provisioned binary at {where}. What would you like to do?",
         initial=0,
@@ -226,15 +405,93 @@ def _apply_cleanup(
             console.print(f"  skipped: {item.identity.display}")
             continue
         if action is CleanupAction.MARK_ORPHAN:
-            mark_orphan(item.identity, console=console)
+            if (
+                item.provider is not None
+                and item.owner_id is not None
+                and item.claim_generation is not None
+            ):
+                with mutation_locks(
+                    resources=True, config_dir=config_dir, profile=profile
+                ):
+                    OwnershipStore().release_locked(
+                        package_resource_id(
+                            ProvisionItem(type=item.provider, identity=item.identity)
+                        ),
+                        expected_owner=item.owner_id,
+                        expected_generation=item.claim_generation,
+                    )
+                    mark_orphan(item.identity, console=console)
+            else:
+                mark_orphan(item.identity, console=console)
             continue
         # Serialize each delete (transition write + unlink) under
         # profile_lock, like every other mutating verb, so a concurrent
         # install/sync writing the same profile's state cannot interleave.
         # Per-item (not whole-loop): _pick_action above is interactive and
         # must not run while holding the lock.
-        with mutation_locks(resources=True, config_dir=config_dir, profile=profile):
+        with (
+            mutation_locks(resources=True, config_dir=config_dir, profile=profile),
+            operations.recover_on_error(profile, "cleanup"),
+        ):
             operations.refuse_active(profile)
+            ownership_store = OwnershipStore()
+            if (
+                item.provider is None
+                or item.owner_id is None
+                or item.claim_generation is None
+            ):
+                raise ConfinementError(
+                    f"refusing to delete unverified package {item.identity.display}"
+                )
+            resource_id = package_resource_id(
+                ProvisionItem(type=item.provider, identity=item.identity)
+            )
+            claim = ownership_store.read(resource_id)
+            if (
+                claim is None
+                or claim.owner_id != item.owner_id
+                or claim.generation != item.claim_generation
+                or claim.authority is not Authority.MANAGE
+                or claim.lifecycle is not ClaimLifecycle.CLAIMED
+            ):
+                raise ConfinementError(
+                    f"ownership changed for {item.identity.display}; retry cleanup"
+                )
+            provider = build(ProvisionItem(type=item.provider, identity=item.identity))
+            observations = {
+                observation.identity: observation
+                for observation in provider.observations(provider.probe())
+            }
+            observation = observations.get(item.identity)
+            if (
+                observation is None
+                or observation_fingerprint(observation) != claim.fingerprint
+            ):
+                raise ConfinementError(
+                    f"package evidence changed for {item.identity.display}; "
+                    "refusing removal"
+                )
+            journal = operations.prepare(
+                command="cleanup",
+                profile=profile,
+                config_dir=config_dir,
+                resources_lock=True,
+                command_line=("cleanup", "--apply"),
+                paths=(),
+            )
+            journal = operations.begin_checkpoint(
+                journal,
+                name=f"remove-package-{item.provider}-{item.identity.key}",
+                kind=operations.CheckpointKind.IRREVERSIBLE,
+                recovery=(
+                    "inspect the package manager and ownership claim; rerun install "
+                    "to restore a missing managed package"
+                ),
+                paths=(),
+                restore_state=False,
+                restore_transitions=False,
+                adapters=(),
+            )
             transitions.ensure_state_dir_writable()
             meta = transitions.make_meta(
                 transitions.TransitionCommand.CLEANUP_ORPHANS, profile
@@ -246,7 +503,24 @@ def _apply_cleanup(
             # deliberately does NOT resurrect a cleanup-deleted binary.
             recorded = {item.path: None} if item.path is not None else {}
             transitions.write_transition(meta, recorded, dict(recorded), ext_delta=None)
-            delete_provisioned(store, item, confine_root=confine_root, console=console)
+            if item.path is not None:
+                delete_provisioned(
+                    store, item, confine_root=confine_root, console=console
+                )
+            else:
+                provider.uninstall_one(item.identity)
+            if item.identity in provider.probe():
+                raise SetforgeError(
+                    f"package removal could not be verified for "
+                    f"{item.identity.display}; ownership claim retained"
+                )
+            ownership_store.release_locked(
+                resource_id,
+                expected_owner=item.owner_id,
+                expected_generation=item.claim_generation,
+            )
+            journal = operations.finish_checkpoint(journal)
+            operations.complete(journal)
 
 
 @app.command("cleanup")
@@ -266,7 +540,19 @@ def cleanup(
     store = _receipt_store()
 
     declared = _resolve_declared(resolved_config, profile)
-    items = discover_cleanup_items(store, declared=declared, console=console)
+    declared_resources = _resolve_declared_resources(resolved_config, profile)
+    try:
+        owner_id = read_owner_id(resolved_config.resolve().parent)
+    except OwnershipError:
+        owner_id = None
+    items = discover_cleanup_items(
+        store,
+        declared=declared,
+        console=console,
+        ownership_store=OwnershipStore(),
+        owner_id=owner_id,
+        declared_resources=declared_resources,
+    )
 
     if not apply:
         _print_dry_run(items, console)

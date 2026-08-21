@@ -10,7 +10,9 @@ from collections.abc import Sequence
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -38,6 +40,9 @@ _PACKAGE_LINE = re.compile(r"^(\S+)\s")
 class PythonProvisioner(Provisioner):
     type = "python"
 
+    def __init__(self) -> None:
+        self._versions: dict[str, str | None] = {}
+
     def probe(self) -> set[Identity]:
         """Return the tools ``uv tool list`` reports (fails OPEN)."""
         uv = self._resolve()
@@ -58,9 +63,19 @@ class PythonProvisioner(Provisioner):
         ) as exc:
             LOGGER.warning("`uv tool list` failed: %s", stderr_of(exc))
             return set()
-        return {
-            Identity(key=name, display=name) for name in _parse_tools(result.stdout)
-        }
+        self._versions = _parse_tools(result.stdout)
+        return {Identity(key=name, display=name) for name in self._versions}
+
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        return tuple(
+            PackageObservation(
+                identity,
+                ObservationOrigin.EXTERNAL,
+                version=self._versions.get(identity.key),
+                source="uv-tool",
+            )
+            for identity in sorted(installed, key=lambda value: value.key)
+        )
 
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
@@ -83,7 +98,11 @@ class PythonProvisioner(Provisioner):
                 ),
             )
         # Version pin is REPORT-only: present-by-name skips even on a mismatch.
-        if item.identity in self.probe():
+        installed = self.probe()
+        if item.identity in installed and (
+            item.version is None
+            or self._versions.get(item.identity.key) == item.version
+        ):
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
         package = item.identity.display
         if item.version is not None:
@@ -135,13 +154,15 @@ class PythonProvisioner(Provisioner):
         return None if resolved is None else str(resolved)
 
 
-def _parse_tools(stdout: str) -> set[str]:
-    tools: set[str] = set()
+def _parse_tools(stdout: str) -> dict[str, str | None]:
+    tools: dict[str, str | None] = {}
     for raw in stdout.splitlines():
         line = _ANSI.sub("", raw)
         if not line or line[0].isspace() or line.startswith("- "):
             continue
         match = _PACKAGE_LINE.match(line)
         if match is not None:
-            tools.add(match.group(1))
+            fields = line.split()
+            version = fields[1].removeprefix("v") if len(fields) > 1 else None
+            tools[match.group(1)] = version
     return tools

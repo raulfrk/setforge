@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Hashable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic import BaseModel
 
@@ -29,6 +29,7 @@ from setforge.provision.protocol import (
     DesiredState,
     Identity,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -43,6 +44,8 @@ class ReconcilePlan:
 
     delta: ProvisionDelta
     installed: frozenset[Identity]
+    observations: tuple[PackageObservation, ...]
+    provider_type: str
     _inventory_fingerprint: Hashable = field(repr=False)
     _executor: _ReconcileExecutor = field(repr=False, compare=False)
 
@@ -99,9 +102,12 @@ def plan_reconcile(
     installed = provisioner.probe()
     inventory_fingerprint = provisioner.plan_fingerprint(items, installed)
     delta = provisioner.plan(items, installed)
+    observations = provisioner.observations(installed)
     return ReconcilePlan(
         delta=delta,
         installed=frozenset(installed),
+        observations=observations,
+        provider_type=provisioner.type,
         _inventory_fingerprint=inventory_fingerprint,
         _executor=_ReconcileExecutor(
             provisioner=provisioner,
@@ -120,9 +126,75 @@ def validate_reconcile(plan: ReconcilePlan) -> None:
     """Refuse when the global provisioner inventory changed after planning."""
     provisioner = plan._executor.provisioner
     installed = provisioner.probe()
+    observations = provisioner.observations(installed)
     items = tuple(item.thaw() for item in plan._executor.declared_items)
-    if provisioner.plan_fingerprint(items, installed) != plan._inventory_fingerprint:
+    if (
+        provisioner.plan_fingerprint(items, installed) != plan._inventory_fingerprint
+        or observations != plan.observations
+    ):
         raise SetforgeError("package inventory changed after planning; retry")
+
+
+def suppress_reconcile(
+    plan: ReconcilePlan, identities: frozenset[Identity]
+) -> ReconcilePlan:
+    """Return the same frozen plan with selected package effects held."""
+    if not identities:
+        return plan
+    executor = replace(
+        plan._executor,
+        items=tuple(
+            item for item in plan._executor.items if item.identity not in identities
+        ),
+    )
+    return replace(
+        plan,
+        delta=ProvisionDelta(
+            installed=tuple(
+                identity
+                for identity in plan.delta.installed
+                if identity not in identities
+            ),
+            activated=tuple(
+                identity
+                for identity in plan.delta.activated
+                if identity not in identities
+            ),
+        ),
+        _executor=executor,
+    )
+
+
+def force_reconcile(
+    plan: ReconcilePlan, identities: frozenset[Identity]
+) -> ReconcilePlan:
+    """Return a frozen plan that applies selected managed upgrades."""
+    if not identities:
+        return plan
+    selected = tuple(
+        item for item in plan._executor.declared_items if item.identity in identities
+    )
+    existing = {item.identity for item in plan._executor.items}
+    executor = replace(
+        plan._executor,
+        items=plan._executor.items
+        + tuple(item for item in selected if item.identity not in existing),
+    )
+    installed = tuple(dict.fromkeys((*plan.delta.installed, *identities)))
+    return replace(
+        plan,
+        delta=ProvisionDelta(
+            installed=installed,
+            activated=plan.delta.activated,
+        ),
+        _executor=executor,
+    )
+
+
+def refresh_observations(plan: ReconcilePlan) -> tuple[PackageObservation, ...]:
+    """Re-probe one frozen provider after successful package effects."""
+    installed = plan._executor.provisioner.probe()
+    return plan._executor.provisioner.observations(installed)
 
 
 def apply_reconcile(plan: ReconcilePlan) -> ReconcileResult:

@@ -15,6 +15,7 @@ from setforge.errors import ProvisionItemFailed, SetforgeError
 from setforge.provision.driver import (
     apply_reconcile,
     exit_code,
+    force_reconcile,
     plan_reconcile,
     reconcile,
     validate_reconcile,
@@ -36,6 +37,15 @@ def _item(key: str) -> ProvisionItem:
         identity=Identity(key=key, display=key),
         desired=DesiredState.ACTIVE,
     )
+
+
+def test_force_reconcile_applies_a_managed_upgrade_omitted_by_provider_plan() -> None:
+    item = _item("tool")
+    provider = _FakeProvisioner(installed={item.identity})
+    plan = force_reconcile(plan_reconcile(provider, [item]), frozenset({item.identity}))
+    result = apply_reconcile(plan)
+    assert provider.apply_calls == ["tool"]
+    assert result.delta.installed == (item.identity,)
 
 
 class _FakeProvisioner(Provisioner):

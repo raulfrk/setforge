@@ -34,6 +34,14 @@ class DesiredState(StrEnum):
     ACTIVE = "active"
 
 
+class ObservationOrigin(StrEnum):
+    """How SetForge learned that a package is present."""
+
+    EXTERNAL = "external"
+    LEGACY_RECEIPT = "legacy-receipt"
+    CURRENT_RECEIPT = "current-receipt"
+
+
 @dataclass(slots=True, frozen=True)
 class Identity:
     """A provisioner match key.
@@ -68,6 +76,19 @@ class ProvisionItem:
     version: str | None = None  # resolved ecosystem pin
     checksum: str | None = None
     config: BaseModel = field(default_factory=_EmptyConfig)
+
+
+@dataclass(slots=True, frozen=True)
+class PackageObservation:
+    """Frozen provider evidence for one present package."""
+
+    identity: Identity
+    origin: ObservationOrigin
+    version: str | None = None
+    source: str | None = None
+    locator: str | None = None
+    fingerprint: str | None = None
+    checksum: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -120,6 +141,13 @@ class Provisioner(ABC):
         depend on richer probe metadata may override it after :meth:`probe`.
         """
         return frozenset(installed)
+
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        """Describe present packages without implying ownership."""
+        return tuple(
+            PackageObservation(identity, ObservationOrigin.EXTERNAL)
+            for identity in sorted(installed, key=lambda value: value.key)
+        )
 
     def plan_fingerprint(
         self, items: Sequence[ProvisionItem], installed: set[Identity]

@@ -15,7 +15,9 @@ from setforge.provision.installer import (
 )
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -65,7 +67,7 @@ class LocalProvisioner(Provisioner):
         self._tracked_root = tracked_root
 
     def probe(self) -> set[Identity]:
-        return self._receipts.installed()
+        return self._receipts.installed_for(self.type)
 
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
@@ -76,6 +78,21 @@ class LocalProvisioner(Provisioner):
                 for item in items
                 if item.identity not in installed or self._is_stale(item)
             )
+        )
+
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        return tuple(
+            PackageObservation(
+                identity,
+                ObservationOrigin.CURRENT_RECEIPT
+                if (entry := self._receipts.entry_for(identity, self.type)) is not None
+                and entry.provider is not None
+                else ObservationOrigin.LEGACY_RECEIPT,
+                locator=str(entry.path) if entry is not None and entry.path else None,
+                fingerprint=entry.source_digest if entry is not None else None,
+                checksum=entry.checksum if entry is not None else None,
+            )
+            for identity in sorted(installed, key=lambda value: value.key)
         )
 
     def _source_digest(self, item: ProvisionItem) -> str | None:
@@ -114,7 +131,7 @@ class LocalProvisioner(Provisioner):
         current = self._source_digest(item)
         if current is None:
             return False
-        return current != self._receipts.digest_for(item.identity)
+        return current != self._receipts.digest_for(item.identity, provider=self.type)
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         # Same predicate `plan` used, not a second copy of the rule — the two
@@ -165,16 +182,17 @@ class LocalProvisioner(Provisioner):
             # reusing `_source_digest` so it describes exactly what was
             # written, not a possibly re-read file.
             source_digest=hashlib.sha256(data).hexdigest(),
+            provider=self.type,
         )
         return ProvisionOutcome(
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"
         )
 
     def uninstall_one(self, identity: Identity) -> None:
-        recorded = self._receipts.path_for(identity)
+        recorded = self._receipts.path_for(identity, provider=self.type)
         if recorded is not None:
             recorded.unlink(missing_ok=True)
-        self._receipts.remove(identity)
+        self._receipts.remove(identity, provider=self.type)
 
     def _resolve_tracked_root(self) -> Path:
         # Lazy: mirrors install.py's tracked_root derivation via the source layer.

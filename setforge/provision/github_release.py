@@ -17,7 +17,9 @@ from setforge.provision.installer import (
 )
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
@@ -57,7 +59,7 @@ class GitHubReleaseProvisioner(Provisioner):
         self._receipts = receipts or ReceiptStore(default_receipt_root())
 
     def probe(self) -> set[Identity]:
-        return self._receipts.installed()
+        return self._receipts.installed_for(self.type)
 
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
@@ -68,8 +70,29 @@ class GitHubReleaseProvisioner(Provisioner):
             )
         )
 
+    def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
+        return tuple(
+            PackageObservation(
+                identity,
+                ObservationOrigin.CURRENT_RECEIPT
+                if (entry := self._receipts.entry_for(identity, self.type)) is not None
+                and entry.provider is not None
+                else ObservationOrigin.LEGACY_RECEIPT,
+                version=entry.version if entry is not None else None,
+                locator=str(entry.path) if entry is not None and entry.path else None,
+                checksum=entry.checksum if entry is not None else None,
+            )
+            for identity in sorted(installed, key=lambda value: value.key)
+        )
+
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
-        if item.identity in self.probe():
+        entry = self._receipts.entry_for(item.identity, self.type)
+        if (
+            item.identity in self.probe()
+            and entry is not None
+            and (item.version is None or entry.version == item.version)
+            and (item.checksum is None or entry.checksum == item.checksum)
+        ):
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
 
         pkg = item.config
@@ -114,16 +137,17 @@ class GitHubReleaseProvisioner(Provisioner):
             version=pkg.tag,
             checksum=pkg.checksum,
             path=dest,
+            provider=self.type,
         )
         return ProvisionOutcome(
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"
         )
 
     def uninstall_one(self, identity: Identity) -> None:
-        recorded = self._receipts.path_for(identity)
+        recorded = self._receipts.path_for(identity, provider=self.type)
         if recorded is not None:
             recorded.unlink(missing_ok=True)
-        self._receipts.remove(identity)
+        self._receipts.remove(identity, provider=self.type)
 
     def _download(self, url: str) -> bytes:
         if not url.startswith("https://"):

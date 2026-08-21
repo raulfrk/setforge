@@ -182,13 +182,22 @@ def test_cargo_skip_if_present_does_not_invoke_install(
 ) -> None:
     c = docker_container()
     _write_source(c, body=_CARGO_YAML)
+    c.exec(["git", "-C", _SRC_REPO, "init", "-b", "main"], check=True)
 
     # Place a fake cargo on PATH that reports ast-grep already installed.
     c.write_text("/home/tester/.local/bin/cargo", _FAKE_CARGO)
     c.exec(["chmod", "+x", "/home/tester/.local/bin/cargo"], check=True)
 
     res = c.exec(
-        ["uv", "run", "setforge", "install", f"--profile={_PROFILE}", "--yes"],
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            f"--profile={_PROFILE}",
+            "--yes",
+            "--no-git-check",
+        ],
         check=False,
         env={"PATH": "/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin"},
     )
@@ -198,3 +207,23 @@ def test_cargo_skip_if_present_does_not_invoke_install(
     # no real `cargo install ast-grep` runs and nothing is (re)provisioned.
     assert "FAKE_CARGO_INSTALL_INVOKED" not in combined, combined
     assert "provisioned ast-grep" not in combined, combined
+    assert "adopted package ownership: ast-grep" in combined, combined
+
+    # The first pass changed metadata only. The durable claim makes the next
+    # non-interactive run a normal managed no-op without another confirmation.
+    repeated = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            f"--profile={_PROFILE}",
+            "--no-git-check",
+        ],
+        check=False,
+        env={"PATH": "/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin"},
+    )
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    repeated_combined = repeated.stdout + repeated.stderr
+    assert "FAKE_CARGO_INSTALL_INVOKED" not in repeated_combined, repeated_combined
+    assert "adopted package ownership" not in repeated_combined, repeated_combined

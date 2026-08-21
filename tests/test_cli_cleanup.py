@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,19 @@ from setforge import binaries as binaries_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
 from setforge.local_config import LocalConfig
-from setforge.provision.protocol import Identity
+from setforge.ownership import OwnershipStore
+from setforge.provision.ownership import (
+    PackageAction,
+    decide_package,
+    package_resource_id,
+    publish_claim_locked,
+)
+from setforge.provision.protocol import (
+    Identity,
+    ObservationOrigin,
+    PackageObservation,
+    ProvisionItem,
+)
 from setforge.provision.receipt import ReceiptStore
 
 
@@ -52,6 +65,280 @@ def test_discovery_lists_undeclared_only(tmp_path: Path, confine_root: Path) -> 
     )
     keys = {it.identity.key for it in items}
     assert keys == {"gone"}
+
+
+def test_discovery_refuses_typed_receipt_without_matching_claim(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    receipts = ReceiptStore(tmp_path / "receipts")
+    identity = _ident("gone")
+    path = _write_binary(confine_root, "gone")
+    receipts.record(identity, version="1", checksum=None, path=path, provider="cargo")
+    items = cleanup_mod.discover_cleanup_items(
+        receipts,
+        declared=set(),
+        console=Console(),
+        ownership_store=OwnershipStore(tmp_path / "ownership"),
+    )
+    assert len(items) == 1
+    assert items[0].managed is False
+    with pytest.raises(cleanup_mod.ConfinementError):
+        cleanup_mod.delete_provisioned(
+            receipts, items[0], confine_root=confine_root, console=Console()
+        )
+    assert path.exists()
+
+
+def test_discovery_accepts_exact_owned_typed_receipt(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    owner = uuid.uuid4()
+    receipts = ReceiptStore(tmp_path / "receipts")
+    identity = _ident("gone")
+    path = _write_binary(confine_root, "gone")
+    receipts.record(identity, version="1", checksum=None, path=path, provider="cargo")
+    observation = PackageObservation(
+        identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        version="1",
+        locator=str(path),
+    )
+    item = ProvisionItem(type="cargo", identity=identity)
+    ownership = OwnershipStore(tmp_path / "ownership")
+    decision = decide_package(item, observation, None, owner_id=owner)
+    assert decision.action is PackageAction.ADOPT
+    with cleanup_mod.mutation_locks(resources=True):
+        publish_claim_locked(
+            ownership,
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.gone",
+            acquisition="adopted-external",
+        )
+    items = cleanup_mod.discover_cleanup_items(
+        receipts,
+        declared=set(),
+        console=Console(),
+        ownership_store=ownership,
+        owner_id=owner,
+    )
+    assert len(items) == 1
+    assert items[0].managed is True
+
+
+def test_declared_provider_does_not_hide_same_key_other_provider_receipt(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    receipts = ReceiptStore(tmp_path / "receipts")
+    identity = _ident("tool")
+    cargo_path = _write_binary(confine_root, "cargo-tool")
+    go_path = _write_binary(confine_root, "go-tool")
+    receipts.record(
+        identity, version="1", checksum=None, path=cargo_path, provider="cargo"
+    )
+    receipts.record(identity, version="1", checksum=None, path=go_path, provider="go")
+    cargo_resource = package_resource_id(ProvisionItem(type="cargo", identity=identity))
+
+    items = cleanup_mod.discover_cleanup_items(
+        receipts,
+        declared={identity},
+        declared_resources=frozenset({cargo_resource}),
+        console=Console(),
+        ownership_store=OwnershipStore(tmp_path / "ownership"),
+    )
+
+    assert [(item.provider, item.identity.key) for item in items] == [("go", "tool")]
+
+
+def test_bundle_declared_package_is_not_offered_for_cleanup(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "bundles:\n"
+        "  tools:\n"
+        "    components:\n"
+        "      - id: tool\n"
+        "        cargo: {crate: tool}\n"
+        "profiles:\n"
+        "  p: {bundles: [tools]}\n",
+        encoding="utf-8",
+    )
+    identity = _ident("tool")
+    receipts = ReceiptStore(tmp_path / "receipts")
+    receipts.record(
+        identity,
+        version="1",
+        checksum=None,
+        path=_write_binary(confine_root, "tool"),
+        provider="cargo",
+    )
+
+    declared = cleanup_mod._resolve_declared(config, "p")
+    declared_resources = cleanup_mod._resolve_declared_resources(config, "p")
+    items = cleanup_mod.discover_cleanup_items(
+        receipts,
+        declared=declared,
+        declared_resources=declared_resources,
+        console=Console(),
+        ownership_store=OwnershipStore(tmp_path / "ownership"),
+    )
+
+    assert items == []
+
+
+def test_discovery_includes_owned_ambient_package_without_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = uuid.uuid4()
+    identity = _ident("ripgrep")
+    observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="14.1.0", source="crates.io"
+    )
+    ownership = OwnershipStore(tmp_path / "ownership")
+    decision = decide_package(
+        ProvisionItem(type="cargo", identity=identity),
+        observation,
+        None,
+        owner_id=owner,
+    )
+    with cleanup_mod.mutation_locks(resources=True):
+        publish_claim_locked(
+            ownership,
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.ripgrep",
+            acquisition="adopted-external",
+        )
+
+    class _Provider:
+        def probe(self) -> set[Identity]:
+            return {identity}
+
+        def observations(
+            self, installed: set[Identity]
+        ) -> tuple[PackageObservation, ...]:
+            assert installed == {identity}
+            return (observation,)
+
+    monkeypatch.setattr(cleanup_mod, "build", lambda _item: _Provider())
+    items = cleanup_mod.discover_cleanup_items(
+        ReceiptStore(tmp_path / "receipts"),
+        declared=set(),
+        console=Console(),
+        ownership_store=ownership,
+        owner_id=owner,
+    )
+    assert [(item.provider, item.identity.key, item.managed) for item in items] == [
+        ("cargo", "ripgrep", True)
+    ]
+
+
+def test_apply_removes_owned_ambient_package_then_releases_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    owner = uuid.uuid4()
+    identity = _ident("ripgrep")
+    observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="14.1.0", source="crates.io"
+    )
+    decision = decide_package(
+        ProvisionItem(type="cargo", identity=identity),
+        observation,
+        None,
+        owner_id=owner,
+    )
+    with cleanup_mod.mutation_locks(resources=True):
+        claim = publish_claim_locked(
+            OwnershipStore(),
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.ripgrep",
+            acquisition="adopted-external",
+        )
+    installed = {identity}
+
+    class _Provider:
+        def probe(self) -> set[Identity]:
+            return set(installed)
+
+        def observations(
+            self, current: set[Identity]
+        ) -> tuple[PackageObservation, ...]:
+            return (observation,) if identity in current else ()
+
+        def uninstall_one(self, removed: Identity) -> None:
+            installed.remove(removed)
+
+    monkeypatch.setattr(cleanup_mod, "build", lambda _item: _Provider())
+    monkeypatch.setattr(
+        cleanup_mod, "_pick_action", lambda _item: cleanup_mod.CleanupAction.DELETE
+    )
+    item = cleanup_mod.CleanupItem(
+        identity=identity,
+        path=None,
+        provider="cargo",
+        owner_id=owner,
+        claim_generation=claim.generation,
+    )
+    cleanup_mod._apply_cleanup(
+        "p", [item], ReceiptStore(tmp_path / "receipts"), Console()
+    )
+    released = OwnershipStore().read(decision.resource_id)
+    assert installed == set()
+    assert released is not None
+    assert released.authority.value == "none"
+
+
+def test_marking_managed_package_orphan_releases_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    owner = uuid.uuid4()
+    identity = _ident("ripgrep")
+    observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="14.1.0"
+    )
+    decision = decide_package(
+        ProvisionItem(type="cargo", identity=identity),
+        observation,
+        None,
+        owner_id=owner,
+    )
+    with cleanup_mod.mutation_locks(resources=True):
+        claim = publish_claim_locked(
+            OwnershipStore(),
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.ripgrep",
+            acquisition="adopted-external",
+        )
+    monkeypatch.setattr(
+        cleanup_mod,
+        "_pick_action",
+        lambda _item: cleanup_mod.CleanupAction.MARK_ORPHAN,
+    )
+    cleanup_mod._apply_cleanup(
+        "p",
+        [
+            cleanup_mod.CleanupItem(
+                identity=identity,
+                path=None,
+                provider="cargo",
+                owner_id=owner,
+                claim_generation=claim.generation,
+            )
+        ],
+        ReceiptStore(tmp_path / "receipts"),
+        Console(),
+    )
+    released = OwnershipStore().read(decision.resource_id)
+    assert released is not None
+    assert released.authority.value == "none"
+    assert "ripgrep" in cleanup_mod.load_ignored_provisioned()
 
 
 def test_discovery_skips_corrupt_receipt_not_fatal(
@@ -107,8 +394,47 @@ def test_apply_delete_holds_profile_lock(
 
     store = ReceiptStore(tmp_path / "receipts")
     binpath = _write_binary(confine_root, "gone")
-    store.record(_ident("gone"), version="1", checksum=None, path=binpath)
-    item = cleanup_mod.CleanupItem(identity=_ident("gone"), path=binpath)
+    identity = _ident("gone")
+    store.record(identity, version="1", checksum=None, path=binpath, provider="cargo")
+    owner = uuid.uuid4()
+    observation = PackageObservation(
+        identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        version="1",
+        locator=str(binpath),
+    )
+    decision = decide_package(
+        ProvisionItem(type="cargo", identity=identity),
+        observation,
+        None,
+        owner_id=owner,
+    )
+    with locking.mutation_locks(resources=True):
+        claim = publish_claim_locked(
+            OwnershipStore(),
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.gone",
+            acquisition="adopted-external",
+        )
+    item = cleanup_mod.CleanupItem(
+        identity=identity,
+        path=binpath,
+        provider="cargo",
+        owner_id=owner,
+        claim_generation=claim.generation,
+    )
+
+    class _Provider:
+        def probe(self) -> set[Identity]:
+            return {identity} if binpath.exists() else set()
+
+        def observations(
+            self, installed: set[Identity]
+        ) -> tuple[PackageObservation, ...]:
+            return (observation,) if installed else ()
+
+    monkeypatch.setattr(cleanup_mod, "build", lambda _item: _Provider())
 
     events: list[str] = []
     real_locks = locking.mutation_locks

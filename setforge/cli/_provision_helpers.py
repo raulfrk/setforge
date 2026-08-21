@@ -12,6 +12,7 @@ from setforge.provision.dispatch import (
     report_provisioning,
     run_provisioning,
 )
+from setforge.provision.ownership import PackageAction
 from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResult
 
 
@@ -58,6 +59,16 @@ def dry_run_packages(
     plan: ProvisioningPlan | None = None,
 ) -> None:
     typer.echo("=== would-be package provision ===")
+    if plan is not None:
+        for decision in plan.ownership:
+            if decision.action is PackageAction.ADOPT:
+                typer.echo(
+                    f"  WOULD adopt {decision.item.identity.display} (metadata only)"
+                )
+            elif decision.action is PackageAction.HOLD:
+                typer.echo(
+                    f"  HOLD {decision.item.identity.display}: {decision.detail}"
+                )
     results = (
         report_provisioning(plan)
         if plan is not None

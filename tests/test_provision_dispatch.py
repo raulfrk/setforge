@@ -14,6 +14,7 @@ Two layers:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -41,22 +42,35 @@ from setforge.config import (
     load_config,
 )
 from setforge.errors import ConfigError, SetforgeError, UnknownProvisionerType
+from setforge.locking import mutation_locks
+from setforge.ownership import OwnershipStore
 from setforge.provision.dispatch import (
+    apply_provisioning,
     has_hard_failure,
     plan_provisioning,
+    publish_installed_package_claims_locked,
     resolve_provision_items,
     run_provisioning,
     validate_provisioning,
 )
+from setforge.provision.ownership import (
+    PackageAction,
+    decide_package,
+    package_resource_id,
+    publish_claim_locked,
+)
 from setforge.provision.protocol import (
     Identity,
+    ObservationOrigin,
     Outcome,
+    PackageObservation,
     ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
     ReconcileResult,
 )
+from setforge.provision.receipt import ReceiptStore, default_receipt_root
 from setforge.provision.registry import _REGISTRY, register
 
 _PROFILE = "prov-test"
@@ -259,6 +273,401 @@ def test_dedup_same_crate_across_two_package_refs() -> None:
     items = resolve_provision_items(cfg, resolved)
     assert len(items) == 1
     assert items[0].identity.key == "ripgrep"
+
+
+def test_same_typed_identity_with_different_source_fails_closed() -> None:
+    cfg = _cfg(
+        packages={
+            "first": GitHubReleasePackage(
+                repo="owner/tool",
+                tag="v1",
+                asset="tool.tar.gz",
+                binary="tool",
+                install="~/.local/bin/tool",
+            ),
+            "second": GitHubReleasePackage(
+                repo="owner/tool",
+                tag="v2",
+                asset="tool.tar.gz",
+                binary="tool",
+                install="~/.local/bin/tool",
+            ),
+        }
+    )
+    with pytest.raises(SetforgeError, match="declarations disagree"):
+        resolve_provision_items(cfg, ResolvedProfile(packages=["first", "second"]))
+
+
+def test_same_coordinate_in_different_providers_is_not_deduplicated() -> None:
+    cfg = _cfg(
+        packages={
+            "cargo-tool": CargoPackage(crate="ruff"),
+            "python-tool": PythonPackage(package="ruff"),
+        }
+    )
+    items = resolve_provision_items(
+        cfg, ResolvedProfile(packages=["cargo-tool", "python-tool"])
+    )
+    assert [(item.type, item.identity.key) for item in items] == [
+        ("cargo", "ruff"),
+        ("python", "ruff"),
+    ]
+
+
+def test_github_release_tag_is_the_desired_item_version() -> None:
+    cfg = _cfg(
+        packages={
+            "tool": GitHubReleasePackage(
+                repo="owner/tool",
+                tag="v2",
+                asset="tool.tar.gz",
+                binary="tool",
+                install="~/.local/bin/tool",
+            )
+        }
+    )
+    [item] = resolve_provision_items(cfg, ResolvedProfile(packages=["tool"]))
+    assert item.version == "v2"
+
+
+def test_provider_planned_managed_effect_becomes_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import setforge.provision.local as local_prov
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    owner_id = uuid.uuid4()
+    identity = Identity("tool", "tool")
+    observation = PackageObservation(
+        identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        locator=str(tmp_path / "bin" / "tool"),
+        fingerprint="old-source",
+    )
+    refreshed = PackageObservation(
+        identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        locator=str(tmp_path / "bin" / "tool"),
+        fingerprint="new-source",
+    )
+    current = [observation]
+    stale = [True]
+    store = OwnershipStore()
+    item = ProvisionItem(type="local", identity=identity)
+    adopted = decide_package(item, observation, None, owner_id=owner_id)
+    with mutation_locks(resources=True):
+        publish_claim_locked(
+            store,
+            adopted,
+            owner_id=owner_id,
+            declaration_ref="packages.local.tool",
+            acquisition="adopted-external",
+        )
+    monkeypatch.setattr(local_prov.LocalProvisioner, "probe", lambda _self: {identity})
+    monkeypatch.setattr(
+        local_prov.LocalProvisioner,
+        "observations",
+        lambda _self, _installed: tuple(current),
+    )
+    monkeypatch.setattr(
+        local_prov.LocalProvisioner,
+        "plan",
+        lambda _self, _items, _installed: ProvisionDelta(
+            installed=(identity,) if stale[0] else ()
+        ),
+    )
+
+    def apply_local(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        current[:] = [refreshed]
+        stale[0] = False
+        return ProvisionOutcome(item=item, outcome=Outcome.OK)
+
+    monkeypatch.setattr(local_prov.LocalProvisioner, "apply_one", apply_local)
+    cfg = _cfg(
+        packages={
+            "tool": LocalPackage(
+                path="bin/tool",
+                binary="tool",
+                install=str(tmp_path / "bin"),
+                extract=False,
+            )
+        }
+    )
+
+    plan = plan_provisioning(
+        cfg,
+        ResolvedProfile(packages=["tool"]),
+        ownership_store=store,
+        owner_id=owner_id,
+    )
+
+    assert plan.ownership[0].action is PackageAction.UPGRADE
+    assert plan.batches[0].delta.installed == (identity,)
+    results = apply_provisioning(plan)
+    with mutation_locks(resources=True):
+        publish_installed_package_claims_locked(plan, results, owner_id=owner_id)
+    repeated = plan_provisioning(
+        cfg,
+        ResolvedProfile(packages=["tool"]),
+        ownership_store=store,
+        owner_id=owner_id,
+    )
+    assert repeated.ownership[0].action is PackageAction.NONE
+
+
+def test_claim_publication_is_partitioned_by_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+    import setforge.provision.python as python_prov
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    identity = Identity("ruff", "ruff")
+    cargo_observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="cargo-1"
+    )
+    python_observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="python-2"
+    )
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    monkeypatch.setattr(python_prov.PythonProvisioner, "probe", lambda _self: set())
+    observation_calls = {"cargo": 0, "python": 0}
+
+    def cargo_observations(_self: object, _installed: object):
+        observation_calls["cargo"] += 1
+        return () if observation_calls["cargo"] == 1 else (cargo_observation,)
+
+    def python_observations(_self: object, _installed: object):
+        observation_calls["python"] += 1
+        return () if observation_calls["python"] == 1 else (python_observation,)
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "observations", cargo_observations)
+    monkeypatch.setattr(
+        python_prov.PythonProvisioner, "observations", python_observations
+    )
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "apply_one",
+        lambda _self, item: ProvisionOutcome(item=item, outcome=Outcome.OK),
+    )
+    monkeypatch.setattr(
+        python_prov.PythonProvisioner,
+        "apply_one",
+        lambda _self, item: ProvisionOutcome(item=item, outcome=Outcome.SOFT),
+    )
+    cfg = _cfg(
+        packages={
+            "cargo": CargoPackage(crate="ruff"),
+            "python": PythonPackage(package="ruff"),
+        }
+    )
+    owner_id = uuid.uuid4()
+    store = OwnershipStore()
+    plan = plan_provisioning(
+        cfg,
+        ResolvedProfile(packages=["cargo", "python"]),
+        ownership_store=store,
+        owner_id=owner_id,
+    )
+    results = apply_provisioning(plan)
+    with mutation_locks(resources=True):
+        publish_installed_package_claims_locked(plan, results, owner_id=owner_id)
+
+    decisions = {decision.item.type: decision for decision in plan.ownership}
+    assert decisions["cargo"].action is PackageAction.INSTALL
+    assert store.read(package_resource_id(decisions["cargo"].item)) is not None
+    assert store.read(package_resource_id(decisions["python"].item)) is None
+
+
+def test_bundle_existing_package_is_adopted_without_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    identity = Identity("ripgrep", "ripgrep")
+    observation = PackageObservation(identity, ObservationOrigin.EXTERNAL, version="14")
+    applied: list[str] = []
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: {identity})
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "observations",
+        lambda _self, _installed: (observation,),
+    )
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "apply_one",
+        lambda _self, item: applied.append(item.identity.key),
+    )
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="ripgrep", cargo=CargoPackage(crate="ripgrep"))
+                ]
+            )
+        }
+    )
+    plan = plan_provisioning(
+        cfg,
+        ResolvedProfile(bundles=["tools"]),
+        ownership_store=OwnershipStore(tmp_path / "ownership"),
+        owner_id=uuid.uuid4(),
+    )
+
+    assert [decision.action for decision in plan.ownership] == [PackageAction.ADOPT]
+    results = apply_provisioning(plan)
+    assert applied == []
+    assert results[0].outcomes[0].outcome is Outcome.SKIP
+
+
+def test_bundle_install_publishes_provider_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    identity = Identity("ripgrep", "ripgrep")
+    observation = PackageObservation(identity, ObservationOrigin.EXTERNAL, version="14")
+    calls = 0
+
+    def observations(_self: object, _installed: object):
+        nonlocal calls
+        calls += 1
+        return () if calls == 1 else (observation,)
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "observations", observations)
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "apply_one",
+        lambda _self, item: ProvisionOutcome(item=item, outcome=Outcome.OK),
+    )
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="ripgrep", cargo=CargoPackage(crate="ripgrep"))
+                ]
+            )
+        }
+    )
+    owner_id = uuid.uuid4()
+    store = OwnershipStore()
+    plan = plan_provisioning(
+        cfg,
+        ResolvedProfile(bundles=["tools"]),
+        ownership_store=store,
+        owner_id=owner_id,
+    )
+    results = apply_provisioning(plan)
+    with mutation_locks(resources=True):
+        publish_installed_package_claims_locked(plan, results, owner_id=owner_id)
+
+    assert plan.ownership[0].action is PackageAction.INSTALL
+    claim = store.read(plan.ownership[0].resource_id)
+    assert claim is not None
+    assert claim.owner_id == owner_id
+
+
+def test_bundle_same_key_across_providers_applies_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import setforge.provision.cargo as cargo_prov
+    import setforge.provision.python as python_prov
+
+    applied: list[str] = []
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda _self: set())
+    monkeypatch.setattr(python_prov.PythonProvisioner, "probe", lambda _self: set())
+
+    def apply(item: ProvisionItem) -> ProvisionOutcome:
+        applied.append(item.type)
+        return ProvisionOutcome(item=item, outcome=Outcome.OK)
+
+    monkeypatch.setattr(
+        cargo_prov.CargoProvisioner,
+        "apply_one",
+        lambda _self, item: apply(item),
+    )
+    monkeypatch.setattr(
+        python_prov.PythonProvisioner,
+        "apply_one",
+        lambda _self, item: apply(item),
+    )
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="cargo", cargo=CargoPackage(crate="ruff")),
+                    BundleComponent(id="python", python=PythonPackage(package="ruff")),
+                ]
+            )
+        }
+    )
+
+    apply_provisioning(plan_provisioning(cfg, ResolvedProfile(bundles=["tools"])))
+
+    assert applied == ["cargo", "python"]
+
+
+def test_direct_and_bundle_conflicting_declarations_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import setforge.provision.python as python_prov
+
+    monkeypatch.setattr(python_prov.PythonProvisioner, "probe", lambda _self: set())
+    cfg = _cfg(
+        packages={"tool": PythonPackage(package="tool", version="1")},
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(
+                        id="tool", python=PythonPackage(package="tool", version="2")
+                    )
+                ]
+            )
+        },
+    )
+
+    with pytest.raises(SetforgeError, match="declarations disagree"):
+        plan_provisioning(
+            cfg,
+            ResolvedProfile(packages=["tool"], bundles=["tools"]),
+            ownership_store=OwnershipStore(tmp_path / "ownership"),
+            owner_id=uuid.uuid4(),
+        )
+
+
+def test_legacy_receipt_shared_by_two_providers_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    installed = tmp_path / "tool"
+    installed.write_text("tool", encoding="utf-8")
+    ReceiptStore(default_receipt_root()).record(
+        Identity("owner/tool", "owner/tool"),
+        version="1",
+        checksum=None,
+        path=installed,
+    )
+    cfg = _cfg(
+        packages={
+            "release": GitHubReleasePackage(
+                repo="owner/tool",
+                tag="v1",
+                asset="tool.tar.gz",
+                binary="tool",
+                install="~/.local/bin/tool",
+            ),
+            "module": GoPackage(module="owner/tool"),
+        }
+    )
+    with pytest.raises(SetforgeError, match="ambiguous across providers"):
+        plan_provisioning(
+            cfg,
+            ResolvedProfile(packages=["release", "module"]),
+            ownership_store=OwnershipStore(tmp_path / "ownership"),
+            owner_id=uuid.uuid4(),
+        )
 
 
 def test_plugin_and_extension_packages_skipped_from_generic_dispatch() -> None:
