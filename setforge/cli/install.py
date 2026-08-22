@@ -21,6 +21,7 @@ from uuid import UUID
 import typer
 
 from setforge import (
+    atomicio,
     binaries,
     deploy,
     operations,
@@ -29,6 +30,7 @@ from setforge import (
     transitions,
 )
 from setforge import claude_plugins as claude_plugins_mod
+from setforge import codex_resources as codex_resources_mod
 from setforge import (
     compare as compare_mod,
 )
@@ -138,6 +140,8 @@ from setforge.provision.ownership import (
 from setforge.provision.protocol import ObservationOrigin, Outcome, ReconcileResult
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
 from setforge.reconcile import host_local_record
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import file_id
 from setforge.secrets import SecretAction, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
@@ -180,6 +184,8 @@ class InstallPlan:
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
+    codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
+    codex_trusted_projects: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,9 +378,23 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     """Compute every tracked-file decision before the first install write."""
     tracked_entries = tuple(_iter_all_tracked_files(ctx))
     tree_entries = tuple(_iter_all_trees(ctx))
+    codex_configs = codex_resources_mod.plan_config_resources(
+        ctx.cfg,
+        ctx.resolved,
+        ctx.repo_root,
+        read_base=lambda resource_id: reconcile_store.read_base(
+            ctx.profile, file_id(resource_id)
+        ),
+    )
+    codex_trusted_projects = codex_resources_mod.selected_trusted_projects(
+        ctx.cfg, ctx.resolved, ctx.repo_root
+    )
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
     source_paths.update(source for _, _, source, _ in tree_entries)
+    source_paths.update(
+        source for codex_plan in codex_configs for source in codex_plan.sources
+    )
     source_bytes = _snapshot_inputs(source_paths)
     source_map = dict(source_bytes)
     if any(source_map.get(path) != payload for path, payload in input_baseline):
@@ -391,6 +411,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             for tf, _, _, sub_dst in tracked_entries
         ]
         + [Path(str(path)).expanduser() for path in ctx.resolved.bootstrap]
+        + [codex_plan.destination for codex_plan in codex_configs]
     )
     live_paths = {
         path
@@ -401,6 +422,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         )
     }
     live_paths.update(Path(str(path)).expanduser() for path in ctx.resolved.bootstrap)
+    live_paths.update(codex_plan.destination for codex_plan in codex_configs)
     live_path_snapshot = _snapshot_live_paths(live_paths)
     file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
     file_ownership = _plan_file_ownership(
@@ -434,6 +456,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 for tree in trees
             },
         },
+        resolved=ctx.resolved,
     )
     deploys = install_helpers_mod._plan_tracked_files(
         ctx,
@@ -515,6 +538,8 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         mcp=mcp,
         extensions=extensions,
         plugins=plugins,
+        codex_configs=codex_configs,
+        codex_trusted_projects=codex_trusted_projects,
     )
 
 
@@ -836,6 +861,46 @@ def _apply_plugin_plan(
     )
 
 
+def _apply_codex_config_plans(
+    plans: tuple[codex_resources_mod.CodexConfigPlan, ...],
+    *,
+    profile: str,
+    mutation_guards: MutationLockGuards,
+) -> None:
+    """Publish native config leaves through their descriptor-bound parents."""
+    for plan in plans:
+        guard = next(
+            (
+                item
+                for item in mutation_guards.targets
+                if item.target.absolute() == plan.destination.parent.absolute()
+            ),
+            None,
+        )
+        if guard is None:
+            raise SetforgeError("Codex config target lock is missing")
+        guard.verify_expected()
+        if guard.target_fd is None:
+            guard.mkdir(mode=0o700)
+        anchor_fd = guard.target_fd
+        if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
+            raise SetforgeError("Codex config target lock has no descriptor")
+
+        def write_config(
+            path: Path, data: bytes, *, parent_fd: int = anchor_fd
+        ) -> None:
+            atomicio.atomic_write_bytes_at(parent_fd, path.name, data)
+
+        codex_resources_mod.apply_config_plan(
+            plan,
+            write=write_config,
+            record_base=lambda resource_id, data: reconcile_store.write_base(
+                profile, file_id(resource_id), data
+            ),
+        )
+        guard.verify_expected()
+
+
 def _apply_capability_targets(  # noqa: C901 - one closure per frozen target phase
     plan: InstallPlan,
     journal: operations.OperationJournal,
@@ -924,8 +989,15 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             restore_transitions=False,
             adapters=(),
         )
+        codex_resources_mod.assert_projects_trusted(plan.codex_trusted_projects)
         deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
-            profile, plan.deploys
+            profile,
+            plan.deploys,
+        )
+        _apply_codex_config_plans(
+            plan.codex_configs,
+            profile=profile,
+            mutation_guards=mutation_guards,
         )
         for tree in plan.trees:
             guard = next(
@@ -1279,15 +1351,20 @@ def _preview_file_ownership(config: Path, profile: str) -> tuple[FileDecision, .
 
 
 def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
-    """Resolve explicit tree roots for canonical mutation-lock acquisition."""
+    """Resolve explicit filesystem roots for mutation-lock acquisition."""
     cfg = load_config(config)
     resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
     )
-    return tuple(
-        _tree_lock_target(destination) for *_prefix, destination in _iter_all_trees(ctx)
-    )
+    roots = {
+        *(
+            _tree_lock_target(destination)
+            for *_prefix, destination in _iter_all_trees(ctx)
+        ),
+        *codex_resources_mod.config_target_roots(cfg, resolved, config.parent),
+    }
+    return tuple(sorted(roots, key=str))
 
 
 def _read_package_owner_id(repo_root: Path) -> UUID | None:
@@ -1831,9 +1908,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto=yes,
             package_owner_id=package_owner_id,
         )
-        if tuple(_tree_lock_target(tree.destination) for tree in plan.trees) != (
-            tree_target_preview
-        ):
+        planned_target_roots = {
+            *(_tree_lock_target(tree.destination) for tree in plan.trees),
+            *(codex.destination.parent for codex in plan.codex_configs),
+        }
+        if tuple(sorted(planned_target_roots, key=str)) != tree_target_preview:
             raise SetforgeError(
                 "managed tree targets changed after confirmation; retry"
             )
@@ -1897,7 +1976,17 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         if not no_transition:
             transitions.ensure_state_dir_writable()
 
-        state_pre = install_helpers_mod._capture_store_snapshots(profile, plan.deploys)
+        state_pre = (
+            *install_helpers_mod._capture_store_snapshots(profile, plan.deploys),
+            *(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE,
+                    profile,
+                    codex_plan.resource_id,
+                )
+                for codex_plan in plan.codex_configs
+            ),
+        )
         secrets_checkpoint_paths = (
             *plan.bootstrap,
             *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
@@ -2062,6 +2151,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             mcp_delta=mcp_delta,
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
             seeded=bool(seeded),
+            codex_base_mutated=any(
+                codex_plan.base != codex_plan.desired
+                for codex_plan in plan.codex_configs
+            ),
             filesystem_deltas=tree_filesystem_deltas,
         ):
             journal = operations.begin_checkpoint(
@@ -2082,7 +2175,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 plugin_delta,
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
-                state_snapshots=deploy_outcome.state_snapshots,
+                state_snapshots=state_pre,
                 mcp_delta=mcp_delta,
                 file_modes=deploy_outcome.prior_modes,
                 filesystem_deltas=tree_filesystem_deltas,

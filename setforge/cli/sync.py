@@ -25,6 +25,7 @@ from setforge import (
 from setforge import (
     capture as capture_mod,
 )
+from setforge import codex_resources as codex_resources_mod
 from setforge import (
     source as source_mod,
 )
@@ -518,6 +519,22 @@ def _capture_sync_store_snapshots(
     Must run BEFORE :func:`_run_capture`, before any re-baseline write.
     """
     entries: list[transitions.StateSnapshotEntry] = []
+    for codex_plan in codex_resources_mod.plan_config_resources(
+        ctx.cfg,
+        ctx.resolved,
+        ctx.repo_root,
+        read_base=lambda resource_id: reconcile_store.read_base(
+            ctx.profile, file_id(resource_id)
+        ),
+        reconcile=False,
+    ):
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.BASE,
+                ctx.profile,
+                codex_plan.resource_id,
+            )
+        )
     saw_reconcile = False
     for tracked_file, sub_name, _sub_src, _sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is not None:
@@ -606,6 +623,13 @@ def _sync_snapshot_paths(
     double-record the same change.
     """
     paths = [sub_src for _, _, sub_src, _ in _iter_all_tracked_files(ctx)]
+    selected = ctx.resolved.codex
+    registry = ctx.cfg.codex
+    if selected is not None and registry is not None:
+        paths.extend(
+            ctx.repo_root / "tracked" / registry.config[name].source
+            for name in selected.config
+        )
     paths.append(config.resolve())
     # Resolve LOCAL_CONFIG_PATH off the module so it tracks any runtime
     # override (tests monkeypatch ``setforge.source.LOCAL_CONFIG_PATH``) —
@@ -674,7 +698,16 @@ def _run_capture(
     the SHARED hunks into tracked and keeps LOCAL host-only content out, so
     the legacy local.yaml ``host_local_sections`` strip is redundant.
     """
-    return capture_mod.capture_profile(
+    codex_plans = codex_resources_mod.plan_config_resources(
+        cfg,
+        resolved,
+        repo_root,
+        read_base=lambda resource_id: reconcile_store.read_base(
+            profile, file_id(resource_id)
+        ),
+        reconcile=False,
+    )
+    results = capture_mod.capture_profile(
         cfg,
         profile,
         repo_root,
@@ -683,6 +716,21 @@ def _run_capture(
         resolved=resolved,
         ownership_authorized=ownership_authorized,
     )
+    for codex_plan in codex_plans:
+        changed = codex_resources_mod.capture_config_plan(
+            codex_plan, write=atomicio.atomic_write_bytes
+        )
+        current_fragments = tuple(source.read_bytes() for source in codex_plan.sources)
+        desired, _owned = codex_resources_mod.compose_fragments(current_fragments)
+        reconcile_store.write_base(profile, file_id(codex_plan.resource_id), desired)
+        if changed:
+            results.append(
+                capture_mod.CaptureResult(
+                    name=codex_plan.resource_id,
+                    action=capture_mod.CaptureAction.UPDATED,
+                )
+            )
+    return results
 
 
 def _restore_sync_snapshots(

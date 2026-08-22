@@ -1,12 +1,34 @@
 """Tests for the shared atomic-write primitive."""
 
 import ast
+import os
 import stat
 from pathlib import Path
 
 import pytest
 
 from setforge import atomicio
+
+
+def test_atomic_write_bytes_at_stays_bound_after_parent_symlink_swap(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "native"
+    parent.mkdir()
+    moved = tmp_path / "moved"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parent.rename(moved)
+        parent.symlink_to(outside, target_is_directory=True)
+
+        atomicio.atomic_write_bytes_at(parent_fd, "config.toml", b"safe = true\n")
+    finally:
+        os.close(parent_fd)
+
+    assert (moved / "config.toml").read_bytes() == b"safe = true\n"
+    assert not (outside / "config.toml").exists()
 
 
 def test_atomic_write_bytes_round_trip(tmp_path: Path) -> None:

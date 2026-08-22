@@ -600,6 +600,7 @@ def compare_profile(
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
     ownership_authorized: Mapping[str, bool] | None = None,
+    resolved: ResolvedProfile | None = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
@@ -626,7 +627,7 @@ def compare_profile(
     idempotently and reads those already-effective definitions; plugin and
     extension lists are irrelevant to its file-only comparison.
     """
-    resolved = resolve_and_expand(config, profile_name, repo_root)
+    resolved = resolved or resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
     overlay = host_local_sections or {}

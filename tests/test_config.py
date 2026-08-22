@@ -384,6 +384,70 @@ def test_local_codex_overlay_merges_add_then_remove(tmp_path: Path) -> None:
     assert resolved.codex == CodexProfile(skills=["local"])
 
 
+def test_local_codex_overlay_resolves_portable_project_locator(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = Config(
+        schema_version="6.4",
+        minimum_version="6.4",
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "config": {
+                    "project": {
+                        "source": "codex/project.toml",
+                        "scope": "project",
+                        "project": "app",
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(config=["project"]))},
+    )
+    path = tmp_path / "local.yaml"
+    path.write_text(f"codex:\n  project_paths:\n    app: {project}\n")
+
+    apply_host_local_codex_overlay(
+        cfg, resolve_profile(cfg, "default"), local_config_path=path
+    )
+
+    assert cfg.codex is not None
+    assert cfg.codex.config["project"].project == Path("app")
+    assert cfg._codex_project_paths == {"app": project}
+
+    apply_host_local_codex_overlay(
+        cfg, resolve_profile(cfg, "default"), local_config_path=path
+    )
+    assert cfg.codex.config["project"].project == Path("app")
+
+
+def test_local_codex_overlay_requires_selected_project_mapping(tmp_path: Path) -> None:
+    cfg = Config(
+        schema_version="6.4",
+        minimum_version="6.4",
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "config": {
+                    "project": {
+                        "source": "codex/project.toml",
+                        "scope": "project",
+                        "project": "app",
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(config=["project"]))},
+    )
+    path = tmp_path / "local.yaml"
+    path.write_text("codex: {}\n")
+
+    with pytest.raises(ConfigError, match=r"project_paths.*app"):
+        apply_host_local_codex_overlay(
+            cfg, resolve_profile(cfg, "default"), local_config_path=path
+        )
+
+
 @pytest.mark.parametrize("body", [None, "", "codex: {}\n"])
 def test_local_codex_overlay_noop_preserves_absent_namespace(
     tmp_path: Path, body: str | None
@@ -402,6 +466,8 @@ def test_local_codex_overlay_noop_preserves_absent_namespace(
 
 
 def test_effective_profile_applies_local_codex_selections(tmp_path: Path) -> None:
+    (tmp_path / "tracked/codex/review").mkdir(parents=True)
+    (tmp_path / "tracked/codex/review/SKILL.md").write_text("# Review\n")
     cfg = Config(
         schema_version="6.4",
         minimum_version="6.4",

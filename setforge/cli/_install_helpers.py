@@ -917,6 +917,7 @@ def _install_recorded_nothing(
     mcp_delta: transitions.MCPDelta | None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...],
     seeded: bool,
+    codex_base_mutated: bool = False,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
 ) -> bool:
     """True iff nothing revertable changed (ANDs the patch with every delta below)."""
@@ -932,7 +933,7 @@ def _install_recorded_nothing(
         return False
     if filesystem_deltas:
         return False
-    return not (reconcile_outcomes or seeded)
+    return not (reconcile_outcomes or seeded or codex_base_mutated)
 
 
 def _write_install_transition(

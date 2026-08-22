@@ -29,6 +29,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 
 def atomic_write_bytes(
@@ -120,6 +121,38 @@ def atomic_write_text(
     return atomic_write_bytes(
         path, text.encode(encoding), fsync=fsync, mode=mode, backup=backup
     )
+
+
+def atomic_write_bytes_at(
+    parent_fd: int, name: str, data: bytes, *, mode: int = 0o600
+) -> None:
+    """Atomically replace a regular leaf relative to a held directory fd."""
+    temporary = f".{name}.setforge-{uuid4().hex}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            mode,
+            dir_fd=parent_fd,
+        )
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written == 0:  # pragma: no cover - kernel contract
+                raise OSError("short write while publishing file")
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=parent_fd)
 
 
 def fsync_path(path: Path, *, strict: bool) -> None:

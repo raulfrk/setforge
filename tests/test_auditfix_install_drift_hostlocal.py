@@ -28,7 +28,7 @@ import setforge.cli._install_helpers as install_helpers_mod
 import setforge.cli.install as install_mod
 from setforge.cli import app
 from setforge.compare import CompareReport
-from setforge.config import Config
+from setforge.config import Config, ResolvedProfile
 from setforge.source import AnchorAfterHeading, HostLocalSection, HostLocalSectionName
 
 HostLocalOverlay = Mapping[str, dict[HostLocalSectionName, HostLocalSection]]
@@ -128,6 +128,7 @@ def test_install_drift_gate_threads_host_local_overlay(
         *,
         host_local_sections: HostLocalOverlay | None = None,
         ownership_authorized: Mapping[str, bool] | None = None,
+        resolved: ResolvedProfile | None = None,
     ) -> CompareReport:
         # Record only the FIRST call (the install drift gate at install.py).
         captured.setdefault("host_local_sections", host_local_sections)
@@ -137,6 +138,7 @@ def test_install_drift_gate_threads_host_local_overlay(
             repo_root,
             host_local_sections=host_local_sections,
             ownership_authorized=ownership_authorized,
+            resolved=resolved,
         )
 
     monkeypatch.setattr(install_mod.compare_mod, "compare_profile", _spy)
@@ -188,6 +190,7 @@ def test_dry_run_pipeline_threads_host_local_overlay(
         *,
         host_local_sections: HostLocalOverlay | None = None,
         ownership_authorized: Mapping[str, bool] | None = None,
+        resolved: ResolvedProfile | None = None,
     ) -> CompareReport:
         captured.setdefault("host_local_sections", host_local_sections)
         return real_compare_profile(
@@ -196,6 +199,7 @@ def test_dry_run_pipeline_threads_host_local_overlay(
             repo_root,
             host_local_sections=host_local_sections,
             ownership_authorized=ownership_authorized,
+            resolved=resolved,
         )
 
     monkeypatch.setattr(install_helpers_mod.compare_mod, "compare_profile", _spy)

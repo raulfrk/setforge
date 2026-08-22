@@ -19,6 +19,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     ValidationInfo,
     field_validator,
@@ -1110,6 +1111,8 @@ class ResolvedProfile(BaseModel):
 class Config(BaseModel):
     model_config = _STRICT
 
+    _codex_project_paths: dict[str, Path] = PrivateAttr(default_factory=dict)
+
     version: int = 1
     """Engine-owned ``setforge.yaml`` file-format version (currently always ``1``).
 
@@ -1232,6 +1235,43 @@ def _merge_codex_profile(
     )
 
 
+def _apply_codex_project_paths(  # noqa: C901 - preserve typed registry assignments
+    config: Config, merged: CodexProfile, project_paths: Mapping[str, Path]
+) -> None:
+    """Resolve portable project locators into host-local absolute paths."""
+    if config.codex is None:
+        return
+
+    resolved_paths: dict[str, Path] = {}
+
+    def host_project(ref: object, field: str, name: str) -> None:
+        project = getattr(ref, "project", None)
+        if project is None:
+            return
+        locator = str(project)
+        host_path = project_paths.get(locator)
+        if host_path is None:
+            raise ConfigError(
+                f"local overlay.codex.project_paths has no host path for "
+                f"project locator {locator!r} used by {field}[{name!r}]"
+            )
+        resolved_paths[locator] = host_path.expanduser().resolve(strict=False)
+
+    for name in merged.config:
+        config_ref = config.codex.config.get(name)
+        if config_ref is not None:
+            host_project(config_ref, "config", name)
+    for name in merged.instructions:
+        instruction_ref = config.codex.instructions.get(name)
+        if instruction_ref is not None:
+            host_project(instruction_ref, "instructions", name)
+    for name in merged.skills:
+        skill_ref = config.codex.skills.get(name)
+        if skill_ref is not None:
+            host_project(skill_ref, "skills", name)
+    config._codex_project_paths = resolved_paths
+
+
 def apply_host_local_codex_overlay(
     config: Config,
     resolved: ResolvedProfile,
@@ -1260,6 +1300,7 @@ def apply_host_local_codex_overlay(
         updates[field] = [name for name in selected if name not in removed]
     merged = base.model_copy(update=updates)
     candidate = resolved.model_copy(update={"codex": merged})
+    _apply_codex_project_paths(config, merged, overlay.project_paths)
     _validate_resolved_codex_references(config, candidate, "local overlay")
     _raise_codex_ownership_collisions(config, candidate, "local overlay")
     return candidate
@@ -2289,7 +2330,7 @@ def _raise_codex_ownership_collisions(
         return
     owners: dict[tuple[str, str], str] = {}
     collisions: list[str] = []
-    for kind in ("config", "instructions"):
+    for kind in ("instructions",):
         registry = getattr(config.codex, kind)
         for name in getattr(resolved.codex, kind):
             ref = registry.get(name)
@@ -2578,6 +2619,10 @@ def resolve_effective_profile(
     resolved = apply_host_local_codex_overlay(
         config, resolved, local_config_path=local_config_path
     )
+    from setforge.codex_resources import expand_filesystem_resources
+
+    expand_filesystem_resources(config, resolved, repo_root)
+    validate_tree_destination_boundaries(config, resolved)
     return EffectiveProfileResolution(
         resolved=resolved,
         tracked_file_overrides=tracked_file_overrides,
