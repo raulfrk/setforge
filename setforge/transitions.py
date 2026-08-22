@@ -45,6 +45,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, NewType
 
+from pydantic import ValidationError
+
 from setforge import __version__, atomicio
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
@@ -656,6 +658,29 @@ class PluginDelta:
             self.installed
             or self.enabled
             or self.disabled
+            or self.marketplaces_added
+            or self.marketplaces_removed
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class CodexPluginDelta:
+    """Successful Codex plugin and marketplace mutations.
+
+    Codex has no native enable/disable operation, and this deliberately lives
+    apart from :class:`PluginDelta` so revert cannot dispatch it through the
+    Claude adapter.
+    """
+
+    installed: tuple[str, ...]
+    removed: tuple[str, ...]
+    marketplaces_added: tuple[str, ...]
+    marketplaces_removed: tuple[tuple[str, dict[str, str]], ...]
+
+    def is_empty(self) -> bool:
+        return not (
+            self.installed
+            or self.removed
             or self.marketplaces_added
             or self.marketplaces_removed
         )
@@ -1354,6 +1379,81 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     )
 
 
+def codex_plugin_delta_from_json(raw: dict[str, object]) -> CodexPluginDelta:
+    """Decode and validate a ``codex_plugins.json`` transition payload."""
+    source_label = "codex_plugins.json"
+    removed_raw = raw.get("marketplaces_removed", [])
+    if not isinstance(removed_raw, list):
+        raise InvalidTransitionRecord(
+            f"{source_label}: marketplaces_removed must be a list"
+        )
+    pairs: list[tuple[str, dict[str, str]]] = []
+    for entry in removed_raw:
+        if not (isinstance(entry, list) and len(entry) == 2):
+            raise InvalidTransitionRecord(
+                f"{source_label}: malformed marketplaces_removed entry: {entry!r}"
+            )
+        name, source = entry
+        if (
+            not isinstance(name, str)
+            or not isinstance(source, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in source.items()
+            )
+        ):
+            raise InvalidTransitionRecord(
+                f"{source_label}: invalid marketplace source entry"
+            )
+        try:
+            from setforge import codex_plugins
+            from setforge.config import MarketplaceSource
+
+            parsed_source = MarketplaceSource.model_validate(source)
+            codex_plugins.validate_marketplace_source(parsed_source)
+        except (ValidationError, ValueError, SetforgeError) as exc:
+            raise InvalidTransitionRecord(
+                f"{source_label}: invalid marketplace source entry: {name!r}"
+            ) from exc
+        pairs.append((name, dict(source)))
+    delta = CodexPluginDelta(
+        installed=tuple(
+            _validated_str_list(
+                raw.get("installed", []), key="installed", source_label=source_label
+            )
+        ),
+        removed=tuple(
+            _validated_str_list(
+                raw.get("removed", []), key="removed", source_label=source_label
+            )
+        ),
+        marketplaces_added=tuple(
+            _validated_str_list(
+                raw.get("marketplaces_added", []),
+                key="marketplaces_added",
+                source_label=source_label,
+            )
+        ),
+        marketplaces_removed=tuple(pairs),
+    )
+    for label, values in (
+        ("installed", delta.installed),
+        ("removed", delta.removed),
+        ("marketplaces_added", delta.marketplaces_added),
+        (
+            "marketplaces_removed",
+            tuple(name for name, _source in delta.marketplaces_removed),
+        ),
+    ):
+        if len(values) != len(set(values)):
+            raise InvalidTransitionRecord(f"{source_label}: duplicate {label} entry")
+    if set(delta.installed) & set(delta.removed):
+        raise InvalidTransitionRecord(
+            f"{source_label}: plugin cannot be both installed and removed"
+        )
+    return delta
+
+
 def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     """Reconstruct an :class:`ExtensionDelta` from a JSON-deserialized
     ``extensions.json`` record. Inverse of the on-disk shape produced
@@ -1670,6 +1770,7 @@ def write_transition(
     mcp_delta: MCPDelta | None = None,
     file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[FilesystemDelta, ...] = (),
+    codex_plugin_delta: CodexPluginDelta | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1749,6 +1850,10 @@ def write_transition(
     plugin_payload = _serialize_plugin_payload(plugin_delta)
     if plugin_payload is not None:
         _write_text_durable(pending / "plugins.json", plugin_payload)
+
+    codex_plugin_payload = _serialize_codex_plugin_payload(codex_plugin_delta)
+    if codex_plugin_payload is not None:
+        _write_text_durable(pending / "codex_plugins.json", codex_plugin_payload)
 
     mcp_payload = _serialize_mcp_payload(mcp_delta)
     if mcp_payload is not None:
@@ -1831,6 +1936,33 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
                 "marketplaces_added": list(plugin_delta.marketplaces_added),
                 "marketplaces_removed": [
                     [name, dict(src)] for name, src in plugin_delta.marketplaces_removed
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _serialize_codex_plugin_payload(
+    delta: CodexPluginDelta | None,
+) -> str | None:
+    if delta is None or delta.is_empty():
+        return None
+    for name, source in delta.marketplaces_removed:
+        if not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in source.items()
+        ):
+            raise TypeError(f"Codex marketplace source {name!r} is not JSON-safe")
+    return (
+        json.dumps(
+            {
+                "installed": list(delta.installed),
+                "removed": list(delta.removed),
+                "marketplaces_added": list(delta.marketplaces_added),
+                "marketplaces_removed": [
+                    [name, dict(source)] for name, source in delta.marketplaces_removed
                 ],
             },
             indent=2,
@@ -2112,9 +2244,12 @@ class TransitionListing:
     file_count: int
     ext_count: int
     plugin_count: int = 0
+    codex_plugin_count: int = 0
 
 
-def _load_listing(transition_dir: Path) -> TransitionListing | None:
+def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
+    transition_dir: Path,
+) -> TransitionListing | None:
     """Decode one transition directory into a :class:`TransitionListing`,
     or return ``None`` if its ``meta.json`` is missing or unreadable. Used
     by :func:`list_transitions` to skip half-written / corrupted dirs
@@ -2167,6 +2302,23 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
         except (OSError, json.JSONDecodeError):
             plugin_count = 0
 
+    codex_plugin_file = transition_dir / "codex_plugins.json"
+    codex_plugin_count = 0
+    if codex_plugin_file.exists():
+        try:
+            codex_payload = json.loads(codex_plugin_file.read_text(encoding="utf-8"))
+            for key in (
+                "installed",
+                "removed",
+                "marketplaces_added",
+                "marketplaces_removed",
+            ):
+                value = codex_payload.get(key, [])
+                if isinstance(value, list):
+                    codex_plugin_count += len(value)
+        except (OSError, json.JSONDecodeError):
+            codex_plugin_count = 0
+
     return TransitionListing(
         directory=TransitionDir(transition_dir),
         timestamp=timestamp,
@@ -2175,6 +2327,7 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
         file_count=file_count,
         ext_count=ext_count,
         plugin_count=plugin_count,
+        codex_plugin_count=codex_plugin_count,
     )
 
 

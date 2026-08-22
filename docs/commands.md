@@ -74,8 +74,8 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `inspect` | Inspect reconcile base/live/merge state. |
 | `transitions` | Inspect transition history. |
 | `ext` | Manage VSCode extension package declarations. |
-| `plugin` | Manage Claude plugin package declarations. |
-| `marketplace` | Manage top-level Claude marketplaces. |
+| `plugin` | Manage Claude or Codex plugin declarations (`--product`). |
+| `marketplace` | Manage Claude or Codex marketplaces (`--product`). |
 | `profile` | Inspect raw and effective profiles. |
 | `snapshot` | Create, list, and restore directory snapshots. |
 | `completion` | Install shell completions. |
@@ -89,8 +89,8 @@ setforge ships eight subcommand groups for narrow inspections and edits. Run
 
 | Group | Subcommands | Purpose |
 |---|---|---|
-| `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugin packages and marketplace cache state. |
-| `marketplace` | `add`, `remove`, `update` | Claude plugin marketplaces (upstream plugin sources). |
+| `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugin packages by default; pass `--product codex` for Codex. Cache sync remains Claude-specific. |
+| `marketplace` | `add`, `remove`, `update` | Claude marketplaces by default; pass `--product codex` for Codex sources. |
 | `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extension packages selected by a profile. |
 | `transitions` | `list`, `show` | Inspect install/sync/revert history. |
 | `profile` | `list`, `show` | Inspect profile definitions and resolved overlays. |

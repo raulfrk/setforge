@@ -30,6 +30,7 @@ from setforge import (
     transitions,
 )
 from setforge import claude_plugins as claude_plugins_mod
+from setforge import codex_plugins as codex_plugins_mod
 from setforge import codex_resources as codex_resources_mod
 from setforge import (
     compare as compare_mod,
@@ -184,6 +185,7 @@ class InstallPlan:
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
+    codex_plugins: codex_plugins_mod.CodexPluginPlan | None
     codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
     codex_trusted_projects: tuple[Path, ...] = ()
 
@@ -212,6 +214,8 @@ class _CapabilityApplyResult:
     ext_outcomes: tuple[transitions.ReconcileOutcome, ...]
     plugin_delta: transitions.PluginDelta | None
     plugin_outcomes: tuple[transitions.ReconcileOutcome, ...]
+    codex_plugin_delta: transitions.CodexPluginDelta | None
+    codex_plugin_failed: tuple[tuple[str, str], ...]
 
 
 def _provisioning_plan_has_work(plan: ProvisioningPlan) -> bool:
@@ -494,6 +498,21 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 err=True,
                 fg=typer.colors.YELLOW,
             )
+    codex_plugins: codex_plugins_mod.CodexPluginPlan | None = None
+    codex_plugin_ids = reconcile_adapter.codex_plugin_ids(ctx.cfg, ctx.resolved)
+    if codex_plugin_ids and ctx.cfg.codex is not None:
+        try:
+            codex_plugins = codex_plugins_mod.plan_reconcile(
+                declared_plugin_ids=codex_plugin_ids,
+                marketplaces=ctx.cfg.codex.marketplaces,
+                policy=reconcile_adapter.codex_plugin_policy(ctx.resolved),
+            )
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping Codex plugin reconcile — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
     provisioning = _plan_owned_provisioning(ctx, lock=lock, owner_id=package_owner_id)
     mcp = plan_mcp_servers(ctx.cfg, ctx.resolved)
     planned_entries = tuple(
@@ -538,6 +557,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         mcp=mcp,
         extensions=extensions,
         plugins=plugins,
+        codex_plugins=codex_plugins,
         codex_configs=codex_configs,
         codex_trusted_projects=codex_trusted_projects,
     )
@@ -861,6 +881,21 @@ def _apply_plugin_plan(
     )
 
 
+def _apply_codex_plugin_plan(
+    plan: InstallPlan,
+) -> tuple[transitions.CodexPluginDelta | None, tuple[tuple[str, str], ...]]:
+    if plan.codex_plugins is None:
+        return None, ()
+    report = codex_plugins_mod.apply_plan(plan.codex_plugins)
+    delta = transitions.CodexPluginDelta(
+        installed=tuple(report.installed),
+        removed=tuple(report.removed),
+        marketplaces_added=tuple(report.marketplaces_added),
+        marketplaces_removed=tuple(report.marketplaces_removed),
+    )
+    return (None if delta.is_empty() else delta), tuple(report.failed)
+
+
 def _apply_codex_config_plans(
     plans: tuple[codex_resources_mod.CodexConfigPlan, ...],
     *,
@@ -923,6 +958,8 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     ext_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
     plugin_delta: transitions.PluginDelta | None = None
     plugin_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
+    codex_plugin_delta: transitions.CodexPluginDelta | None = None
+    codex_plugin_failed: tuple[tuple[str, str], ...] = ()
     retry_failed_ids = (
         _collect_retry_failed_ids(profile) if retry_failed else frozenset()
     )
@@ -1089,6 +1126,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
 
     def apply_plugins() -> CapabilityActivation:
         nonlocal journal, plugin_delta, plugin_outcomes
+        nonlocal codex_plugin_delta, codex_plugin_failed
         journal = operations.begin_checkpoint(
             journal,
             name="plugins-and-marketplaces",
@@ -1097,9 +1135,14 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             paths=(),
             restore_state=False,
             restore_transitions=False,
-            adapters=(operations.AdapterKind.PLUGINS,)
-            if operations.AdapterKind.PLUGINS in adapter_kinds
-            else (),
+            adapters=tuple(
+                kind
+                for kind in (
+                    operations.AdapterKind.PLUGINS,
+                    operations.AdapterKind.CODEX_PLUGINS,
+                )
+                if kind in adapter_kinds
+            ),
         )
         plugin_delta, plugin_outcomes = _apply_plugin_plan(
             plan,
@@ -1107,8 +1150,9 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             yes=yes,
             lock=active_lock,
         )
+        codex_plugin_delta, codex_plugin_failed = _apply_codex_plugin_plan(plan)
         journal = operations.finish_checkpoint(journal)
-        failed = any(
+        failed = bool(codex_plugin_failed) or any(
             outcome.status in {ReconcileStatus.SKIPPED, ReconcileStatus.ABORTED}
             for outcome in plugin_outcomes
         )
@@ -1178,6 +1222,8 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         ext_outcomes=ext_outcomes,
         plugin_delta=plugin_delta,
         plugin_outcomes=plugin_outcomes,
+        codex_plugin_delta=codex_plugin_delta,
+        codex_plugin_failed=codex_plugin_failed,
     )
 
 
@@ -1195,6 +1241,19 @@ def _render_install_plan(plan: InstallPlan, scan_result: SecretsScanResult) -> N
         secrets_scan=scan_result,
         host_local_sections_map=plan.host_local_sections,
     )
+    if plan.codex_plugins is not None:
+        report = codex_plugins_mod.apply_plan(plan.codex_plugins, dry_run=True)
+        typer.echo("=== would-be Codex plugin reconcile ===")
+        for name in report.marketplaces_added:
+            typer.echo(f"  WOULD add marketplace  {name}")
+        for name, _source in report.marketplaces_removed:
+            typer.echo(f"  WOULD remove marketplace  {name}")
+        for plugin_id in report.installed:
+            typer.echo(f"  WOULD install  {plugin_id}")
+        for plugin_id in report.removed:
+            typer.echo(f"  WOULD remove  {plugin_id}")
+        if not report:
+            typer.echo("  nothing to reconcile")
 
 
 def _fetch_upstream(
@@ -2109,6 +2168,8 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         ext_outcomes = capability_result.ext_outcomes
         plugin_delta = capability_result.plugin_delta
         plugin_outcomes = capability_result.plugin_outcomes
+        codex_plugin_delta = capability_result.codex_plugin_delta
+        codex_plugin_failed = capability_result.codex_plugin_failed
         journal = _refresh_file_claims_checkpoint(plan, journal)
         journal = operations.begin_checkpoint(
             journal,
@@ -2148,6 +2209,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             deploy_outcome=deploy_outcome,
             ext_delta=ext_delta,
             plugin_delta=plugin_delta,
+            codex_plugin_delta=codex_plugin_delta,
             mcp_delta=mcp_delta,
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
             seeded=bool(seeded),
@@ -2173,6 +2235,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 file_post,
                 ext_delta,
                 plugin_delta,
+                codex_plugin_delta=codex_plugin_delta,
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
                 state_snapshots=state_pre,
@@ -2187,6 +2250,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         operations.complete(journal)
 
         _gate_on_mcp_failures(mcp_failed)
+        if codex_plugin_failed:
+            details = "; ".join(
+                f"{item}: {error}" for item, error in codex_plugin_failed
+            )
+            raise SetforgeError(f"Codex plugin reconciliation failed: {details}")
         _gate_on_provisioning_failures(provision_results)
         _gate_on_deferred_reconcile(deploy_outcome.deferred_reconcile, interactive)
 
@@ -2239,6 +2307,21 @@ def _install_adapter_snapshots(
                     {
                         "plugins": plan.plugins.pre_plugins,
                         "marketplaces": plan.plugins.pre_marketplaces,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+    if plan.codex_plugins is not None:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.CODEX_PLUGINS,
+                json.dumps(
+                    {
+                        "plugins": list(plan.codex_plugins.pre_plugin_ids),
+                        "marketplaces": [
+                            list(item) for item in plan.codex_plugins.pre_marketplaces
+                        ],
                     },
                     sort_keys=True,
                 ),

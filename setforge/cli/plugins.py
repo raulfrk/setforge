@@ -1,4 +1,4 @@
-"""plugin + marketplace subcommand groups — manage Claude plugins in setforge.yaml.
+"""Product-aware plugin and marketplace subcommand groups.
 
 ``plugin list/add/remove/reconcile/sync-cache`` and ``marketplace
 add/remove/update`` both register their sub-apps on the main ``app``
@@ -10,10 +10,11 @@ from pathlib import Path
 
 import typer
 
-from setforge import binaries, operations, reconcile_adapter
+from setforge import atomicio, binaries, operations, reconcile_adapter
 from setforge import claude_marketplace_cache as claude_mp_cache_mod
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import claude_yaml_editor as claude_yaml_editor_mod
+from setforge import codex_plugins as codex_plugins_mod
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     MARKETPLACE_ADD_EXAMPLES,
@@ -30,12 +31,13 @@ from setforge.config import (
     ClaudeInstallMode,
     Config,
     MarketplaceSource,
+    ProductKind,
     ReconcilePolicy,
     ResolvedProfile,
     load_config,
     resolve_effective_profile,
 )
-from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
+from setforge.errors import MarketplaceCacheMiss, PluginToolMissing, SetforgeError
 from setforge.locking import mutation_locks
 
 # ---------------------------------------------------------------------------
@@ -43,7 +45,7 @@ from setforge.locking import mutation_locks
 # ---------------------------------------------------------------------------
 
 plugin_app: typer.Typer = typer.Typer(
-    help="Manage Claude plugins in setforge.yaml.",
+    help="Manage Claude or Codex plugins in setforge.yaml.",
     no_args_is_help=True,
     rich_markup_mode=None,
 )
@@ -54,12 +56,18 @@ app.add_typer(plugin_app, name="plugin")
 def plugin_list(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Show declared (YAML) vs installed (claude plugin list) status."""
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    if product is ProductKind.CODEX:
+        _codex_plugin_list(cfg, resolved)
+        return
     declared_ids = set(reconcile_adapter.plugin_bare_names(cfg, resolved))
 
     try:
@@ -86,6 +94,31 @@ def plugin_list(
         else:
             status = "missing-from-decl"
         typer.echo(f"{pid:<{width}}{is_declared:<12}{status:<22}")
+
+
+def _codex_plugin_list(cfg: Config, resolved: ResolvedProfile) -> None:
+    declared_ids = reconcile_adapter.codex_plugin_ids(cfg, resolved)
+    try:
+        installed = codex_plugins_mod.list_installed()
+    except PluginToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    all_ids = sorted(declared_ids | set(installed))
+    if not all_ids:
+        typer.echo("(no Codex plugins declared or installed)")
+        return
+    width = max(len(plugin_id) for plugin_id in all_ids) + 2
+    typer.echo(f"{'Codex plugin':<{width}}{'declared':<12}{'status':<22}")
+    for plugin_id in all_ids:
+        status = (
+            "installed"
+            if plugin_id in installed
+            else "missing-from-install"
+            if plugin_id in declared_ids
+            else "missing-from-decl"
+        )
+        declared = "yes" if plugin_id in declared_ids else "no"
+        typer.echo(f"{plugin_id:<{width}}{declared:<12}{status:<22}")
 
 
 @plugin_app.command("add", epilog=PLUGIN_ADD_EXAMPLES)
@@ -115,11 +148,25 @@ def plugin_add(
         "--no-install",
         help="Register in YAML only; skip `claude plugin install`.",
     ),
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Register a marketplace (if new), declare plugin in YAML, and install."""
     config = _resolve_config_arg(config)
     plugin_name, mp_name = _validate_plugin_add_args(name, marketplace)
     source = _parse_marketplace_from(from_)
+
+    if product is ProductKind.CODEX:
+        _codex_plugin_add(
+            config,
+            profile,
+            plugin_name,
+            mp_name,
+            source,
+            no_install=no_install,
+        )
+        return
 
     with mutation_locks(
         resources=True, config_dir=config.resolve().parent, profile=profile
@@ -129,6 +176,87 @@ def plugin_add(
         _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
         if not no_install:
             _execute_plugin_add(plugin_name, mp_name)
+
+
+def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
+    config: Path,
+    profile: str,
+    plugin_name: str,
+    marketplace: str,
+    source: MarketplaceSource,
+    *,
+    no_install: bool,
+) -> None:
+    with mutation_locks(
+        resources=True, config_dir=config.resolve().parent, profile=profile
+    ):
+        operations.refuse_active(profile)
+        config_target = config.resolve()
+        config_before = config_target.read_bytes()
+        config_mode = config_target.stat().st_mode & 0o7777
+        pre_plugins = (
+            set(codex_plugins_mod.list_installed()) if not no_install else set()
+        )
+        pre_marketplaces = (
+            set(codex_plugins_mod.list_marketplaces()) if not no_install else set()
+        )
+        mp_added = claude_yaml_editor_mod.yaml_add_codex_marketplace(
+            config, marketplace, source
+        )
+        plugin_added = False
+        profile_added = False
+        native_marketplace_added = False
+        try:
+            if mp_added and not no_install:
+                codex_plugins_mod.marketplace_add(source)
+                native_marketplace_added = True
+            plugin_added = claude_yaml_editor_mod.yaml_add_codex_plugin(
+                config, plugin_name, marketplace
+            )
+            profile_added = claude_yaml_editor_mod.yaml_add_codex_plugin_to_profile(
+                config, profile, plugin_name
+            )
+            if not no_install:
+                codex_plugins_mod.plugin_install(f"{plugin_name}@{marketplace}")
+        except (OSError, PluginToolMissing, SetforgeError) as exc:
+            plugin_id = f"{plugin_name}@{marketplace}"
+            try:
+                if (
+                    not no_install
+                    and plugin_id not in pre_plugins
+                    and plugin_id in codex_plugins_mod.list_installed()
+                ):
+                    codex_plugins_mod.plugin_remove(plugin_id)
+            except (OSError, PluginToolMissing, SetforgeError) as rollback_exc:
+                exc.add_note(
+                    f"failed to inspect/remove new Codex plugin: {rollback_exc}"
+                )
+            should_remove_marketplace = native_marketplace_added
+            try:
+                should_remove_marketplace |= (
+                    not no_install
+                    and marketplace not in pre_marketplaces
+                    and marketplace in codex_plugins_mod.list_marketplaces()
+                )
+            except (OSError, PluginToolMissing, SetforgeError) as rollback_exc:
+                exc.add_note(f"failed to inspect new Codex marketplace: {rollback_exc}")
+            if should_remove_marketplace:
+                try:
+                    codex_plugins_mod.marketplace_remove(marketplace)
+                except (PluginToolMissing, SetforgeError) as rollback_exc:
+                    exc.add_note(
+                        "failed to remove newly added Codex marketplace: "
+                        f"{rollback_exc}"
+                    )
+            if profile_added or plugin_added or mp_added:
+                atomicio.atomic_write_bytes(
+                    config_target, config_before, mode=config_mode
+                )
+            typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"declared Codex plugin: {plugin_name}@{marketplace}")
+        if not no_install:
+            typer.echo(f"installed Codex plugin: {plugin_name}@{marketplace}")
 
 
 def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:
@@ -294,7 +422,7 @@ def _resolve_disable_id(cfg: Config, name: str) -> str:
 
 
 @plugin_app.command("remove", epilog=PLUGIN_REMOVE_EXAMPLES)
-def plugin_remove(
+def plugin_remove(  # noqa: C901 - product-specific transactional removal
     name: str = typer.Argument(..., help="Plugin name (bare or <name>@<marketplace>)."),
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -303,6 +431,9 @@ def plugin_remove(
         "--disable",
         help="Also run `claude plugin disable` after removing from YAML.",
     ),
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Remove a plugin from the profile's packages list."""
     config = _resolve_config_arg(config)
@@ -310,6 +441,51 @@ def plugin_remove(
     # so strip any trailing @marketplace for the YAML removal to keep it
     # symmetric with the corrected add path.
     bare_ref = name.split("@", 1)[0]
+    if product is ProductKind.CODEX:
+        if disable:
+            typer.secho(
+                "error: Codex CLI has no native plugin enable/disable operation; "
+                "use removal instead",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
+        with mutation_locks(
+            resources=True, config_dir=config.resolve().parent, profile=profile
+        ):
+            operations.refuse_active(profile)
+            cfg = load_config(config)
+            config_target = config.resolve()
+            config_before = config_target.read_bytes()
+            config_mode = config_target.stat().st_mode & 0o7777
+            pre_plugins = codex_plugins_mod.list_installed()
+            plugin_id = name
+            if "@" not in plugin_id and cfg.codex is not None:
+                ref = cfg.codex.plugins.get(name)
+                if ref is not None:
+                    plugin_id = f"{name}@{ref.marketplace}"
+            yaml_changed = claude_yaml_editor_mod.yaml_remove_codex_plugin_from_profile(
+                config, profile, bare_ref
+            )
+            try:
+                codex_plugins_mod.plugin_remove(plugin_id)
+            except PluginToolMissing as exc:
+                try:
+                    if (
+                        plugin_id in pre_plugins
+                        and plugin_id not in codex_plugins_mod.list_installed()
+                    ):
+                        codex_plugins_mod.plugin_install(plugin_id)
+                except (OSError, PluginToolMissing, SetforgeError) as rollback_exc:
+                    exc.add_note(f"failed to restore Codex plugin: {rollback_exc}")
+                if yaml_changed:
+                    atomicio.atomic_write_bytes(
+                        config_target, config_before, mode=config_mode
+                    )
+                typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+                raise typer.Exit(code=1) from exc
+            typer.echo(f"removed Codex plugin: {plugin_id}")
+        return
     with mutation_locks(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
@@ -358,6 +534,9 @@ def plugin_reconcile(
             "auto-resolution rather than prompting."
         ),
     ),
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Explicit reconcile (in addition to the automatic run inside install).
 
@@ -369,6 +548,9 @@ def plugin_reconcile(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    if product is ProductKind.CODEX:
+        _codex_plugin_reconcile(config, profile, cfg, resolved, dry_run=dry_run)
+        return
     policy = reconcile_adapter.plugin_policy(resolved)
     try:
         policy, report = _run_plugin_reconcile(
@@ -392,6 +574,68 @@ def plugin_reconcile(
     elif is_read_only:  # noqa: SIM114 — read-only drift and live-run failure are distinct exit conditions; keep branches separate
         raise typer.Exit(code=1)
     elif report.failed:
+        raise typer.Exit(code=1)
+
+
+def _codex_plugin_reconcile(  # noqa: C901 - lock/read-only rendering boundary
+    config: Path,
+    profile: str,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    *,
+    dry_run: bool,
+) -> None:
+    if cfg.codex is None:
+        typer.echo("Codex plugins: nothing to reconcile")
+        return
+    policy = reconcile_adapter.codex_plugin_policy(resolved)
+
+    def execute(
+        current_cfg: Config, current_resolved: ResolvedProfile
+    ) -> codex_plugins_mod.ReconcileReport:
+        current_codex = current_cfg.codex
+        if current_codex is None:  # guarded before locking; protects a waiting writer
+            return codex_plugins_mod.ReconcileReport([], [], [], [], True)
+        plan = codex_plugins_mod.plan_reconcile(
+            declared_plugin_ids=reconcile_adapter.codex_plugin_ids(
+                current_cfg, current_resolved
+            ),
+            marketplaces=current_codex.marketplaces,
+            policy=reconcile_adapter.codex_plugin_policy(current_resolved),
+        )
+        return codex_plugins_mod.apply_plan(plan, dry_run=dry_run)
+
+    try:
+        if dry_run or policy is ReconcilePolicy.REPORT:
+            report = execute(cfg, resolved)
+        else:
+            with mutation_locks(
+                resources=True, config_dir=config.resolve().parent, profile=profile
+            ):
+                operations.refuse_active(profile)
+                current_cfg = load_config(config)
+                current_resolved = resolve_effective_profile(
+                    current_cfg, profile, config.resolve().parent
+                ).resolved
+                report = execute(current_cfg, current_resolved)
+    except PluginToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    read_only = dry_run or policy is ReconcilePolicy.REPORT
+    prefix = "would " if read_only else ""
+    for name in report.marketplaces_added:
+        typer.echo(f"{prefix}add Codex marketplace  {name}")
+    for name, _source in report.marketplaces_removed:
+        typer.echo(f"{prefix}remove Codex marketplace  {name}")
+    for plugin_id in report.installed:
+        typer.echo(f"{prefix}install Codex plugin  {plugin_id}")
+    for plugin_id in report.removed:
+        typer.echo(f"{prefix}remove Codex plugin  {plugin_id}")
+    for plugin_id, error in report.failed:
+        typer.secho(f"FAILED  {plugin_id} — {error}", err=True, fg=typer.colors.RED)
+    if not report:
+        typer.echo("Codex plugins: nothing to reconcile")
+    if (read_only and report) or report.failed:
         raise typer.Exit(code=1)
 
 
@@ -516,7 +760,7 @@ def sync_cache(
 # ---------------------------------------------------------------------------
 
 marketplace_app: typer.Typer = typer.Typer(
-    help="Manage Claude plugin marketplaces in setforge.yaml.",
+    help="Manage Claude or Codex plugin marketplaces in setforge.yaml.",
     no_args_is_help=True,
     rich_markup_mode=None,
 )
@@ -532,10 +776,44 @@ def marketplace_add_cmd(
         help="Source: 'github:owner/repo' or 'path:/local/dir'.",
     ),
     config: Path = _CONFIG_OPTION,
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Register a marketplace in YAML and run claude plugin marketplace add."""
     config = _resolve_config_arg(config)
     source = _parse_marketplace_from(from_)
+
+    if product is ProductKind.CODEX:
+        with mutation_locks(resources=True, config_dir=config.resolve().parent):
+            config_target = config.resolve()
+            config_before = config_target.read_bytes()
+            config_mode = config_target.stat().st_mode & 0o7777
+            pre_marketplaces = codex_plugins_mod.list_marketplaces()
+            changed = claude_yaml_editor_mod.yaml_add_codex_marketplace(
+                config, name, source
+            )
+            try:
+                codex_plugins_mod.marketplace_add(source)
+            except PluginToolMissing as exc:
+                try:
+                    if (
+                        name not in pre_marketplaces
+                        and name in codex_plugins_mod.list_marketplaces()
+                    ):
+                        codex_plugins_mod.marketplace_remove(name)
+                except (OSError, PluginToolMissing, SetforgeError) as rollback_exc:
+                    exc.add_note(
+                        f"failed to remove partially-added marketplace: {rollback_exc}"
+                    )
+                if changed:
+                    atomicio.atomic_write_bytes(
+                        config_target, config_before, mode=config_mode
+                    )
+                typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+                raise typer.Exit(code=1) from exc
+            typer.echo(f"registered Codex marketplace: {name}")
+        return
 
     try:
         claude_plugins_mod.ensure_claude_available()
@@ -574,9 +852,45 @@ def marketplace_add_cmd(
 def marketplace_remove_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
     config: Path = _CONFIG_OPTION,
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Remove a marketplace from YAML and run claude plugin marketplace remove."""
     config = _resolve_config_arg(config)
+    if product is ProductKind.CODEX:
+        with mutation_locks(resources=True, config_dir=config.resolve().parent):
+            load_config(config)
+            config_target = config.resolve()
+            config_before = config_target.read_bytes()
+            config_mode = config_target.stat().st_mode & 0o7777
+            pre_marketplaces = codex_plugins_mod.list_marketplaces()
+            yaml_changed = claude_yaml_editor_mod.yaml_remove_codex_marketplace(
+                config, name
+            )
+            try:
+                codex_plugins_mod.marketplace_remove(name)
+            except PluginToolMissing as exc:
+                try:
+                    prior = pre_marketplaces.get(name)
+                    if (
+                        prior is not None
+                        and name not in codex_plugins_mod.list_marketplaces()
+                    ):
+                        codex_plugins_mod.marketplace_add(
+                            prior.source
+                            or codex_plugins_mod._source_from_root(prior.root)
+                        )
+                except (OSError, PluginToolMissing, SetforgeError) as rollback_exc:
+                    exc.add_note(f"failed to restore Codex marketplace: {rollback_exc}")
+                if yaml_changed:
+                    atomicio.atomic_write_bytes(
+                        config_target, config_before, mode=config_mode
+                    )
+                typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+                raise typer.Exit(code=1) from exc
+            typer.echo(f"removed Codex marketplace: {name}")
+        return
     try:
         claude_plugins_mod.ensure_claude_available()
     except PluginToolMissing as exc:
@@ -603,11 +917,23 @@ def marketplace_remove_cmd(
 def marketplace_update_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
     config: Path = _CONFIG_OPTION,
+    product: ProductKind = typer.Option(
+        ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
+    ),
 ) -> None:
     """Run claude plugin marketplace update for a named marketplace."""
     # No _resolve_config_arg here: this command never loads the config
     # (it only shells to `claude`), and resolving would add a spurious
     # NoSourceConfigured failure mode for a command that needs no source.
+    if product is ProductKind.CODEX:
+        try:
+            with mutation_locks(resources=True):
+                codex_plugins_mod.marketplace_update(name)
+            typer.echo(f"updated Codex marketplace: {name}")
+        except PluginToolMissing as exc:
+            typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
+        return
     try:
         with mutation_locks(resources=True):
             claude_plugins_mod.marketplace_update(name)

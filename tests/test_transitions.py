@@ -13,6 +13,7 @@ import pytest
 
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 from setforge.transitions import (
+    CodexPluginDelta,
     ExtensionDelta,
     PluginDelta,
     TransitionCommand,
@@ -20,6 +21,7 @@ from setforge.transitions import (
     TransitionListing,
     TransitionMeta,
     apply_patch_reverse,
+    codex_plugin_delta_from_json,
     compute_patch,
     extension_delta_from_json,
     list_transitions,
@@ -38,6 +40,52 @@ from setforge.transitions import (
     write_meta,
     write_transition,
 )
+
+
+def test_codex_plugin_delta_round_trip_is_product_separate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    delta = CodexPluginDelta(
+        installed=("review@official",),
+        removed=("old@official",),
+        marketplaces_added=("official",),
+        marketplaces_removed=(("old", {"source": "path", "path": "/cache/old"}),),
+    )
+
+    target = write_transition(_make_meta(), {}, {}, None, codex_plugin_delta=delta)
+
+    assert not (target / "plugins.json").exists()
+    payload = json.loads((target / "codex_plugins.json").read_text())
+    assert codex_plugin_delta_from_json(payload) == delta
+
+
+def test_codex_plugin_delta_rejects_opaque_source_values() -> None:
+    with pytest.raises(InvalidTransitionRecord, match="marketplace source"):
+        codex_plugin_delta_from_json(
+            {
+                "marketplaces_removed": [
+                    ["official", {"source": "path", "secret": {"token": "x"}}]
+                ]
+            }
+        )
+
+
+def test_codex_plugin_delta_rejects_unsafe_github_source() -> None:
+    with pytest.raises(InvalidTransitionRecord, match="marketplace source"):
+        codex_plugin_delta_from_json(
+            {
+                "marketplaces_removed": [
+                    [
+                        "official",
+                        {
+                            "source": "github",
+                            "repo": "https://token@github.com/owner/repo",
+                        },
+                    ]
+                ]
+            }
+        )
 
 
 def test_state_root_default(monkeypatch: pytest.MonkeyPatch) -> None:

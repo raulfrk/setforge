@@ -70,6 +70,7 @@ class AdapterKind(StrEnum):
 
     EXTENSIONS = "extensions"
     PLUGINS = "plugins"
+    CODEX_PLUGINS = "codex_plugins"
     MCP = "mcp"
 
 
@@ -1041,6 +1042,8 @@ def recover_adapters(journal: OperationJournal) -> None:
                 _recover_extensions(payload)
             case AdapterKind.PLUGINS:
                 _recover_plugins(payload)
+            case AdapterKind.CODEX_PLUGINS:
+                _recover_codex_plugins(payload)
             case AdapterKind.MCP:
                 _recover_mcp(payload)
 
@@ -2149,7 +2152,80 @@ def _validate_adapter_payload(kind: AdapterKind, payload: object) -> None:
     if kind is AdapterKind.PLUGINS:
         _validate_plugin_payload(payload)
         return
+    if kind is AdapterKind.CODEX_PLUGINS:
+        _validate_codex_plugin_payload(payload)
+        return
     _validate_mcp_payload(payload)
+
+
+def _validate_codex_plugin_payload(payload: object) -> None:
+    from setforge import codex_plugins
+    from setforge.config import MarketplaceSource
+
+    if not isinstance(payload, dict):
+        raise ValueError("invalid Codex plugin recovery baseline")
+    plugins = payload.get("plugins")
+    marketplaces = payload.get("marketplaces")
+    if not isinstance(plugins, list) or not all(
+        isinstance(item, str) and item and "@" in item for item in plugins
+    ):
+        raise ValueError("invalid Codex plugin recovery entries")
+    if not isinstance(marketplaces, list):
+        raise ValueError("invalid Codex marketplace recovery entries")
+    _require_unique(iter(plugins), "Codex plugin recovery id")
+    marketplace_names: list[str] = []
+    for row in marketplaces:
+        if not (
+            isinstance(row, list)
+            and len(row) == 2
+            and all(isinstance(item, str) and item for item in row)
+        ):
+            raise ValueError("invalid Codex marketplace recovery entry")
+        name, source_json = row
+        marketplace_names.append(name)
+        source = MarketplaceSource.model_validate_json(source_json)
+        codex_plugins.validate_marketplace_source(source)
+    _require_unique(iter(marketplace_names), "Codex marketplace recovery name")
+
+
+def _recover_codex_plugins(payload: object) -> None:
+    from setforge import codex_plugins
+    from setforge.config import MarketplaceSource
+
+    _validate_codex_plugin_payload(payload)
+    assert isinstance(payload, dict)
+    expected_plugins = set(payload["plugins"])
+    expected_marketplaces = {
+        name: MarketplaceSource.model_validate_json(source_json)
+        for name, source_json in payload["marketplaces"]
+    }
+    current_plugins = set(codex_plugins.list_installed())
+    current_marketplaces = codex_plugins.list_marketplaces()
+    drifted = {
+        name
+        for name in set(current_marketplaces) & set(expected_marketplaces)
+        if not codex_plugins._marketplace_present(
+            name, expected_marketplaces[name], current_marketplaces
+        )
+    }
+    drift_dependents = {
+        plugin_id
+        for plugin_id in current_plugins
+        if plugin_id.rpartition("@")[2] in drifted
+    }
+    for plugin_id in sorted((current_plugins - expected_plugins) | drift_dependents):
+        codex_plugins.plugin_remove(plugin_id)
+    for name in sorted(
+        (set(current_marketplaces) - set(expected_marketplaces)) | drifted
+    ):
+        codex_plugins.marketplace_remove(name)
+    for name in sorted(
+        (set(expected_marketplaces) - set(current_marketplaces)) | drifted
+    ):
+        codex_plugins.marketplace_add(expected_marketplaces[name])
+    current_plugins = set(codex_plugins.list_installed())
+    for plugin_id in sorted(expected_plugins - current_plugins):
+        codex_plugins.plugin_install(plugin_id)
 
 
 def _validate_plugin_payload(payload: object) -> None:

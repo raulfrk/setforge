@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from setforge import operations, transitions
+from setforge import codex_plugins, operations, transitions
 from setforge.errors import SetforgeError
 from setforge.locking import install_resources_lock
 from setforge.ownership import (
@@ -48,6 +48,32 @@ def _prepare(
         command_line=("install", "--profile=p"),
         paths=paths,
     )
+
+
+def test_codex_recovery_rejects_unsafe_source_before_native_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        codex_plugins,
+        "list_installed",
+        lambda: pytest.fail("invalid recovery baseline reached native state"),
+    )
+    payload = {
+        "plugins": ["review@official"],
+        "marketplaces": [
+            [
+                "official",
+                json.dumps(
+                    {
+                        "source": "github",
+                        "repo": "https://token@github.com/owner/repo",
+                    }
+                ),
+            ]
+        ],
+    }
+    with pytest.raises(SetforgeError, match="credential-free owner/repo"):
+        operations._recover_codex_plugins(payload)
 
 
 def _path_guards(path: Path) -> tuple[operations.PathGuard, ...]:

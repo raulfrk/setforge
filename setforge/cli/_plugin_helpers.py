@@ -12,6 +12,7 @@ needs marketplace-source re-construction that the per-plugin dispatch
 shape doesn't fit.
 """
 
+import functools
 import json
 import subprocess
 import sys
@@ -31,6 +32,7 @@ from setforge import (
     vscode_extensions,
 )
 from setforge import claude_plugins as claude_plugins_mod
+from setforge import codex_plugins as codex_plugins_mod
 from setforge._redact import redact_argv
 from setforge.binaries import load_host_local_config
 from setforge.cli._confirm import FailureAction, prompt_failure_action
@@ -47,6 +49,7 @@ from setforge.errors import (
     MarketplaceCacheMiss,
     PluginToolMissing,
     ReconcileAborted,
+    SetforgeError,
 )
 from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.transitions import ReconcileKind, ReconcileStatus
@@ -1212,6 +1215,129 @@ def _reverse_plugins(
     return reverse_delta, failed
 
 
+def _reverse_codex_plugins(  # noqa: C901 - preserves inverse operation ordering
+    delta: transitions.CodexPluginDelta,
+) -> tuple[transitions.CodexPluginDelta, list[tuple[str, str]]]:
+    """Apply a Codex sidecar's inverse and retain only successful effects."""
+    reverse_installed: list[str] = []
+    reverse_removed: list[str] = []
+    reverse_marketplaces_added: list[str] = []
+    reverse_marketplaces_removed: list[tuple[str, dict[str, str]]] = []
+    failed: list[tuple[str, str]] = []
+
+    try:
+        current_plugins = codex_plugins_mod.list_installed()
+        current_marketplaces = codex_plugins_mod.list_marketplaces()
+    except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+        return (
+            transitions.CodexPluginDelta(
+                installed=(),
+                removed=(),
+                marketplaces_added=(),
+                marketplaces_removed=(),
+            ),
+            [("codex", str(exc))],
+        )
+
+    def refresh_plugins(identity: str) -> dict[str, codex_plugins_mod.InstalledPlugin]:
+        try:
+            return codex_plugins_mod.list_installed()
+        except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+            failed.append((identity, f"cannot verify native effect: {exc}"))
+            return current_plugins
+
+    def refresh_marketplaces(
+        identity: str,
+    ) -> dict[str, codex_plugins_mod.InstalledMarketplace]:
+        try:
+            return codex_plugins_mod.list_marketplaces()
+        except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+            failed.append((identity, f"cannot verify native effect: {exc}"))
+            return current_marketplaces
+
+    def apply_plugin(
+        identity: str,
+        operation: Callable[[], None],
+        target: list[str],
+        *,
+        expect_present: bool,
+    ) -> None:
+        nonlocal current_plugins
+        try:
+            operation()
+            target.append(identity)
+        except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+            failed.append((identity, str(exc)))
+            observed = refresh_plugins(identity)
+            if (identity in observed) is expect_present:
+                target.append(identity)
+        current_plugins = refresh_plugins(identity)
+
+    for plugin_id in delta.installed:
+        apply_plugin(
+            plugin_id,
+            functools.partial(codex_plugins_mod.plugin_remove, plugin_id),
+            reverse_removed,
+            expect_present=False,
+        )
+    for name in delta.marketplaces_added:
+        current = current_marketplaces.get(name)
+        if current is None:
+            continue
+        try:
+            codex_plugins_mod.marketplace_remove(name)
+            reverse_marketplaces_removed.append(
+                (
+                    name,
+                    (
+                        current.source
+                        or codex_plugins_mod._source_from_root(current.root)
+                    ).model_dump(mode="json", exclude_none=True),
+                )
+            )
+        except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+            failed.append((name, str(exc)))
+            observed = refresh_marketplaces(name)
+            if name not in observed:
+                reverse_marketplaces_removed.append(
+                    (
+                        name,
+                        (
+                            current.source
+                            or codex_plugins_mod._source_from_root(current.root)
+                        ).model_dump(mode="json", exclude_none=True),
+                    )
+                )
+        current_marketplaces = refresh_marketplaces(name)
+    for name, source_payload in delta.marketplaces_removed:
+        source = MarketplaceSource.model_validate(source_payload)
+        try:
+            codex_plugins_mod.marketplace_add(source)
+            reverse_marketplaces_added.append(name)
+        except (PluginToolMissing, SetforgeError, subprocess.CalledProcessError) as exc:
+            failed.append((name, str(exc)))
+            observed = refresh_marketplaces(name)
+            if codex_plugins_mod._marketplace_present(name, source, observed):
+                reverse_marketplaces_added.append(name)
+        current_marketplaces = refresh_marketplaces(name)
+    for plugin_id in delta.removed:
+        apply_plugin(
+            plugin_id,
+            functools.partial(codex_plugins_mod.plugin_install, plugin_id),
+            reverse_installed,
+            expect_present=True,
+        )
+    return (
+        transitions.CodexPluginDelta(
+            installed=tuple(reverse_installed),
+            removed=tuple(reverse_removed),
+            marketplaces_added=tuple(reverse_marketplaces_added),
+            marketplaces_removed=tuple(reverse_marketplaces_removed),
+        ),
+        failed,
+    )
+
+
 def _write_reverse_transition(
     transition: transitions.TransitionDir,
     profile: str,
@@ -1251,6 +1377,22 @@ def _write_reverse_transition(
         if reverse_plugin_delta.is_empty():
             reverse_plugin_delta = None
 
+    codex_plugin_file = transition / "codex_plugins.json"
+    reverse_codex_plugin_delta: transitions.CodexPluginDelta | None = None
+    if codex_plugin_file.exists():
+        codex_raw = json.loads(codex_plugin_file.read_text(encoding="utf-8"))
+        codex_payload = transitions.codex_plugin_delta_from_json(codex_raw)
+        reverse_codex_plugin_delta, codex_failures = _reverse_codex_plugins(
+            codex_payload
+        )
+        if codex_failures:
+            detail = "; ".join(
+                f"{identity}: {error}" for identity, error in codex_failures
+            )
+            raise ReconcileAborted(f"Codex plugin reversal failed: {detail}")
+        if reverse_codex_plugin_delta.is_empty():
+            reverse_codex_plugin_delta = None
+
     mcp_file = transition / "mcp.json"
     reverse_mcp_delta: transitions.MCPDelta | None = None
     if mcp_file.exists():
@@ -1282,4 +1424,5 @@ def _write_reverse_transition(
         mcp_delta=reverse_mcp_delta,
         file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
+        codex_plugin_delta=reverse_codex_plugin_delta,
     )

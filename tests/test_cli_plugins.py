@@ -14,7 +14,298 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge import claude_plugins as claude_plugins_mod
+from setforge import codex_plugins as codex_plugins_mod
 from setforge.cli import app
+
+
+def test_codex_reconcile_routes_natively_and_second_run_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files: {}
+codex:
+  marketplaces:
+    official: {source: github, repo: owner/repo}
+  plugins:
+    review: {marketplace: official}
+profiles:
+  default:
+    codex:
+      plugins: [review]
+"""
+    )
+    plugins: dict[str, codex_plugins_mod.InstalledPlugin] = {}
+    marketplaces: dict[str, codex_plugins_mod.InstalledMarketplace] = {}
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "_marketplace_present",
+        lambda name, _source, installed: name in installed,
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        lambda _source: marketplaces.__setitem__(
+            "official",
+            codex_plugins_mod.InstalledMarketplace(
+                "official", tmp_path / "marketplace"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "plugin_install",
+        lambda plugin_id: plugins.__setitem__(
+            plugin_id,
+            codex_plugins_mod.InstalledPlugin(plugin_id, "review", "official"),
+        ),
+    )
+
+    runner = CliRunner()
+    first = runner.invoke(
+        app,
+        [
+            "plugin",
+            "reconcile",
+            "--product=codex",
+            "--profile=default",
+            f"--config={config}",
+        ],
+    )
+    second = runner.invoke(
+        app,
+        [
+            "plugin",
+            "reconcile",
+            "--product=codex",
+            "--profile=default",
+            f"--config={config}",
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert "install Codex plugin" in first.output
+    assert second.exit_code == 0, second.output
+    assert "nothing to reconcile" in second.output
+
+
+def test_codex_add_compensates_native_marketplace_when_plugin_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.errors import PluginToolMissing
+
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files: {}
+profiles:
+  default: {}
+"""
+    )
+    before = config.read_bytes()
+    marketplaces: dict[str, codex_plugins_mod.InstalledMarketplace] = {}
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: {})
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        lambda _source: marketplaces.__setitem__(
+            "team", codex_plugins_mod.InstalledMarketplace("team", tmp_path / "team")
+        ),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_remove",
+        lambda name: marketplaces.pop(name, None),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "plugin_install",
+        lambda _plugin_id: (_ for _ in ()).throw(PluginToolMissing("install failed")),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@team",
+            "--product=codex",
+            "--from=github:owner/repo",
+            "--profile=default",
+            f"--config={config}",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert marketplaces == {}
+    assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("argv", "native_name"),
+    [
+        (["plugin", "remove", "b", "--profile=default"], "plugin_remove"),
+        (["marketplace", "remove", "middle"], "marketplace_remove"),
+    ],
+)
+def test_codex_remove_failure_restores_exact_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    native_name: str,
+) -> None:
+    from setforge.errors import PluginToolMissing
+
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files: {}
+codex:
+  marketplaces:
+    first: {source: github, repo: owner/first}
+    middle: {source: github, repo: owner/middle} # keep comment
+    last: {source: github, repo: owner/last}
+  plugins:
+    a: {marketplace: first}
+    b: {marketplace: middle}
+    c: {marketplace: last}
+profiles:
+  default:
+    codex:
+      plugins: [a, b, c] # preserve order
+"""
+    )
+    before = config.read_bytes()
+    installed_plugin = codex_plugins_mod.InstalledPlugin("b@middle", "b", "middle")
+    installed_marketplace = codex_plugins_mod.InstalledMarketplace(
+        "middle",
+        tmp_path / "middle",
+        codex_plugins_mod.MarketplaceSource(
+            source=codex_plugins_mod.MarketplaceSourceKind.GITHUB,
+            repo="owner/middle",
+        ),
+    )
+    plugins = {installed_plugin.plugin_id: installed_plugin}
+    marketplaces = {installed_marketplace.name: installed_marketplace}
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+    if native_name == "plugin_remove":
+
+        def fail_after_plugin_remove(plugin_id: str) -> None:
+            plugins.pop(plugin_id)
+            raise PluginToolMissing("native failed")
+
+        monkeypatch.setattr(
+            codex_plugins_mod, "plugin_remove", fail_after_plugin_remove
+        )
+        monkeypatch.setattr(
+            codex_plugins_mod,
+            "plugin_install",
+            lambda _plugin_id: plugins.__setitem__(
+                installed_plugin.plugin_id, installed_plugin
+            ),
+        )
+    else:
+
+        def fail_after_marketplace_remove(name: str) -> None:
+            marketplaces.pop(name)
+            raise PluginToolMissing("native failed")
+
+        monkeypatch.setattr(
+            codex_plugins_mod, "marketplace_remove", fail_after_marketplace_remove
+        )
+        monkeypatch.setattr(
+            codex_plugins_mod,
+            "marketplace_add",
+            lambda _source: marketplaces.__setitem__(
+                installed_marketplace.name, installed_marketplace
+            ),
+        )
+
+    result = CliRunner().invoke(
+        app,
+        [*argv, "--product=codex", f"--config={config}"],
+    )
+
+    assert result.exit_code == 1
+    assert config.read_bytes() == before
+    assert plugins == {installed_plugin.plugin_id: installed_plugin}
+    assert marketplaces == {installed_marketplace.name: installed_marketplace}
+
+
+def test_codex_marketplace_add_failure_restores_exact_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.errors import PluginToolMissing
+
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files: {}
+profiles:
+  default: {}
+"""
+    )
+    before = config.read_bytes()
+    marketplaces: dict[str, codex_plugins_mod.InstalledMarketplace] = {}
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+
+    def fail_after_add(_source: object) -> None:
+        marketplaces["team"] = codex_plugins_mod.InstalledMarketplace(
+            "team", tmp_path / "team"
+        )
+        raise PluginToolMissing("native failed")
+
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        fail_after_add,
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_remove",
+        lambda name: marketplaces.pop(name),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "marketplace",
+            "add",
+            "team",
+            "--product=codex",
+            "--from=github:owner/repo",
+            f"--config={config}",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert config.read_bytes() == before
+    assert marketplaces == {}
 
 
 @pytest.mark.parametrize(

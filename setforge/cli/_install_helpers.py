@@ -914,6 +914,7 @@ def _install_recorded_nothing(
     deploy_outcome: DeployOutcome,
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
+    codex_plugin_delta: transitions.CodexPluginDelta | None = None,
     mcp_delta: transitions.MCPDelta | None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...],
     seeded: bool,
@@ -928,6 +929,8 @@ def _install_recorded_nothing(
     if ext_delta is not None and not ext_delta.is_empty():
         return False
     if plugin_delta is not None and not plugin_delta.is_empty():
+        return False
+    if codex_plugin_delta is not None and not codex_plugin_delta.is_empty():
         return False
     if mcp_delta is not None and not mcp_delta.is_empty():
         return False
@@ -949,6 +952,7 @@ def _write_install_transition(
     mcp_delta: transitions.MCPDelta | None = None,
     file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
+    codex_plugin_delta: transitions.CodexPluginDelta | None = None,
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -994,6 +998,7 @@ def _write_install_transition(
         mcp_delta=mcp_delta,
         file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
+        codex_plugin_delta=codex_plugin_delta,
     )
 
 

@@ -16,7 +16,7 @@ walks four layers in order of precedence:
    ``binaries: {code: /p, claude: /p, gitleaks: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).
 
-``SUPPORTED_BINARIES`` also includes ``cargo``, ``go``, and ``uv``,
+``SUPPORTED_BINARIES`` also includes ``codex``, ``cargo``, ``go``, and ``uv``,
 which resolve through this same chain via the env-var, config-file,
 and ``which`` layers — but, unlike the other four, have no dedicated
 CLI flag.
@@ -44,6 +44,7 @@ from setforge.errors import BinaryOverrideInvalid, ConfigError
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "claude",
+    "codex",
     "code",
     "gitleaks",
     "patch",
@@ -63,6 +64,7 @@ _STUB_TEMPLATE: Final[str] = """\
 # binaries:
 #   code: /custom/path/to/code
 #   claude: /opt/claude/bin/claude
+#   codex: /opt/codex/bin/codex
 #   gitleaks: /usr/local/bin/gitleaks
 #   patch: /usr/local/bin/gpatch
 #

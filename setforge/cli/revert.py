@@ -834,6 +834,7 @@ def _prepare_revert_journal(
     ] = {}
     has_extensions = False
     has_plugins = False
+    has_codex_plugins = False
     mcp_names: dict[str, None] = {}
     generic_paths: dict[Path, None] = {}
     for transition in chain:
@@ -849,6 +850,7 @@ def _prepare_revert_journal(
             state_keys[identity] = transitions.snapshot_store_state(*identity)
         has_extensions |= (transition / "extensions.json").exists()
         has_plugins |= (transition / "plugins.json").exists()
+        has_codex_plugins |= (transition / "codex_plugins.json").exists()
         mcp_path = transition / "mcp.json"
         if mcp_path.exists():
             delta = transitions.mcp_delta_from_json(
@@ -868,6 +870,7 @@ def _prepare_revert_journal(
         adapters=_revert_adapter_snapshots(
             extensions=has_extensions,
             plugins=has_plugins,
+            codex_plugins=has_codex_plugins,
             mcp_names=tuple(mcp_names),
         ),
         path_guards=orphan_scan.capture_parent_path_guards(tuple(generic_paths)),
@@ -905,9 +908,14 @@ def _revert_symlink_paths(config: Path, profile: str) -> tuple[Path, ...]:
 
 
 def _revert_adapter_snapshots(
-    *, extensions: bool, plugins: bool, mcp_names: tuple[str, ...]
+    *,
+    extensions: bool,
+    plugins: bool,
+    codex_plugins: bool,
+    mcp_names: tuple[str, ...],
 ) -> tuple[operations.AdapterSnapshot, ...]:
     from setforge import claude_plugins, mcp_servers, vscode_extensions
+    from setforge import codex_plugins as codex_plugins_mod
 
     snapshots: list[operations.AdapterSnapshot] = []
     if extensions:
@@ -925,6 +933,30 @@ def _revert_adapter_snapshots(
                     {
                         "plugins": claude_plugins.list_installed(),
                         "marketplaces": claude_plugins.list_marketplaces(),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+    if codex_plugins:
+        snapshots.append(
+            operations.AdapterSnapshot(
+                operations.AdapterKind.CODEX_PLUGINS,
+                json.dumps(
+                    {
+                        "plugins": sorted(codex_plugins_mod.list_installed()),
+                        "marketplaces": sorted(
+                            [
+                                name,
+                                (
+                                    item.source
+                                    or codex_plugins_mod._source_from_root(item.root)
+                                ).model_dump_json(exclude_none=True),
+                            ]
+                            for name, item in (
+                                codex_plugins_mod.list_marketplaces().items()
+                            )
+                        ),
                     },
                     sort_keys=True,
                 ),
@@ -1022,6 +1054,7 @@ def _transitions_list_json_data(
             "timestamp": entry.timestamp.astimezone(UTC).isoformat(),
             "files": entry.file_count,
             "plugins": entry.plugin_count,
+            "codex_plugins": entry.codex_plugin_count,
             "ext": entry.ext_count,
         }
         for entry in listings
@@ -1070,6 +1103,7 @@ def _render_transitions_table(
     table.add_column("age", no_wrap=True)
     table.add_column("files", no_wrap=True, justify="right")
     table.add_column("plugins", no_wrap=True, justify="right")
+    table.add_column("codex", no_wrap=True, justify="right")
     table.add_column("ext", no_wrap=True, justify="right")
     for entry in listings:
         table.add_row(
@@ -1078,6 +1112,7 @@ def _render_transitions_table(
             _compact_age(entry.timestamp, now),
             str(entry.file_count),
             str(entry.plugin_count),
+            str(entry.codex_plugin_count),
             str(entry.ext_count),
         )
     if profile_filter:
@@ -1138,6 +1173,7 @@ def transitions_show(
 
     _render_files_section_show(target, console)
     _render_plugins_section_show(target, console)
+    _render_codex_plugins_section_show(target, console)
     _render_extensions_section_show(target, console)
 
     console.print("=== reverse this transition ===")
@@ -1192,6 +1228,27 @@ def _render_plugins_section_show(
         console.print(f"    + marketplace:{name}")
     for entry in delta.marketplaces_removed:
         name = entry[0] if isinstance(entry, tuple) else str(entry)
+        console.print(f"    - marketplace:{name}")
+
+
+def _render_codex_plugins_section_show(
+    target: transitions.TransitionDir, console: Console
+) -> None:
+    plugin_file = target / "codex_plugins.json"
+    if not plugin_file.exists():
+        return
+    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+    delta = transitions.codex_plugin_delta_from_json(payload)
+    if delta.is_empty():
+        return
+    console.print("  Codex plugins:")
+    for plugin_id in delta.installed:
+        console.print(f"    + {plugin_id}  (installed)")
+    for plugin_id in delta.removed:
+        console.print(f"    - {plugin_id}  (removed)")
+    for name in delta.marketplaces_added:
+        console.print(f"    + marketplace:{name}")
+    for name, _source in delta.marketplaces_removed:
         console.print(f"    - marketplace:{name}")
 
 

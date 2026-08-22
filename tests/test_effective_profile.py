@@ -39,6 +39,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("plugins.py", "plugin_list"),
     ("plugins.py", "plugin_reconcile"),
     ("plugins.py", "_run_plugin_reconcile"),
+    ("plugins.py", "_codex_plugin_reconcile"),
     ("plugins.py", "sync_cache"),
     ("profile.py", "_run_profile_show"),
     ("revert.py", "_revert_symlink_deployments"),

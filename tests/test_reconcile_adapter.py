@@ -100,6 +100,27 @@ def test_plugin_policy_inherits_across_chain() -> None:
     assert adapter.plugin_policy(resolved) is ReconcilePolicy.PRUNE
 
 
+def test_codex_plugin_ids_and_policy() -> None:
+    cfg = _cfg(
+        profiles={
+            "p": {
+                "codex": {
+                    "plugins": ["review"],
+                    "reconcile": {"policy": "prune"},
+                }
+            }
+        },
+        codex={
+            "marketplaces": {"official": {"source": "github", "repo": "o/r"}},
+            "plugins": {"review": {"marketplace": "official"}},
+        },
+    )
+    resolved = resolve_profile(cfg, "p")
+
+    assert adapter.codex_plugin_ids(cfg, resolved) == {"review@official"}
+    assert adapter.codex_plugin_policy(resolved) is ReconcilePolicy.PRUNE
+
+
 def test_extension_policy_from_reconcile_block() -> None:
     cfg = _cfg(profiles={"p": {"reconcile": {"extensions": {"policy": "prune"}}}})
     resolved = resolve_profile(cfg, "p")

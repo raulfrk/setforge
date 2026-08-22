@@ -67,10 +67,11 @@ loads. Everything else has a default:
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
 | `version` | no | `1` | Config format version. |
-| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.2"`. |
+| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.4"`. |
 | `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |
 | `claude_plugins` | no | `{}` | Top-level Claude plugin defaults. |
+| `codex` | no | omitted | Typed Codex resources; requires `schema_version` and `minimum_version` 6.4 or newer. |
 | `mcp_servers` | no | `{}` | Named Claude MCP server commands. |
 | `section_templates` | no | `{}` | Reusable host-local section bodies. |
 | `packages` | no | `{}` | Named package declarations. |

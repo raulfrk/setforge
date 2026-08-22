@@ -51,7 +51,7 @@ terminal mockups, and links to the complete inventory.
 - **Profiles.** A profile is a named subset of tracked files, packages,
   bundles, and MCP servers, with optional inheritance (`extends:`). Reconcile
   policy for plugin/extension package types also lives on the profile.
-- **Schema.** New `setforge.yaml` files carry `schema_version: "6.2"`. An optional
+- **Schema.** New `setforge.yaml` files carry `schema_version: "6.4"`. An optional
   `minimum_version:` floor refuses to run an engine older than your config
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
@@ -159,7 +159,7 @@ A minimal config repo is a manifest plus the file content it points at:
 <!-- setforge-doc-example: tutorial-schema6 -->
 ```yaml
 # ~/projects/dotfiles/setforge.yaml
-schema_version: "6.2"
+schema_version: "6.4"
 tracked_files:
   gitconfig:
     src: gitconfig            # lives at tracked/gitconfig
@@ -681,6 +681,42 @@ $ setforge marketplace add mymarket --from github:owner/repo
 $ setforge marketplace remove mymarket
 $ setforge marketplace update mymarket       # claude plugin marketplace update (per-marketplace)
 ```
+
+**Codex plugins:** declare sources and plugins beneath the top-level `codex`
+block and select them from the profile's `codex.plugins` list:
+
+```yaml
+schema_version: '6.4'
+minimum_version: '6.4'
+codex:
+  marketplaces:
+    team:
+      source: github
+      repo: example/codex-plugins
+  plugins:
+    review:
+      marketplace: team
+profiles:
+  default:
+    codex:
+      plugins: [review]
+      reconcile: {policy: additive}
+```
+
+Use the same commands with an explicit product:
+
+```console
+$ setforge plugin list --product codex --profile default
+$ setforge plugin reconcile --product codex --profile default --dry-run
+$ setforge plugin add review@team --product codex --from github:example/codex-plugins --profile default
+$ setforge marketplace update team --product codex
+```
+
+SetForge invokes the native `codex plugin` JSON interface and never writes
+Codex's opaque plugin state. Authentication remains host-local. Current Codex
+CLI releases do not expose plugin enable/disable commands; `--disable` with
+`--product codex` therefore fails explicitly. Removal and reconciliation are
+supported, and install/revert records Codex effects separately from Claude.
 
 **VSCode extensions:**
 

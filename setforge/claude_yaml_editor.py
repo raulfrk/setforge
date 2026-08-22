@@ -34,12 +34,123 @@ from setforge.config import (
 from setforge.errors import ConfigError, ProfileNotFound
 
 __all__ = [
+    "yaml_add_codex_marketplace",
+    "yaml_add_codex_plugin",
+    "yaml_add_codex_plugin_to_profile",
     "yaml_add_marketplace",
     "yaml_add_plugin",
     "yaml_add_plugin_to_profile",
+    "yaml_remove_codex_marketplace",
+    "yaml_remove_codex_plugin",
+    "yaml_remove_codex_plugin_from_profile",
     "yaml_remove_marketplace",
     "yaml_remove_plugin_from_profile",
 ]
+
+
+def _codex_block(doc: CommentedMap) -> CommentedMap:
+    return _ensure_top_level_block(doc, "codex")
+
+
+def _require_codex_contract(cfg: Config, config_path: Path) -> None:
+    def version(value: str | None) -> tuple[int, int]:
+        try:
+            major, minor = (value or "").split(".", 1)
+            return int(major), int(minor)
+        except ValueError:
+            return 0, 0
+
+    if version(cfg.schema_version) < (6, 4) or version(cfg.minimum_version) < (6, 4):
+        raise ConfigError(
+            f"{config_path}: Codex declarations require schema_version and "
+            "minimum_version >= '6.4'; run `setforge migrate` first"
+        )
+
+
+def yaml_add_codex_marketplace(
+    config_path: Path, name: str, source: MarketplaceSource
+) -> bool:
+    cfg = load_config(config_path)
+    _require_codex_contract(cfg, config_path)
+    if cfg.codex is not None and name in cfg.codex.marketplaces:
+        return False
+    yaml, doc = _load_yaml_doc(config_path)
+    marketplaces = _ensure_top_level_block(_codex_block(doc), "marketplaces")
+    marketplaces[name] = source.model_dump(mode="json", exclude_none=True)
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
+
+
+def yaml_remove_codex_marketplace(config_path: Path, name: str) -> bool:
+    yaml, doc = _load_yaml_doc(config_path)
+    codex = doc.get("codex")
+    marketplaces = (
+        codex.get("marketplaces") if isinstance(codex, CommentedMap) else None
+    )
+    if not isinstance(marketplaces, CommentedMap) or name not in marketplaces:
+        return False
+    del marketplaces[name]
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
+
+
+def yaml_add_codex_plugin(config_path: Path, name: str, marketplace: str) -> bool:
+    cfg = load_config(config_path)
+    _require_codex_contract(cfg, config_path)
+    if cfg.codex is not None and name in cfg.codex.plugins:
+        return False
+    yaml, doc = _load_yaml_doc(config_path)
+    plugins = _ensure_top_level_block(_codex_block(doc), "plugins")
+    plugins[name] = CommentedMap({"marketplace": marketplace})
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
+
+
+def yaml_remove_codex_plugin(config_path: Path, name: str) -> bool:
+    yaml, doc = _load_yaml_doc(config_path)
+    codex = doc.get("codex")
+    plugins = codex.get("plugins") if isinstance(codex, CommentedMap) else None
+    if not isinstance(plugins, CommentedMap) or name not in plugins:
+        return False
+    del plugins[name]
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
+
+
+def yaml_add_codex_plugin_to_profile(
+    config_path: Path, profile: str, name: str
+) -> bool:
+    cfg = load_config(config_path)
+    _require_codex_contract(cfg, config_path)
+    if profile not in cfg.profiles:
+        raise ProfileNotFound(profile)
+    yaml, doc = _load_yaml_doc(config_path)
+    profiles = doc["profiles"]
+    profile_block = profiles[profile]
+    codex = _ensure_top_level_block(profile_block, "codex")
+    plugins = _ensure_list(codex, "plugins")
+    if name in plugins:
+        return False
+    plugins.append(name)
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
+
+
+def yaml_remove_codex_plugin_from_profile(
+    config_path: Path, profile: str, name: str
+) -> bool:
+    cfg = load_config(config_path)
+    if profile not in cfg.profiles:
+        raise ProfileNotFound(profile)
+    yaml, doc = _load_yaml_doc(config_path)
+    profile_block = doc["profiles"][profile]
+    codex = profile_block.get("codex")
+    plugins = codex.get("plugins") if isinstance(codex, CommentedMap) else None
+    if not isinstance(plugins, CommentedSeq) or name not in plugins:
+        return False
+    plugins.remove(name)
+    _atomic_yaml_dump(yaml, doc, config_path)
+    return True
 
 
 def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:

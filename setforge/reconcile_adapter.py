@@ -61,6 +61,22 @@ def plugin_policy(resolved: ResolvedProfile) -> ReconcilePolicy:
     return resolved.reconcile.plugins.policy
 
 
+def codex_plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
+    """Return selected Codex plugin IDs in native ``name@marketplace`` form."""
+    if resolved.codex is None or cfg.codex is None:
+        return set()
+    return {
+        f"{name}@{cfg.codex.plugins[name].marketplace}"
+        for name in resolved.codex.plugins
+    }
+
+
+def codex_plugin_policy(resolved: ResolvedProfile) -> ReconcilePolicy:
+    if resolved.codex is None:
+        return ReconcilePolicy.ADDITIVE
+    return resolved.codex.reconcile.policy
+
+
 def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
     include = [
         pkg.extension

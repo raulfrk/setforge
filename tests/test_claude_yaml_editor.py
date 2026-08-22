@@ -274,3 +274,52 @@ def test_atomic_write_preserves_file_permissions(tmp_path: Path) -> None:
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
     yaml_add_marketplace(p, "new-mp", src)
     assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+def test_codex_plugin_editors_round_trip_and_are_idempotent(tmp_path: Path) -> None:
+    import setforge.claude_yaml_editor as mod
+    from setforge.config import load_config
+
+    path = _write_yaml_fixture(tmp_path)
+    path.write_text(
+        path.read_text().replace(
+            "version: 1\n",
+            "version: 1\nschema_version: '6.4'\nminimum_version: '6.4'\n",
+        )
+    )
+    source = MarketplaceSource(
+        source=MarketplaceSourceKind.GITHUB, repo="example/codex-plugins"
+    )
+
+    assert mod.yaml_add_codex_marketplace(path, "team", source)
+    assert not mod.yaml_add_codex_marketplace(path, "team", source)
+    assert mod.yaml_add_codex_plugin(path, "review", "team")
+    assert not mod.yaml_add_codex_plugin(path, "review", "team")
+    assert mod.yaml_add_codex_plugin_to_profile(path, "myprofile", "review")
+    assert not mod.yaml_add_codex_plugin_to_profile(path, "myprofile", "review")
+
+    cfg = load_config(path)
+    assert cfg.codex is not None
+    assert cfg.codex.plugins["review"].marketplace == "team"
+    assert cfg.profiles["myprofile"].codex is not None
+    assert cfg.profiles["myprofile"].codex.plugins == ["review"]
+
+    assert mod.yaml_remove_codex_plugin_from_profile(path, "myprofile", "review")
+    assert mod.yaml_remove_codex_plugin(path, "review")
+    assert mod.yaml_remove_codex_marketplace(path, "team")
+
+
+def test_codex_editor_refuses_old_schema_before_write(tmp_path: Path) -> None:
+    import setforge.claude_yaml_editor as mod
+    from setforge.errors import ConfigError
+
+    path = _write_yaml_fixture(tmp_path)
+    before = path.read_bytes()
+    source = MarketplaceSource(
+        source=MarketplaceSourceKind.GITHUB, repo="example/codex-plugins"
+    )
+
+    with pytest.raises(ConfigError, match="setforge migrate"):
+        mod.yaml_add_codex_marketplace(path, "team", source)
+
+    assert path.read_bytes() == before
