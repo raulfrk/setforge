@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SetForge convergence audit</title>
+  <style>
+    :root { --ink:#17211d; --muted:#65736d; --paper:#f4f0e8; --card:#fffdf8; --line:#d8d1c3; --green:#195c45; --lime:#b8e36c; --amber:#d58a2a; --red:#a33c32; --navy:#17324a; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.6 system-ui,-apple-system,sans-serif; }
+    header { padding:72px max(24px,calc((100vw - 1120px)/2)); color:#f8f4e9; background:linear-gradient(125deg,#112c23,#173e30 62%,#285842); }
+    header .tag { color:var(--lime); letter-spacing:.14em; text-transform:uppercase; font-size:.75rem; font-weight:800; }
+    h1 { max-width:900px; margin:.25em 0; font:700 clamp(2.6rem,7vw,5.5rem)/.96 Georgia,serif; letter-spacing:-.045em; }
+    .lede { max-width:760px; font-size:1.2rem; color:#d9e5db; }
+    nav { position:sticky; top:0; z-index:4; display:flex; gap:18px; overflow:auto; padding:12px max(24px,calc((100vw - 1120px)/2)); background:rgba(255,253,248,.96); border-bottom:1px solid var(--line); }
+    nav a { white-space:nowrap; color:var(--green); font-weight:700; text-decoration:none; }
+    main { width:min(1120px,calc(100% - 40px)); margin:42px auto 100px; }
+    section { margin:26px 0; padding:34px; background:var(--card); border:1px solid var(--line); border-radius:20px; box-shadow:0 12px 35px rgba(39,46,39,.06); }
+    .section-head { display:flex; align-items:start; justify-content:space-between; gap:20px; }
+    .eyebrow { color:var(--green); font-size:.76rem; font-weight:850; letter-spacing:.13em; text-transform:uppercase; }
+    h2 { margin:.1em 0 .5em; font:700 clamp(1.7rem,3vw,2.7rem)/1.1 Georgia,serif; }
+    h3 { margin:.2em 0; font-size:1rem; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .card { padding:20px; border:1px solid var(--line); border-radius:14px; background:#fff; }
+    .status { display:inline-block; padding:3px 9px; border-radius:999px; color:var(--green); background:#e2f3e8; font-size:.72rem; font-weight:850; text-transform:uppercase; }
+    .status.deferred { color:#70440c; background:#fae8c8; }
+    .before-after { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    pre { overflow:auto; padding:18px; color:#e8f2ec; background:#14221c; border-radius:12px; font:13px/1.55 ui-monospace,monospace; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:13px 10px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:.76rem; text-transform:uppercase; letter-spacing:.08em; }
+    .review-btn { flex:none; padding:9px 13px; border:1px solid var(--green); border-radius:9px; color:var(--green); background:transparent; font-weight:750; cursor:pointer; }
+    .review-btn:hover { color:white; background:var(--green); }
+    .notes { margin-top:16px; color:var(--muted); font-size:.92rem; }
+    .note { margin-top:8px; padding:10px 13px; border-left:3px solid var(--lime); background:#f2f7eb; }
+    dialog { width:min(560px,calc(100% - 32px)); border:0; border-radius:16px; padding:24px; box-shadow:0 24px 80px #0006; }
+    dialog::backdrop { background:#102019aa; }
+    label { display:block; margin:12px 0 4px; font-weight:700; }
+    input,textarea { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+    textarea { min-height:140px; resize:vertical; }
+    .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
+    button.primary { padding:9px 15px; border:0; border-radius:8px; color:white; background:var(--green); font-weight:700; }
+    .callout { padding:18px 20px; border-left:5px solid var(--amber); background:#fff3dc; }
+    footer { width:min(1120px,calc(100% - 40px)); margin:0 auto 48px; color:var(--muted); }
+    @media (max-width:760px) { .grid,.before-after { grid-template-columns:1fr; } section { padding:24px 18px; } .section-head { display:block; } .review-btn { margin:8px 0 18px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="tag">Current-state engineering audit · August 2026</div>
+    <h1>Convergence should be boring.</h1>
+    <p class="lede">SetForge now separates portable intent from local reality, executes commands from one frozen plan, adopts existing resources without silently taking control, and returns useful test feedback sooner.</p>
+  </header>
+  <nav><a href="#summary">Readout</a><a href="#reconciliation">LOCAL / SHARED</a><a href="#workflow">Command safety</a><a href="#adoption">Adoption</a><a href="#feedback">Test feedback</a><a href="#remaining">Remaining</a></nav>
+  <main>
+    <section id="summary" data-review-id="summary">
+      <div class="section-head"><div><span class="eyebrow">01 · Executive readout</span><h2>Four hardening tracks landed as one contract</h2></div><button class="review-btn">Annotate</button></div>
+      <div class="grid">
+        <div class="card"><span class="status">Delivered</span><h3>Portable intent is explicit</h3><p>Changed SHARED units require confirmation. LOCAL and PENDING units never become portable merely because their container is managed.</p></div>
+        <div class="card"><span class="status">Delivered</span><h3>Commands consume one plan</h3><p>Read, preview, confirmation, and apply share a frozen interpretation instead of re-reading mutable inputs between phases.</p></div>
+        <div class="card"><span class="status">Delivered</span><h3>Existing state stays yours</h3><p>Discovery does not grant authority. Adoption records metadata; replacement, upgrade, release, and deletion remain separate operations.</p></div>
+      </div>
+      <div class="notes"></div>
+    </section>
+
+    <section id="reconciliation" data-review-id="reconciliation">
+      <div class="section-head"><div><span class="eyebrow">02 · LOCAL / SHARED</span><h2>A container claim and a unit decision answer different questions</h2></div><button class="review-btn">Annotate</button></div>
+      <p>A file claim answers <em>may SetForge reconcile this container?</em> A stable unit classification answers <em>may these bytes flow back to shared configuration?</em> Neither implies the other. Mixed files can therefore contain confirmed SHARED units beside LOCAL, SHARED_DRAFTED, and PENDING units without accidental promotion.</p>
+      <div class="before-after">
+        <div><h3>Failure mode before hardening</h3><pre>tracked: team-setting=v1
+live:    team-setting=v2 + secret-path
+
+capture #1: keep locally, but refresh identity
+capture #2: identity matches → silently publish</pre></div>
+        <div><h3>Current contract</h3><pre>changed SHARED identity → confirmation required
+LOCAL / PENDING         → never promoted
+SHARED_DRAFTED          → publish sanitized draft
+missing/corrupt state   → preserve and refuse mutation</pre></div>
+      </div>
+      <p>Stable typed unit identities replace collision-prone positional anchors. Participation is durable, so a temporarily unclassifiable file cannot fall back to whole-file capture. Capture locking, pruning, and recovery preserve the index-last publication boundary.</p>
+      <div class="notes"></div>
+    </section>
+
+    <section id="workflow" data-review-id="workflow">
+      <div class="section-head"><div><span class="eyebrow">03 · Command safety</span><h2>Observe once, decide once, apply what was approved</h2></div><button class="review-btn">Annotate</button></div>
+      <table><thead><tr><th>Boundary</th><th>Now guaranteed</th><th>Why it matters</th></tr></thead><tbody>
+        <tr><td>Read-only commands</td><td>No hidden fetch, migration, receipt, or state writes.</td><td>Inspection is safe in automation and during incident diagnosis.</td></tr>
+        <tr><td>Profile resolution</td><td>One effective profile and capability graph feed preview and execution.</td><td>No first-versus-second interpretation drift.</td></tr>
+        <tr><td>Install planning</td><td>The confirmed immutable plan is the plan applied.</td><td>Mutable configuration cannot change the operation after approval.</td></tr>
+        <tr><td>Recovery</td><td>Write-ahead state records each effect before mutation.</td><td>Restart and reversal do not pretend partial work was atomic.</td></tr>
+      </tbody></table>
+      <div class="notes"></div>
+    </section>
+
+    <section id="adoption" data-review-id="adoption">
+      <div class="section-head"><div><span class="eyebrow">04 · Existing tools and state</span><h2>Presence is evidence, not ownership</h2></div><button class="review-btn">Annotate</button></div>
+      <p>SetForge reports an existing resource as present and unowned. An explicit metadata-only adoption can then record a typed identity, owner, declaration, provenance, fingerprint, authority, generation, and history. It does not reinstall or rewrite the resource.</p>
+      <div class="grid">
+        <div class="card"><h3>Adopt</h3><p>Revalidate the frozen observation under locks and publish a claim with compare-and-swap semantics.</p></div>
+        <div class="card"><h3>Release or transfer</h3><p>Retain history and tombstones; refuse stale generations, competing owners, and changed fingerprints.</p></div>
+        <div class="card"><h3>Change or remove</h3><p>Require a current management grant and a separate operation. Matching bytes alone never bootstrap destructive authority.</p></div>
+      </div>
+      <p>This contract now covers typed capabilities, generated resources, directory trees, package provenance, and platform-specific release assets while preserving legacy receipts as non-destructive, unverified history.</p>
+      <div class="notes"></div>
+    </section>
+
+    <section id="feedback" data-review-id="feedback">
+      <div class="section-head"><div><span class="eyebrow">05 · Test feedback</span><h2>The pyramid now answers cheap questions first</h2></div><button class="review-btn">Annotate</button></div>
+      <table><thead><tr><th>Lane</th><th>Purpose</th><th>Current routing</th></tr></thead><tbody>
+        <tr><td>Default local</td><td>Unit and integration behavior, branch coverage, deterministic infrastructure checks.</td><td>Skips Docker E2E and test-infrastructure probes by default.</td></tr>
+        <tr><td>Pull request</td><td>Fast suite, focused infrastructure regressions, slow non-Docker lane, and a thin Docker smoke journey.</td><td>Smoke image is prebuilt once; smoke and full suites no longer overlap.</td></tr>
+        <tr><td>Nightly</td><td>Full deterministic Docker E2E, isolated live-network canaries, and deeper mutation/property evidence.</td><td>Network probes report separately from product correctness.</td></tr>
+      </tbody></table>
+      <p>Docker workers no longer race to build the same image. Missing-tool and network-dependent tests are non-vacuous and explicitly routed. The verdict manifest keeps the collected Docker set and each test’s evidence role in lock-step.</p>
+      <div class="notes"></div>
+    </section>
+
+    <section id="remaining" data-review-id="remaining">
+      <div class="section-head"><div><span class="eyebrow">06 · Remaining boundary</span><h2>One optimization is intentionally deferred</h2></div><button class="review-btn">Annotate</button></div>
+      <div class="callout"><strong>Deferred, not missing:</strong> finer per-file Docker-daemon xdist grouping is scheduled for a later v0.3.x pass. The current prebuild and scheduling model is correct and predictable; the deferred work targets additional parallel throughput, not a correctness hole.</div>
+      <p>This report is a repository-local engineering artifact. Running the companion server is optional and local; feedback is stored outside the tracked tree. Publishing Git refs, deploying a service, or changing credentials is not part of this audit.</p>
+      <div class="notes"></div>
+    </section>
+  </main>
+
+  <dialog id="review-dialog">
+    <form method="dialog" id="review-form">
+      <h2>Section feedback</h2>
+      <input type="hidden" name="section">
+      <label for="author">Author</label><input id="author" name="author" value="Reviewer" maxlength="200">
+      <label for="note">Note</label><textarea id="note" name="note" maxlength="10000" required></textarea>
+      <p id="review-error" role="alert"></p>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save note</button></div>
+    </form>
+  </dialog>
+  <footer>SetForge convergence and feedback audit · generated from the current repository contract.</footer>
+  <script>
+    const dialog = document.querySelector('#review-dialog');
+    const form = document.querySelector('#review-form');
+    const error = document.querySelector('#review-error');
+    const sections = new Map([...document.querySelectorAll('[data-review-id]')].map(section => [section.dataset.reviewId, section]));
+
+    function render(feedback) {
+      document.querySelectorAll('.notes').forEach(node => node.replaceChildren());
+      feedback.forEach(entry => {
+        const container = sections.get(entry.section)?.querySelector('.notes');
+        if (!container) return;
+        const note = document.createElement('div');
+        note.className = 'note';
+        note.textContent = `${entry.author}: ${entry.note}`;
+        container.append(note);
+      });
+    }
+
+    async function loadFeedback() {
+      try {
+        const response = await fetch('/api/feedback', {cache: 'no-store'});
+        if (response.ok) render((await response.json()).feedback);
+      } catch (_) {
+        // The report remains fully usable when opened as a static file.
+      }
+    }
+
+    document.querySelectorAll('.review-btn').forEach(button => button.addEventListener('click', () => {
+      form.reset();
+      form.elements.section.value = button.closest('[data-review-id]').dataset.reviewId;
+      error.textContent = '';
+      dialog.showModal();
+    }));
+
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (event.submitter?.value === 'cancel') { dialog.close(); return; }
+      const payload = Object.fromEntries(new FormData(form));
+      try {
+        const response = await fetch('/api/feedback', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error((await response.json()).error || 'Unable to save note');
+        dialog.close();
+        await loadFeedback();
+      } catch (failure) {
+        error.textContent = failure.message;
+      }
+    });
+
+    loadFeedback();
+  </script>
+</body>
+</html>
