@@ -11,8 +11,8 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
-schema_version: '6.1'
-minimum_version: '6.1'
+schema_version: '6.2'
+minimum_version: '6.2'
 version: 1
 
 # ----------------------------------------------------------------------
@@ -72,6 +72,8 @@ tracked_files:
   directory_tree:
     src: directory
     dst: ~/.setforge_e2e/directory
+    tree:
+      orphans: remove-owned
 
   # Template — Jinja2 dst rendered (template: true triggers render).
   template_path:

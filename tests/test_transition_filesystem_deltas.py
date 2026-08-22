@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 from pathlib import Path
 
 import pytest
 
 from setforge import operations, orphan_scan, transitions
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+
+
+def test_staging_event_witness_rejects_queue_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temporary = ".managed.setforge-remove"
+    encoded = temporary.encode() + b"\0"
+    padded = encoded + b"\0" * (-len(encoded) % 4)
+    overflow = struct.pack("iIII", -1, 0x00004000, 0, 0)
+    created = struct.pack("iIII", 1, 0x00000100, 0, len(padded)) + padded
+    reads: list[bytes] = [overflow + created]
+
+    def read_once(descriptor: int, size: int) -> bytes:
+        del descriptor, size
+        if reads:
+            return reads.pop()
+        raise BlockingIOError
+
+    monkeypatch.setattr(os, "read", read_once)
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations._verify_staging_create_event(123, temporary, tmp_path / "managed")
 
 
 def _write_transition(
@@ -63,6 +86,267 @@ def test_filesystem_delta_round_trips_binary_symlink_mode_and_mtime(
     )
     assert not binary.exists()
     assert not link.is_symlink()
+
+
+@pytest.mark.parametrize("with_child", [False, True])
+def test_filesystem_delta_reverse_restores_parent_directory_metadata(
+    tmp_path: Path, with_child: bool
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    parent.chmod(0o700)
+    original_mtime = 1_700_000_000_333_456_789
+    os.utime(parent, ns=(original_mtime, original_mtime))
+    child = parent / "child"
+    parent_pre = transitions.snapshot_filesystem_image(parent)
+    child_pre = transitions.snapshot_filesystem_image(child)
+    if with_child:
+        child.write_text("created", encoding="utf-8")
+    parent.chmod(0o755)
+    deltas = [
+        transitions.FilesystemDelta(
+            parent, parent_pre, transitions.snapshot_filesystem_image(parent)
+        ),
+    ]
+    if with_child:
+        deltas.append(
+            transitions.FilesystemDelta(
+                child, child_pre, transitions.snapshot_filesystem_image(child)
+            )
+        )
+    guards = orphan_scan.capture_parent_path_guards((parent, child))
+
+    operations.apply_filesystem_deltas_reverse_anchored(tuple(deltas), guards)
+
+    assert not child.exists()
+    assert parent.stat().st_mode & 0o777 == 0o700
+    assert parent.stat().st_mtime_ns == original_mtime
+
+
+def test_filesystem_delta_reverse_recreates_deleted_directory_tree(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    child = parent / "child"
+    child.write_text("payload", encoding="utf-8")
+    deltas = transitions.filesystem_deletion_deltas((parent, child))
+    child.unlink()
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent, child))
+
+    operations.apply_filesystem_deltas_reverse_anchored(deltas, guards)
+
+    assert child.read_text(encoding="utf-8") == "payload"
+
+
+def test_filesystem_delta_directory_recreation_refuses_existing_collision(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    parent.mkdir()
+    parent.chmod(0o711)
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert parent.stat().st_mode & 0o777 == 0o711
+    assert not (tmp_path / ".managed.setforge-remove").exists()
+
+
+def test_filesystem_delta_directory_recreation_refuses_preidentity_staging_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    original_mkdir = os.mkdir
+    injected: Path | None = None
+    injected_mode: int | None = None
+
+    def collide(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal injected, injected_mode
+        if path == ".managed.setforge-remove":
+            original_mkdir(path, 0o711, dir_fd=dir_fd)
+            injected = tmp_path / path
+            injected_mode = injected.stat().st_mode
+        original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", collide)
+    with pytest.raises(SetforgeError, match="staging collision"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert injected is not None
+    assert injected.stat().st_mode == injected_mode
+    assert not parent.exists()
+
+
+def test_filesystem_delta_directory_recreation_refuses_swap_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    original_open = os.open
+    swapped = False
+
+    def swap_before_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == ".managed.setforge-remove" and dir_fd is not None and not swapped:
+            swapped = True
+            staged = tmp_path / ".managed.setforge-remove"
+            staged.rename(tmp_path / "detached")
+            staged.mkdir()
+            staged.chmod(0o711)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_before_open)
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert not parent.exists()
+    assert (tmp_path / ".managed.setforge-remove").stat().st_mode & 0o777 == 0o711
+    assert (tmp_path / "detached").stat().st_mode & 0o777 != 0o711
+
+
+def test_filesystem_delta_directory_recreation_refuses_swap_before_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    original_mkdir = os.mkdir
+    swapped = False
+
+    def swap_after_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped
+        original_mkdir(path, mode, dir_fd=dir_fd)
+        if path == ".managed.setforge-remove" and not swapped:
+            swapped = True
+            staged = tmp_path / ".managed.setforge-remove"
+            staged.rename(tmp_path / "detached")
+            staged.mkdir()
+            staged.chmod(0o711)
+
+    monkeypatch.setattr(os, "mkdir", swap_after_mkdir)
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert not parent.exists()
+    assert (tmp_path / ".managed.setforge-remove").stat().st_mode & 0o777 == 0o711
+
+
+def test_filesystem_delta_collision_cleanup_preserves_swapped_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    parent.mkdir()
+    original_rename = operations._rename_noreplace_at
+
+    def swap_then_collide(parent_fd: int, source: str, destination: str) -> None:
+        staged = tmp_path / source
+        staged.rename(tmp_path / "detached")
+        staged.mkdir()
+        staged.chmod(0o711)
+        original_rename(parent_fd, source, destination)
+
+    monkeypatch.setattr(operations, "_rename_noreplace_at", swap_then_collide)
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert (tmp_path / ".managed.setforge-remove").stat().st_mode & 0o777 == 0o711
+    assert (tmp_path / "detached").is_dir()
+
+
+def test_filesystem_delta_metadata_refuses_replaced_restored_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    original = operations._restore_directory_metadata_anchored
+
+    def swap_then_restore(
+        item: transitions.FilesystemDelta,
+        identities: dict[Path, tuple[int, int, int] | None],
+    ) -> None:
+        item.path.rename(tmp_path / "detached")
+        item.path.mkdir()
+        item.path.chmod(0o711)
+        original(item, identities)
+
+    monkeypatch.setattr(
+        operations, "_restore_directory_metadata_anchored", swap_then_restore
+    )
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert parent.stat().st_mode & 0o777 == 0o711
+
+
+def test_filesystem_delta_directory_restore_keeps_validated_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    parent.chmod(0o700)
+    pre = transitions.snapshot_filesystem_image(parent)
+    parent.chmod(0o755)
+    post = transitions.snapshot_filesystem_image(parent)
+    delta = transitions.FilesystemDelta(parent, pre, post)
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    original_fchmod = os.fchmod
+    swapped = False
+
+    def swap_before_chmod(descriptor: int, mode: int) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(tmp_path / "detached")
+            parent.mkdir()
+            parent.chmod(0o755)
+        original_fchmod(descriptor, mode)
+
+    monkeypatch.setattr(os, "fchmod", swap_before_chmod)
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert parent.stat().st_mode & 0o777 == 0o755
+    assert (tmp_path / "detached").stat().st_mode & 0o777 == 0o700
 
 
 def test_filesystem_delta_writer_canonicalizes_and_rejects_double_slash_aliases(
@@ -129,7 +413,8 @@ def test_filesystem_delta_round_trips_empty_file_and_old_transition(
     path.unlink()
 
     operations.apply_filesystem_deltas_reverse_anchored(
-        transitions.load_filesystem_deltas(transition), guards
+        transitions.load_filesystem_deltas(transition),
+        guards,
     )
     assert path.read_bytes() == b""
 

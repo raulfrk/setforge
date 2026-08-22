@@ -67,7 +67,7 @@ loads. Everything else has a default:
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
 | `version` | no | `1` | Config format version. |
-| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.1"`. |
+| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.2"`. |
 | `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |
 | `claude_plugins` | no | `{}` | Top-level Claude plugin defaults. |
@@ -91,8 +91,8 @@ real config.
 
 <!-- setforge-doc-example: configuration-full-schema6 -->
 ```yaml
-schema_version: "6.1"
-minimum_version: "6.1"
+schema_version: "6.2"
+minimum_version: "6.2"
 tracked_files:
   shell:
     src: shell/zshrc
@@ -176,8 +176,8 @@ Generated resources keep portable intent in the repository while resolving
 host facts only in the frozen install plan:
 
 ```yaml
-schema_version: "6.1"
-minimum_version: "6.1"
+schema_version: "6.2"
+minimum_version: "6.2"
 tracked_files:
   code-settings:
     src: code-settings.json.j2
@@ -196,6 +196,34 @@ misspelled or undeclared input names fail before any install write. Templates
 are deliberately expression-only: function and method calls, filters, and
 tests are rejected so rendering stays deterministic and confined to declared
 values.
+
+Managed directory trees use schema 6.2 and remain one-way tracked-to-live
+resources. The first install over an existing directory adopts its current
+inventory without changing bytes; later installs manage entries under the
+declared policy:
+
+```yaml
+schema_version: "6.2"
+minimum_version: "6.2"
+tracked_files:
+  tool-home:
+    src: tool-home
+    dst: ~/.local/share/example
+    tree:
+      exclude: ["cache/**"]
+      symlinks: refuse       # or preserve
+      orphans: keep          # or remove-owned
+```
+
+Excludes use gitignore-style matching. `remove-owned` removes only entries
+recorded in the previous owned inventory and only while their content remains
+unchanged; unowned or drifted entries are preserved or held for review. Tree
+roots cannot overlap another tracked destination. `capture` and `stage` refuse
+managed trees; edit the tracked source tree instead.
+
+Basenames matching `.NAME.setforge-create`, `.NAME.setforge-update`, or
+`.NAME.setforge-remove` are reserved for journaled atomic publication and are
+rejected in both tracked sources and live managed trees.
 
 ### Profiles
 

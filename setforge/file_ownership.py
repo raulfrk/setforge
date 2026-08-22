@@ -195,6 +195,47 @@ def observe_file(destination: Path, *, allow_topology: bool = False) -> FileObse
     )
 
 
+def observe_tree(destination: Path, inventory_fingerprint: str) -> FileObservation:
+    """Bind one no-follow directory root to its canonical entry inventory."""
+    absolute = destination.absolute()
+    resource_id = file_resource_id(absolute)
+    try:
+        logical = absolute.lstat()
+    except FileNotFoundError:
+        present = False
+        mode = None
+        object_kind = "absent-tree"
+        content_hash = None
+    else:
+        if not stat.S_ISDIR(logical.st_mode) or stat.S_ISLNK(logical.st_mode):
+            raise OwnershipError(
+                f"managed tree root is not a real directory: {absolute}"
+            )
+        present = True
+        mode = stat.S_IMODE(logical.st_mode)
+        object_kind = "tree"
+        content_hash = inventory_fingerprint
+    fingerprint = _file_fingerprint(
+        resource_id,
+        present=present,
+        object_kind=object_kind,
+        mode=mode,
+        symlink_target=None,
+        content_hash=content_hash,
+    )
+    return FileObservation(
+        resource_id,
+        str(absolute),
+        present,
+        object_kind,
+        mode,
+        None,
+        content_hash,
+        fingerprint,
+        True,
+    )
+
+
 def decide_file(
     observation: FileObservation,
     claim: OwnershipClaim | None,

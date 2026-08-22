@@ -243,6 +243,11 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     previews: list[CapturePreview] = []
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
+        if tracked_file.tree is not None:
+            raise InvariantViolation(
+                f"managed tree {name!r} is one-way output and cannot be captured; "
+                "edit its tracked source tree"
+            )
         if tracked_file.generated is not None:
             raise InvariantViolation(
                 f"generated tracked file {name!r} is one-way output and cannot "
@@ -666,6 +671,11 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
     work: list[tuple[str, Path, Path, frozenset[HostLocalSectionName], bool]] = []
     for name in effective.tracked_files:
         tracked_file = config.tracked_files[name]
+        if tracked_file.tree is not None:
+            raise InvariantViolation(
+                f"managed tree {name!r} is one-way output and cannot be captured; "
+                "edit its tracked source tree"
+            )
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         # capture-back filter: names of host-local sections

@@ -29,6 +29,7 @@ See ``tests/docker/conftest.py`` for the ``docker_image``,
 from __future__ import annotations
 
 import json
+import posixpath
 import subprocess
 import textwrap
 from collections.abc import Callable
@@ -351,7 +352,7 @@ def test_install_yaml_deep_preserve_overlay(
 def test_install_directory_copy(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """I: directory tree copied recursively, nested files included."""
+    """I: a tree is installed, then only owned orphans are removed."""
     c = docker_container()
     _install(c, "test-directory")
     assert _read_live(c, ".setforge_e2e/directory/file-a.txt") == "file-a content\n"
@@ -360,6 +361,22 @@ def test_install_directory_copy(
         _read_live(c, ".setforge_e2e/directory/nested/file-c.txt")
         == "file-c content (nested)\n"
     )
+    unowned = "/home/tester/.setforge_e2e/directory/unowned.txt"
+    c.write_text(unowned, "keep\n")
+    tracked_orphan = posixpath.join(
+        posixpath.dirname(CONFIG_FIXTURE), "tracked/directory/file-b.txt"
+    )
+    c.exec(["rm", tracked_orphan])
+
+    _install(c, "test-directory")
+    assert (
+        c.exec(
+            ["test", "!", "-e", "/home/tester/.setforge_e2e/directory/file-b.txt"],
+            check=False,
+        ).returncode
+        == 0
+    )
+    assert c.read_text(unowned) == "keep\n"
 
 
 # --- Variant J ------------------------------------------------------------
@@ -1804,7 +1821,7 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (6.1)
+    A config already pinned to the build's current expected schema (6.2)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
     surface the full 1.0 → … → 6.0 chain) is covered in

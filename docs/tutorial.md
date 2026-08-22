@@ -51,7 +51,7 @@ terminal mockups, and links to the complete inventory.
 - **Profiles.** A profile is a named subset of tracked files, packages,
   bundles, and MCP servers, with optional inheritance (`extends:`). Reconcile
   policy for plugin/extension package types also lives on the profile.
-- **Schema.** New `setforge.yaml` files carry `schema_version: "6.1"`. An optional
+- **Schema.** New `setforge.yaml` files carry `schema_version: "6.2"`. An optional
   `minimum_version:` floor refuses to run an engine older than your config
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
@@ -159,7 +159,7 @@ A minimal config repo is a manifest plus the file content it points at:
 <!-- setforge-doc-example: tutorial-schema6 -->
 ```yaml
 # ~/projects/dotfiles/setforge.yaml
-schema_version: "6.1"
+schema_version: "6.2"
 tracked_files:
   gitconfig:
     src: gitconfig            # lives at tracked/gitconfig
@@ -497,8 +497,8 @@ quick index.
   ```
   === schema migration check ===
   your setforge.yaml:  ~/projects/dotfiles/setforge.yaml
-    declared schema:   6.1
-  installed setforge expects schema:   6.1
+    declared schema:   6.2
+  installed setforge expects schema:   6.2
   === no migrations available ===
   ```
 

@@ -239,7 +239,7 @@ def test_current_expected_is_six_one() -> None:
     """The build expects schema 6.1 after generated resources landed."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "6.1"
+    assert current_expected_schema_version == "6.2"
 
 
 def test_schema_major_is_six() -> None:

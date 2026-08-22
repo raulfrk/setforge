@@ -124,10 +124,28 @@ def _iter_all_tracked_files(
     """
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
+        if tracked_file.tree is not None:
+            continue
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             yield tracked_file, sub_name, sub_src, sub_dst
+
+
+def _iter_all_trees(
+    ctx: ProfileContext,
+) -> Iterator[tuple[TrackedFile, str, Path, Path]]:
+    """Yield one unexpanded root tuple for every explicit managed tree."""
+    for name in ctx.resolved.tracked_files:
+        tracked_file = ctx.cfg.tracked_files[name]
+        if tracked_file.tree is None:
+            continue
+        yield (
+            tracked_file,
+            name,
+            resolve_src(tracked_file, ctx.repo_root),
+            resolve_dst(tracked_file),
+        )
 
 
 def _resolve_drift_paths(

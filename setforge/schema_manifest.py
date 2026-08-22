@@ -48,6 +48,7 @@ from setforge.config import (
     ResolvedProfile,
     SectionTemplateRef,
     TrackedFile,
+    TreePolicy,
 )
 
 SCHEMA_MAJOR: int = 6
@@ -58,6 +59,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     Profile,
     TrackedFile,
     GeneratedContent,
+    TreePolicy,
     Extensions,
     MarketplaceSource,
     ClaudePluginRef,
@@ -147,12 +149,18 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "dst": "<class 'str'>",
         "template": "<class 'bool'>",
         "generated": "setforge.config.GeneratedContent | None",
+        "tree": "setforge.config.TreePolicy | None",
         "mode": "int | None",
         "symlink": "str | None",
         "allow_outside_home": "<class 'bool'>",
     },
     "GeneratedContent": {
         "inputs": "dict[str, setforge.config.HostInputKind]",
+    },
+    "TreePolicy": {
+        "exclude": "list[str]",
+        "symlinks": "<enum 'TreeSymlinkPolicy'>",
+        "orphans": "<enum 'TreeOrphanPolicy'>",
     },
     "Extensions": {
         "include": "list[str]",
@@ -237,6 +245,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "mode": "int | None",
         "template": "<class 'bool'>",
         "generated": "setforge.config.GeneratedContent | None",
+        "tree": "setforge.config.TreePolicy | None",
         "symlink": "str | None",
         "allow_outside_home": "<class 'bool'>",
     },

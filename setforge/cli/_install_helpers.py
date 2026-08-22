@@ -56,6 +56,7 @@ from setforge.cli._confirm import (
 from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
+    _iter_all_trees,
     _refuse_duplicate_section_names,
     _resolve_drift_paths,
 )
@@ -273,6 +274,8 @@ def _plan_tracked_files(
     pending: list[_PendingDeploy] = []
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
+        if tracked_file.tree is not None:
+            continue
         host_local = host_local_sections_map.get(name) or None
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
@@ -914,6 +917,7 @@ def _install_recorded_nothing(
     mcp_delta: transitions.MCPDelta | None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...],
     seeded: bool,
+    filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
 ) -> bool:
     """True iff nothing revertable changed (ANDs the patch with every delta below)."""
     if transitions.compute_patch(file_pre, file_post):
@@ -925,6 +929,8 @@ def _install_recorded_nothing(
     if plugin_delta is not None and not plugin_delta.is_empty():
         return False
     if mcp_delta is not None and not mcp_delta.is_empty():
+        return False
+    if filesystem_deltas:
         return False
     return not (reconcile_outcomes or seeded)
 
@@ -941,6 +947,7 @@ def _write_install_transition(
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     mcp_delta: transitions.MCPDelta | None = None,
     file_modes: Mapping[Path, int] | None = None,
+    filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -985,6 +992,7 @@ def _write_install_transition(
         state_snapshots=state_snapshots,
         mcp_delta=mcp_delta,
         file_modes=file_modes,
+        filesystem_deltas=filesystem_deltas,
     )
 
 
@@ -1338,19 +1346,23 @@ def _dry_run_emit_deploys(
     """
     typer.echo("=== would-be deploy ===")
     walk = list(_iter_all_tracked_files(ctx))
-    if len(walk) != len(drift_report.entries):
+    trees = list(_iter_all_trees(ctx))
+    if len(walk) + len(trees) != len(drift_report.entries):
         # Defensive: a future expand_tracked_file divergence between
         # the two callers would silently mis-pair entries. Surface the
         # mismatch loudly rather than print a half-correct report.
         raise SetforgeError(
-            f"dry-run: tracked-file walk length ({len(walk)}) does not match "
+            "dry-run: tracked inventory length "
+            f"({len(walk) + len(trees)}) does not match "
             f"compare report length ({len(drift_report.entries)}); refusing "
             f"to render a deploy preview against an inconsistent join"
         )
+    by_name = {entry.name: entry for entry in drift_report.entries}
     planned = deploys if deploys is not None else (None,) * len(walk)
-    for (_tracked, _sub_name, _sub_src, sub_dst), entry, record in zip(
-        walk, drift_report.entries, planned, strict=True
+    for (_tracked, sub_name, _sub_src, sub_dst), record in zip(
+        walk, planned, strict=True
     ):
+        entry = by_name[sub_name]
         if record is not None and record.preview_action is not None:
             verb = {
                 deploy.DeployAction.CREATED: "install",
@@ -1369,6 +1381,14 @@ def _dry_run_emit_deploys(
                 typer.echo(f"  WOULD noop      {sub_dst}")
             case _ as never:
                 assert_never(never)
+    for _tracked, name, _src, destination in trees:
+        entry = by_name[name]
+        verb = {
+            CompareStatus.MISSING: "install",
+            CompareStatus.DRIFTED: "update",
+            CompareStatus.UNCHANGED: "noop",
+        }[entry.status]
+        typer.echo(f"  WOULD {verb:<9} {destination}")
     for raw in ctx.resolved.bootstrap:
         path = Path(str(raw)).expanduser()
         if not path.exists():

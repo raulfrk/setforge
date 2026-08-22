@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ctypes
 import fcntl
 import hashlib
 import json
 import os
 import shutil
 import stat
+import struct
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
@@ -23,6 +25,18 @@ from setforge import atomicio, transitions
 from setforge.errors import SetforgeError
 
 JOURNAL_SCHEMA_VERSION: Final[int] = 1
+_RENAME_NOREPLACE: Final[int] = 1
+_IN_CREATE: Final[int] = 0x00000100
+_IN_DELETE: Final[int] = 0x00000200
+_IN_MOVED_FROM: Final[int] = 0x00000040
+_IN_MOVED_TO: Final[int] = 0x00000080
+_IN_UNMOUNT: Final[int] = 0x00002000
+_IN_Q_OVERFLOW: Final[int] = 0x00004000
+_IN_IGNORED: Final[int] = 0x00008000
+_INOTIFY_MASK: Final[int] = (
+    _IN_CREATE | _IN_DELETE | _IN_MOVED_FROM | _IN_MOVED_TO | _IN_UNMOUNT
+)
+_INOTIFY_INVALID: Final[int] = _IN_UNMOUNT | _IN_Q_OVERFLOW | _IN_IGNORED
 
 
 class OperationPhase(StrEnum):
@@ -670,14 +684,73 @@ def apply_filesystem_deltas_reverse_anchored(
 ) -> None:
     """Validate and reverse typed filesystem deltas through guarded dirfds."""
     guard_identities = _guard_identities(guards)
-    for delta in deltas:
-        _replace_filesystem_delta_anchored(delta, guard_identities)
+
+    def order(delta: transitions.FilesystemDelta) -> tuple[int, int, str]:
+        depth = len(delta.path.parts)
+        if delta.pre.kind is transitions.FilesystemKind.DIRECTORY:
+            return (0, depth, str(delta.path))
+        if delta.pre.kind is transitions.FilesystemKind.ABSENT and (
+            delta.post.kind is transitions.FilesystemKind.DIRECTORY
+        ):
+            return (2, -depth, str(delta.path))
+        return (1, depth, str(delta.path))
+
+    for delta in sorted(deltas, key=order):
+        restored_identity = _replace_filesystem_delta_anchored(delta, guard_identities)
+        if restored_identity is not None:
+            guard_identities[delta.path] = restored_identity
+    for delta in sorted(
+        (
+            item
+            for item in deltas
+            if item.pre.kind is transitions.FilesystemKind.DIRECTORY
+        ),
+        key=lambda item: len(item.path.parts),
+        reverse=True,
+    ):
+        _restore_directory_metadata_anchored(delta, guard_identities)
+
+
+def _restore_directory_metadata_anchored(
+    delta: transitions.FilesystemDelta,
+    guard_identities: dict[Path, tuple[int, int, int] | None],
+) -> None:
+    replacement = _path_snapshot_from_filesystem_image(delta.path, delta.pre)
+    with _open_guarded_parent(
+        delta.path,
+        guard_identities,
+        create_missing=False,
+        permit_existing_absent=False,
+    ) as parent_fd:
+        if parent_fd is None:
+            raise SetforgeError(f"filesystem path parent changed: {delta.path.parent}")
+        expected = guard_identities.get(delta.path)
+        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        directory_fd = os.open(delta.path.name, flags, dir_fd=parent_fd)
+        try:
+            info = os.fstat(directory_fd)
+            actual = (info.st_dev, info.st_ino, info.st_mode)
+            if expected is None or actual != expected:
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {delta.path}"
+                )
+            if replacement.mode is not None:
+                os.fchmod(directory_fd, replacement.mode)
+            if replacement.mtime_ns is not None:
+                os.utime(
+                    directory_fd,
+                    ns=(replacement.mtime_ns, replacement.mtime_ns),
+                )
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        os.fsync(parent_fd)
 
 
 def _replace_filesystem_delta_anchored(
     delta: transitions.FilesystemDelta,
     guard_identities: dict[Path, tuple[int, int, int] | None],
-) -> None:
+) -> tuple[int, int, int] | None:
     replacement = _path_snapshot_from_filesystem_image(delta.path, delta.pre)
     with _open_guarded_parent(
         delta.path,
@@ -688,15 +761,206 @@ def _replace_filesystem_delta_anchored(
         if parent_fd is None:
             raise SetforgeError(f"filesystem path parent changed: {delta.path.parent}")
         _verify_parent_binding(parent_fd, delta.path.parent)
-        current = _snapshot_path_at(parent_fd, delta.path)
         expected = _path_snapshot_from_filesystem_image(delta.path, delta.post)
-        if current != expected:
+        if replacement.kind is SnapshotKind.DIRECTORY:
+            directory_identity = _restore_directory_delta_at(
+                parent_fd,
+                replacement,
+                expected,
+                allow_child_metadata_drift=(
+                    expected.kind is SnapshotKind.DIRECTORY
+                    and delta.pre.kind is transitions.FilesystemKind.ABSENT
+                ),
+            )
+            _verify_parent_binding(parent_fd, delta.path.parent)
+            return directory_identity
+        current = _snapshot_path_at(parent_fd, delta.path)
+        directory_after_children = (
+            replacement.kind is SnapshotKind.ABSENT
+            and current.kind is SnapshotKind.DIRECTORY
+            and expected.kind is SnapshotKind.DIRECTORY
+            and current.mode == expected.mode
+        )
+        if current != expected and not directory_after_children:
             raise SetforgeError(
                 f"filesystem path changed since transition: {delta.path}"
             )
         _verify_parent_binding(parent_fd, delta.path.parent)
-        _restore_path_at(parent_fd, replacement)
+        restored_identity = _restore_path_at(parent_fd, replacement)
         _verify_parent_binding(parent_fd, delta.path.parent)
+        return restored_identity
+
+
+def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
+    parent_fd: int,
+    replacement: PathSnapshot,
+    expected: PathSnapshot,
+    *,
+    allow_child_metadata_drift: bool,
+) -> tuple[int, int, int]:
+    """Validate and restore a directory through one continuously-held fd."""
+    name = replacement.path.name
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd: int | None = None
+    watch_fd: int | None = None
+    try:
+        if expected.kind is SnapshotKind.ABSENT:
+            temporary = f".{name}.setforge-remove"
+            watch_fd = _watch_parent_directory(parent_fd)
+            try:
+                os.mkdir(
+                    temporary,
+                    mode=replacement.mode or 0o700,
+                    dir_fd=parent_fd,
+                )
+            except FileExistsError as exc:
+                raise SetforgeError(
+                    "filesystem reverse staging collision requires operator "
+                    f"inspection: {replacement.path.parent / temporary}"
+                ) from exc
+            staged = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+            directory_fd = os.open(temporary, flags, dir_fd=parent_fd)
+            opened = os.fstat(directory_fd)
+            if not _same_snapshot_stat(staged, opened):
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {replacement.path}"
+                )
+            _verify_staging_create_event(watch_fd, temporary, replacement.path)
+            if not _coordinate_matches_fd(parent_fd, temporary, directory_fd):
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {replacement.path}"
+                )
+            try:
+                _rename_noreplace_at(parent_fd, temporary, name)
+            except FileExistsError as exc:
+                if _coordinate_matches_fd(parent_fd, temporary, directory_fd):
+                    os.rmdir(temporary, dir_fd=parent_fd)
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {replacement.path}"
+                ) from exc
+            if not _coordinate_matches_fd(parent_fd, name, directory_fd):
+                with suppress(OSError):
+                    _rename_noreplace_at(parent_fd, name, temporary)
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {replacement.path}"
+                )
+            os.fsync(parent_fd)
+        elif expected.kind is SnapshotKind.DIRECTORY:
+            directory_fd = os.open(name, flags, dir_fd=parent_fd)
+            info = os.fstat(directory_fd)
+            current = PathSnapshot(
+                replacement.path,
+                SnapshotKind.DIRECTORY,
+                mode=stat.S_IMODE(info.st_mode),
+                mtime_ns=info.st_mtime_ns,
+            )
+            metadata_matches = current == expected
+            if allow_child_metadata_drift:
+                metadata_matches = current.mode == expected.mode
+            if not metadata_matches:
+                raise SetforgeError(
+                    f"filesystem path changed since transition: {replacement.path}"
+                )
+        else:
+            raise SetforgeError(
+                f"filesystem path changed since transition: {replacement.path}"
+            )
+        if replacement.mode is not None:
+            os.fchmod(directory_fd, replacement.mode)
+        if replacement.mtime_ns is not None:
+            os.utime(
+                directory_fd,
+                ns=(replacement.mtime_ns, replacement.mtime_ns),
+            )
+        os.fsync(directory_fd)
+        info = os.fstat(directory_fd)
+        os.fsync(parent_fd)
+        return (info.st_dev, info.st_ino, info.st_mode)
+    except FileNotFoundError as exc:
+        raise SetforgeError(
+            f"filesystem path changed since transition: {replacement.path}"
+        ) from exc
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if watch_fd is not None:
+            os.close(watch_fd)
+
+
+def _coordinate_matches_fd(parent_fd: int, name: str, descriptor: int) -> bool:
+    try:
+        coordinate = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        opened = os.fstat(descriptor)
+    except OSError:
+        return False
+    return (coordinate.st_dev, coordinate.st_ino, coordinate.st_mode) == (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_mode,
+    )
+
+
+def _watch_parent_directory(parent_fd: int) -> int:
+    libc = ctypes.CDLL(None, use_errno=True)
+    init = getattr(libc, "inotify_init1", None)
+    add_watch = getattr(libc, "inotify_add_watch", None)
+    if init is None or add_watch is None:
+        raise SetforgeError("filesystem recovery requires inotify support")
+    watch_fd = init(os.O_NONBLOCK | os.O_CLOEXEC)
+    if watch_fd < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    result = add_watch(
+        watch_fd,
+        os.fsencode(f"/proc/self/fd/{parent_fd}"),
+        _INOTIFY_MASK,
+    )
+    if result < 0:
+        error = ctypes.get_errno()
+        os.close(watch_fd)
+        raise OSError(error, os.strerror(error))
+    return cast(int, watch_fd)
+
+
+def _verify_staging_create_event(watch_fd: int, temporary: str, path: Path) -> None:
+    events: list[tuple[int, str]] = []
+    while True:
+        try:
+            payload = os.read(watch_fd, 64 * 1024)
+        except BlockingIOError:
+            break
+        if not payload:
+            break
+        offset = 0
+        while offset < len(payload):
+            _, mask, _, length = struct.unpack_from("iIII", payload, offset)
+            offset += struct.calcsize("iIII")
+            raw_name = payload[offset : offset + length]
+            offset += length
+            event_name = os.fsdecode(raw_name.split(b"\0", 1)[0])
+            if mask & _INOTIFY_INVALID:
+                raise SetforgeError(f"filesystem path changed since transition: {path}")
+            if event_name == temporary:
+                events.append((mask & _INOTIFY_MASK, event_name))
+    if events != [(_IN_CREATE, temporary)]:
+        raise SetforgeError(f"filesystem path changed since transition: {path}")
+
+
+def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise SetforgeError("filesystem recovery requires renameat2 support")
+    result = renameat2(
+        parent_fd,
+        os.fsencode(source),
+        parent_fd,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
 
 
 def finish_recovery(journal: OperationJournal) -> OperationJournal:
@@ -1111,6 +1375,24 @@ def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
             link_target=target,
             mtime_ns=before.st_mtime_ns,
         )
+    if stat.S_ISDIR(before.st_mode):
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if not _same_snapshot_stat(before, opened):
+                raise SetforgeError(f"filesystem path changed while reading: {path}")
+        finally:
+            os.close(descriptor)
+        return PathSnapshot(
+            path,
+            SnapshotKind.DIRECTORY,
+            mode=stat.S_IMODE(before.st_mode),
+            mtime_ns=before.st_mtime_ns,
+        )
     if not stat.S_ISREG(before.st_mode):
         raise SetforgeError(f"unsupported transition filesystem object: {path}")
     descriptor = os.open(
@@ -1146,6 +1428,7 @@ def _path_snapshot_from_filesystem_image(
         transitions.FilesystemKind.ABSENT: SnapshotKind.ABSENT,
         transitions.FilesystemKind.FILE: SnapshotKind.FILE,
         transitions.FilesystemKind.SYMLINK: SnapshotKind.SYMLINK,
+        transitions.FilesystemKind.DIRECTORY: SnapshotKind.DIRECTORY,
     }
     return PathSnapshot(
         path,
@@ -1157,13 +1440,46 @@ def _path_snapshot_from_filesystem_image(
     )
 
 
-def _restore_path_at(parent_fd: int, snapshot: PathSnapshot) -> None:
+def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
+    parent_fd: int, snapshot: PathSnapshot
+) -> tuple[int, int, int] | None:
     """Publish one snapshot relative to an already-held parent descriptor."""
     name = snapshot.path.name
     if snapshot.kind is SnapshotKind.ABSENT:
         _remove_replaceable_at(parent_fd, name, snapshot.path)
         os.fsync(parent_fd)
-        return
+        return None
+    if snapshot.kind is SnapshotKind.DIRECTORY:
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            os.mkdir(name, mode=snapshot.mode or 0o700, dir_fd=parent_fd)
+        else:
+            if not stat.S_ISDIR(info.st_mode):
+                raise SetforgeError(
+                    "refusing to replace non-directory during recovery: "
+                    f"{snapshot.path}"
+                )
+        directory_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            if snapshot.mode is not None:
+                os.fchmod(directory_fd, snapshot.mode)
+            if snapshot.mtime_ns is not None:
+                os.utime(
+                    directory_fd,
+                    ns=(snapshot.mtime_ns, snapshot.mtime_ns),
+                )
+            os.fsync(directory_fd)
+            info = os.fstat(directory_fd)
+            identity = (info.st_dev, info.st_ino, info.st_mode)
+        finally:
+            os.close(directory_fd)
+        os.fsync(parent_fd)
+        return identity
     _remove_replaceable_at(parent_fd, name, snapshot.path)
     if snapshot.kind is SnapshotKind.FILE:
         assert snapshot.payload is not None
@@ -1174,7 +1490,7 @@ def _restore_path_at(parent_fd: int, snapshot: PathSnapshot) -> None:
             mode=snapshot.mode if snapshot.mode is not None else 0o600,
             mtime_ns=snapshot.mtime_ns,
         )
-        return
+        return None
     if snapshot.kind is SnapshotKind.SYMLINK:
         assert snapshot.link_target is not None
         os.symlink(snapshot.link_target, name, dir_fd=parent_fd)
@@ -1186,7 +1502,7 @@ def _restore_path_at(parent_fd: int, snapshot: PathSnapshot) -> None:
                 follow_symlinks=False,
             )
         os.fsync(parent_fd)
-        return
+        return None
     raise SetforgeError(f"unsupported anchored filesystem replacement: {snapshot.path}")
 
 

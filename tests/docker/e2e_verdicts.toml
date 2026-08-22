@@ -1136,7 +1136,7 @@ verbs = ["install"]
 [tests."tests/docker/test_e2e_docker.py::test_install_directory_copy"]
 verdict = "keep"
 smoke = false
-signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+signal = "managed tree recursive apply and owned-versus-unowned orphan handling"
 verbs = ["install"]
 
 [tests."tests/docker/test_e2e_docker.py::test_install_idempotent_second_run_noop"]

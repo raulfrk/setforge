@@ -1266,8 +1266,8 @@ def _rethread_comprehensive_to_packages(yaml_path: Path) -> None:
     yaml = YAML()
     yaml.preserve_quotes = True
     data = yaml.load(yaml_path.read_text(encoding="utf-8"))
-    data["schema_version"] = "6.1"
-    data["minimum_version"] = "6.1"
+    data["schema_version"] = "6.2"
+    data["minimum_version"] = "6.2"
 
     packages = data.setdefault("packages", {})
     packages["superpowers"] = {"type": "plugin", "plugin": "superpowers"}

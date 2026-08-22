@@ -70,7 +70,7 @@ your-config/
 <!-- setforge-doc-example: readme-minimal-schema6 -->
 ```yaml
 # your-config/setforge.yaml
-schema_version: "6.1"
+schema_version: "6.2"
 tracked_files:
   example:
     src: example.txt            # lives at tracked/example.txt
@@ -87,7 +87,7 @@ See [docs/configuration.md](docs/configuration.md) for the full schema
 preservation).
 
 (Configs without a `schema_version` — or with an older one — still load and are
-migrated forward to the current `6.1` by `setforge migrate`. The unrelated
+migrated forward to the current `6.2` by `setforge migrate`. The unrelated
 engine-owned `version:` file-format field defaults to `1` and you don't set it.)
 
 **4. Wire setforge to your config**

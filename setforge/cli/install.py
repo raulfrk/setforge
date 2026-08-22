@@ -51,6 +51,7 @@ from setforge.cli._help_examples import INSTALL_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
+    _iter_all_trees,
     _parse_section_auto,
 )
 from setforge.cli._install_helpers import (
@@ -86,6 +87,7 @@ from setforge.config import (
     LocalOverlayResolution,
     ResolvedProfile,
     TrackedFile,
+    TreeSymlinkPolicy,
     load_config,
     refuse_unmigrated_host_local_leak,
     resolve_effective_profile,
@@ -96,11 +98,12 @@ from setforge.file_ownership import (
     FileDecision,
     decide_file,
     observe_file,
+    observe_tree,
     publish_file_claim_locked,
 )
 from setforge.generated import resolve_generated
 from setforge.lockfile import LockFile, lock_path, parse_lock
-from setforge.locking import mutation_locks
+from setforge.locking import MutationLockGuards, mutation_locks
 from setforge.ownership import (
     OwnershipError,
     OwnershipStore,
@@ -141,6 +144,16 @@ from setforge.transitions import (
     load_latest,
     load_reconcile_outcomes,
 )
+from setforge.tree_management import (
+    TreePlan,
+    apply_tree,
+    inventory_path,
+    plan_tree,
+    read_inventory,
+    scan_tree,
+    temporary_entry_name,
+    write_inventory,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,11 +174,24 @@ class InstallPlan:
     file_pre: Mapping[Path, str | None]
     ownership_pre: Mapping[Path, str | None]
     file_ownership: tuple[FileDecision, ...]
+    trees: tuple[PlannedTree, ...]
     provisioning: ProvisioningPlan
     package_owner_id: UUID | None
     mcp: MCPInstallPlan
     extensions: vscode_extensions_mod.ExtensionPlan | None
     plugins: claude_plugins_mod.PluginPlan | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedTree:
+    """One frozen explicit tree plan and its root authority decision."""
+
+    tracked_file: TrackedFile
+    name: str
+    source: Path
+    destination: Path
+    plan: TreePlan
+    decision: FileDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,12 +371,20 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
 ) -> InstallPlan:
     """Compute every tracked-file decision before the first install write."""
     tracked_entries = tuple(_iter_all_tracked_files(ctx))
+    tree_entries = tuple(_iter_all_trees(ctx))
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
+    source_paths.update(source for _, _, source, _ in tree_entries)
     source_bytes = _snapshot_inputs(source_paths)
     source_map = dict(source_bytes)
     if any(source_map.get(path) != payload for path, payload in input_baseline):
         raise SetforgeError("install configuration changed before planning; retry")
+    trees = _plan_trees(tree_entries, profile=ctx.profile, owner_id=package_owner_id)
+    blocked_trees = tuple(tree.name for tree in trees if tree.plan.blocked)
+    if blocked_trees:
+        raise SetforgeError(
+            "managed tree conflicts require review: " + ", ".join(blocked_trees)
+        )
     dst_paths = tuple(
         [
             Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
@@ -371,7 +405,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
     file_ownership = _plan_file_ownership(
         tracked_entries, profile=ctx.profile, owner_id=package_owner_id
-    )
+    ) + tuple(tree.decision for tree in trees)
     ownership_pre = MappingProxyType(
         transitions.snapshot_paths(
             tuple(
@@ -392,9 +426,14 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         ctx.profile,
         ctx.repo_root,
         host_local_sections=host_local,
-        ownership_authorized=_file_ownership_authorization(
-            tracked_entries, file_ownership
-        ),
+        ownership_authorized={
+            **_file_ownership_authorization(tracked_entries, file_ownership),
+            **{
+                tree.name: tree.decision.action
+                not in {FileAction.ADOPT, FileAction.HOLD}
+                for tree in trees
+            },
+        },
     )
     deploys = install_helpers_mod._plan_tracked_files(
         ctx,
@@ -438,7 +477,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
         for record in deploys
     )
-    expected_names = tuple(sub_name for _, sub_name, _, _ in tracked_entries)
+    expected_names = tuple(sub_name for _, sub_name, _, _ in tracked_entries) + tuple(
+        tree.name for tree in trees
+    )
     compared_names = tuple(entry.name for entry in drift_report.entries)
     if (
         planned_entries != tracked_entries
@@ -468,6 +509,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         file_pre=file_pre,
         ownership_pre=ownership_pre,
         file_ownership=file_ownership,
+        trees=trees,
         provisioning=provisioning,
         package_owner_id=package_owner_id,
         mcp=mcp,
@@ -554,6 +596,54 @@ def _plan_file_ownership(
     )
 
 
+def _plan_trees(
+    tree_entries: tuple[tuple[TrackedFile, str, Path, Path], ...],
+    *,
+    profile: str,
+    owner_id: UUID | None,
+) -> tuple[PlannedTree, ...]:
+    """Freeze desired/live/prior inventories and root authority decisions."""
+    store = OwnershipStore()
+    planning_owner = owner_id or UUID(int=0)
+    planned: list[PlannedTree] = []
+    for tracked, name, source, destination in tree_entries:
+        policy = tracked.tree
+        if policy is None:  # pragma: no cover - iterator contract
+            raise SetforgeError(f"managed tree {name!r} has no tree policy")
+        desired = scan_tree(source, policy, capture_payloads=True)
+        if not desired.inventory.root_present:
+            raise SetforgeError(f"managed tree source is missing: {source}")
+        live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
+        live = scan_tree(destination, live_policy).inventory
+        prior = read_inventory(profile, name)
+        tree_plan = plan_tree(desired, live, prior, policy)
+        observation = observe_tree(destination, live.fingerprint)
+        decision = decide_file(
+            observation,
+            store.read(observation.resource_id),
+            owner_id=planning_owner,
+        )
+        if (
+            owner_id is None
+            and prior is not None
+            and decision.action is FileAction.ADOPT
+        ):
+            decision = FileDecision(
+                observation,
+                None,
+                (
+                    FileAction.MANAGE
+                    if live.fingerprint == prior.fingerprint
+                    else FileAction.REVIEW
+                ),
+                "legacy non-Git tree inventory",
+            )
+        planned.append(
+            PlannedTree(tracked, name, source, destination, tree_plan, decision)
+        )
+    return tuple(planned)
+
+
 def _ownership_destinations(
     tracked: TrackedFile, destination: Path
 ) -> tuple[Path, ...]:
@@ -562,6 +652,50 @@ def _ownership_destinations(
         return (destination,)
     target = Path(tracked.symlink).expanduser()
     return tuple(dict.fromkeys((target, destination)))
+
+
+def _tree_checkpoint_paths(tree: PlannedTree, profile: str) -> tuple[Path, ...]:
+    """Return every entry that the frozen tree plan may mutate."""
+    relative = {
+        entry.path
+        for inventory in (
+            tree.plan.desired.inventory,
+            tree.plan.live,
+            tree.plan.prior,
+        )
+        if inventory is not None
+        for entry in inventory.entries
+    }
+    lock_target = _tree_lock_target(tree.destination)
+    root_prefixes = [lock_target]
+    current = lock_target
+    for part in tree.destination.absolute().relative_to(lock_target).parts:
+        current /= part
+        root_prefixes.append(current)
+    entry_paths = [tree.destination / path for path in sorted(relative)]
+    temporary_paths = [
+        path.with_name(temporary_entry_name(path.name, purpose))
+        for path in entry_paths
+        for purpose in ("create", "update", "remove")
+    ]
+    return tuple(
+        dict.fromkeys(
+            (
+                *root_prefixes,
+                *entry_paths,
+                *temporary_paths,
+                inventory_path(profile, tree.name),
+            )
+        )
+    )
+
+
+def _tree_lock_target(destination: Path) -> Path:
+    """Return the highest missing ancestor whose parent is stable and present."""
+    candidate = destination.absolute()
+    while not candidate.parent.exists():
+        candidate = candidate.parent
+    return candidate
 
 
 def _file_ownership_authorization(
@@ -598,6 +732,13 @@ def _assert_plan_inputs_unchanged(plan: InstallPlan) -> None:
     """Refuse if source or live inputs changed before the first write."""
     if tuple(_iter_all_tracked_files(plan.ctx)) != plan.tracked_entries:
         raise SetforgeError("tracked file inventory changed after planning; retry")
+    current_trees = _plan_trees(
+        tuple(_iter_all_trees(plan.ctx)),
+        profile=plan.ctx.profile,
+        owner_id=plan.package_owner_id,
+    )
+    if current_trees != plan.trees:
+        raise SetforgeError("managed tree inputs changed after planning; retry")
     changed = [
         path
         for path, payload in plan.source_bytes
@@ -705,6 +846,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     adapter_kinds: set[operations.AdapterKind],
     retry_failed: bool,
     yes: bool,
+    mutation_guards: MutationLockGuards,
 ) -> _CapabilityApplyResult:
     """Apply frozen target plans in the selected bundles' graph order."""
     cfg = plan.ctx.cfg
@@ -785,6 +927,43 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
             profile, plan.deploys
         )
+        for tree in plan.trees:
+            guard = next(
+                (
+                    item
+                    for item in mutation_guards.targets
+                    if item.target.absolute() == _tree_lock_target(tree.destination)
+                ),
+                None,
+            )
+            if guard is None:
+                raise SetforgeError("managed tree target lock is missing")
+            guard.verify_expected()
+            if guard.target_fd is None:
+                guard.mkdir()
+            anchor_fd = guard.target_fd
+            if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
+                raise SetforgeError("managed tree target lock has no descriptor")
+            if tree.decision.action is FileAction.ADOPT:
+                inventory = replace(
+                    tree.plan.live,
+                    owned_paths=tuple(entry.path for entry in tree.plan.live.entries),
+                )
+            else:
+                policy = tree.tracked_file.tree
+                if policy is None:  # pragma: no cover - frozen plan invariant
+                    raise SetforgeError("managed tree lost its policy")
+                inventory = apply_tree(
+                    tree.plan,
+                    tree.destination,
+                    policy,
+                    anchor_fd=anchor_fd,
+                    anchor_relative=tree.destination.absolute()
+                    .relative_to(guard.target.absolute())
+                    .parts,
+                )
+            guard.verify_expected()
+            write_inventory(profile, tree.name, inventory)
         seeded = tuple(
             host_local_record.seed_section_slots_to_store(
                 cfg, resolved, plan.ctx.repo_root, profile
@@ -1092,8 +1271,22 @@ def _preview_file_ownership(config: Path, profile: str) -> tuple[FileDecision, .
         owner_id = read_owner_id(config.parent)
     except OwnershipError:
         owner_id = None
-    return _plan_file_ownership(
+    regular = _plan_file_ownership(
         tuple(_iter_all_tracked_files(ctx)), profile=profile, owner_id=owner_id
+    )
+    trees = _plan_trees(tuple(_iter_all_trees(ctx)), profile=profile, owner_id=owner_id)
+    return regular + tuple(tree.decision for tree in trees)
+
+
+def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
+    """Resolve explicit tree roots for canonical mutation-lock acquisition."""
+    cfg = load_config(config)
+    resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
+    )
+    return tuple(
+        _tree_lock_target(destination) for *_prefix, destination in _iter_all_trees(ctx)
     )
 
 
@@ -1209,6 +1402,10 @@ def _publish_file_claims(
         for tracked, name, _source, destination in plan.tracked_entries
         for path in _ownership_destinations(tracked, destination)
     }
+    declarations.update(
+        {str(tree.destination.absolute()): tree.name for tree in plan.trees}
+    )
+    trees_by_locator = {str(tree.destination.absolute()): tree for tree in plan.trees}
     for resource_id, expected in by_resource.items():
         current = store.read(resource_id)
         if current != expected.claim and not (
@@ -1221,10 +1418,21 @@ def _publish_file_claims(
             raise SetforgeError(
                 "tracked file ownership changed after confirmation; retry"
             )
-        observed = observe_file(
-            Path(expected.observation.locator),
-            allow_topology=expected.observation.topology,
-        )
+        tree = trees_by_locator.get(expected.observation.locator)
+        if tree is None:
+            observed = observe_file(
+                Path(expected.observation.locator),
+                allow_topology=expected.observation.topology,
+            )
+        else:
+            policy = tree.tracked_file.tree
+            if policy is None:  # pragma: no cover - frozen plan invariant
+                raise SetforgeError("managed tree lost its policy")
+            live = scan_tree(
+                tree.destination,
+                policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE}),
+            ).inventory
+            observed = observe_tree(tree.destination, live.fingerprint)
         if observed.resource_id != resource_id:
             if current is not None:
                 current = store.move_locked(
@@ -1578,6 +1786,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     ownership_config = config.read_bytes()
     ownership_preview = _preview_package_ownership(config, profile, locked=locked)
     file_ownership_preview = _preview_file_ownership(config, profile)
+    tree_target_preview = _preview_tree_targets(config, profile)
     if config.read_bytes() != ownership_config:
         raise SetforgeError("install configuration changed while loading; retry")
     _confirm_package_adoptions(ownership_preview, yes=yes)
@@ -1593,8 +1802,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         mutation_locks(
             resources=True,
             config_dir=config.parent,
+            target_roots=tree_target_preview,
             profile=profile,
-        ),
+        ) as mutation_guards,
         operations.recover_on_error(profile, "install"),
     ):
         operations.refuse_active(profile)
@@ -1621,6 +1831,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto=yes,
             package_owner_id=package_owner_id,
         )
+        if tuple(_tree_lock_target(tree.destination) for tree in plan.trees) != (
+            tree_target_preview
+        ):
+            raise SetforgeError(
+                "managed tree targets changed after confirmation; retry"
+            )
         scan_result = secrets_mod.run_pre_deploy_scan(
             tracked_root=config.parent / "tracked",
             skip=no_secrets_scan,
@@ -1709,6 +1925,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 (
                     *plan.dst_paths,
                     *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
+                    *(
+                        path
+                        for tree in plan.trees
+                        for path in _tree_checkpoint_paths(tree, profile)
+                    ),
                     *secrets_checkpoint_paths,
                     *ownership_paths,
                     *file_ownership_paths,
@@ -1722,6 +1943,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     *plan.dst_paths,
                     *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
                     *(
+                        path
+                        for tree in plan.trees
+                        for path in _tree_checkpoint_paths(tree, profile)
+                    ),
+                    *(
                         OwnershipStore().claim_path(decision.observation.resource_id)
                         for decision in plan.file_ownership
                         if decision.action
@@ -1730,6 +1956,17 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 )
             )
         )
+        tree_filesystem_paths = tuple(
+            dict.fromkeys(
+                path
+                for tree in plan.trees
+                for path in _tree_checkpoint_paths(tree, profile)
+            )
+        )
+        tree_pre_images = {
+            path: transitions.snapshot_filesystem_image(path)
+            for path in tree_filesystem_paths
+        }
         adapter_snapshots = _install_adapter_snapshots(plan)
         adapter_kinds = {item.kind for item in adapter_snapshots}
         journal = operations.prepare(
@@ -1773,6 +2010,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             adapter_kinds=adapter_kinds,
             retry_failed=retry_failed,
             yes=yes,
+            mutation_guards=mutation_guards,
         )
         journal = capability_result.journal
         provision_results = list(capability_result.provision_results)
@@ -1799,6 +2037,19 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         journal = operations.finish_checkpoint(journal)
 
         file_post = transitions.snapshot_paths(dst_paths)
+        tree_post_images = {
+            path: transitions.snapshot_filesystem_image(path)
+            for path in tree_filesystem_paths
+        }
+        tree_filesystem_deltas = tuple(
+            transitions.FilesystemDelta(
+                path,
+                tree_pre_images[path],
+                tree_post_images[path],
+            )
+            for path in tree_filesystem_paths
+            if tree_pre_images[path] != tree_post_images[path]
+        )
 
         _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
 
@@ -1811,6 +2062,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             mcp_delta=mcp_delta,
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
             seeded=bool(seeded),
+            filesystem_deltas=tree_filesystem_deltas,
         ):
             journal = operations.begin_checkpoint(
                 journal,
@@ -1833,6 +2085,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 state_snapshots=deploy_outcome.state_snapshots,
                 mcp_delta=mcp_delta,
                 file_modes=deploy_outcome.prior_modes,
+                filesystem_deltas=tree_filesystem_deltas,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")

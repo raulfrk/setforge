@@ -113,6 +113,43 @@ class GeneratedContent(BaseModel):
         return value
 
 
+class TreeSymlinkPolicy(StrEnum):
+    """How an explicitly managed directory tree treats source symlinks."""
+
+    REFUSE = "refuse"
+    PRESERVE = "preserve"
+
+
+class TreeOrphanPolicy(StrEnum):
+    """How a managed tree treats prior owned entries absent from intent."""
+
+    KEEP = "keep"
+    REMOVE_OWNED = "remove-owned"
+
+
+class TreePolicy(BaseModel):
+    """Portable management policy for one directory-shaped tracked file."""
+
+    model_config = _STRICT
+
+    exclude: list[str] = Field(default_factory=list)
+    symlinks: TreeSymlinkPolicy = TreeSymlinkPolicy.REFUSE
+    orphans: TreeOrphanPolicy = TreeOrphanPolicy.KEEP
+
+    @field_validator("exclude")
+    @classmethod
+    def _validate_excludes(cls, value: list[str]) -> list[str]:
+        for pattern in value:
+            if not pattern or pattern.startswith("/"):
+                raise ValueError(
+                    "tree exclude patterns must be non-empty relative patterns"
+                )
+            if any(part == ".." for part in PurePosixPath(pattern).parts):
+                raise ValueError("tree exclude patterns must not contain '..'")
+            _reject_control_chars_in_path(pattern)
+        return value
+
+
 class MarketplaceSourceKind(StrEnum):
     GITHUB = "github"
     PATH = "path"
@@ -258,6 +295,7 @@ class TrackedFile(BaseModel):
     dst: str
     template: bool = False
     generated: GeneratedContent | None = None
+    tree: TreePolicy | None = None
     mode: int | None = None
     """POSIX file-mode bits (chmod) for the live dst.
 
@@ -324,6 +362,20 @@ class TrackedFile(BaseModel):
             raise ValueError(
                 f"mode {oct(self.mode)} and symlink {self.symlink!r} are "
                 f"mutually exclusive — a symlink cannot carry a file mode."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _tree_shape_is_unambiguous(self) -> Self:
+        if self.tree is None:
+            return self
+        if self.generated is not None:
+            raise ValueError("tree and generated are mutually exclusive")
+        if self.symlink is not None:
+            raise ValueError("tree and tracked-file symlink are mutually exclusive")
+        if self.mode is not None:
+            raise ValueError(
+                "tree root mode is inventory-derived; per-entry source modes apply"
             )
         return self
 
@@ -588,8 +640,23 @@ class FileComponent(BaseModel):
     mode: int | None = None
     template: bool = False
     generated: GeneratedContent | None = None
+    tree: TreePolicy | None = None
     symlink: str | None = None
     allow_outside_home: bool = False
+
+    @model_validator(mode="after")
+    def _tree_shape_is_unambiguous(self) -> Self:
+        if self.tree is None:
+            return self
+        if (
+            self.generated is not None
+            or self.symlink is not None
+            or self.mode is not None
+        ):
+            raise ValueError(
+                "tree is mutually exclusive with generated, symlink, and root mode"
+            )
+        return self
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -899,6 +966,7 @@ def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
         mode=fc.mode,
         template=fc.template,
         generated=fc.generated,
+        tree=fc.tree,
         symlink=fc.symlink,
         allow_outside_home=fc.allow_outside_home,
     )
@@ -1057,9 +1125,38 @@ def expand_bundle_file_components(
                 resolved.tracked_files.append(synthetic_id)
 
 
+def validate_tree_destination_boundaries(
+    config: Config, resolved: ResolvedProfile
+) -> None:
+    """Refuse nested deployment roots when either side is a managed tree."""
+    from jinja2 import TemplateError
+
+    destinations: list[tuple[str, TrackedFile, Path]] = []
+    for name in resolved.tracked_files:
+        tracked = config.tracked_files[name]
+        try:
+            destination = _resolve_confined_dst(tracked.dst, template=tracked.template)
+        except TemplateError:
+            continue
+        destinations.append((name, tracked, destination))
+    for index, (left_name, left, left_path) in enumerate(destinations):
+        for right_name, right, right_path in destinations[index + 1 :]:
+            nested = (
+                left_path == right_path
+                or left_path in right_path.parents
+                or right_path in left_path.parents
+            )
+            if nested and (left.tree is not None or right.tree is not None):
+                raise ConfigError(
+                    f"managed tree destination overlap: {left_name!r} targets "
+                    f"{left_path}, while {right_name!r} targets {right_path}"
+                )
+
+
 def resolve_and_expand(config: Config, name: str, repo_root: Path) -> ResolvedProfile:
     resolved = resolve_profile(config, name)
     expand_bundle_file_components(config, resolved, repo_root)
+    validate_tree_destination_boundaries(config, resolved)
     return resolved
 
 
@@ -1105,6 +1202,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _validate_package_references(config)
     _validate_section_slot_references(config)
     _guard_generated_resources(config, path)
+    _guard_directory_trees(config, path)
     _warn_on_schema_mismatch(config)
     return config
 
@@ -1128,6 +1226,24 @@ def _guard_generated_resources(config: Config, path: Path) -> None:
         raise ConfigError(
             f"{path}: generated tracked files require minimum_version >= '6.1'"
         )
+
+
+def _guard_directory_trees(config: Config, path: Path) -> None:
+    """Require the 6.2 reader floor before accepting tree intent."""
+    direct = any(item.tree is not None for item in config.tracked_files.values())
+    bundled = any(
+        component.file is not None and component.file.tree is not None
+        for bundle in config.bundles.values()
+        for component in bundle.components
+    )
+    if not direct and not bundled:
+        return
+    if not _meets_floor(config.schema_version, "6.2") or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: managed trees require schema_version and minimum_version >= '6.2'"
+        )
+    if not _meets_floor(config.minimum_version, "6.2"):
+        raise ConfigError(f"{path}: managed trees require minimum_version >= '6.2'")
 
 
 def _validate_tolerant(data: object) -> Config:

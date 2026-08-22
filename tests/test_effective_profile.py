@@ -22,6 +22,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("install.py", "_load_install_context"),
     ("install.py", "_preview_package_ownership"),
     ("install.py", "_preview_file_ownership"),
+    ("install.py", "_preview_tree_targets"),
     ("sync.py", "_load_capture_preview"),
     ("inspect.py", "inspect"),
     ("status.py", "status"),

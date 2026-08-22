@@ -43,12 +43,13 @@ from setforge.config import (
     resolve_and_expand,
 )
 from setforge.errors import BaseStoreError, ConfigError
-from setforge.file_ownership import FileAction, decide_file, observe_file
+from setforge.file_ownership import FileAction, decide_file, observe_file, observe_tree
 from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.tree_management import plan_tree, read_inventory, scan_tree
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -636,6 +637,56 @@ def compare_profile(
         dst = resolve_dst(tracked_file)
         host_local = overlay.get(name) or None
 
+        if tracked_file.tree is not None:
+            desired = scan_tree(src, tracked_file.tree, capture_payloads=True)
+            live = scan_tree(
+                dst,
+                tracked_file.tree.model_copy(update={"symlinks": "preserve"}),
+            ).inventory
+            tree_plan = plan_tree(
+                desired,
+                live,
+                read_inventory(profile_name, name),
+                tracked_file.tree,
+            )
+            changed = tuple(
+                action for action in tree_plan.actions if action.kind.value != "keep"
+            )
+            if not changed:
+                entry = FileCompare(name, CompareStatus.UNCHANGED, "")
+                unexpected = False
+            elif not live.root_present:
+                entry = FileCompare(name, CompareStatus.MISSING, "")
+                unexpected = False
+            else:
+                summary = "\n".join(
+                    f"{action.kind.value}: {action.path} ({action.detail})"
+                    for action in changed
+                )
+                entry = FileCompare(
+                    name,
+                    CompareStatus.DRIFTED,
+                    summary,
+                    drift_class=(
+                        DriftClass.UNEXPECTED
+                        if ownership_authorized is None
+                        or ownership_authorized.get(name, False)
+                        else DriftClass.EXPECTED
+                    ),
+                    reason=(
+                        "managed tree inventory differs"
+                        if ownership_authorized is None
+                        or ownership_authorized.get(name, False)
+                        else "tree awaits container adoption"
+                    ),
+                )
+                unexpected = ownership_authorized is None or ownership_authorized.get(
+                    name, False
+                )
+            entries.append(entry)
+            has_unexpected = has_unexpected or unexpected
+            continue
+
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             entry, sub_unexpected = _compare_one(
                 sub_name,
@@ -691,16 +742,40 @@ def file_authorization_map(
         return {
             sub_name: legacy
             for name in resolved.tracked_files
-            for sub_name, _src, _dst in expand_tracked_file(
-                name,
-                resolve_src(config.tracked_files[name], repo_root),
-                resolve_dst(config.tracked_files[name]),
+            for sub_name in (
+                (name,)
+                if config.tracked_files[name].tree is not None
+                else tuple(
+                    item[0]
+                    for item in expand_tracked_file(
+                        name,
+                        resolve_src(config.tracked_files[name], repo_root),
+                        resolve_dst(config.tracked_files[name]),
+                    )
+                )
             )
         }
     store = OwnershipStore()
     result: dict[str, bool] = {}
     for name in resolved.tracked_files:
         tracked = config.tracked_files[name]
+        if tracked.tree is not None:
+            destination = resolve_dst(tracked)
+            live = scan_tree(
+                destination,
+                tracked.tree.model_copy(update={"symlinks": "preserve"}),
+            ).inventory
+            observation = observe_tree(destination, live.fingerprint)
+            decision = decide_file(
+                observation,
+                store.read(observation.resource_id),
+                owner_id=owner_id,
+            )
+            result[name] = decision.action not in {
+                FileAction.ADOPT,
+                FileAction.HOLD,
+            }
+            continue
         for sub_name, _src, destination in expand_tracked_file(
             name, resolve_src(tracked, repo_root), resolve_dst(tracked)
         ):

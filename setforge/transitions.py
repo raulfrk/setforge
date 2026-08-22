@@ -76,6 +76,7 @@ class FilesystemKind(StrEnum):
     ABSENT = "absent"
     FILE = "file"
     SYMLINK = "symlink"
+    DIRECTORY = "directory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1418,6 +1419,15 @@ def snapshot_filesystem_image(path: Path) -> FilesystemImage:
                 mode=stat.S_IMODE(before.st_mode),
                 mtime_ns=before.st_mtime_ns,
             )
+        if stat.S_ISDIR(before.st_mode):
+            after = path.lstat()
+            if _filesystem_stat_identity(before) != _filesystem_stat_identity(after):
+                raise OSError("directory changed while snapshotting")
+            return FilesystemImage(
+                FilesystemKind.DIRECTORY,
+                mode=stat.S_IMODE(before.st_mode),
+                mtime_ns=before.st_mtime_ns,
+            )
         if not stat.S_ISREG(before.st_mode):
             raise SetforgeError(f"unsupported transition filesystem object: {path}")
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -1629,8 +1639,11 @@ def _validate_filesystem_image(image: FilesystemImage) -> None:
     if image.kind is FilesystemKind.FILE:
         if image.payload is None or image.link_target is not None:
             raise ValueError("invalid regular-file image")
-    elif image.payload is not None or image.link_target is None:
-        raise ValueError("invalid symlink image")
+    elif image.kind is FilesystemKind.SYMLINK:
+        if image.payload is not None or image.link_target is None:
+            raise ValueError("invalid symlink image")
+    elif image.payload is not None or image.link_target is not None:
+        raise ValueError("invalid directory image")
 
 
 def validate_filesystem_deltas_reverse(deltas: tuple[FilesystemDelta, ...]) -> None:

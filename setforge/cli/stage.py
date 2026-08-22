@@ -231,7 +231,7 @@ def collect_stages(
     stages: list[FileStage] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
-        if tracked_file.generated is not None:
+        if tracked_file.generated is not None or tracked_file.tree is not None:
             continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
@@ -316,7 +316,7 @@ def collect_structured_stages(
     stages: list[StructuredFileStage] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
-        if tracked_file.generated is not None:
+        if tracked_file.generated is not None or tracked_file.tree is not None:
             continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
@@ -1092,7 +1092,10 @@ def _refuse_generated_stage_target(
 ) -> None:
     """Refuse staging when ``file`` names generated one-way output."""
     matched = any(
-        cfg.tracked_files[name].generated is not None
+        (
+            cfg.tracked_files[name].generated is not None
+            or cfg.tracked_files[name].tree is not None
+        )
         and file
         in {
             name,
@@ -1103,8 +1106,8 @@ def _refuse_generated_stage_target(
     )
     if matched:
         raise typer.BadParameter(
-            f"{file!r} is generated one-way output and cannot be staged; "
-            "edit its tracked template or host-input declaration"
+            f"{file!r} is one-way output and cannot be staged; edit its tracked "
+            "template, source tree, or host-input declaration"
         )
 
 
