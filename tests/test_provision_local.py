@@ -10,7 +10,9 @@ import pytest
 from pydantic import ValidationError
 
 from setforge.config import LocalPackage
+from setforge.errors import CorruptReceiptError
 from setforge.provision import local as loc
+from setforge.provision.driver import reconcile
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.receipt import ReceiptStore
 
@@ -247,6 +249,68 @@ def test_rerun_no_ops_when_receipt_present(tmp_path: Path) -> None:
     second = prov.apply_one(_item(pkg))
     assert second.outcome is Outcome.SKIP, second.detail
     assert second.detail == "present"
+
+
+def test_reconcile_reinstalls_when_receipted_destination_is_missing(
+    tmp_path: Path,
+) -> None:
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"content")
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    prov = _provisioner(tmp_path, tracked)
+    item = _item(pkg)
+
+    assert reconcile(prov, [item]).outcomes[0].outcome is Outcome.OK
+    destination = install_dir / "tool"
+    destination.unlink()
+
+    result = reconcile(prov, [item])
+
+    assert result.delta.installed == (item.identity,)
+    assert result.outcomes[0].outcome is Outcome.OK
+    assert destination.read_bytes() == b"content"
+
+
+def test_receipted_directory_is_not_an_installed_local_binary(tmp_path: Path) -> None:
+    destination = tmp_path / "out" / "tool"
+    destination.mkdir(parents=True)
+    receipts = ReceiptStore(tmp_path / "receipts")
+    item = _item(_pkg(destination.parent, path="bin/tool", extract=False))
+    receipts.record(
+        item.identity,
+        version=None,
+        checksum=None,
+        path=destination,
+        provider="local",
+    )
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tmp_path / "tracked")
+
+    assert item.identity not in prov.probe()
+
+
+def test_missing_typed_and_legacy_destinations_still_fail_closed(
+    tmp_path: Path,
+) -> None:
+    receipts = ReceiptStore(tmp_path / "receipts")
+    item = _item(_pkg(tmp_path / "out", path="bin/tool", extract=False))
+    receipts.record(
+        item.identity,
+        version=None,
+        checksum=None,
+        path=tmp_path / "missing-legacy",
+    )
+    receipts.record(
+        item.identity,
+        version=None,
+        checksum=None,
+        path=tmp_path / "missing-typed",
+        provider="local",
+    )
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tmp_path / "tracked")
+
+    with pytest.raises(CorruptReceiptError):
+        prov.probe()
 
 
 def test_reproducible_from_committed_file(tmp_path: Path) -> None:

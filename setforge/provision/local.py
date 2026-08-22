@@ -67,7 +67,18 @@ class LocalProvisioner(Provisioner):
         self._tracked_root = tracked_root
 
     def probe(self) -> set[Identity]:
-        return self._receipts.installed_for(self.type)
+        present: set[Identity] = set()
+        for identity in self._receipts.installed_for(self.type):
+            recorded = self._receipts.path_for(identity, provider=self.type)
+            try:
+                exists = recorded is not None and recorded.is_file()
+            except OSError:
+                exists = False
+            if exists:
+                present.add(identity)
+            else:
+                self._receipts.entry_for(identity, self.type)
+        return present
 
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
