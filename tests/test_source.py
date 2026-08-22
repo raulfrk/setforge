@@ -19,10 +19,55 @@ from setforge.source import (
     SourceKind,
     _load_local_source_config,
     _LocalTrackedFileOverlay,
+    load_local_codex_overlay,
     resolve_source,
     resolve_source_dir,
     validate_source_dir,
 )
+
+
+def test_local_codex_overlay_loads_selections_and_host_references(
+    tmp_path: Path,
+) -> None:
+    path = _write_local_yaml(
+        tmp_path / "local.yaml",
+        """codex:
+  skills:
+    add: [review]
+    remove: [legacy]
+  project_paths:
+    app: ~/src/app
+  environment_vars:
+    github_token: GITHUB_TOKEN
+""",
+    )
+
+    overlay = load_local_codex_overlay(path)
+
+    assert overlay.skills.add == ["review"]
+    assert overlay.skills.remove == ["legacy"]
+    assert overlay.project_paths["app"] == Path("~/src/app")
+    assert overlay.environment_vars == {"github_token": "GITHUB_TOKEN"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "codex: {project_paths: {app: relative/path}}\n",
+        'codex: {project_paths: {app: "/tmp/a\\nb"}}\n',
+        "codex: {environment_vars: {token: 'literal secret'}}\n",
+        "codex: {environment_vars: {token: 'TOKEN=value'}}\n",
+        "codex: {environment_vars: {token: 'TOKEN.DOT'}}\n",
+        "codex: {unknown: true}\n",
+    ],
+)
+def test_local_codex_overlay_rejects_unsafe_host_values(
+    tmp_path: Path, body: str
+) -> None:
+    path = _write_local_yaml(tmp_path / "local.yaml", body)
+
+    with pytest.raises(ValidationError):
+        load_local_codex_overlay(path)
 
 
 def _write_local_yaml(path: Path, body: str) -> Path:

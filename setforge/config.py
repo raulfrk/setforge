@@ -7,11 +7,13 @@ writes that re-serialize the document.
 """
 
 import copy
+import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -184,6 +186,33 @@ class McpScope(StrEnum):
     USER = "user"
     PROJECT = "project"
     LOCAL = "local"
+
+
+class ProductKind(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+class CodexFileScope(StrEnum):
+    USER = "user"
+    PROJECT = "project"
+
+
+class CodexSkillScope(StrEnum):
+    USER = "user"
+    REPOSITORY = "repository"
+
+
+class CodexMcpTransport(StrEnum):
+    STDIO = "stdio"
+    HTTP = "http"
+
+
+class CodexToolApprovalMode(StrEnum):
+    AUTO = "auto"
+    PROMPT = "prompt"
+    WRITES = "writes"
+    APPROVE = "approve"
 
 
 def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
@@ -437,6 +466,229 @@ class McpServerRef(BaseModel):
         if not v:
             raise ValueError("McpServerRef.command must be a non-empty token list")
         return v
+
+
+def _validate_project_locator(value: Path | None, scope: CodexFileScope) -> Path | None:
+    if scope is CodexFileScope.PROJECT and value is None:
+        raise ValueError("project-scoped Codex resources require `project`")
+    if scope is CodexFileScope.USER and value is not None:
+        raise ValueError("user-scoped Codex resources must not declare `project`")
+    if value is not None:
+        _validate_portable_source(value, label="Codex project locators")
+    return value
+
+
+def _validate_portable_source(
+    value: Path, *, label: str = "Codex portable sources"
+) -> Path:
+    raw = str(value)
+    posix = PurePosixPath(raw)
+    windows = PureWindowsPath(raw)
+    if (
+        posix.is_absolute()
+        or windows.is_absolute()
+        or bool(windows.drive)
+        or ".." in posix.parts
+        or ".." in windows.parts
+        or raw.startswith("~")
+    ):
+        raise ValueError(f"{label} must be safe relative paths")
+    _reject_control_chars_in_path(value)
+    return value
+
+
+class CodexConfigRef(BaseModel):
+    model_config = _STRICT
+
+    source: Path
+    scope: CodexFileScope = CodexFileScope.USER
+    project: Path | None = None
+
+    @field_validator("source")
+    @classmethod
+    def _portable_source(cls, value: Path) -> Path:
+        return _validate_portable_source(value)
+
+    @model_validator(mode="after")
+    def _valid_scope(self) -> Self:
+        self.project = _validate_project_locator(self.project, self.scope)
+        return self
+
+
+class CodexInstructionRef(BaseModel):
+    model_config = _STRICT
+
+    source: Path
+    scope: CodexFileScope = CodexFileScope.USER
+    project: Path | None = None
+
+    @field_validator("source")
+    @classmethod
+    def _portable_source(cls, value: Path) -> Path:
+        return _validate_portable_source(value)
+
+    @model_validator(mode="after")
+    def _valid_scope(self) -> Self:
+        self.project = _validate_project_locator(self.project, self.scope)
+        return self
+
+
+class CodexSkillRef(BaseModel):
+    model_config = _STRICT
+
+    source: Path
+    scope: CodexSkillScope = CodexSkillScope.USER
+    project: Path | None = None
+
+    @field_validator("source")
+    @classmethod
+    def _portable_source(cls, value: Path) -> Path:
+        return _validate_portable_source(value)
+
+    @model_validator(mode="after")
+    def _valid_scope(self) -> Self:
+        file_scope = (
+            CodexFileScope.USER
+            if self.scope is CodexSkillScope.USER
+            else CodexFileScope.PROJECT
+        )
+        self.project = _validate_project_locator(self.project, file_scope)
+        return self
+
+
+class CodexPluginRef(BaseModel):
+    model_config = _STRICT
+
+    marketplace: str
+
+
+class CodexMcpToolPolicy(BaseModel):
+    model_config = _STRICT
+
+    approval_mode: CodexToolApprovalMode
+
+
+def _validate_env_name(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None:
+        raise ValueError("Codex environment references must be variable names")
+    return value
+
+
+class CodexStdioMcpServerRef(BaseModel):
+    model_config = _STRICT
+
+    transport: Literal[CodexMcpTransport.STDIO] = CodexMcpTransport.STDIO
+    command: str
+    args: list[str] = []
+    cwd: Path | None = None
+    env_vars: list[str] = []
+    enabled: bool = True
+    required: bool = False
+    startup_timeout_sec: float | None = None
+    tool_timeout_sec: float | None = None
+    enabled_tools: list[str] = []
+    disabled_tools: list[str] = []
+    default_tools_approval_mode: CodexToolApprovalMode | None = None
+    tools: dict[str, CodexMcpToolPolicy] = {}
+
+    @field_validator("command")
+    @classmethod
+    def _command_non_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Codex STDIO MCP command must not be empty")
+        return value
+
+    @field_validator("env_vars")
+    @classmethod
+    def _environment_names(cls, values: list[str]) -> list[str]:
+        return [_validate_env_name(value) for value in values]
+
+    @field_validator("startup_timeout_sec", "tool_timeout_sec")
+    @classmethod
+    def _positive_timeout(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("Codex MCP timeouts must be positive")
+        return value
+
+    @field_validator("cwd")
+    @classmethod
+    def _portable_cwd(cls, value: Path | None) -> Path | None:
+        return None if value is None else _validate_portable_source(value)
+
+
+class CodexHttpMcpServerRef(BaseModel):
+    model_config = _STRICT
+
+    transport: Literal[CodexMcpTransport.HTTP] = CodexMcpTransport.HTTP
+    url: str
+    bearer_token_env_var: str | None = None
+    env_http_headers: dict[str, str] = {}
+    enabled: bool = True
+    required: bool = False
+    startup_timeout_sec: float | None = None
+    tool_timeout_sec: float | None = None
+    enabled_tools: list[str] = []
+    disabled_tools: list[str] = []
+    default_tools_approval_mode: CodexToolApprovalMode | None = None
+    tools: dict[str, CodexMcpToolPolicy] = {}
+
+    @field_validator("url")
+    @classmethod
+    def _streamable_http_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        try:
+            _port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Codex HTTP MCP url has an invalid port") from exc
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or any(char.isspace() for char in value)
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError(
+                "Codex HTTP MCP url must be a credential-free http(s) endpoint"
+            )
+        return value
+
+    @field_validator("bearer_token_env_var")
+    @classmethod
+    def _bearer_environment_name(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_env_name(value)
+
+    @field_validator("env_http_headers")
+    @classmethod
+    def _header_environment_names(cls, values: dict[str, str]) -> dict[str, str]:
+        return {name: _validate_env_name(value) for name, value in values.items()}
+
+    @field_validator("startup_timeout_sec", "tool_timeout_sec")
+    @classmethod
+    def _positive_timeout(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("Codex MCP timeouts must be positive")
+        return value
+
+
+CodexMcpServerRef = Annotated[
+    CodexStdioMcpServerRef | CodexHttpMcpServerRef,
+    Field(discriminator="transport"),
+]
+
+
+class CodexSpec(BaseModel):
+    model_config = _STRICT
+
+    config: dict[str, CodexConfigRef] = {}
+    instructions: dict[str, CodexInstructionRef] = {}
+    skills: dict[str, CodexSkillRef] = {}
+    marketplaces: dict[str, MarketplaceSource] = {}
+    plugins: dict[str, CodexPluginRef] = {}
+    mcp_servers: dict[str, CodexMcpServerRef] = {}
 
 
 class SectionTemplateRef(BaseModel):
@@ -797,6 +1049,17 @@ class ReconcileSpec(BaseModel):
     extensions: ExtensionReconcile = ExtensionReconcile()
 
 
+class CodexProfile(BaseModel):
+    model_config = _STRICT
+
+    config: list[str] = []
+    instructions: list[str] = []
+    skills: list[str] = []
+    plugins: list[str] = []
+    mcp_servers: list[str] = []
+    reconcile: PluginReconcile = PluginReconcile()
+
+
 class Profile(BaseModel):
     model_config = _STRICT
 
@@ -807,6 +1070,9 @@ class Profile(BaseModel):
     packages: list[str] = []
     bundles: list[str] = []
     reconcile: ReconcileSpec = ReconcileSpec()
+    codex: CodexProfile | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     section_slots: dict[str, str] = {}
     """Map a host-local user-section NAME → a template name in the
     top-level :attr:`Config.section_templates` registry.
@@ -835,6 +1101,9 @@ class ResolvedProfile(BaseModel):
     packages: list[str] = []
     bundles: list[str] = []
     reconcile: ReconcileSpec = ReconcileSpec()
+    codex: CodexProfile | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     section_slots: dict[str, str] = {}
 
 
@@ -880,6 +1149,9 @@ class Config(BaseModel):
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
     mcp_servers: dict[str, McpServerRef] = {}
+    codex: CodexSpec | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     section_templates: dict[str, SectionTemplateRef] = {}
     packages: dict[str, Package] = {}
     bundles: dict[str, BundleSpec] = {}
@@ -935,6 +1207,64 @@ def _merge_reconcile(parent: ReconcileSpec, child: ReconcileSpec) -> ReconcileSp
     )
 
 
+def _merge_codex_profile(
+    parent: CodexProfile | None, child: CodexProfile | None
+) -> CodexProfile | None:
+    if parent is None:
+        return child.model_copy(deep=True) if child is not None else None
+    if child is None:
+        return parent.model_copy(deep=True)
+    child_policy_set = (
+        "reconcile" in child.model_fields_set
+        and "policy" in child.reconcile.model_fields_set
+    )
+    return CodexProfile(
+        config=_merge_list(parent.config, child.config),
+        instructions=_merge_list(parent.instructions, child.instructions),
+        skills=_merge_list(parent.skills, child.skills),
+        plugins=_merge_list(parent.plugins, child.plugins),
+        mcp_servers=_merge_list(parent.mcp_servers, child.mcp_servers),
+        reconcile=PluginReconcile(
+            policy=(
+                child.reconcile.policy if child_policy_set else parent.reconcile.policy
+            )
+        ),
+    )
+
+
+def apply_host_local_codex_overlay(
+    config: Config,
+    resolved: ResolvedProfile,
+    *,
+    local_config_path: Path | None = None,
+) -> ResolvedProfile:
+    """Merge ``local.yaml`` Codex selections without importing host values."""
+    if resolved.codex is None:
+        base = CodexProfile()
+    else:
+        base = resolved.codex.model_copy(deep=True)
+    from setforge.source import LOCAL_CONFIG_PATH, load_local_codex_overlay
+
+    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    overlay = load_local_codex_overlay(path)
+    fields = ("config", "instructions", "skills", "plugins", "mcp_servers")
+    if resolved.codex is None and not any(
+        getattr(overlay, field).add for field in fields
+    ):
+        return resolved
+    updates: dict[str, object] = {}
+    for field in fields:
+        selection = getattr(overlay, field)
+        selected = _merge_list(getattr(base, field), selection.add)
+        removed = set(selection.remove)
+        updates[field] = [name for name in selected if name not in removed]
+    merged = base.model_copy(update=updates)
+    candidate = resolved.model_copy(update={"codex": merged})
+    _validate_resolved_codex_references(config, candidate, "local overlay")
+    _raise_codex_ownership_collisions(config, candidate, "local overlay")
+    return candidate
+
+
 def resolve_chain(config: Config, name: str) -> list[Profile]:
     """Walk ``extends:`` from leaf to root, return profiles root-first."""
     chain: list[Profile] = []
@@ -979,6 +1309,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
             bundles=_merge_list(resolved.bundles, profile.bundles),
             section_slots=_merge_dict(resolved.section_slots, profile.section_slots),
             reconcile=_merge_reconcile(resolved.reconcile, profile.reconcile),
+            codex=_merge_codex_profile(resolved.codex, profile.codex),
         )
     return resolved
 
@@ -1249,11 +1580,14 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     )
     _validate_plugin_references(config)
     _validate_mcp_references(config)
+    _validate_codex_references(config)
+    _validate_codex_ownership(config)
     _validate_package_references(config)
     _validate_section_slot_references(config)
     _guard_generated_resources(config, path)
     _guard_directory_trees(config, path)
     _guard_platform_release_assets(config, path)
+    _guard_codex_contract(config, path)
     _warn_on_schema_mismatch(config)
     return config
 
@@ -1320,6 +1654,20 @@ def _guard_platform_release_assets(config: Config, path: Path) -> None:
         raise ConfigError(
             f"{path}: platform release assets require minimum_version >= '6.3'"
         )
+
+
+def _guard_codex_contract(config: Config, path: Path) -> None:
+    if config.codex is None and not any(
+        profile.codex is not None for profile in config.profiles.values()
+    ):
+        return
+    if not _meets_floor(config.schema_version, "6.4") or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: Codex resources require schema_version and "
+            "minimum_version >= '6.4'"
+        )
+    if not _meets_floor(config.minimum_version, "6.4"):
+        raise ConfigError(f"{path}: Codex resources require minimum_version >= '6.4'")
 
 
 def _validate_tolerant(data: object) -> Config:
@@ -1864,6 +2212,102 @@ def _validate_mcp_references(config: Config) -> None:
         )
 
 
+def _validate_codex_references(config: Config) -> None:
+    spec = config.codex
+    registries = {
+        "config": set(spec.config) if spec is not None else set(),
+        "instructions": set(spec.instructions) if spec is not None else set(),
+        "skills": set(spec.skills) if spec is not None else set(),
+        "plugins": set(spec.plugins) if spec is not None else set(),
+        "mcp_servers": set(spec.mcp_servers) if spec is not None else set(),
+    }
+    offenders: list[str] = []
+    for profile_name, profile in config.profiles.items():
+        if profile.codex is None:
+            continue
+        for field, registry in registries.items():
+            for reference in getattr(profile.codex, field):
+                if reference not in registry:
+                    offenders.append(f"{profile_name}.codex.{field}[{reference}]")
+    if spec is not None:
+        for name, plugin in spec.plugins.items():
+            if plugin.marketplace not in spec.marketplaces:
+                offenders.append(
+                    f"codex.plugins.{name}.marketplace[{plugin.marketplace}]"
+                )
+    if offenders:
+        raise ConfigError(
+            "Codex profile/resource references undeclared name(s): "
+            + ", ".join(offenders)
+        )
+
+
+def _validate_resolved_codex_references(
+    config: Config, resolved: ResolvedProfile, profile_name: str
+) -> None:
+    if resolved.codex is None:
+        return
+    spec = config.codex
+    registries = {
+        "config": set(spec.config) if spec is not None else set(),
+        "instructions": set(spec.instructions) if spec is not None else set(),
+        "skills": set(spec.skills) if spec is not None else set(),
+        "plugins": set(spec.plugins) if spec is not None else set(),
+        "mcp_servers": set(spec.mcp_servers) if spec is not None else set(),
+    }
+    offenders = [
+        f"{profile_name}.codex.{field}[{name}]"
+        for field, registry in registries.items()
+        for name in getattr(resolved.codex, field)
+        if name not in registry
+    ]
+    if offenders:
+        raise ConfigError(
+            "Codex profile/resource references undeclared name(s): "
+            + ", ".join(offenders)
+        )
+
+
+def _validate_codex_ownership(config: Config) -> None:
+    """Reject selected Codex resources that target one native destination."""
+    if config.codex is None:
+        return
+    for profile_name in config.profiles:
+        codex_profile: CodexProfile | None = None
+        for profile in resolve_chain(config, profile_name):
+            codex_profile = _merge_codex_profile(codex_profile, profile.codex)
+        if codex_profile is None:
+            continue
+        resolved = ResolvedProfile(codex=codex_profile)
+        _raise_codex_ownership_collisions(config, resolved, f"profile {profile_name!r}")
+
+
+def _raise_codex_ownership_collisions(
+    config: Config, resolved: ResolvedProfile, owner_label: str
+) -> None:
+    if config.codex is None or resolved.codex is None:
+        return
+    owners: dict[tuple[str, str], str] = {}
+    collisions: list[str] = []
+    for kind in ("config", "instructions"):
+        registry = getattr(config.codex, kind)
+        for name in getattr(resolved.codex, kind):
+            ref = registry.get(name)
+            if ref is None:
+                continue
+            scope = (
+                "user" if ref.scope is CodexFileScope.USER else f"project:{ref.project}"
+            )
+            destination = (kind, scope)
+            previous = owners.setdefault(destination, name)
+            if previous != name:
+                collisions.append(f"{kind} {previous!r} and {name!r} both own {scope}")
+    if collisions:
+        raise ConfigError(
+            f"{owner_label} has conflicting Codex ownership: " + "; ".join(collisions)
+        )
+
+
 def _validate_package_references(config: Config) -> None:
     package_registry = set(config.packages)
     bundle_registry = set(config.bundles)
@@ -2113,6 +2557,7 @@ def resolve_effective_profile(
     1. merge profile inheritance and expand bundle-file components;
     2. apply host-local tracked-file ``dst`` / ``mode`` / symlink overrides;
     3. apply host-local plugin / extension / marketplace overlays.
+    4. apply host-local Codex resource selections.
 
     Bundle expansion must precede tracked-file overlays so a host may override a
     synthetic bundle-file id. All operations mutate ``config`` and ``resolved``
@@ -2129,6 +2574,9 @@ def resolve_effective_profile(
         resolved,
         profile_name,
         local_config_path=local_config_path,
+    )
+    resolved = apply_host_local_codex_overlay(
+        config, resolved, local_config_path=local_config_path
     )
     return EffectiveProfileResolution(
         resolved=resolved,

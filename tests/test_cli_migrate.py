@@ -491,7 +491,7 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
-    assert "11 migration(s) available" in result.output
+    assert "12 migration(s) available" in result.output
     assert "1.0 → 1.1" in result.output
     assert "1.1 → 1.2" in result.output
     assert "1.2 → 2.0" in result.output

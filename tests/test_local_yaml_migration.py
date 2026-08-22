@@ -92,6 +92,10 @@ def test_local_config_schema_version_defaults_to_baseline() -> None:
     assert cfg.schema_version == LOCAL_YAML_BASELINE_VERSION
 
 
+def test_local_config_without_codex_preserves_legacy_dump() -> None:
+    assert "codex" not in LocalConfig().model_dump()
+
+
 def test_detect_absent_file_returns_baseline(tmp_path: Path) -> None:
     """A missing local.yaml detects as the baseline version."""
     assert detect_local_yaml_schema(tmp_path / "missing.yaml") == (

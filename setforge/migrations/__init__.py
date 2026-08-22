@@ -18,7 +18,7 @@ so the ``migrate`` CLI's backup + multi-file diff preview + atomic
 rollback cover the whole footprint, not just ``setforge.yaml``.
 
 The registry :data:`MIGRATIONS` holds the version-stamp chain
-1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0 → 6.1 → 6.2 → 6.3.
+1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0 → 6.1 → 6.2 → 6.3 → 6.4.
 Future migrations
 are appended in ``from_version`` order so :func:`find_migration_path`
 can walk the chain forward.
@@ -182,6 +182,7 @@ def _lower_floor(data: CommentedMap, to_version: str) -> None:
 
 __all__ = [
     "MIGRATIONS",
+    "CodexContractMigration",
     "Contract20Migration",
     "DispositionRetireMigration",
     "GeneratedResourcesMigration",
@@ -207,7 +208,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "6.3"
+current_expected_schema_version: Final[str] = "6.4"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -634,6 +635,7 @@ class RestampMigration:
 # circular import: _contract_2_0 / _marker_retire import ManifestEntry /
 # ManifestType / MigrationRoots (and friends) from this package, all defined
 # above this point.
+from setforge.migrations._codex_contract import CodexContractMigration  # noqa: E402
 from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
 from setforge.migrations._directory_trees import DirectoryTreesMigration  # noqa: E402
 from setforge.migrations._disposition_retire import (  # noqa: E402
@@ -668,6 +670,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     GeneratedResourcesMigration(),
     DirectoryTreesMigration(),
     PlatformReleaseAssetsMigration(),
+    CodexContractMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 
@@ -679,7 +682,8 @@ breaking preserve_* contraction) → 2.1 (:class:`MarkerRetireMigration`)
 → 6.0 (:class:`ProfileFieldsRetireMigration`) → 6.1
 (:class:`GeneratedResourcesMigration`) → 6.2
 (:class:`DirectoryTreesMigration`) → 6.3
-(:class:`PlatformReleaseAssetsMigration`). Future migrations are
+(:class:`PlatformReleaseAssetsMigration`) → 6.4
+(:class:`CodexContractMigration`). Future migrations are
 appended in ``from_version`` order so :func:`find_migration_path` can
 walk the chain forward. Each migration's reverse is attached to its
 forward instance, never added here — that would make the forward walk

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from setforge.source import Source
+from setforge.source import CodexLocalOverlay, Source
 
 __all__ = ["LocalConfig"]
 
@@ -60,6 +60,9 @@ class LocalConfig(BaseModel):
     plugins: dict[str, object] = Field(default_factory=dict)
     extensions: dict[str, object] = Field(default_factory=dict)
     marketplaces: dict[str, object] = Field(default_factory=dict)
+    codex: CodexLocalOverlay | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # ``orphan_ignore:`` is a list of tracked_file ids the user has
     # flagged "keep orphan" via ``cleanup-orphans --ignore``. Free-form
     # list-of-strings at this layer; the runtime loader in

@@ -122,7 +122,7 @@ def test_span_surface_retire_is_no_longer_terminal() -> None:
     # The build advanced well past 4.0 (span_types retirement → 5.0, then the
     # profile-fields contract → 6.0); the span-surface cutover is now an
     # intermediate chain step, not the head.
-    assert current_expected_schema_version == "6.3"
+    assert current_expected_schema_version == "6.4"
     assert parse_schema_version(current_expected_schema_version) > (4, 0)
 
 

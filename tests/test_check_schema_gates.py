@@ -235,11 +235,11 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_six_one() -> None:
-    """The build expects schema 6.1 after generated resources landed."""
+def test_current_expected_is_six_four() -> None:
+    """The build expects schema 6.4 after the Codex contract landed."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "6.3"
+    assert current_expected_schema_version == "6.4"
 
 
 def test_schema_major_is_six() -> None:

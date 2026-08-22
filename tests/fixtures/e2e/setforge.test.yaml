@@ -11,7 +11,7 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
-schema_version: '6.3'
+schema_version: '6.4'
 minimum_version: '6.3'
 version: 1
 

@@ -24,6 +24,7 @@ at load time.
 """
 
 import os
+import re
 import shlex
 from collections.abc import Mapping, MutableMapping
 from enum import StrEnum
@@ -55,6 +56,7 @@ from setforge.anchors import (
 from setforge.config import (
     MarketplaceSourceKind,
     _check_yaml_octal_mode,
+    _reject_control_chars_in_path,
 )
 from setforge.errors import (
     ConfigError,
@@ -454,6 +456,49 @@ class MarketplaceOverlay(BaseModel):
     remove: list[str] = []
 
 
+class CodexSelectionOverlay(BaseModel):
+    """Host-local additions/removals for one portable Codex registry."""
+
+    model_config = _STRICT
+
+    add: list[str] = []
+    remove: list[str] = []
+
+
+def _environment_name(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None:
+        raise ValueError("Codex host environment references must be variable names")
+    return value
+
+
+class CodexLocalOverlay(BaseModel):
+    """Strict host-only Codex selections and non-secret native locators."""
+
+    model_config = _STRICT
+
+    config: CodexSelectionOverlay = CodexSelectionOverlay()
+    instructions: CodexSelectionOverlay = CodexSelectionOverlay()
+    skills: CodexSelectionOverlay = CodexSelectionOverlay()
+    plugins: CodexSelectionOverlay = CodexSelectionOverlay()
+    mcp_servers: CodexSelectionOverlay = CodexSelectionOverlay()
+    project_paths: dict[str, Path] = {}
+    environment_vars: dict[str, str] = {}
+
+    @field_validator("project_paths")
+    @classmethod
+    def _absolute_project_paths(cls, values: dict[str, Path]) -> dict[str, Path]:
+        if any(not path.expanduser().is_absolute() for path in values.values()):
+            raise ValueError("Codex host project paths must be absolute or `~`-rooted")
+        for path in values.values():
+            _reject_control_chars_in_path(path)
+        return values
+
+    @field_validator("environment_vars")
+    @classmethod
+    def _environment_names(cls, values: dict[str, str]) -> dict[str, str]:
+        return {name: _environment_name(value) for name, value in values.items()}
+
+
 class _LocalSourceConfig(BaseModel):
     """Source + tracked_files + per-host overlay blocks of ``local.yaml``.
 
@@ -474,6 +519,7 @@ class _LocalSourceConfig(BaseModel):
     plugins: PluginOverlay = PluginOverlay()
     extensions: ExtensionOverlay = ExtensionOverlay()
     marketplaces: MarketplaceOverlay = MarketplaceOverlay()
+    codex: CodexLocalOverlay = CodexLocalOverlay()
 
     @model_validator(mode="before")
     @classmethod
@@ -530,7 +576,14 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     # Extract only the keys this loader owns; ignore other blocks
     # (binaries:, claude:, orphan_ignore:) which belong to other loaders.
     payload: dict[str, object] = {}
-    for key in ("source", "tracked_files", "plugins", "extensions", "marketplaces"):
+    for key in (
+        "source",
+        "tracked_files",
+        "plugins",
+        "extensions",
+        "marketplaces",
+        "codex",
+    ):
         if key in data:
             payload[key] = data[key]
     if not payload:
@@ -549,6 +602,11 @@ def load_local_tracked_file_overlays(
     import time, per the SPEC 8 anti-smell discipline.
     """
     return _load_local_source_config(path).tracked_files
+
+
+def load_local_codex_overlay(path: Path = LOCAL_CONFIG_PATH) -> CodexLocalOverlay:
+    """Return the strict host-local Codex overlay, empty on absence."""
+    return _load_local_source_config(path).codex
 
 
 _MARKDOWN_SUFFIXES: Final[frozenset[str]] = frozenset({".md", ".markdown"})
