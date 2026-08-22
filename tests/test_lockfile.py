@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from setforge.errors import LockVersionError, MalformedLockError, SetforgeError
 from setforge.lockfile import (
@@ -18,7 +19,9 @@ from setforge.lockfile import (
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
+    ResolvedArtifact,
     ResolvedPin,
+    artifact_set_integrity,
 )
 
 
@@ -55,6 +58,32 @@ def _sha_pin() -> ResolvedPin:
     )
 
 
+def _portable_release_pin() -> ResolvedPin:
+    artifacts = (
+        ResolvedArtifact(
+            os="linux",
+            arch="x86_64",
+            asset="tool-linux-amd64.tar.gz",
+            checksum=f"sha256:{'b' * 64}",
+        ),
+        ResolvedArtifact(
+            os="macos",
+            arch="aarch64",
+            asset="tool-darwin-arm64.tar.gz",
+            checksum=f"sha256:{'a' * 64}",
+        ),
+    )
+    return ResolvedPin(
+        type=PackageType.GITHUB_RELEASE,
+        key="owner/tool",
+        version="v1.2.3",
+        integrity=artifact_set_integrity(artifacts),
+        integrity_kind=IntegrityKind.CHECKSUM,
+        profiles=("portable",),
+        artifacts=artifacts,
+    )
+
+
 @pytest.mark.parametrize(
     "pin", [_checksum_pin(), _sum_pin(), _sha_pin()], ids=["checksum", "sum", "sha"]
 )
@@ -69,6 +98,14 @@ def test_checksum_pin_serializes_under_checksum_column() -> None:
     assert "checksum = " in text
     assert "\nsum = " not in text
     assert "\nsha = " not in text
+
+
+def test_portable_release_pin_requires_checksum_integrity_kind() -> None:
+    pin = _portable_release_pin()
+    with pytest.raises(ValidationError, match="require checksum integrity"):
+        ResolvedPin.model_validate(
+            {**pin.model_dump(), "integrity_kind": IntegrityKind.SHA}
+        )
 
 
 def test_sum_pin_serializes_under_sum_column() -> None:
@@ -109,6 +146,56 @@ def test_dump_has_no_timestamp_or_host_field() -> None:
     text = dump_lock(LockFile(packages=(_checksum_pin(),)))
     for banned in ("timestamp", "generated", "host", "duration", "date"):
         assert banned not in text
+
+
+def test_v2_portable_release_artifacts_round_trip_without_host_pin() -> None:
+    text = dump_lock(LockFile(packages=(_portable_release_pin(),)))
+
+    assert "version = 2" in text
+    assert text.count("[[package.artifact]]") == 2
+    assert 'os = "macos"' in text
+    assert 'arch = "x86_64"' in text
+    reparsed = parse_lock(text)
+    assert reparsed.packages[0].artifacts == _portable_release_pin().artifacts
+
+
+def test_v1_rejects_v2_artifact_tables() -> None:
+    text = """\
+version = 1
+[[package]]
+type = "github_release"
+key = "owner/tool"
+version = "v1"
+[[package.artifact]]
+os = "linux"
+arch = "x86_64"
+asset = "tool.tar.gz"
+checksum = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"""
+    with pytest.raises(MalformedLockError, match="v1 does not support"):
+        parse_lock(text)
+
+
+def test_v2_rejects_duplicate_platform_artifacts() -> None:
+    text = """\
+version = 2
+[[package]]
+type = "github_release"
+key = "owner/tool"
+version = "v1"
+[[package.artifact]]
+os = "linux"
+arch = "x86_64"
+asset = "one.tar.gz"
+checksum = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+[[package.artifact]]
+os = "linux"
+arch = "x86_64"
+asset = "two.tar.gz"
+checksum = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"""
+    with pytest.raises(MalformedLockError, match="sorted and unique"):
+        parse_lock(text)
 
 
 def test_lock_path_is_config_repo_root(tmp_path: Path) -> None:
@@ -189,7 +276,7 @@ def test_reject_missing_key() -> None:
 
 
 def test_reject_newer_lock_version() -> None:
-    text = "version = 2\n"
+    text = "version = 3\n"
     with pytest.raises(LockVersionError, match="Upgrade setforge"):
         parse_lock(text)
 

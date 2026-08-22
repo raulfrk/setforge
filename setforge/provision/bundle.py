@@ -7,12 +7,19 @@ from setforge.config import (
     Package,
 )
 from setforge.errors import ConfigError, ProvisionItemFailed
+from setforge.lockfile import LockFile
+from setforge.platform_assets import HostPlatform
 from setforge.provision.capability_graph import (
     CapabilityGraph,
     CapabilityTargetKind,
     build_capability_graph,
 )
-from setforge.provision.identity import package_identity, package_version
+from setforge.provision.identity import (
+    package_artifact,
+    package_identity,
+    package_version,
+)
+from setforge.provision.lock_apply import apply_lock_to_items
 from setforge.provision.protocol import (
     Identity,
     Outcome,
@@ -39,27 +46,44 @@ def _is_file_component(component: BundleComponent) -> bool:
     return component.file is not None
 
 
-def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
+def _resolve_item(
+    component: BundleComponent,
+    cfg: Config,
+    *,
+    platform_os: str | None = None,
+    platform_arch: str | None = None,
+) -> ProvisionItem:
+    host = (
+        HostPlatform(platform_os, platform_arch)
+        if platform_os is not None and platform_arch is not None
+        else None
+    )
     if component.package is not None:
         pkg = cfg.packages[component.package]
+        artifact, platform, checksum = package_artifact(pkg, host=host)
         return ProvisionItem(
             type=pkg.type.value,
             identity=package_identity(pkg),
             config=pkg,
             version=package_version(pkg),
-            checksum=getattr(pkg, "checksum", None),
+            checksum=checksum,
+            artifact=artifact,
+            platform=platform,
         )
     model = _inline_model(component)
     if model is None:  # pragma: no cover - plugin rejected in validate_bundle
         raise AssertionError(
             f"bundle component {component.id!r} has no provisioner-backed source"
         )
+    artifact, platform, checksum = package_artifact(model, host=host)
     return ProvisionItem(
         type=model.type.value,
         identity=package_identity(model),
         config=model,
         version=package_version(model),
-        checksum=getattr(model, "checksum", None),
+        checksum=checksum,
+        artifact=artifact,
+        platform=platform,
     )
 
 
@@ -79,6 +103,23 @@ def resolve_bundle_items(bundle: BundleSpec, cfg: Config) -> tuple[ProvisionItem
         for node in graph.ordered()
         if node.target_kind is CapabilityTargetKind.PACKAGE
     )
+
+
+def _apply_item_lock(
+    item: ProvisionItem,
+    lock: LockFile | None,
+    *,
+    platform_os: str | None,
+    platform_arch: str | None,
+) -> ProvisionItem:
+    if lock is None:
+        return item
+    return apply_lock_to_items(
+        [item],
+        lock,
+        platform_os=platform_os,
+        platform_arch=platform_arch,
+    )[0]
 
 
 def topo_order(bundle: BundleSpec) -> list[BundleComponent]:
@@ -138,6 +179,9 @@ def execute_bundle(
     report_only: bool = False,
     graph: CapabilityGraph | None = None,
     package_actions: dict[tuple[str, str], tuple[str, bool]] | None = None,
+    lock: LockFile | None = None,
+    platform_os: str | None = None,
+    platform_arch: str | None = None,
 ) -> ReconcileResult:
     validated = validate_bundle(bundle, cfg)
     if graph is not None and graph != validated:
@@ -159,7 +203,17 @@ def execute_bundle(
             satisfied.add(component.id)
             continue
         blocked = any(dep not in satisfied for dep in component.depends_on)
-        item = _resolve_item(component, cfg)
+        item = _apply_item_lock(
+            _resolve_item(
+                component,
+                cfg,
+                platform_os=platform_os,
+                platform_arch=platform_arch,
+            ),
+            lock,
+            platform_os=platform_os,
+            platform_arch=platform_arch,
+        )
         if blocked:
             outcomes.append(
                 ProvisionOutcome(

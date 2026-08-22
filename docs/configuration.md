@@ -256,7 +256,7 @@ writes the exact version and integrity value to the shared, committed
 `setforge.lock`. For a Cargo package, the lock entry has this TOML shape:
 
 ```toml
-version = 1
+version = 2
 
 [[package]]
 type = "cargo"
@@ -284,6 +284,61 @@ must have a matching `setforge.lock` entry and disables re-resolution; it does
 not make Cargo offline. Cargo pins still need the crates.io sparse-index check,
 and a missing crate/tool download can still need the network. `--no-fetch`
 only suppresses the config-repository git fetch.
+
+### GitHub release assets by platform
+
+The original `github_release` shape remains valid and means that one asset is
+universal across every supported host:
+
+```yaml
+schema_version: "6.3"
+minimum_version: "6.3"
+packages:
+  tool:
+    type: github_release
+    repo: example/tool
+    tag: v1.2.3
+    asset: tool
+    checksum: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    binary: tool
+    install: ~/.local/bin
+    extract: false
+```
+
+For releases with different files per platform, replace `asset` with `assets`:
+
+```yaml
+schema_version: "6.3"
+minimum_version: "6.3"
+packages:
+  tool:
+    type: github_release
+    repo: example/tool
+    tag: v1.2.3
+    assets:
+      - {asset: tool-linux-amd64, os: linux, arch: x86_64}
+      - {asset: tool-linux-arm64, os: linux, arch: aarch64}
+      - {asset: tool-macos, os: macos}
+      - {asset: tool-portable}
+    binary: tool
+    install: ~/.local/bin
+    extract: false
+```
+
+Selectors use canonical `linux` / `macos` and `x86_64` / `aarch64` values;
+common aliases such as `darwin`, `amd64`, and `arm64` normalize to those
+values. Selection precedence is exact OS+architecture, then OS-only, then
+architecture-only, then the universal row. No match or more than one match at
+the winning precedence is an error before download or mutation. `asset` and
+`assets` are mutually exclusive, and each variant checksum is bound only to
+that variant.
+
+`setforge lock` writes every declared variant, its canonical selector, and its
+checksum to lock format v2. The lock is portable: it contains no locking-host
+field, so a lock committed on Linux can later select its declared macOS or ARM
+artifact without contacting GitHub or silently resolving a different asset.
+Legacy lock v1 files and scalar declarations remain readable as universal
+assets.
 
 ## Per-host preservation
 

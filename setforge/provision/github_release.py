@@ -6,10 +6,11 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from pathlib import Path
 
 from setforge.config import GitHubReleasePackage
+from setforge.platform_assets import current_host_platform
 from setforge.provision.installer import (
     InstallError,
     InstallSpec,
@@ -47,8 +48,11 @@ class DownloadError(Exception):
     pass
 
 
-def _asset_url(pkg: GitHubReleasePackage) -> str:
-    return f"https://github.com/{pkg.repo}/releases/download/{pkg.tag}/{pkg.asset}"
+def _asset_url(pkg: GitHubReleasePackage, asset: str | None = None) -> str:
+    selected = asset if asset is not None else pkg.asset
+    if selected is None:
+        raise DownloadError("github_release asset was not selected for this platform")
+    return f"https://github.com/{pkg.repo}/releases/download/{pkg.tag}/{selected}"
 
 
 @register("github_release")
@@ -70,6 +74,23 @@ class GitHubReleaseProvisioner(Provisioner):
             )
         )
 
+    def plan_fingerprint(
+        self, items: Sequence[ProvisionItem], installed: set[Identity]
+    ) -> Hashable:
+        host_key = (
+            current_host_platform().key
+            if any(item.platform is not None for item in items)
+            else None
+        )
+        return (
+            super().plan_fingerprint(items, installed),
+            host_key,
+            tuple(
+                (item.identity.key, item.artifact, item.platform, item.checksum)
+                for item in items
+            ),
+        )
+
     def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
         return tuple(
             PackageObservation(
@@ -81,6 +102,8 @@ class GitHubReleaseProvisioner(Provisioner):
                 version=entry.version if entry is not None else None,
                 locator=str(entry.path) if entry is not None and entry.path else None,
                 checksum=entry.checksum if entry is not None else None,
+                artifact=entry.artifact if entry is not None else None,
+                platform=entry.platform if entry is not None else None,
             )
             for identity in sorted(installed, key=lambda value: value.key)
         )
@@ -92,6 +115,8 @@ class GitHubReleaseProvisioner(Provisioner):
             and entry is not None
             and (item.version is None or entry.version == item.version)
             and (item.checksum is None or entry.checksum == item.checksum)
+            and (item.artifact is None or entry.artifact == item.artifact)
+            and (item.platform is None or entry.platform == item.platform)
         ):
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
 
@@ -110,7 +135,7 @@ class GitHubReleaseProvisioner(Provisioner):
                 detail="a checksum is required for github_release assets",
             )
 
-        url = _asset_url(pkg)
+        url = _asset_url(pkg, item.artifact)
         try:
             data = self._download(url)
         except DownloadError as exc:
@@ -118,7 +143,7 @@ class GitHubReleaseProvisioner(Provisioner):
             return ProvisionOutcome(item=item, outcome=Outcome.SOFT, detail=str(exc))
 
         spec = InstallSpec(
-            asset=pkg.asset,
+            asset=item.artifact or pkg.asset or "",
             binary=pkg.binary,
             install_dir=Path(pkg.install).expanduser(),
             rename=pkg.rename,
@@ -138,6 +163,8 @@ class GitHubReleaseProvisioner(Provisioner):
             checksum=pkg.checksum,
             path=dest,
             provider=self.type,
+            artifact=item.artifact or pkg.asset,
+            platform=item.platform,
         )
         return ProvisionOutcome(
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"

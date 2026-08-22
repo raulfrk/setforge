@@ -7,13 +7,15 @@ import json
 from collections.abc import Callable
 from typing import ClassVar
 
-from setforge.config import GitHubReleasePackage
+from setforge.config import GitHubReleasePackage, PlatformAssetVariant
 from setforge.errors import ResolveError
 from setforge.provision.resolve._fetch import fetch_bytes
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
+    ResolvedArtifact,
     ResolvedPin,
+    artifact_set_integrity,
 )
 from setforge.provision.resolve.registry import register
 
@@ -49,6 +51,26 @@ class GitHubReleaseResolver:
                 "GitHubReleasePackage"
             )
         tag = self._resolve_tag(item.repo, item.tag)
+        if item.assets is not None:
+            artifacts = tuple(
+                sorted(
+                    (
+                        self._resolve_artifact(item.repo, tag, variant)
+                        for variant in item.assets
+                    ),
+                    key=ResolvedArtifact.sort_key,
+                )
+            )
+            return ResolvedPin(
+                type=PackageType.GITHUB_RELEASE,
+                key=item.repo,
+                version=tag,
+                integrity=artifact_set_integrity(artifacts),
+                integrity_kind=IntegrityKind.CHECKSUM,
+                artifacts=artifacts,
+            )
+        if item.asset is None:  # pragma: no cover - config model invariant
+            raise ResolveError("github_release package has no asset")
         digest = self._hash_asset(item.repo, tag, item.asset)
         return ResolvedPin(
             type=PackageType.GITHUB_RELEASE,
@@ -56,6 +78,23 @@ class GitHubReleaseResolver:
             version=tag,
             integrity=f"sha256:{digest}",
             integrity_kind=IntegrityKind.CHECKSUM,
+        )
+
+    def _resolve_artifact(
+        self, repo: str, tag: str, variant: PlatformAssetVariant
+    ) -> ResolvedArtifact:
+        digest = self._hash_asset(repo, tag, variant.asset)
+        checksum = f"sha256:{digest}"
+        if variant.checksum is not None and variant.checksum != checksum:
+            raise ResolveError(
+                f"GitHub release asset checksum mismatch for {repo!r} "
+                f"asset {variant.asset!r}"
+            )
+        return ResolvedArtifact(
+            os=variant.os or "*",
+            arch=variant.arch or "*",
+            asset=variant.asset,
+            checksum=checksum,
         )
 
     def _resolve_tag(self, repo: str, tag: str) -> str:

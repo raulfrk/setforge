@@ -184,6 +184,25 @@ def test_provider_qualified_receipts_do_not_collide(tmp_path: Path) -> None:
     assert len(tuple(tmp_path.glob("*.json"))) == 2
 
 
+def test_typed_receipt_round_trips_platform_artifact_evidence(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident("tool", "Tool")
+    store.record(
+        identity,
+        version="v1",
+        checksum="sha256:abc",
+        provider="github_release",
+        artifact="tool-linux-x86_64.tar.gz",
+        platform="linux-x86_64",
+    )
+
+    entry = store.entry_for(identity, "github_release")
+
+    assert entry is not None
+    assert entry.artifact == "tool-linux-x86_64.tar.gz"
+    assert entry.platform == "linux-x86_64"
+
+
 def test_typed_read_falls_back_to_legacy_receipt(tmp_path: Path) -> None:
     store = ReceiptStore(tmp_path)
     identity = _ident()

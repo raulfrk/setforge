@@ -36,6 +36,8 @@ class ReceiptEntry:
     version: str | None = None
     checksum: str | None = None
     source_digest: str | None = None
+    artifact: str | None = None
+    platform: str | None = None
 
 
 def default_receipt_root() -> Path:
@@ -76,6 +78,8 @@ class ReceiptStore:
         path: Path | str | None = None,
         source_digest: str | None = None,
         provider: str | None = None,
+        artifact: str | None = None,
+        platform: str | None = None,
     ) -> None:
         """Write one receipt for ``identity`` atomically, replacing any prior.
 
@@ -99,6 +103,8 @@ class ReceiptStore:
             "checksum": checksum,
             "path": str(path) if path is not None else None,
             "source_digest": source_digest,
+            "artifact": artifact,
+            "platform": platform,
         }
         atomic_write_text(
             self._root / _receipt_name(identity, provider),
@@ -131,6 +137,8 @@ class ReceiptStore:
             path=entry.path,
             source_digest=entry.source_digest,
             provider=provider,
+            artifact=entry.artifact,
+            platform=entry.platform,
         )
         self.remove(identity)
         migrated = self.entry_for(identity, provider)
@@ -207,6 +215,16 @@ class ReceiptStore:
                 source_digest=(
                     data.get("source_digest")
                     if isinstance(data.get("source_digest"), str)
+                    else None
+                ),
+                artifact=(
+                    data.get("artifact")
+                    if isinstance(data.get("artifact"), str)
+                    else None
+                ),
+                platform=(
+                    data.get("platform")
+                    if isinstance(data.get("platform"), str)
                     else None
                 ),
             )

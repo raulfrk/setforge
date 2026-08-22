@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from setforge.config import GitHubReleasePackage
+from setforge.config import GitHubReleasePackage, PlatformAssetVariant
 from setforge.errors import ResolveError
 from setforge.provision.resolve.github_release import GitHubReleaseResolver
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType
@@ -95,6 +95,73 @@ def test_resolve_never_returns_latest_token() -> None:
     )
     pin = resolver.resolve(_pkg("latest"))
     assert pin.version != "latest"
+
+
+def test_resolve_hashes_every_declared_platform_variant_portably() -> None:
+    linux = b"linux asset"
+    macos = b"macos asset"
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v0.8.9",
+        assets=(
+            PlatformAssetVariant(asset="tool-linux", os="linux", arch="amd64"),
+            PlatformAssetVariant(asset="tool-macos", os="darwin", arch="arm64"),
+        ),
+        binary="tool",
+        install="~/.local/bin",
+    )
+    record: list[tuple[str, str | None]] = []
+    resolver = GitHubReleaseResolver(
+        fetch=_fetcher(
+            {
+                "https://github.com/owner/tool/releases/download/v0.8.9/"
+                "tool-linux": linux,
+                "https://github.com/owner/tool/releases/download/v0.8.9/"
+                "tool-macos": macos,
+            },
+            record=record,
+        )
+    )
+
+    pin = resolver.resolve(package)
+
+    assert [(row.os, row.arch, row.asset) for row in pin.artifacts] == [
+        ("linux", "x86_64", "tool-linux"),
+        ("macos", "aarch64", "tool-macos"),
+    ]
+    assert [row.checksum for row in pin.artifacts] == [
+        f"sha256:{hashlib.sha256(linux).hexdigest()}",
+        f"sha256:{hashlib.sha256(macos).hexdigest()}",
+    ]
+    assert len(record) == 2
+
+
+def test_resolve_platform_variant_refuses_declared_checksum_mismatch() -> None:
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v0.8.9",
+        assets=(
+            PlatformAssetVariant(
+                asset="tool-linux",
+                os="linux",
+                arch="amd64",
+                checksum=f"sha256:{'0' * 64}",
+            ),
+        ),
+        binary="tool",
+        install="~/.local/bin",
+    )
+    resolver = GitHubReleaseResolver(
+        fetch=_fetcher(
+            {
+                "https://github.com/owner/tool/releases/download/v0.8.9/"
+                "tool-linux": b"different"
+            }
+        )
+    )
+
+    with pytest.raises(ResolveError, match="checksum mismatch"):
+        resolver.resolve(package)
 
 
 def test_resolve_missing_asset_raises_clean_error() -> None:

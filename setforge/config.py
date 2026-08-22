@@ -560,19 +560,69 @@ class GoPackage(BaseModel):
     version: str | None = None
 
 
+class PlatformAssetVariant(BaseModel):
+    """One platform-qualified GitHub release asset."""
+
+    model_config = _STRICT
+
+    asset: str
+    os: str | None = None
+    arch: str | None = None
+    checksum: str | None = None
+
+    @field_validator("asset")
+    @classmethod
+    def _bare_asset(cls, value: str) -> str:
+        return _reject_path_in_bare_name(value, "asset")
+
+    @field_validator("os")
+    @classmethod
+    def _canonical_os(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from setforge.platform_assets import normalize_platform_os
+
+        return normalize_platform_os(value)
+
+    @field_validator("arch")
+    @classmethod
+    def _canonical_arch(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from setforge.platform_assets import normalize_platform_arch
+
+        return normalize_platform_arch(value)
+
+
 class GitHubReleasePackage(_BareNameChmodPackage):
     model_config = _STRICT
 
     type: Literal[PackageKind.GITHUB_RELEASE] = PackageKind.GITHUB_RELEASE
     repo: str
     tag: str
-    asset: str
+    asset: str | None = None
+    assets: tuple[PlatformAssetVariant, ...] | None = None
     binary: str
     install: str
     checksum: str | None = None
     rename: str | None = None
     extract: bool = True
     chmod: str = "+x"
+
+    @model_validator(mode="after")
+    def _asset_mode_is_unambiguous(self) -> Self:
+        if self.assets is None:
+            if self.asset is None:
+                raise ValueError("github_release requires asset or assets")
+            return self
+        if not self.assets:
+            raise ValueError("github_release assets must not be empty")
+        if self.asset is not None or self.checksum is not None:
+            raise ValueError(
+                "github_release assets are mutually exclusive with asset and "
+                "top-level checksum"
+            )
+        return self
 
     @field_validator("binary")
     @classmethod
@@ -1203,6 +1253,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _validate_section_slot_references(config)
     _guard_generated_resources(config, path)
     _guard_directory_trees(config, path)
+    _guard_platform_release_assets(config, path)
     _warn_on_schema_mismatch(config)
     return config
 
@@ -1244,6 +1295,31 @@ def _guard_directory_trees(config: Config, path: Path) -> None:
         )
     if not _meets_floor(config.minimum_version, "6.2"):
         raise ConfigError(f"{path}: managed trees require minimum_version >= '6.2'")
+
+
+def _guard_platform_release_assets(config: Config, path: Path) -> None:
+    """Require the 6.3 reader floor before accepting variant asset intent."""
+    direct = any(
+        isinstance(item, GitHubReleasePackage) and item.assets is not None
+        for item in config.packages.values()
+    )
+    bundled = any(
+        component.github_release is not None
+        and component.github_release.assets is not None
+        for bundle in config.bundles.values()
+        for component in bundle.components
+    )
+    if not direct and not bundled:
+        return
+    if not _meets_floor(config.schema_version, "6.3") or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: platform release assets require schema_version and "
+            "minimum_version >= '6.3'"
+        )
+    if not _meets_floor(config.minimum_version, "6.3"):
+        raise ConfigError(
+            f"{path}: platform release assets require minimum_version >= '6.3'"
+        )
 
 
 def _validate_tolerant(data: object) -> Config:

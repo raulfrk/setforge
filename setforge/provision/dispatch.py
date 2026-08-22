@@ -15,12 +15,14 @@ import setforge.provision.python as _python  # noqa: F401
 from setforge.config import (
     Config,
     ExtensionPackage,
+    GitHubReleasePackage,
     PluginPackage,
     ResolvedProfile,
 )
 from setforge.errors import SetforgeError
 from setforge.lockfile import LockFile
 from setforge.ownership import OwnershipStore
+from setforge.platform_assets import current_host_platform
 from setforge.provision.bundle import (
     execute_bundle,
     resolve_bundle_items,
@@ -39,7 +41,11 @@ from setforge.provision.driver import (
     suppress_reconcile,
     validate_reconcile,
 )
-from setforge.provision.identity import package_identity, package_version
+from setforge.provision.identity import (
+    package_artifact,
+    package_identity,
+    package_version,
+)
 from setforge.provision.lock_apply import apply_lock_to_items
 from setforge.provision.ownership import (
     PackageAction,
@@ -68,6 +74,9 @@ class ProvisioningPlan:
     bundle_batches: tuple[ReconcilePlan, ...] = ()
     ownership: tuple[PackageDecision, ...] = ()
     direct_keys: frozenset[tuple[str, str]] = frozenset()
+    lock: LockFile | None = None
+    platform_os: str | None = None
+    platform_arch: str | None = None
 
     @property
     def capability_graph(self) -> CapabilityGraph:
@@ -87,8 +96,22 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
 ) -> ProvisioningPlan:
     """Probe every top-level provisioner once and retain its exact delta."""
     items = resolve_provision_items(cfg, resolved)
+    host = (
+        current_host_platform()
+        if any(
+            isinstance(item.config, GitHubReleasePackage)
+            and item.config.assets is not None
+            for item in items
+        )
+        else None
+    )
     if lock is not None:
-        items = apply_lock_to_items(items, lock)
+        items = apply_lock_to_items(
+            items,
+            lock,
+            platform_os=None if host is None else host.os,
+            platform_arch=None if host is None else host.arch,
+        )
     items.sort(key=lambda it: it.type)
     batches: list[ReconcilePlan] = []
     ownership: list[PackageDecision] = []
@@ -137,18 +160,47 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
         batches.append(batch)
     bundles = tuple(resolved.bundles)
     bundle_graphs = tuple(validate_bundle(cfg.bundles[name], cfg) for name in bundles)
+    if host is None:
+        bundle_requires_platform = any(
+            isinstance(item.config, GitHubReleasePackage)
+            and item.config.assets is not None
+            for name in bundles
+            for item in resolve_bundle_items(cfg.bundles[name], cfg)
+        )
+        if bundle_requires_platform:
+            host = current_host_platform()
     bundle_batches: tuple[ReconcilePlan, ...] = ()
     if ownership_store is not None:
         seen_resources = {decision.resource_id for decision in ownership}
         direct_items = {(item.type, item.identity.key): item for item in items}
         bundle_items: dict[tuple[str, str], ProvisionItem] = {}
         for name in bundles:
-            for item in resolve_bundle_items(cfg.bundles[name], cfg):
+            resolved_bundle_items = list(resolve_bundle_items(cfg.bundles[name], cfg))
+            if (
+                lock is not None
+                and host is None
+                and any(
+                    isinstance(item.config, GitHubReleasePackage)
+                    and item.config.assets is not None
+                    for item in resolved_bundle_items
+                )
+            ):
+                host = current_host_platform()
+            if lock is not None:
+                resolved_bundle_items = apply_lock_to_items(
+                    resolved_bundle_items,
+                    lock,
+                    platform_os=None if host is None else host.os,
+                    platform_arch=None if host is None else host.arch,
+                )
+            for item in resolved_bundle_items:
                 bundle_key = (item.type, item.identity.key)
                 direct_item = direct_items.get(bundle_key)
                 if direct_item is not None and (
                     direct_item.version != item.version
                     or direct_item.checksum != item.checksum
+                    or direct_item.artifact != item.artifact
+                    or direct_item.platform != item.platform
                     or direct_item.config.model_dump_json()
                     != item.config.model_dump_json()
                 ):
@@ -161,6 +213,8 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
                 if previous is not None and (
                     previous.version != item.version
                     or previous.checksum != item.checksum
+                    or previous.artifact != item.artifact
+                    or previous.platform != item.platform
                     or previous.config.model_dump_json()
                     != item.config.model_dump_json()
                 ):
@@ -229,6 +283,9 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
         bundle_batches=bundle_batches,
         ownership=tuple(ownership),
         direct_keys=frozenset((item.type, item.identity.key) for item in items),
+        lock=lock,
+        platform_os=None if host is None else host.os,
+        platform_arch=None if host is None else host.arch,
     )
 
 
@@ -246,7 +303,13 @@ def apply_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
         package_actions[direct_key] = ("hold", True)
     results = [
         execute_bundle(
-            cfg.bundles[name], cfg, graph=graph, package_actions=package_actions
+            cfg.bundles[name],
+            cfg,
+            graph=graph,
+            package_actions=package_actions,
+            lock=plan.lock,
+            platform_os=plan.platform_os,
+            platform_arch=plan.platform_arch,
         )
         for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
     ]
@@ -370,6 +433,10 @@ def report_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
 
 def validate_provisioning(plan: ProvisioningPlan) -> None:
     """Refuse when any top-level package inventory changed after planning."""
+    if plan.platform_os is not None and plan.platform_arch is not None:
+        host = current_host_platform()
+        if (host.os, host.arch) != (plan.platform_os, plan.platform_arch):
+            raise SetforgeError("package platform changed after planning; retry")
     cfg = Config.model_validate_json(plan.cfg_json)
     current_graphs = tuple(
         validate_bundle(cfg.bundles[name], cfg) for name in plan.bundles
@@ -395,6 +462,8 @@ def resolve_provision_items(
             if (
                 previous.version != item.version
                 or previous.checksum != item.checksum
+                or previous.artifact != item.artifact
+                or previous.platform != item.platform
                 or previous.config.model_dump_json() != item.config.model_dump_json()
             ):
                 raise SetforgeError(
@@ -411,13 +480,16 @@ def resolve_provision_items(
         # driver — skip them here so they are not double-provisioned.
         if isinstance(pkg, PluginPackage | ExtensionPackage):
             continue
+        artifact, platform, checksum = package_artifact(pkg)
         _add(
             ProvisionItem(
                 type=pkg.type.value,
                 identity=package_identity(pkg),
                 config=pkg,
                 version=package_version(pkg),
-                checksum=getattr(pkg, "checksum", None),
+                checksum=checksum,
+                artifact=artifact,
+                platform=platform,
             )
         )
     return items

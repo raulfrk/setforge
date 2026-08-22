@@ -3,11 +3,12 @@ from __future__ import annotations
 import uuid
 
 from setforge.locking import mutation_locks
-from setforge.ownership import OwnershipStore
+from setforge.ownership import OwnershipStore, ProvenanceFactKind
 from setforge.provision.ownership import (
     PackageAction,
     decide_package,
     observation_fingerprint,
+    observation_provenance,
     package_resource_id,
     publish_claim_locked,
 )
@@ -119,3 +120,33 @@ def test_provider_coordinate_uses_existing_canonical_rules() -> None:
     )
     assert cargo.coordinate == "ripgrep"
     assert python.coordinate == "my-tool"
+
+
+def test_platform_artifact_is_part_of_desired_state_and_provenance() -> None:
+    item = ProvisionItem(
+        type="github_release",
+        identity=Identity("owner/tool", "owner/tool"),
+        version="v1",
+        checksum="sha256:linux",
+        artifact="tool-linux.tar.gz",
+        platform="linux-x86_64",
+    )
+    observed = PackageObservation(
+        item.identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        version="v1",
+        checksum="sha256:linux",
+        artifact="tool-macos.tar.gz",
+        platform="macos-aarch64",
+    )
+
+    facts = observation_provenance(observed, acquisition="setforge-installed")
+
+    assert (
+        decide_package(item, observed, None, owner_id=uuid.uuid4()).action
+        is PackageAction.ADOPT
+    )
+    assert {(fact.kind, fact.value) for fact in facts} >= {
+        (ProvenanceFactKind.ARTIFACT, "tool-macos.tar.gz"),
+        (ProvenanceFactKind.PLATFORM, "macos-aarch64"),
+    }

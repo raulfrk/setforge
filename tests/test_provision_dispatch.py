@@ -34,6 +34,7 @@ from setforge.config import (
     GitHubReleasePackage,
     GoPackage,
     LocalPackage,
+    PlatformAssetVariant,
     PluginPackage,
     Profile,
     PythonPackage,
@@ -42,8 +43,10 @@ from setforge.config import (
     load_config,
 )
 from setforge.errors import ConfigError, SetforgeError, UnknownProvisionerType
+from setforge.lockfile import LockFile
 from setforge.locking import mutation_locks
 from setforge.ownership import OwnershipStore
+from setforge.platform_assets import HostPlatform
 from setforge.provision.dispatch import (
     apply_provisioning,
     has_hard_failure,
@@ -72,8 +75,58 @@ from setforge.provision.protocol import (
 )
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
 from setforge.provision.registry import _REGISTRY, register
+from setforge.provision.resolve.protocol import (
+    IntegrityKind,
+    PackageType,
+    ResolvedArtifact,
+    ResolvedPin,
+    artifact_set_integrity,
+)
 
 _PROFILE = "prov-test"
+
+
+def _portable_release_lock() -> LockFile:
+    artifacts = (
+        ResolvedArtifact(
+            os="linux",
+            arch="x86_64",
+            asset="tool-linux",
+            checksum=f"sha256:{'a' * 64}",
+        ),
+        ResolvedArtifact(
+            os="macos",
+            arch="aarch64",
+            asset="tool-macos",
+            checksum=f"sha256:{'b' * 64}",
+        ),
+    )
+    return LockFile(
+        packages=(
+            ResolvedPin(
+                type=PackageType.GITHUB_RELEASE,
+                key="owner/tool",
+                version="v1",
+                integrity=artifact_set_integrity(artifacts),
+                integrity_kind=IntegrityKind.CHECKSUM,
+                artifacts=artifacts,
+            ),
+        )
+    )
+
+
+def _portable_release() -> GitHubReleasePackage:
+    return GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v1",
+        assets=(
+            PlatformAssetVariant(asset="tool-linux", os="linux", arch="x86_64"),
+            PlatformAssetVariant(asset="tool-macos", os="macos", arch="aarch64"),
+        ),
+        binary="tool",
+        install="~/.local/bin/tool",
+        extract=False,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -607,6 +660,130 @@ def test_bundle_same_key_across_providers_applies_both(
     apply_provisioning(plan_provisioning(cfg, ResolvedProfile(bundles=["tools"])))
 
     assert applied == ["cargo", "python"]
+
+
+@pytest.mark.parametrize("placement", ["direct", "bundle"])
+@pytest.mark.parametrize("locked", [False, True], ids=["unlocked", "locked"])
+def test_platform_host_drift_is_refused_before_apply(
+    placement: str, locked: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linux = HostPlatform("linux", "x86_64")
+    macos = HostPlatform("macos", "aarch64")
+    for target in (
+        "setforge.provision.dispatch.current_host_platform",
+        "setforge.provision.identity.current_host_platform",
+        "setforge.provision.github_release.current_host_platform",
+    ):
+        monkeypatch.setattr(target, lambda: linux)
+    package = _portable_release()
+    if placement == "direct":
+        cfg = _cfg(packages={"tool": package})
+        resolved = ResolvedProfile(packages=["tool"])
+        store = None
+    else:
+        cfg = _cfg(
+            bundles={
+                "tools": BundleSpec(
+                    components=[BundleComponent(id="tool", github_release=package)]
+                )
+            }
+        )
+        resolved = ResolvedProfile(bundles=["tools"])
+        store = None
+    plan = plan_provisioning(
+        cfg,
+        resolved,
+        lock=_portable_release_lock() if locked else None,
+        ownership_store=store,
+        owner_id=uuid.uuid4(),
+    )
+
+    monkeypatch.setattr(
+        "setforge.provision.github_release.current_host_platform", lambda: macos
+    )
+    monkeypatch.setattr(
+        "setforge.provision.dispatch.current_host_platform", lambda: macos
+    )
+    with pytest.raises(SetforgeError, match="platform changed"):
+        validate_provisioning(plan)
+
+
+def test_scalar_release_lock_does_not_probe_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "setforge.provision.dispatch.current_host_platform",
+        lambda: (_ for _ in ()).throw(AssertionError("platform probe was called")),
+    )
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v1",
+        asset="tool-universal",
+        binary="tool",
+        install="~/.local/bin/tool",
+        extract=False,
+    )
+    lock = LockFile(
+        packages=(
+            ResolvedPin(
+                type=PackageType.GITHUB_RELEASE,
+                key="owner/tool",
+                version="v1",
+                integrity=f"sha256:{'a' * 64}",
+                integrity_kind=IntegrityKind.CHECKSUM,
+            ),
+        )
+    )
+
+    plan = plan_provisioning(
+        _cfg(packages={"tool": package}),
+        ResolvedProfile(packages=["tool"]),
+        lock=lock,
+    )
+
+    assert plan.platform_os is None
+    assert plan.batches[0].delta.installed
+
+
+def test_unlocked_bundle_apply_uses_frozen_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    linux = HostPlatform("linux", "x86_64")
+    macos = HostPlatform("macos", "aarch64")
+    for target in (
+        "setforge.provision.dispatch.current_host_platform",
+        "setforge.provision.identity.current_host_platform",
+        "setforge.provision.github_release.current_host_platform",
+    ):
+        monkeypatch.setattr(target, lambda: linux)
+    package = _portable_release()
+    cfg = _cfg(
+        bundles={
+            "tools": BundleSpec(
+                components=[BundleComponent(id="tool", github_release=package)]
+            )
+        }
+    )
+    plan = plan_provisioning(cfg, ResolvedProfile(bundles=["tools"]))
+    applied: list[ProvisionItem] = []
+
+    def apply_item(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        applied.append(item)
+        return ProvisionOutcome(item=item, outcome=Outcome.OK)
+
+    monkeypatch.setattr(
+        "setforge.provision.github_release.current_host_platform", lambda: macos
+    )
+    monkeypatch.setattr(
+        "setforge.provision.github_release.GitHubReleaseProvisioner.apply_one",
+        apply_item,
+    )
+
+    apply_provisioning(plan)
+
+    assert [(item.artifact, item.platform) for item in applied] == [
+        ("tool-linux", "linux-x86_64")
+    ]
 
 
 def test_direct_and_bundle_conflicting_declarations_fail_closed(

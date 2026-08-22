@@ -68,6 +68,8 @@ class _FrozenProvisionItem:
     desired: DesiredState
     version: str | None
     checksum: str | None
+    artifact: str | None
+    platform: str | None
     config_type: builtins.type[BaseModel]
     config_json: str
 
@@ -79,6 +81,8 @@ class _FrozenProvisionItem:
             desired=item.desired,
             version=item.version,
             checksum=item.checksum,
+            artifact=item.artifact,
+            platform=item.platform,
             config_type=type(item.config),
             config_json=item.config.model_dump_json(),
         )
@@ -91,6 +95,8 @@ class _FrozenProvisionItem:
             desired=self.desired,
             version=self.version,
             checksum=self.checksum,
+            artifact=self.artifact,
+            platform=self.platform,
             config=self.config_type.model_validate_json(self.config_json),
         )
 

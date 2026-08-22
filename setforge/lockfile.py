@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from setforge.atomicio import atomic_write_text
 from setforge.errors import LockVersionError, MalformedLockError
@@ -13,11 +13,13 @@ from setforge.provision.resolve.protocol import (
     _KIND_FIELD,
     IntegrityKind,
     PackageType,
+    ResolvedArtifact,
     ResolvedPin,
+    artifact_set_integrity,
 )
 
 LOCK_FILENAME = "setforge.lock"
-LOCK_VERSION = 1
+LOCK_VERSION = 2
 
 _FIELD_KIND: dict[str, IntegrityKind] = {v: k for k, v in _KIND_FIELD.items()}
 
@@ -27,6 +29,12 @@ class LockFile(BaseModel):
 
     version: int = LOCK_VERSION
     packages: tuple[ResolvedPin, ...] = Field(default_factory=tuple)
+
+    @model_validator(mode="after")
+    def _version_supports_payload(self) -> "LockFile":
+        if self.version < 2 and any(pin.artifacts for pin in self.packages):
+            raise ValueError("lock format v1 cannot carry platform artifacts")
+        return self
 
 
 def lock_path(config_path: Path) -> Path:
@@ -64,7 +72,7 @@ def parse_lock(text: str) -> LockFile:
     if not isinstance(packages_raw, list):
         raise MalformedLockError("setforge.lock: 'package' must be an array of tables")
 
-    pins = tuple(_parse_pin(entry) for entry in packages_raw)
+    pins = tuple(_parse_pin(entry, lock_version=version) for entry in packages_raw)
     return LockFile(version=version, packages=pins)
 
 
@@ -72,7 +80,7 @@ def write_lock(lockfile: LockFile, path: Path) -> None:
     atomic_write_text(path, dump_lock(lockfile))
 
 
-def _parse_pin(entry: object) -> ResolvedPin:
+def _parse_pin(entry: object, *, lock_version: int) -> ResolvedPin:
     if not isinstance(entry, dict):
         raise MalformedLockError(
             f"setforge.lock: each 'package' must be a table, got {type(entry).__name__}"
@@ -90,8 +98,19 @@ def _parse_pin(entry: object) -> ResolvedPin:
     key = _require(entry, "key")
     version = _require(entry, "version")
 
+    artifact_raw = entry.get("artifact")
+    if artifact_raw is not None and lock_version < 2:
+        raise MalformedLockError(
+            "setforge.lock: lock format v1 does not support platform artifacts"
+        )
+    artifacts = _parse_artifacts(artifact_raw, key=key, pkg_type=pkg_type)
     present = [field for field in _FIELD_KIND if field in entry]
-    if not present:
+    if artifacts and present:
+        raise MalformedLockError(
+            f"setforge.lock: package {key!r} carries both artifact tables and "
+            "a top-level integrity field"
+        )
+    if not present and not artifacts:
         raise MalformedLockError(
             f"setforge.lock: package {key!r} has no integrity field "
             f"(one of {', '.join(_FIELD_KIND)} required)"
@@ -101,13 +120,14 @@ def _parse_pin(entry: object) -> ResolvedPin:
             f"setforge.lock: package {key!r} carries multiple integrity fields "
             f"({', '.join(present)}); exactly one is allowed"
         )
-    field = present[0]
-    expected = _KIND_FIELD[_expected_kind(pkg_type)]
-    if field != expected:
-        raise MalformedLockError(
-            f"setforge.lock: package {key!r} (type {pkg_type.value!r}) uses "
-            f"integrity field {field!r}, but this ecosystem uses {expected!r}"
-        )
+    field = present[0] if present else None
+    if field is not None:
+        expected = _KIND_FIELD[_expected_kind(pkg_type)]
+        if field != expected:
+            raise MalformedLockError(
+                f"setforge.lock: package {key!r} (type {pkg_type.value!r}) uses "
+                f"integrity field {field!r}, but this ecosystem uses {expected!r}"
+            )
 
     profiles_raw = entry.get("profiles", [])
     if not isinstance(profiles_raw, list) or not all(
@@ -121,10 +141,61 @@ def _parse_pin(entry: object) -> ResolvedPin:
         type=pkg_type,
         key=key,
         version=version,
-        integrity=_require(entry, field),
-        integrity_kind=_FIELD_KIND[field],
+        integrity=(
+            _require(entry, field)
+            if field is not None
+            else artifact_set_integrity(artifacts)
+        ),
+        integrity_kind=(
+            _FIELD_KIND[field] if field is not None else IntegrityKind.CHECKSUM
+        ),
         profiles=tuple(profiles_raw),
+        artifacts=artifacts,
     )
+
+
+def _parse_artifacts(
+    raw: object, *, key: str, pkg_type: PackageType
+) -> tuple[ResolvedArtifact, ...]:
+    if raw is None:
+        return ()
+    if pkg_type is not PackageType.GITHUB_RELEASE:
+        raise MalformedLockError(
+            f"setforge.lock: package {key!r} is not github_release but carries "
+            "platform artifacts"
+        )
+    if not isinstance(raw, list) or not raw:
+        raise MalformedLockError(
+            f"setforge.lock: package {key!r} 'artifact' must be a non-empty "
+            "array of tables"
+        )
+    parsed: list[ResolvedArtifact] = []
+    for row in raw:
+        if not isinstance(row, dict) or set(row) != {"os", "arch", "asset", "checksum"}:
+            raise MalformedLockError(
+                f"setforge.lock: package {key!r} artifact must contain exactly "
+                "os, arch, asset, and checksum"
+            )
+        try:
+            parsed.append(
+                ResolvedArtifact(
+                    os=_require(row, "os"),
+                    arch=_require(row, "arch"),
+                    asset=_require(row, "asset"),
+                    checksum=_require(row, "checksum"),
+                )
+            )
+        except ValueError as exc:
+            raise MalformedLockError(
+                f"setforge.lock: package {key!r} has invalid artifact: {exc}"
+            ) from exc
+    ordered = tuple(sorted(parsed, key=ResolvedArtifact.sort_key))
+    if tuple(parsed) != ordered or len({(a.os, a.arch) for a in parsed}) != len(parsed):
+        raise MalformedLockError(
+            f"setforge.lock: package {key!r} artifacts must be sorted and unique "
+            "by os/arch"
+        )
+    return ordered
 
 
 def _expected_kind(pkg_type: PackageType) -> IntegrityKind:

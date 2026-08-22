@@ -51,11 +51,13 @@ def observation_fingerprint(observation: PackageObservation) -> str:
     """Hash the complete normalized observation used by ownership CAS."""
     payload = json.dumps(
         {
+            "artifact": observation.artifact,
             "checksum": observation.checksum,
             "fingerprint": observation.fingerprint,
             "identity": observation.identity.key,
             "locator": observation.locator,
             "origin": observation.origin.value,
+            "platform": observation.platform,
             "source": observation.source,
             "version": observation.version,
         },
@@ -138,6 +140,12 @@ def decide_package(
     desired_matches = (
         item.version is None or item.version == observation.version
     ) and (item.checksum is None or item.checksum == observation.checksum)
+    desired_matches = desired_matches and (
+        item.artifact is None or item.artifact == observation.artifact
+    )
+    desired_matches = desired_matches and (
+        item.platform is None or item.platform == observation.platform
+    )
     return PackageDecision(
         item,
         resource_id,
@@ -164,6 +172,10 @@ def observation_provenance(
         values.append(
             ProvenanceFact(ProvenanceFactKind.INTEGRITY, observation.checksum)
         )
+    if observation.artifact is not None:
+        values.append(ProvenanceFact(ProvenanceFactKind.ARTIFACT, observation.artifact))
+    if observation.platform is not None:
+        values.append(ProvenanceFact(ProvenanceFactKind.PLATFORM, observation.platform))
     return tuple(values)
 
 

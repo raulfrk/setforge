@@ -14,11 +14,13 @@ from setforge.config import (
     Config,
     GitHubReleasePackage,
     GoPackage,
+    PlatformAssetVariant,
     Profile,
     PythonPackage,
     ResolvedProfile,
     TrackedFile,
 )
+from setforge.errors import ConfigError
 from setforge.lockfile import LockFile
 from setforge.provision.dispatch import resolve_provision_items, run_provisioning
 from setforge.provision.lock_apply import apply_lock_to_items
@@ -26,7 +28,9 @@ from setforge.provision.protocol import Outcome, ProvisionItem, ProvisionOutcome
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
+    ResolvedArtifact,
     ResolvedPin,
+    artifact_set_integrity,
 )
 
 
@@ -138,6 +142,97 @@ def test_github_release_latest_spec_gets_pinned_concrete_tag() -> None:
 
     assert "download/v1.2.3/" in _asset_url(locked_pkg)
     assert "latest" not in _asset_url(locked_pkg)
+
+
+def test_portable_github_release_lock_selects_injected_platform_offline() -> None:
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="latest",
+        assets=(
+            PlatformAssetVariant(asset="tool-linux", os="linux", arch="amd64"),
+            PlatformAssetVariant(asset="tool-macos", os="macos", arch="arm64"),
+        ),
+        binary="tool",
+        install="~/.local/bin",
+    )
+    items = resolve_provision_items(
+        _cfg(packages={"tool": package}), ResolvedProfile(packages=["tool"])
+    )
+    artifacts = (
+        ResolvedArtifact(
+            os="linux",
+            arch="x86_64",
+            asset="tool-linux",
+            checksum=f"sha256:{'a' * 64}",
+        ),
+        ResolvedArtifact(
+            os="macos",
+            arch="aarch64",
+            asset="tool-macos",
+            checksum=f"sha256:{'b' * 64}",
+        ),
+    )
+    pin = ResolvedPin(
+        type=PackageType.GITHUB_RELEASE,
+        key="owner/tool",
+        version="v1.2.3",
+        integrity=artifact_set_integrity(artifacts),
+        integrity_kind=IntegrityKind.CHECKSUM,
+        artifacts=artifacts,
+    )
+
+    out = apply_lock_to_items(
+        items,
+        LockFile(packages=(pin,)),
+        platform_os="linux",
+        platform_arch="amd64",
+    )
+
+    locked = out[0].config
+    assert isinstance(locked, GitHubReleasePackage)
+    assert locked.assets is None
+    assert locked.asset == "tool-linux"
+    assert locked.checksum == f"sha256:{'a' * 64}"
+    assert locked.tag == "v1.2.3"
+    assert out[0].artifact == "tool-linux"
+    assert out[0].platform == "linux-x86_64"
+
+
+def test_portable_github_release_lock_refuses_variant_correspondence_mismatch() -> None:
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="latest",
+        assets=(PlatformAssetVariant(asset="tool-linux", os="linux", arch="amd64"),),
+        binary="tool",
+        install="~/.local/bin",
+    )
+    items = resolve_provision_items(
+        _cfg(packages={"tool": package}), ResolvedProfile(packages=["tool"])
+    )
+    artifacts = (
+        ResolvedArtifact(
+            os="linux",
+            arch="x86_64",
+            asset="other-linux",
+            checksum=f"sha256:{'a' * 64}",
+        ),
+    )
+    pin = ResolvedPin(
+        type=PackageType.GITHUB_RELEASE,
+        key="owner/tool",
+        version="v1.2.3",
+        integrity=artifact_set_integrity(artifacts),
+        integrity_kind=IntegrityKind.CHECKSUM,
+        artifacts=artifacts,
+    )
+
+    with pytest.raises(ConfigError, match="do not match config"):
+        apply_lock_to_items(
+            items,
+            LockFile(packages=(pin,)),
+            platform_os="linux",
+            platform_arch="amd64",
+        )
 
 
 def test_unlocked_item_passes_through_unchanged() -> None:

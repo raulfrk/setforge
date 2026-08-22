@@ -75,6 +75,8 @@ class ProvisionItem:
     desired: DesiredState = DesiredState.ACTIVE
     version: str | None = None  # resolved ecosystem pin
     checksum: str | None = None
+    artifact: str | None = None
+    platform: str | None = None
     config: BaseModel = field(default_factory=_EmptyConfig)
 
 
@@ -89,6 +91,8 @@ class PackageObservation:
     locator: str | None = None
     fingerprint: str | None = None
     checksum: str | None = None
+    artifact: str | None = None
+    platform: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -17,6 +17,11 @@ from setforge.config import (
     Package,
     PythonPackage,
 )
+from setforge.platform_assets import (
+    HostPlatform,
+    current_host_platform,
+    select_platform_asset,
+)
 from setforge.provision.protocol import Identity
 
 
@@ -43,3 +48,16 @@ def package_version(pkg: Package) -> str | None:
         return pkg.tag
     value = getattr(pkg, "version", None)
     return value if isinstance(value, str) else None
+
+
+def package_artifact(
+    pkg: Package, *, host: HostPlatform | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Return selected artifact, platform, and checksum for one package."""
+    if not isinstance(pkg, GitHubReleasePackage):
+        return (None, None, getattr(pkg, "checksum", None))
+    if pkg.assets is None:
+        return (pkg.asset, None, pkg.checksum)
+    host = current_host_platform() if host is None else host
+    selected = select_platform_asset(pkg.assets, os=host.os, arch=host.arch)
+    return (selected.asset, host.key, selected.checksum)

@@ -22,11 +22,13 @@ _EXT_ID = "esbenp.prettier-vscode"
 _GHR_REPO = "jqlang/jq"
 _GHR_TAG = "jq-1.7.1"
 _GHR_ASSET = "jq-linux-amd64"
+_GHR_OTHER_ASSET = "jq-macos-amd64"
 _CRATE = "cfg-if"
 
 _CONFIG_YAML = f"""\
 version: 1
-schema_version: '6.0'
+schema_version: '6.3'
+minimum_version: '6.3'
 tracked_files:
   note:
     src: note.md
@@ -39,7 +41,13 @@ packages:
     type: github_release
     repo: {_GHR_REPO}
     tag: {_GHR_TAG}
-    asset: {_GHR_ASSET}
+    assets:
+      - asset: {_GHR_ASSET}
+        os: linux
+        arch: x86_64
+      - asset: {_GHR_OTHER_ASSET}
+        os: macos
+        arch: x86_64
     binary: jq
     install: /tmp/lock-out/bin
     extract: false
@@ -113,7 +121,9 @@ def test_lock_writes_concrete_pins_across_ecosystems(
 
     ghr_pin = _pin_table(lock_text, pkg_type="github_release", key=_GHR_REPO)
     assert ghr_pin["version"] == _GHR_TAG, ghr_pin
-    assert ghr_pin["checksum"].startswith("sha256:"), ghr_pin
+    assert ghr_pin["artifact_count"] == "2", ghr_pin
+    assert ghr_pin["linux_asset"] == _GHR_ASSET, ghr_pin
+    assert ghr_pin["macos_asset"] == _GHR_OTHER_ASSET, ghr_pin
 
     ext_pin = _pin_table(lock_text, pkg_type="extension", key=_EXT_ID)
     assert re.match(r"\d+\.\d+", ext_pin["version"]), ext_pin
@@ -159,7 +169,17 @@ def _pin_table(lock_text: str, *, pkg_type: str, key: str) -> dict[str, str]:
     doc = tomllib.loads(lock_text)
     for entry in doc.get("package", []):
         if entry.get("type") == pkg_type and entry.get("key") == key:
-            return {k: str(v) for k, v in entry.items()}
+            result = {k: str(v) for k, v in entry.items() if k != "artifact"}
+            artifacts = entry.get("artifact", [])
+            if artifacts:
+                result["artifact_count"] = str(len(artifacts))
+                for artifact in artifacts:
+                    if artifact.get("os") == "linux":
+                        result["linux_asset"] = str(artifact.get("asset"))
+                    if artifact.get("os") == "macos":
+                        result["macos_asset"] = str(artifact.get("asset"))
+                    assert str(artifact.get("checksum", "")).startswith("sha256:")
+            return result
     raise AssertionError(f"no ({pkg_type}, {key}) pin in lock:\n{lock_text}")
 
 

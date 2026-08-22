@@ -480,6 +480,13 @@ quick index.
   complete lock coverage but is not a Cargo offline mode. *When:* after changing
   a lockable package declaration.
 
+  GitHub release packages may keep the legacy universal `asset: name` form or
+  declare an `assets:` list under schema 6.3. A variant can select `os`, `arch`,
+  both, or neither. Exact OS+architecture wins over OS-only, then arch-only,
+  then universal; an equal-rank tie or no match fails before download. Lock v2
+  records every variant and checksum rather than the host that ran `lock`, so
+  the committed lock stays portable across Linux/macOS and x86_64/aarch64.
+
   ```console
   $ setforge lock --profile=default
   $ setforge install --profile=default --locked
@@ -497,8 +504,8 @@ quick index.
   ```
   === schema migration check ===
   your setforge.yaml:  ~/projects/dotfiles/setforge.yaml
-    declared schema:   6.2
-  installed setforge expects schema:   6.2
+    declared schema:   6.3
+  installed setforge expects schema:   6.3
   === no migrations available ===
   ```
 
