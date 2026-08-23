@@ -44,10 +44,10 @@ ALL_E2E_EXPR = "e2e_docker"
 DETERMINISTIC_E2E_EXPR = "e2e_docker and not network_canary"
 PR_SMOKE_EXPR = "e2e_docker and smoke and not network_canary"
 
-MAX_TOTAL_E2E_TESTS = 233
-MAX_DETERMINISTIC_E2E_TESTS = 224
+MAX_TOTAL_E2E_TESTS = 234
+MAX_DETERMINISTIC_E2E_TESTS = 225
 MAX_NETWORK_CANARY_TESTS = 9
-MAX_PR_SMOKE_TESTS = 9
+MAX_PR_SMOKE_TESTS = 10
 
 
 def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:

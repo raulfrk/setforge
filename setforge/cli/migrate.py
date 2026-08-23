@@ -265,6 +265,63 @@ def _chain_owns_transition(chain: Sequence[Migration]) -> bool:
     return any(getattr(m, "writes_own_transition", False) for m in chain)
 
 
+def _migration_transition_dirs() -> frozenset[Path]:
+    """Return committed migration-transition directories currently visible."""
+    root = transitions.transitions_root()
+    if not root.exists():
+        return frozenset()
+    found: set[Path] = set()
+    for candidate in root.iterdir():
+        if not candidate.is_dir() or candidate.name.startswith(".pending-"):
+            continue
+        try:
+            meta = transitions.load_meta(transitions.TransitionDir(candidate))
+        except transitions.InvalidTransitionRecord:
+            continue
+        if (
+            meta.command is transitions.TransitionCommand.MIGRATE
+            and meta.profile == transitions.MIGRATE_TRANSITION_PROFILE
+        ):
+            found.add(candidate)
+    return frozenset(found)
+
+
+def _finalize_owned_transition(
+    *,
+    before: frozenset[Path],
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+) -> None:
+    """Consolidate this chain's owners into one complete terminal record."""
+    created = sorted(_migration_transition_dirs() - before, key=lambda path: path.name)
+    if not created:
+        raise RuntimeError("migration chain owned a transition but created none")
+    latest = created[-1]
+    patch_path = latest / "changes.patch"
+    patch = transitions.compute_patch(file_pre, file_post)
+    if not patch:
+        raise RuntimeError("owned migration transition has no chain-final changes")
+    mode = patch_path.stat().st_mode & 0o777
+    atomicio.atomic_write_text(patch_path, patch, mode=mode)
+    for superseded in created[:-1]:
+        _remove_superseded_transition(superseded)
+
+
+def _remove_superseded_transition(path: Path) -> None:
+    """Durably remove one validated migrate record created by this apply."""
+    root = transitions.transitions_root()
+    if path.parent != root or not path.is_dir() or path.name.startswith(".pending-"):
+        raise RuntimeError(f"refusing invalid migration transition removal: {path}")
+    meta = transitions.load_meta(transitions.TransitionDir(path))
+    if (
+        meta.command is not transitions.TransitionCommand.MIGRATE
+        or meta.profile != transitions.MIGRATE_TRANSITION_PROFILE
+    ):
+        raise RuntimeError(f"refusing non-migration transition removal: {path}")
+    shutil.rmtree(path)
+    atomicio.fsync_dir(root)
+
+
 def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) -> None:
     """Handle the ``--apply`` branch.
 
@@ -292,6 +349,9 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # pre-step state, so a multi-step chain reverts to the intermediate schema
     # rather than the chain's origin (INV-5). See _chain_owns_transition.
     roots = replace(roots, pre_chain_snapshot=file_pre)
+    owned_transition_dirs = (
+        _migration_transition_dirs() if _chain_owns_transition(chain) else frozenset()
+    )
 
     _print_multi_file_diff_preview(chain=chain, roots=roots)
     choice = _confirm_migrate(chain=chain, roots=roots, yes=yes)
@@ -316,6 +376,12 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     try:
         _execute_chain(chain=chain, roots=roots, choice=choice)
         _run_post_apply_validate(cfg_path=cfg_path)
+        if _chain_owns_transition(chain):
+            _finalize_owned_transition(
+                before=owned_transition_dirs,
+                file_pre=file_pre,
+                file_post=transitions.snapshot_paths(affected),
+            )
     except BaseException as primary:
         try:
             _recover_migration_journal(journal)

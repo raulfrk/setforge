@@ -98,6 +98,30 @@ setforge ships eight subcommand groups for narrow inspections and edits. Run
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
 
+<a id="codex-lifecycle"></a>
+## Codex lifecycle
+
+The ordinary profile lifecycle needs no product-specific flag:
+
+```console
+setforge validate --profile=workstation
+setforge lock --profile=workstation
+setforge install --profile=workstation
+setforge compare --check --profile=workstation
+setforge status --profile=workstation
+setforge sync --profile=workstation
+setforge revert --profile=workstation --yes
+```
+
+These commands reconcile Claude and Codex selections as one profile operation,
+with product-qualified diagnostics and reversible transition records. Use
+`--product codex` only for direct `plugin` and `marketplace` declaration
+commands. `compare` and `status` stay read-only; a missing or incompatible
+Codex plugin CLI is reported as drift rather than silently ignored.
+`cleanup` remains the package-receipt cleanup flow; Codex plugin pruning is
+selected by `profiles.<name>.codex.reconcile.policy: prune` and applied by
+install or direct plugin reconciliation.
+
 `cleanup` and `cleanup-orphans` are deliberately different. `cleanup` compares
 package provisioner receipts with the effective package/bundle declaration and
 reviews undeclared binaries. `cleanup-orphans` concerns filesystem paths: its

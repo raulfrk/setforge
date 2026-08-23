@@ -18,6 +18,7 @@ The tests cover three call paths:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
@@ -503,6 +504,139 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     assert "6.0 → 6.1" in result.output
     assert "6.1 → 6.2" in result.output
     assert "6.2 → 6.3" in result.output
+
+
+def test_real_full_chain_latest_transition_reverts_to_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The latest owner records the final 6.5 image, so one revert reaches 1.0."""
+    from setforge import atomicio, transitions
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        "setforge.cli.migrate._run_post_apply_validate", lambda **_: None
+    )
+    cfg = tmp_path / "setforge.yaml"
+    origin = (
+        'version: 1\nminimum_version: "6.5"\ntracked_files: {}\nprofiles: {p: {}}\n'
+    )
+    cfg.write_text(origin, encoding="utf-8")
+    retained_payloads: dict[str, str] = {}
+    real_write = atomicio.atomic_write_text
+
+    def record_retained_payloads(
+        path: Path, text: str, **kwargs: object
+    ) -> Path | None:
+        if path.name == "changes.patch":
+            retained_payloads.update(
+                {
+                    str(item.relative_to(path.parent)): hashlib.sha256(
+                        item.read_bytes()
+                    ).hexdigest()
+                    for item in sorted(path.parent.rglob("*"))
+                    if item.is_file() and item.name != "changes.patch"
+                }
+            )
+        return real_write(path, text, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "setforge.cli.migrate.atomicio.atomic_write_text", record_retained_payloads
+    )
+
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    root = transitions.transitions_root()
+    migrate_records = [
+        path
+        for path in root.iterdir()
+        if path.is_dir()
+        and transitions.load_meta(transitions.TransitionDir(path)).command
+        is transitions.TransitionCommand.MIGRATE
+    ]
+    assert len(migrate_records) == 1
+    assert retained_payloads
+    assert {
+        str(item.relative_to(migrate_records[0])): hashlib.sha256(
+            item.read_bytes()
+        ).hexdigest()
+        for item in sorted(migrate_records[0].rglob("*"))
+        if item.is_file() and item.name != "changes.patch"
+    } == retained_payloads
+    latest = transitions.load_latest(transitions.MIGRATE_TRANSITION_PROFILE)
+    assert latest is not None
+
+    transitions.apply_patch_reverse(latest, dry_run=True)
+    transitions.apply_patch_reverse(latest)
+    assert cfg.read_text(encoding="utf-8") == origin
+
+
+def test_owned_transition_finalization_failure_recovers_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed chain-final patch replacement restores files and owner history."""
+    from setforge import atomicio, transitions
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    monkeypatch.setattr(
+        "setforge.cli.migrate._run_post_apply_validate", lambda **_: None
+    )
+    cfg = tmp_path / "setforge.yaml"
+    origin = (
+        'version: 1\nminimum_version: "6.5"\ntracked_files: {}\nprofiles: {p: {}}\n'
+    )
+    cfg.write_text(origin, encoding="utf-8")
+    real_write = atomicio.atomic_write_text
+
+    def fail_final_patch(path: Path, text: str, **kwargs: object) -> Path | None:
+        if path.name == "changes.patch":
+            raise OSError("injected finalization failure")
+        return real_write(path, text, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "setforge.cli.migrate.atomicio.atomic_write_text", fail_final_patch
+    )
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+
+    assert result.exit_code != 0
+    assert cfg.read_text(encoding="utf-8") == origin
+    root = transitions.transitions_root()
+    assert not root.exists() or not any(root.iterdir())
+
+
+def test_owned_transition_consolidation_failure_recovers_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed superseded-record removal restores origin and owner history."""
+    from setforge import transitions
+    from setforge.cli import migrate as migrate_cli
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    monkeypatch.setattr(
+        "setforge.cli.migrate._run_post_apply_validate", lambda **_: None
+    )
+    cfg = tmp_path / "setforge.yaml"
+    origin = (
+        'version: 1\nminimum_version: "6.5"\ntracked_files: {}\nprofiles: {p: {}}\n'
+    )
+    cfg.write_text(origin, encoding="utf-8")
+
+    def fail_transition_removal(path: Path) -> None:
+        raise OSError(f"injected consolidation failure: {path.name}")
+
+    monkeypatch.setattr(
+        migrate_cli,
+        "_remove_superseded_transition",
+        fail_transition_removal,
+        raising=False,
+    )
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+
+    assert result.exit_code != 0
+    assert cfg.read_text(encoding="utf-8") == origin
+    root = transitions.transitions_root()
+    assert not root.exists() or not any(root.iterdir())
 
 
 def test_to_five_zero_from_four_zero_is_schema_only_and_round_trips(

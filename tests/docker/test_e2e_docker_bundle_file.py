@@ -70,7 +70,9 @@ def _setforge(
 
 def _install(c: ContainerHandle) -> subprocess.CompletedProcess[str]:
     return _setforge(
-        c, ["install", "--profile=test-bundle-file", f"--config={_CFG}"], check=False
+        c,
+        ["install", "--profile=test-bundle-file", f"--config={_CFG}", "--yes"],
+        check=False,
     )
 
 

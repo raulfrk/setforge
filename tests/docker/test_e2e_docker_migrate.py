@@ -1,17 +1,18 @@
 """Docker e2e tests for ``setforge migrate`` — the schema version-stamp chain.
 
-Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0 → 6.1 → 6.2 migration
-chain end-to-end against a real Debian 12 container + the installed
+Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0 → 6.1
+→ 6.2 → 6.3 → 6.4 → 6.5 migration chain end-to-end against a real Debian 12
+container + the installed
 ``setforge`` binary:
 
-- ``migrate --check`` lists the full 1.0 → … → 6.0 → 6.1 → 6.2 chain
+- ``migrate --check`` lists the full 1.0 → … → 6.4 → 6.5 chain
   on a frozen 1.0 config (the listing never gates, so it shows all steps).
-- ``migrate --apply --yes`` walks the chain to ``schema_version: '6.2'`` (the
-  build's current expected) and writes a ``.pre-6.2.bak`` backup sibling. The
+- ``migrate --apply --yes`` walks the chain to ``schema_version: '6.5'`` (the
+  build's current expected) and writes a ``.pre-6.5.bak`` backup sibling. The
   destructive 1.2 → 2.0 contract step is gated on an operator-declared
   ``minimum_version >= 2.0`` AND the chain-terminal 5.0 → 6.0
   profile-fields-retire step is gated on ``minimum_version >= 6.0``, so the
-  apply-family configs carry the 6.0 floor (which satisfies both gates).
+  apply-family configs carry the 6.5 floor (which satisfies all gates).
 - ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
 - a pre-bump frozen config (no ``schema_version`` key) still ``install``s.
 
@@ -60,12 +61,12 @@ def _seed_frozen_config(c: ContainerHandle) -> None:
 # The 1.2 → 2.0 step drops the legacy preserve_* fields irreversibly and the
 # chain-terminal 5.0 → 6.0 step drops the legacy per-profile package/reconcile
 # fields irreversibly, so each refuses unless minimum_version attests every
-# host is upgraded. A 6.0 floor clears BOTH gates (>= is a full compare). The
+# host is upgraded. A 6.5 floor clears all gates (>= is a full compare). The
 # apply-family tests need the full chain to run, so they seed this variant;
 # the config still detects as the 1.0 baseline (no schema_version key).
 _FROZEN_1_0_FLOORED_YAML: str = (
     "version: 1\n"
-    'minimum_version: "6.0"\n'
+    'minimum_version: "6.5"\n'
     "tracked_files:\n"
     "  foo:\n"
     "    src: foo.md\n"
@@ -78,11 +79,11 @@ _FROZEN_1_0_FLOORED_YAML: str = (
 
 
 def _seed_floored_config(c: ContainerHandle) -> None:
-    """Write a frozen 1.0 config carrying ``minimum_version: "6.0"``.
+    """Write a frozen 1.0 config carrying ``minimum_version: "6.5"``.
 
     The floor lets the destructive 1.2 → 2.0 contract step AND the terminal
     5.0 → 6.0 profile-fields-retire step run, so the apply-family tests can
-    walk the full chain to the build's expected 6.2.
+    walk the full chain to the build's expected 6.5.
     """
     c.exec(["mkdir", "-p", f"{_CFG_DIR}/tracked"])
     c.write_text(_CFG_PATH, _FROZEN_1_0_FLOORED_YAML)
@@ -93,7 +94,7 @@ def _seed_floored_config(c: ContainerHandle) -> None:
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the full 1.0 → … → 6.0 → 6.2 chain.
+    """``migrate --check`` lists the full 1.0 → … → 6.4 → 6.5 chain.
 
     The listing never gates on the contract floor, so a floorless frozen 1.0
     config still shows all steps (including the 1.2 → 2.0 contract, the
@@ -109,7 +110,7 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "8 migration(s) available" in combined, combined
+    assert "13 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
     assert "1.1 → 1.2" in combined, combined
     assert "1.2 → 2.0" in combined, combined
@@ -120,13 +121,16 @@ def test_migrate_check_lists_the_stamp(
     assert "5.0 → 6.0" in combined, combined
     assert "6.0 → 6.1" in combined, combined
     assert "6.1 → 6.2" in combined, combined
+    assert "6.2 → 6.3" in combined, combined
+    assert "6.3 → 6.4" in combined, combined
+    assert "6.4 → 6.5" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '6.2'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '6.5'`` + writes a backup."""
     c = docker_container()
     _seed_floored_config(c)
     result = c.exec(
@@ -143,10 +147,10 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
-    # A frozen-1.0 apply runs the full chain to the build's expected version (6.2).
-    assert "schema_version: '6.2'" in after, after
+    # A frozen-1.0 apply runs the full chain to the build's expected version (6.5).
+    assert "schema_version: '6.5'" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-6.2.bak")
+    backup = c.read_text(f"{_CFG_PATH}.pre-6.5.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -179,7 +183,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '6.2'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '6.5'" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -204,8 +208,8 @@ _CFG_2_1_DISPOSITION_YAML: str = (
     "version: 1\n"
     # The full chain now terminates at the 5.0 → 6.0 profile-fields-retire
     # cutover, which is gated on minimum_version >= 6.0; declare the floor so
-    # the apply walks all the way to the build's current 6.2.
-    'minimum_version: "6.0"\n'
+    # the apply walks all the way to the build's current 6.5.
+    'minimum_version: "6.5"\n'
     "tracked_files:\n"
     "  foo:\n"
     "    src: foo.md\n"
@@ -249,7 +253,7 @@ def test_migrate_2_1_to_3_0_strips_disposition_and_reverts(
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
     after = c.read_text(_CFG_PATH)
-    assert "schema_version: '6.2'" in after, after
+    assert "schema_version: '6.5'" in after, after
     assert "disposition" not in after, after
 
     validate_res = c.exec(
@@ -287,7 +291,7 @@ def test_migrate_pin_round_trips_to_from_version(
     """``migrate --pin=1.0`` writes the from_version back into setforge.yaml."""
     c = docker_container()
     _seed_floored_config(c)
-    # First stamp it through the chain to 6.2, then pin back to 1.0.
+    # First stamp it through the chain to 6.5, then pin back to 1.0.
     apply_res = c.exec(
         [
             "uv",
@@ -301,7 +305,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '6.2'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '6.5'" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -311,8 +315,8 @@ def test_migrate_pin_round_trips_to_from_version(
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
     assert "1.0" in after, after
-    # The pin overwrote the applied 6.2 stamp in place.
-    assert "schema_version: '6.2'" not in after, after
+    # The pin overwrote the applied 6.5 stamp in place.
+    assert "schema_version: '6.5'" not in after, after
 
 
 def test_frozen_pre_bump_config_still_installs(
@@ -330,7 +334,7 @@ def test_frozen_pre_bump_config_still_installs(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    # The schema-mismatch warning fires (1.0 declared vs 6.2 expected) but
+    # The schema-mismatch warning fires (1.0 declared vs 6.5 expected) but
     # install proceeds and deploys the tracked file.
     combined = result.stdout + result.stderr
     assert "schema_version" in combined, combined
@@ -451,7 +455,7 @@ def test_downgrade_across_marker_retire_refuses(
         check=False,
     )
     assert up.returncode == 0, up.stdout + up.stderr
-    assert "schema_version: '6.2'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '6.5'" in c.read_text(_CFG_PATH)
 
     down = c.exec(
         [
@@ -472,8 +476,8 @@ def test_downgrade_across_marker_retire_refuses(
     assert "cannot be regenerated" in combined, combined
     assert "Traceback (most recent call last)" not in combined, combined
     # The refused downgrade atomically rolled back the completed reverse hops
-    # (6.2 → 6.1 → 6.0 → 5.0 → 4.0): still 6.2.
-    assert "schema_version: '6.2'" in c.read_text(_CFG_PATH)
+    # (6.5 → 6.4 → 6.3 → 6.2 → 6.1 → 6.0 → 5.0 → 4.0): still 6.5.
+    assert "schema_version: '6.5'" in c.read_text(_CFG_PATH)
 
 
 def test_install_cross_major_config_refuses_clean(
@@ -536,12 +540,12 @@ def test_sub_floor_engine_refuses_all_config_verbs(
 ) -> None:
     """A floor above this build's schema refuses every config-reading verb.
 
-    minimum_version 6.5 puts this (schema-6.2) engine below the floor, so the
+    minimum_version 6.6 puts this schema-6.5 engine below the floor, so the
     floor fires and refuses every config-reading verb. ``--version`` (no config
     read) stays usable.
     """
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "6.5"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "6.6"\n'))
     for verb in (
         ["install", "--profile=base"],
         ["compare", "--profile=base"],

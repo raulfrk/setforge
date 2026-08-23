@@ -382,8 +382,9 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
     The disposition-retire (2.1->3.0) and span-surface-retire (3.0->4.0) steps
     each set ``writes_own_transition``; the one command applies both, reaching 4.0
     with the local.yaml section folded as a LOCAL+reloc unit and the retired
-    surface stripped. Because both steps own a transition, TWO durable MIGRATE
-    transitions land on disk.
+    surface stripped. Both steps initially own a transition, then the driver
+    consolidates those overlapping current-apply records into one terminal
+    MIGRATE transition.
     """
     cfg, local_yaml = _write_chain_origin(tmp_path)
 
@@ -399,7 +400,7 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
     assert "host_local_sections" not in local_yaml.read_text(encoding="utf-8")
 
     migrate_transitions = transitions.list_transitions(["migrate"])
-    assert len(migrate_transitions) == 2
+    assert len(migrate_transitions) == 1
 
 
 def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(
@@ -542,8 +543,9 @@ def test_chained_2_1_to_5_0_single_revert_restores_config_and_store_to_origin(
     )
     assert apply.exit_code == 0, apply.output
     assert detect_current_schema(cfg) == "5.0"
-    # All three cutovers own a durable transition.
-    assert len(transitions.list_transitions(["migrate"])) == 3
+    # All three cutovers initially own a transition; the driver consolidates
+    # their overlapping current-apply records into one terminal record.
+    assert len(transitions.list_transitions(["migrate"])) == 1
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -692,7 +694,7 @@ def test_chained_4_0_to_6_0_single_revert_restores_config_to_origin(
     )
     assert apply.exit_code == 0, apply.output
     assert detect_current_schema(cfg) == "6.0"
-    assert len(transitions.list_transitions(["migrate"])) == 2
+    assert len(transitions.list_transitions(["migrate"])) == 1
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]

@@ -19,6 +19,34 @@ The tool (this repo) and your config are deliberately separate: the engine
 ships no personal data, and your config repo carries no engine code. That
 split is what lets one published tool drive many different people's setups.
 
+## Codex parity and compatibility
+
+Setforge supports mixed Claude and Codex profiles. Codex configuration,
+layered `AGENTS.md` instructions, standalone skills, plugins and marketplaces,
+and STDIO/HTTP MCP servers use the same profile lifecycle and transition model
+as existing resources.
+
+| Surface | Claude | Codex | Runtime requirement |
+| --- | --- | --- | --- |
+| Configuration and instructions | native JSON/Markdown | native TOML/`AGENTS.md` | filesystem access |
+| Standalone skills | managed directories | managed directories | filesystem access |
+| Plugins and marketplaces | `claude` CLI | `codex` CLI | non-interactive JSON commands described below |
+| MCP servers | Claude registry | native `config.toml` | host-local environment values when needed |
+| File lifecycle and snapshots | supported | supported | Setforge schema 6.4+; Codex MCP needs 6.5 |
+| Plugin install/compare/revert | supported | supported | compatible native CLI |
+
+Codex CLI compatibility is capability-based rather than tied to a guessed
+version number. Plugin automation requires `plugin list --available --json`,
+`plugin add/remove --json`, and `plugin marketplace
+list/add/remove/upgrade --json`. When those commands are unavailable, file and
+MCP management still works and compare/status reports actionable plugin-state
+drift. Credential values, OAuth state, and bearer tokens remain host-local.
+
+See [configuration](docs/configuration.md#codex-profile),
+[commands](docs/commands.md#codex-lifecycle), and the
+[tutorial](docs/tutorial.md#codex-migration-and-limitations) for a complete
+profile, migration steps, and limitations.
+
 ## How it works
 
 - **Engine repo** (`raulfrk/setforge`, this one): the `setforge` CLI plus the

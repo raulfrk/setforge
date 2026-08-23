@@ -93,6 +93,8 @@ def _draft_through_review(
         ],
         timeout=120.0,
     )
+    s.expect_in_display("Manage existing tracked file", timeout=30.0)
+    s.send_keys("y\r")
     s.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s.expect_in_display("Host paths", timeout=30.0)  # the lone workdir hunk
     s.send_keys("\r")  # Share (focused) → share sub-menu

@@ -77,9 +77,66 @@ loads. Everything else has a default:
 | `packages` | no | `{}` | Named package declarations. |
 | `bundles` | no | `{}` | Ordered, dependency-aware package/file groups. |
 
-The current schema keeps deployable registries at the top level. Profiles only
-select `tracked_files`, `packages`, `bundles`, and `mcp_servers`, then configure
-`reconcile` and `section_slots`. The pre-6.0 profile fields `extensions`,
+<a id="codex-profile"></a>
+## Complete mixed Codex profile
+
+Codex resources require `schema_version: '6.4'` or newer. Codex MCP servers
+require 6.5. This example keeps Claude instructions and a complete
+Codex selection in one profile:
+
+```yaml
+schema_version: '6.5'
+minimum_version: '6.5'
+version: 1
+tracked_files:
+  claude-instructions:
+    src: claude/CLAUDE.md
+    dst: ~/.claude/CLAUDE.md
+codex:
+  config:
+    defaults: {source: codex/config.toml}
+  instructions:
+    shared: {source: codex/AGENTS.md}
+  skills:
+    review: {source: codex/skills/review}
+  marketplaces:
+    team: {source: github, repo: example/codex-plugins}
+  plugins:
+    reviewer: {marketplace: team}
+  mcp_servers:
+    notes:
+      transport: stdio
+      command: uvx
+      args: [notes-mcp]
+      env_vars: [notes_token]
+profiles:
+  workstation:
+    tracked_files: [claude-instructions]
+    codex:
+      config: [defaults]
+      instructions: [shared]
+      skills: [review]
+      plugins: [reviewer]
+      mcp_servers: [notes]
+      reconcile: {policy: additive}
+```
+
+Map portable environment names to real host variables in
+`~/.config/setforge/local.yaml`; never put values in the shared repository:
+
+```yaml
+codex:
+  environment_vars:
+    notes_token: NOTES_TOKEN
+```
+
+Setforge owns only selected TOML leaves and declared filesystem resources.
+Unmanaged TOML keys, comments, OAuth state, credential material, and unrelated
+instructions or skills are preserved.
+
+The current schema keeps deployable registries at the top level. Profiles
+select `tracked_files`, `packages`, `bundles`, `mcp_servers`, and typed `codex`
+resources, then configure reconciliation behavior. The pre-6.0 profile fields `extensions`,
 `claude_plugins`, `cargo_binaries`, and `plugins_reconcile` are migration input,
 not schema-6 authoring syntax. The historical `5.0 -> 6.0` migration folds
 those selections into package declarations before removing the old fields.

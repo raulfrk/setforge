@@ -136,6 +136,12 @@ def _stage_session(
     )
 
 
+def _accept_adoption(s: PyteSession) -> None:
+    """Cross the required one-time tracked-file adoption gate."""
+    s.expect_in_display("Manage existing tracked file", timeout=30.0)
+    s.send_keys("y\r")
+
+
 @pytest.mark.xdist_group("docker_daemon")
 def test_stage_walk_shares_one_hunk_then_demotes(
     pyte_pty_session: Callable[..., PyteSession],
@@ -149,6 +155,7 @@ def test_stage_walk_shares_one_hunk_then_demotes(
 
     # --- walk 1: Share (verbatim) the Shell hunk, Keep-local the Host-paths hunk.
     s = _stage_session(pyte_pty_session, c)
+    _accept_adoption(s)
     s.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s.expect_in_display("Shell", timeout=30.0)  # hunk 1 = the ## Shell insertion
     s.send_keys("\r")  # Share (focused) → opens the share sub-menu
@@ -190,6 +197,7 @@ def test_stage_walk_shares_one_hunk_then_demotes(
 
     # --- walk 2: choose SHARED again for the changed Shell bytes.
     s_reconfirm = _stage_session(pyte_pty_session, c)
+    _accept_adoption(s_reconfirm)
     s_reconfirm.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s_reconfirm.expect_in_display("Shell", timeout=30.0)
     s_reconfirm.send_keys("\r")
@@ -210,6 +218,7 @@ def test_stage_walk_shares_one_hunk_then_demotes(
 
     # --- walk 3: demote the now-SHARED Shell hunk back to LOCAL.
     s2 = _stage_session(pyte_pty_session, c)
+    _accept_adoption(s2)
     s2.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s2.expect_in_display("Shell", timeout=30.0)
     s2.send_keys("\x1b[C\r")  # Shell SHARED (focus 0) → 0→1 = Keep local (demote)
@@ -240,6 +249,7 @@ def test_stage_walk_skip_then_quit_classifies_nothing(
     c.write_text(_LIVE, _LIVE_BODY)
 
     s = _stage_session(pyte_pty_session, c)
+    _accept_adoption(s)
     s.expect_in_display(_FRAME_GLYPH, timeout=60.0)
     s.expect_in_display("Shell", timeout=30.0)
     s.send_keys("\x1b[C\x1b[C\r")  # focus 0→2 = Skip (leave unchanged) → next hunk

@@ -718,6 +718,39 @@ CLI releases do not expose plugin enable/disable commands; `--disable` with
 `--product codex` therefore fails explicitly. Removal and reconciliation are
 supported, and install/revert records Codex effects separately from Claude.
 
+<a id="codex-migration-and-limitations"></a>
+### Codex migration and limitations
+
+To add Codex to an existing Claude-only repository:
+
+1. Run `setforge migrate --check`, then `setforge migrate` to reach the current
+   schema. Codex resources begin at schema 6.4; project-scoped Codex MCP begins
+   at 6.5.
+2. Add top-level `codex` declarations and select them under each intended
+   profile. Existing Claude-only fields keep their meaning.
+3. Put machine paths and environment-variable mappings in
+   `~/.config/setforge/local.yaml`. Keep tokens and OAuth material out of the
+   shared repository.
+4. Run `setforge validate`, `setforge compare`, then `setforge install`.
+   Repeat install to confirm idempotence before enabling prune policy.
+
+Known boundaries:
+
+- Plugin and marketplace automation needs a Codex CLI implementing the
+  non-interactive JSON commands listed in the README. Compatibility is detected
+  from those capabilities, not inferred from a numeric version string.
+- Setforge does not manage Codex login, OAuth state, bearer-token values, or
+  project trust. Project-scoped destinations must already be trusted.
+- Marketplace sources are credential-free GitHub `owner/repo` references or
+  host-local paths. Cache synchronization remains Claude-specific.
+- `additive` is the safe default for plugin reconciliation. Explicit `prune`
+  authorizes removal of every installed Codex plugin absent from the effective
+  profile, including plugins installed outside Setforge. Inventory the native
+  plugin list and compare it with the effective profile before enabling prune;
+  `report` is read-only.
+- Unavailable plugin inspection does not block filesystem or MCP convergence,
+  but `compare --check` reports unresolved plugin state as drift.
+
 **Codex MCP servers:** declare STDIO or HTTP servers in the same top-level
 `codex` registry and select them from `profiles.<name>.codex.mcp_servers`:
 

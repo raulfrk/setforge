@@ -35,10 +35,10 @@ def test_suite_budgets_report_each_exceeded_lane() -> None:
         [f"smoke-{i}" for i in range(MAX_PR_SMOKE_TESTS + 1)],
     )
     assert len(violations) == 4
-    assert "234 Docker tests" in violations[0]
-    assert "225 deterministic Docker tests" in violations[1]
+    assert "235 Docker tests" in violations[0]
+    assert "226 deterministic Docker tests" in violations[1]
     assert "10 network canaries" in violations[2]
-    assert "10 smoke tests" in violations[3]
+    assert "11 smoke tests" in violations[3]
 
 
 def test_run_all_gates_collects_exact_ci_lane_expressions(

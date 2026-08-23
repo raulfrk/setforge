@@ -23,6 +23,12 @@
 # persisted multi-process lifecycle. delete/merge verdicts, when present, still
 # flag future work and require a live superseded_by target.
 
+[tests."tests/docker/test_e2e_docker_codex_parity.py::test_mixed_codex_profile_converges_and_rolls_back_across_processes"]
+verdict = "keep"
+smoke = true
+signal = "mixed Claude/Codex fresh convergence, idempotence, drift, sync, and rollback across CLI processes"
+verbs = ["validate", "install", "compare", "sync", "revert"]
+
 [tests."tests/docker/test_auditfix_plugin_add_marketplace.py::test_marketplace_add_binary_failure_does_not_leave_orphan_yaml_entry"]
 verdict = "keep"
 smoke = false
