@@ -67,7 +67,7 @@ loads. Everything else has a default:
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
 | `version` | no | `1` | Config format version. |
-| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.4"`. |
+| `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.5"`. |
 | `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |
 | `claude_plugins` | no | `{}` | Top-level Claude plugin defaults. |
@@ -83,6 +83,18 @@ select `tracked_files`, `packages`, `bundles`, and `mcp_servers`, then configure
 `claude_plugins`, `cargo_binaries`, and `plugins_reconcile` are migration input,
 not schema-6 authoring syntax. The historical `5.0 -> 6.0` migration folds
 those selections into package declarations before removing the old fields.
+
+Codex MCP declarations live under `codex.mcp_servers`, separately from the
+legacy Claude registry. They use `transport: stdio` with `command`, optional
+`args`, `cwd`, and `env_vars`, or `transport: http` with `url`, optional
+`bearer_token_env_var`, and `env_http_headers`. Both transports support
+`scope`/`project`, `enabled`, `required`, startup/tool timeouts, enabled and
+disabled tool lists, a default approval mode, and per-tool approval modes.
+Environment fields contain portable logical names only. Map each selected name
+to a host environment-variable name under `codex.environment_vars` in
+`local.yaml`; OAuth sessions and all credential values remain host-owned.
+The MCP scope/project contract requires `schema_version` and
+`minimum_version` 6.5 or newer.
 
 ### Complete schema-6 shape
 

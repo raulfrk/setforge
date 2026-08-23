@@ -107,6 +107,7 @@ def compare(
             read_base=lambda resource_id: reconcile_store.read_base(
                 profile, file_id(resource_id)
             ),
+            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
             reconcile=False,
         )
         codex_drift = False

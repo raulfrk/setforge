@@ -389,9 +389,13 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         read_base=lambda resource_id: reconcile_store.read_base(
             ctx.profile, file_id(resource_id)
         ),
+        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
     )
     codex_trusted_projects = codex_resources_mod.selected_trusted_projects(
-        ctx.cfg, ctx.resolved, ctx.repo_root
+        ctx.cfg,
+        ctx.resolved,
+        ctx.repo_root,
+        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
     )
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
@@ -932,6 +936,9 @@ def _apply_codex_config_plans(
             record_base=lambda resource_id, data: reconcile_store.write_base(
                 profile, file_id(resource_id), data
             ),
+            record_marker=lambda resource_id, data: reconcile_store.write_base(
+                profile, file_id(resource_id), data
+            ),
         )
         guard.verify_expected()
 
@@ -1421,7 +1428,12 @@ def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
             _tree_lock_target(destination)
             for *_prefix, destination in _iter_all_trees(ctx)
         ),
-        *codex_resources_mod.config_target_roots(cfg, resolved, config.parent),
+        *codex_resources_mod.config_target_roots(
+            cfg,
+            resolved,
+            config.parent,
+            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+        ),
     }
     return tuple(sorted(roots, key=str))
 
@@ -2035,8 +2047,16 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         if not no_transition:
             transitions.ensure_state_dir_writable()
 
+        deploy_state_pre = install_helpers_mod._capture_store_snapshots(
+            profile, plan.deploys
+        )
+        captured_base_keys = {
+            entry.key
+            for entry in deploy_state_pre
+            if entry.store is transitions.SnapshotStore.BASE
+        }
         state_pre = (
-            *install_helpers_mod._capture_store_snapshots(profile, plan.deploys),
+            *deploy_state_pre,
             *(
                 transitions.snapshot_store_state(
                     transitions.SnapshotStore.BASE,
@@ -2044,6 +2064,17 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     codex_plan.resource_id,
                 )
                 for codex_plan in plan.codex_configs
+                if codex_plan.resource_id not in captured_base_keys
+            ),
+            *(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE,
+                    profile,
+                    codex_plan.mcp_marker_id,
+                )
+                for codex_plan in plan.codex_configs
+                if codex_plan.mcp_marker_id is not None
+                and codex_plan.mcp_marker_id not in captured_base_keys
             ),
         )
         secrets_checkpoint_paths = (
@@ -2214,8 +2245,13 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
             seeded=bool(seeded),
             codex_base_mutated=any(
-                codex_plan.base != codex_plan.desired
-                for codex_plan in plan.codex_configs
+                entry.store is transitions.SnapshotStore.BASE
+                and entry.key.startswith(("codex/config/", "codex/mcp-target/"))
+                and transitions.snapshot_store_state(
+                    entry.store, entry.profile, entry.key
+                )
+                != entry
+                for entry in state_pre
             ),
             filesystem_deltas=tree_filesystem_deltas,
         ):

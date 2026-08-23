@@ -526,6 +526,7 @@ def _capture_sync_store_snapshots(
         read_base=lambda resource_id: reconcile_store.read_base(
             ctx.profile, file_id(resource_id)
         ),
+        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
         reconcile=False,
     ):
         entries.append(
@@ -535,6 +536,14 @@ def _capture_sync_store_snapshots(
                 codex_plan.resource_id,
             )
         )
+        if codex_plan.mcp_marker_id is not None:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE,
+                    ctx.profile,
+                    codex_plan.mcp_marker_id,
+                )
+            )
     saw_reconcile = False
     for tracked_file, sub_name, _sub_src, _sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is not None:
@@ -579,14 +588,17 @@ def _write_sync_transition(
     by :func:`_capture_sync_store_snapshots` so ``revert`` restores the
     byte bases / spans sidecars in lockstep with the tracked patch.
 
-    Skips the write entirely when capture produced no file mutations
-    (``file_pre == file_post``). An empty SYNC transition would shadow a
+    Skips the write only when capture produced neither file mutations nor
+    per-host store mutations. A truly empty SYNC transition would shadow a
     preceding ``TransitionCommand.PROMOTE`` record in
-    :func:`transitions.load_latest`, so ``setforge revert`` after a
-    sync-with-promote would reverse the no-op SYNC instead of the
-    promote (round-4 round-trip regression).
+    :func:`transitions.load_latest`, while a state-only transition is required
+    so revert can restore newly acquired ownership metadata.
     """
-    if file_pre == file_post:
+    state_changed = any(
+        transitions.snapshot_store_state(entry.store, entry.profile, entry.key) != entry
+        for entry in state_snapshots
+    )
+    if file_pre == file_post and not state_changed:
         return
     target = transitions.write_transition(
         transitions.make_meta(
@@ -705,6 +717,7 @@ def _run_capture(
         read_base=lambda resource_id: reconcile_store.read_base(
             profile, file_id(resource_id)
         ),
+        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
         reconcile=False,
     )
     results = capture_mod.capture_profile(
@@ -721,8 +734,12 @@ def _run_capture(
             codex_plan, write=atomicio.atomic_write_bytes
         )
         current_fragments = tuple(source.read_bytes() for source in codex_plan.sources)
-        desired, _owned = codex_resources_mod.compose_fragments(current_fragments)
+        desired, _owned = codex_resources_mod.compose_fragments(
+            (*current_fragments, *codex_plan.generated_bytes)
+        )
         reconcile_store.write_base(profile, file_id(codex_plan.resource_id), desired)
+        if codex_plan.mcp_marker_id is not None:
+            reconcile_store.write_base(profile, file_id(codex_plan.mcp_marker_id), b"")
         if changed:
             results.append(
                 capture_mod.CaptureResult(

@@ -232,6 +232,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     },
     "CodexStdioMcpServerRef": {
         "transport": "typing.Literal[<CodexMcpTransport.STDIO: 'stdio'>]",
+        "scope": "<enum 'CodexFileScope'>",
+        "project": "pathlib.Path | None",
         "command": "<class 'str'>",
         "args": "list[str]",
         "cwd": "pathlib.Path | None",
@@ -247,6 +249,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     },
     "CodexHttpMcpServerRef": {
         "transport": "typing.Literal[<CodexMcpTransport.HTTP: 'http'>]",
+        "scope": "<enum 'CodexFileScope'>",
+        "project": "pathlib.Path | None",
         "url": "<class 'str'>",
         "bearer_token_env_var": "str | None",
         "env_http_headers": "dict[str, str]",

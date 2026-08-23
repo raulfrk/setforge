@@ -51,7 +51,7 @@ terminal mockups, and links to the complete inventory.
 - **Profiles.** A profile is a named subset of tracked files, packages,
   bundles, and MCP servers, with optional inheritance (`extends:`). Reconcile
   policy for plugin/extension package types also lives on the profile.
-- **Schema.** New `setforge.yaml` files carry `schema_version: "6.4"`. An optional
+- **Schema.** New `setforge.yaml` files carry `schema_version: "6.5"`. An optional
   `minimum_version:` floor refuses to run an engine older than your config
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
@@ -159,7 +159,7 @@ A minimal config repo is a manifest plus the file content it points at:
 <!-- setforge-doc-example: tutorial-schema6 -->
 ```yaml
 # ~/projects/dotfiles/setforge.yaml
-schema_version: "6.4"
+schema_version: "6.5"
 tracked_files:
   gitconfig:
     src: gitconfig            # lives at tracked/gitconfig
@@ -686,8 +686,8 @@ $ setforge marketplace update mymarket       # claude plugin marketplace update 
 block and select them from the profile's `codex.plugins` list:
 
 ```yaml
-schema_version: '6.4'
-minimum_version: '6.4'
+schema_version: '6.5'
+minimum_version: '6.5'
 codex:
   marketplaces:
     team:
@@ -717,6 +717,50 @@ Codex's opaque plugin state. Authentication remains host-local. Current Codex
 CLI releases do not expose plugin enable/disable commands; `--disable` with
 `--product codex` therefore fails explicitly. Removal and reconciliation are
 supported, and install/revert records Codex effects separately from Claude.
+
+**Codex MCP servers:** declare STDIO or HTTP servers in the same top-level
+`codex` registry and select them from `profiles.<name>.codex.mcp_servers`:
+
+```yaml
+codex:
+  mcp_servers:
+    notes:
+      transport: stdio
+      command: uvx
+      args: [notes-mcp]
+      env_vars: [notes_token]
+      enabled_tools: [search, read]
+      disabled_tools: [delete]
+      tool_timeout_sec: 30
+    team_api:
+      transport: http
+      url: https://mcp.example.com/api
+      bearer_token_env_var: team_token
+      env_http_headers: {X-Tenant: tenant_id}
+      default_tools_approval_mode: writes
+profiles:
+  default:
+    codex:
+      mcp_servers: [notes, team_api]
+```
+
+The portable names are mapped to real host variable names in
+`~/.config/setforge/local.yaml`; values never enter SetForge configuration or
+state:
+
+```yaml
+codex:
+  environment_vars:
+    notes_token: NOTES_TOKEN
+    team_token: TEAM_MCP_TOKEN
+    tenant_id: TEAM_TENANT_ID
+```
+
+SetForge reconciles the corresponding native `config.toml` leaves, preserving
+unmanaged servers, comments, OAuth login state, and credential material.
+Project-scoped servers additionally use `scope: project`, a portable
+`project: app` locator, and `codex.project_paths.app` in `local.yaml`; the
+project must already be trusted by Codex.
 
 **VSCode extensions:**
 

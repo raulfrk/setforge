@@ -18,9 +18,10 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import base_store, transitions
+from setforge import base_store, source, transitions
 from setforge.cli import app
 from setforge.cli import install as install_mod
+from setforge.codex_resources import mcp_target_marker
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
 from setforge.transitions import SnapshotStore
@@ -200,6 +201,50 @@ def test_codex_base_only_install_records_transition_and_revert(repo: Path) -> No
     assert destination.read_bytes() == desired
 
 
+def test_codex_marker_only_install_records_transition_and_revert(repo: Path) -> None:
+    codex_home = Path.home() / ".codex"
+    codex_home.mkdir()
+    live = codex_home / "config.toml"
+    desired = (
+        b'[mcp_servers.notes]\ncommand = "notes-mcp"\nenabled = true\n'
+        b"required = false\n"
+    )
+    live.write_bytes(desired)
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\nminimum_version: '6.5'\ntracked_files: {}\n"
+        "codex:\n  mcp_servers:\n    notes:\n      transport: stdio\n"
+        "      command: notes-mcp\nprofiles:\n"
+        f"  {_PROFILE}:\n    codex:\n      mcp_servers: [notes]\n"
+    )
+    digest = sha256(str(live).encode()).hexdigest()[:16]
+    config_base_id = file_id(f"codex/config/{digest}")
+    marker = mcp_target_marker(live, None)
+    marker_id = file_id(marker)
+    reconcile_store.write_base(_PROFILE, config_base_id, desired)
+    assert reconcile_store.read_base(_PROFILE, marker_id) is None
+
+    installed = _install(config)
+    assert installed.exit_code == 0, installed.output
+    latest = transitions.load_latest(_PROFILE)
+    assert latest is not None
+    assert (
+        transitions.load_meta(latest).command is transitions.TransitionCommand.INSTALL
+    )
+    assert reconcile_store.read_base(_PROFILE, marker_id) == b""
+    assert reconcile_store.read_base(_PROFILE, config_base_id) == desired
+    assert live.read_bytes() == desired
+
+    reverted = CliRunner().invoke(
+        app,
+        ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert reconcile_store.read_base(_PROFILE, marker_id) is None
+    assert reconcile_store.read_base(_PROFILE, config_base_id) == desired
+    assert live.read_bytes() == desired
+
+
 def test_codex_install_compare_sync_and_revert_journey(repo: Path) -> None:
     codex_home = Path.home() / ".codex"
     codex_home.mkdir()
@@ -283,7 +328,7 @@ def test_install_refuses_project_resource_after_trust_revocation(
     trust = codex_home / "config.toml"
     trust.write_text(f'[projects."{project}"]\ntrust_level = "trusted"\n')
     local = Path.home() / ".config/setforge/local.yaml"
-    local.parent.mkdir(parents=True)
+    local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text(f"codex:\n  project_paths:\n    app: {project}\n")
     monkeypatch.setattr(install_mod.source_mod, "LOCAL_CONFIG_PATH", local)
     tracked = repo / "tracked/codex"
@@ -406,3 +451,204 @@ def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> 
         for kind, path in paths.items()
     } == before
     reconcile_store.verify(_PROFILE)
+
+
+def test_codex_mcp_install_compare_and_revert_journey(repo: Path) -> None:
+    home = Path.home()
+    codex_home = home / ".codex"
+    codex_home.mkdir()
+    live = codex_home / "config.toml"
+    original = b'# host\n[mcp_servers.personal]\ncommand = "mine"\n'
+    live.write_bytes(original)
+    local = source.LOCAL_CONFIG_PATH
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("codex:\n  environment_vars:\n    api_token: SETFORGE_API_TOKEN\n")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\n"
+        "minimum_version: '6.5'\n"
+        "tracked_files: {}\n"
+        "codex:\n"
+        "  mcp_servers:\n"
+        "    api:\n"
+        "      transport: http\n"
+        "      url: https://mcp.example.test\n"
+        "      bearer_token_env_var: api_token\n"
+        "      enabled_tools: [read]\n"
+        "      tool_timeout_sec: 20\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    codex:\n"
+        "      mcp_servers: [api]\n"
+    )
+
+    dry_run = CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--dry-run",
+            "--no-git-check",
+        ],
+    )
+    assert dry_run.exit_code == 0, dry_run.output
+    assert live.read_bytes() == original
+
+    installed = _install(config)
+    assert installed.exit_code == 0, installed.output
+    rendered = live.read_text()
+    assert "[mcp_servers.personal]" in rendered
+    assert "[mcp_servers.api]" in rendered
+    assert 'bearer_token_env_var = "SETFORGE_API_TOKEN"' in rendered
+    assert "api_token" not in rendered
+
+    clean = CliRunner().invoke(
+        app,
+        ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"],
+    )
+    assert clean.exit_code == 0, clean.output
+    live.write_text(
+        rendered.replace("tool_timeout_sec = 20.0", "tool_timeout_sec = 9.0")
+    )
+    drifted = CliRunner().invoke(
+        app,
+        ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"],
+    )
+    assert drifted.exit_code == 1
+    live.write_text(rendered)
+
+    reverted = CliRunner().invoke(
+        app,
+        ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert live.read_bytes() == original
+
+
+def test_codex_mcp_sync_preserves_ownership_for_deselect_and_revert(
+    repo: Path,
+) -> None:
+    home = Path.home()
+    codex_home = home / ".codex"
+    codex_home.mkdir()
+    live = codex_home / "config.toml"
+    original = b'[mcp_servers.personal]\ncommand = "mine"\n'
+    live.write_bytes(original)
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\nminimum_version: '6.5'\ntracked_files: {}\n"
+        "codex:\n  mcp_servers:\n    notes:\n      transport: stdio\n"
+        "      command: notes-mcp\nprofiles:\n"
+        f"  {_PROFILE}:\n    codex:\n      mcp_servers: [notes]\n"
+    )
+
+    assert _install(config).exit_code == 0
+    selected_live = live.read_bytes()
+    marker = mcp_target_marker(live, None)
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) == b""
+
+    synced = CliRunner().invoke(
+        app,
+        [
+            "sync",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--auto=use-live",
+            "--yes",
+        ],
+    )
+    assert synced.exit_code == 0, synced.output
+    digest = sha256(str(live).encode()).hexdigest()[:16]
+    base = reconcile_store.read_base(_PROFILE, file_id(f"codex/config/{digest}"))
+    assert base is not None
+    assert b"mcp_servers.notes" in base
+
+    config.write_text(
+        config.read_text().replace(
+            f"  {_PROFILE}:\n    codex:\n      mcp_servers: [notes]\n",
+            f"  {_PROFILE}: {{}}\n",
+        )
+    )
+    deselected = _install(config)
+    assert deselected.exit_code == 0, deselected.output
+    assert b"mcp_servers.notes" not in live.read_bytes()
+    assert b"mcp_servers.personal" in live.read_bytes()
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) is None
+
+    reverted = CliRunner().invoke(
+        app,
+        ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert live.read_bytes() == selected_live
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) == b""
+
+
+def test_codex_mcp_first_sync_records_marker_for_later_retirement(repo: Path) -> None:
+    codex_home = Path.home() / ".codex"
+    codex_home.mkdir()
+    live = codex_home / "config.toml"
+    live.write_bytes(
+        b'[mcp_servers.notes]\ncommand = "notes-mcp"\nenabled = true\n'
+        b'required = false\n\n[mcp_servers.personal]\ncommand = "mine"\n'
+    )
+    config = repo / "setforge.yaml"
+    selected = (
+        "schema_version: '6.5'\nminimum_version: '6.5'\ntracked_files: {}\n"
+        "codex:\n  mcp_servers:\n    notes:\n      transport: stdio\n"
+        "      command: notes-mcp\nprofiles:\n"
+        f"  {_PROFILE}:\n    codex:\n      mcp_servers: [notes]\n"
+    )
+    config.write_text(selected)
+
+    synced = CliRunner().invoke(
+        app,
+        [
+            "sync",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--auto=use-live",
+            "--yes",
+        ],
+    )
+    assert synced.exit_code == 0, synced.output
+    marker = mcp_target_marker(live, None)
+    digest = sha256(str(live).encode()).hexdigest()[:16]
+    config_base_id = file_id(f"codex/config/{digest}")
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) == b""
+    assert reconcile_store.read_base(_PROFILE, config_base_id) is not None
+    latest = transitions.load_latest(_PROFILE)
+    assert latest is not None
+    assert transitions.load_meta(latest).command is transitions.TransitionCommand.SYNC
+
+    reverted = CliRunner().invoke(
+        app,
+        ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) is None
+    assert reconcile_store.read_base(_PROFILE, config_base_id) is None
+    assert b"mcp_servers.notes" in live.read_bytes()
+
+    synced_again = CliRunner().invoke(
+        app,
+        [
+            "sync",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--auto=use-live",
+            "--yes",
+        ],
+    )
+    assert synced_again.exit_code == 0, synced_again.output
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) == b""
+
+    config.write_text(
+        "schema_version: '6.5'\nminimum_version: '6.5'\n"
+        f"tracked_files: {{}}\nprofiles:\n  {_PROFILE}: {{}}\n"
+    )
+    retired = _install(config)
+    assert retired.exit_code == 0, retired.output
+    assert b"mcp_servers.notes" not in live.read_bytes()
+    assert b"mcp_servers.personal" in live.read_bytes()

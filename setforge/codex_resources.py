@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -17,9 +18,12 @@ from tomlkit.items import Item
 from setforge.config import (
     CodexConfigRef,
     CodexFileScope,
+    CodexHttpMcpServerRef,
     CodexInstructionRef,
+    CodexMcpServerRef,
     CodexSkillRef,
     CodexSkillScope,
+    CodexStdioMcpServerRef,
     Config,
     ResolvedProfile,
     TrackedFile,
@@ -57,6 +61,8 @@ class CodexConfigPlan:
     project: Path | None
     sources: tuple[Path, ...]
     source_bytes: tuple[bytes, ...]
+    generated_bytes: tuple[bytes, ...]
+    mcp_marker_id: str | None
     desired: bytes
     base: bytes | None
     live: bytes | None
@@ -65,6 +71,40 @@ class CodexConfigPlan:
     @property
     def changed(self) -> bool:
         return self.live != self.result
+
+
+_MCP_MARKER_PREFIX = "codex/mcp-target/"
+
+
+def mcp_target_marker(destination: Path, project: Path | None) -> str:
+    scope = "project" if project is not None else "user"
+    encoded = urlsafe_b64encode(str(destination).encode()).decode()
+    return f"{_MCP_MARKER_PREFIX}{scope}/{encoded}"
+
+
+def _decode_mcp_target_marker(marker: str) -> tuple[Path, Path | None]:
+    suffix = marker.removeprefix(_MCP_MARKER_PREFIX)
+    scope, separator, encoded = suffix.partition("/")
+    if not separator or scope not in {"user", "project"}:
+        raise CodexResourceError(f"malformed Codex MCP target marker: {marker}")
+    try:
+        destination = Path(urlsafe_b64decode(encoded.encode()).decode())
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise CodexResourceError(
+            f"malformed Codex MCP target marker: {marker}"
+        ) from exc
+    if not destination.is_absolute():
+        raise CodexResourceError(f"relative Codex MCP target marker: {marker}")
+    project = destination.parent.parent if scope == "project" else None
+    if project is not None:
+        safe_destination = _safe_destination(project, Path(".codex/config.toml"))
+        if destination != safe_destination:
+            raise CodexResourceError(f"malformed project MCP target marker: {marker}")
+    else:
+        safe_destination = _safe_destination(codex_home(), Path("config.toml"))
+        if destination != safe_destination:
+            raise CodexResourceError(f"stale user MCP target marker: {marker}")
+    return safe_destination, project
 
 
 def codex_home() -> Path:
@@ -193,6 +233,98 @@ def resolve_config(
     return CodexResourcePath(_source(repo_root, ref.source), destination, project)
 
 
+def resolve_mcp_destination(
+    ref: CodexMcpServerRef,
+    project_paths: Mapping[str, Path] | None = None,
+) -> tuple[Path, Path | None]:
+    """Resolve one MCP declaration to its native Codex config destination."""
+    project = (
+        None
+        if ref.scope is CodexFileScope.USER
+        else _trusted_project(ref.project, project_paths)
+    )
+    root = codex_home() if project is None else project
+    relative = Path("config.toml") if project is None else Path(".codex/config.toml")
+    return _safe_destination(root, relative), project
+
+
+def _render_common_mcp(
+    server: MutableMapping[str, object], ref: CodexMcpServerRef
+) -> None:
+    server["enabled"] = ref.enabled
+    server["required"] = ref.required
+    optional = {
+        "startup_timeout_sec": ref.startup_timeout_sec,
+        "tool_timeout_sec": ref.tool_timeout_sec,
+        "enabled_tools": ref.enabled_tools or None,
+        "disabled_tools": ref.disabled_tools or None,
+        "default_tools_approval_mode": (
+            ref.default_tools_approval_mode.value
+            if ref.default_tools_approval_mode is not None
+            else None
+        ),
+    }
+    for key, value in optional.items():
+        if value is not None:
+            server[key] = value
+    if ref.tools:
+        tools = tomlkit.table()
+        for tool_name, policy in ref.tools.items():
+            tool = tomlkit.table()
+            tool["approval_mode"] = policy.approval_mode.value
+            tools[tool_name] = tool
+        server["tools"] = tools
+
+
+def render_mcp_server(
+    name: str,
+    ref: CodexMcpServerRef,
+    environment_vars: Mapping[str, str],
+) -> bytes:
+    """Render one value-free portable declaration as native Codex TOML."""
+    document = tomlkit.document()
+    servers = tomlkit.table()
+    server = tomlkit.table()
+    if isinstance(ref, CodexStdioMcpServerRef):
+        server["command"] = ref.command
+        if ref.args:
+            server["args"] = ref.args
+        if ref.cwd is not None:
+            server["cwd"] = str(ref.cwd)
+        if ref.env_vars:
+            server["env_vars"] = [environment_vars[value] for value in ref.env_vars]
+    elif isinstance(ref, CodexHttpMcpServerRef):
+        server["url"] = ref.url
+        if ref.bearer_token_env_var is not None:
+            server["bearer_token_env_var"] = environment_vars[ref.bearer_token_env_var]
+        if ref.env_http_headers:
+            server["env_http_headers"] = {
+                header: environment_vars[value]
+                for header, value in ref.env_http_headers.items()
+            }
+    _render_common_mcp(server, ref)
+    servers[name] = server
+    document["mcp_servers"] = servers
+    return tomlkit.dumps(document).encode("utf-8")
+
+
+def _mcp_destination_refs(
+    config: Config, resolved: ResolvedProfile
+) -> Iterator[tuple[str, CodexMcpServerRef]]:
+    """Yield selected refs plus safely locatable prior-ownership destinations."""
+    if resolved.codex is None or config.codex is None:
+        return
+    selected = set(resolved.codex.mcp_servers)
+    for name, ref in config.codex.mcp_servers.items():
+        locator = None if ref.project is None else str(ref.project)
+        if (
+            name in selected
+            or ref.scope is CodexFileScope.USER
+            or locator in config._codex_project_paths
+        ):
+            yield name, ref
+
+
 def resolve_instruction(
     ref: CodexInstructionRef,
     repo_root: Path,
@@ -296,12 +428,13 @@ def _regular_bytes(path: Path, *, absent_ok: bool) -> bytes | None:
         raise CodexResourceError(f"cannot read Codex resource {path}: {exc}") from exc
 
 
-def plan_config_resources(
+def plan_config_resources(  # noqa: C901 - one pass freezes all destination inputs
     config: Config,
     resolved: ResolvedProfile,
     repo_root: Path,
     *,
     read_base: Callable[[str], bytes | None],
+    stored_ids: tuple[str, ...] = (),
     reconcile: bool = True,
 ) -> tuple[CodexConfigPlan, ...]:
     """Freeze selected fragments, merge bases, live bytes, and results.
@@ -311,27 +444,55 @@ def plan_config_resources(
     """
     selected = resolved.codex
     registry = config.codex
-    if selected is None or not selected.config:
-        return ()
-    if registry is None:
+    if selected is not None and registry is None:
         raise CodexResourceError("Codex profile has no Codex resource registry")
-    grouped: dict[Path, tuple[Path | None, list[Path]]] = {}
-    for name in selected.config:
+    grouped: dict[Path, tuple[Path | None, list[Path], list[bytes]]] = {}
+    for name in selected.config if selected is not None else ():
+        assert registry is not None
         paths = resolve_config(
             registry.config[name], repo_root, config._codex_project_paths
         )
-        project, sources = grouped.setdefault(paths.destination, (paths.project, []))
+        project, sources, _generated = grouped.setdefault(
+            paths.destination, (paths.project, [], [])
+        )
         if project != paths.project:  # pragma: no cover - destination invariant
             raise CodexResourceError("Codex destination has inconsistent project scope")
         sources.append(paths.source)
+    selected_mcp = set(selected.mcp_servers) if selected is not None else set()
+    for name, ref in (
+        _mcp_destination_refs(config, resolved) if selected is not None else ()
+    ):
+        destination, mcp_project = resolve_mcp_destination(
+            ref, config._codex_project_paths
+        )
+        project, _sources, generated = grouped.setdefault(
+            destination, (mcp_project, [], [])
+        )
+        if project != mcp_project:  # pragma: no cover - destination invariant
+            raise CodexResourceError("Codex destination has inconsistent MCP scope")
+        if name in selected_mcp:
+            generated.append(
+                render_mcp_server(name, ref, config._codex_environment_vars)
+            )
+    for marker in stored_ids:
+        if not marker.startswith(_MCP_MARKER_PREFIX):
+            continue
+        destination, marker_project = _decode_mcp_target_marker(marker)
+        if marker_project is not None and not project_is_trusted(marker_project):
+            raise CodexResourceError(
+                "Codex project is not trusted for prior MCP ownership: "
+                f"{marker_project}"
+            )
+        grouped.setdefault(destination, (marker_project, [], []))
     plans: list[CodexConfigPlan] = []
-    for destination, (project, sources) in grouped.items():
-        source_bytes = tuple(
+    for destination, (project, sources, generated) in grouped.items():
+        tracked_bytes = tuple(
             payload
             for source in sources
             if (payload := _regular_bytes(source, absent_ok=False)) is not None
         )
-        desired, owned = compose_fragments(source_bytes)
+        source_bytes = tracked_bytes
+        desired, owned = compose_fragments((*tracked_bytes, *generated))
         if project is None and any(path[:1] == ("projects",) for path in owned):
             raise CodexResourceError(
                 "managed Codex config fragments cannot own native project trust"
@@ -352,6 +513,10 @@ def plan_config_resources(
                 project=project,
                 sources=tuple(sources),
                 source_bytes=source_bytes,
+                generated_bytes=tuple(generated),
+                mcp_marker_id=(
+                    mcp_target_marker(destination, project) if generated else None
+                ),
                 desired=desired,
                 base=base,
                 live=live,
@@ -379,70 +544,101 @@ def assert_config_plan_current(plan: CodexConfigPlan) -> None:
 
 
 def config_target_roots(
-    config: Config, resolved: ResolvedProfile, repo_root: Path
+    config: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    *,
+    stored_ids: tuple[str, ...] = (),
 ) -> tuple[Path, ...]:
     """Return descriptor-lock roots for selected native config destinations."""
     selected = resolved.codex
     registry = config.codex
-    if selected is None or not selected.config:
-        return ()
-    if registry is None:
+    if selected is not None and registry is None:
         raise CodexResourceError("Codex profile has no Codex resource registry")
-    return tuple(
-        sorted(
-            {
-                resolve_config(
-                    registry.config[name], repo_root, config._codex_project_paths
-                ).destination.parent
-                for name in selected.config
-            },
-            key=str,
+    registry_config = registry.config if registry is not None else {}
+    roots = {
+        resolve_config(
+            registry_config[name], repo_root, config._codex_project_paths
+        ).destination.parent
+        for name in (selected.config if selected is not None else ())
+    }
+    roots.update(
+        resolve_mcp_destination(ref, config._codex_project_paths)[0].parent
+        for _name, ref in (
+            _mcp_destination_refs(config, resolved) if selected is not None else ()
         )
     )
+    roots.update(
+        destination.parent
+        for marker in stored_ids
+        if marker.startswith(_MCP_MARKER_PREFIX)
+        for destination, _project in (_decode_mcp_target_marker(marker),)
+    )
+    return tuple(sorted(roots, key=str))
 
 
 def selected_trusted_projects(
-    config: Config, resolved: ResolvedProfile, repo_root: Path
+    config: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    *,
+    stored_ids: tuple[str, ...] = (),
 ) -> tuple[Path, ...]:
     """Freeze every selected project whose native resources require trust."""
     selected = resolved.codex
     registry = config.codex
-    if selected is None:
-        return ()
-    if registry is None:
+    if selected is not None and registry is None:
         raise CodexResourceError("Codex profile has no Codex resource registry")
+    registry_config = registry.config if registry is not None else {}
+    registry_instructions = registry.instructions if registry is not None else {}
+    registry_skills = registry.skills if registry is not None else {}
     projects = {
         *(
             paths.project
-            for name in selected.config
+            for name in (selected.config if selected is not None else ())
             if (
                 paths := resolve_config(
-                    registry.config[name], repo_root, config._codex_project_paths
+                    registry_config[name], repo_root, config._codex_project_paths
                 )
             ).project
             is not None
         ),
         *(
+            project
+            for _name, ref in (
+                _mcp_destination_refs(config, resolved) if selected is not None else ()
+            )
+            if (project := resolve_mcp_destination(ref, config._codex_project_paths)[1])
+            is not None
+        ),
+        *(
             paths.project
-            for name in selected.instructions
+            for name in (selected.instructions if selected is not None else ())
             if (
                 paths := resolve_instruction(
-                    registry.instructions[name], repo_root, config._codex_project_paths
+                    registry_instructions[name], repo_root, config._codex_project_paths
                 )
             ).project
             is not None
         ),
         *(
             paths.project
-            for name in selected.skills
+            for name in (selected.skills if selected is not None else ())
             if (
                 paths := resolve_skill(
-                    name, registry.skills[name], repo_root, config._codex_project_paths
+                    name, registry_skills[name], repo_root, config._codex_project_paths
                 )
             ).project
             is not None
         ),
     }
+    projects.update(
+        project
+        for marker in stored_ids
+        if marker.startswith(_MCP_MARKER_PREFIX)
+        for _destination, project in (_decode_mcp_target_marker(marker),)
+        if project is not None
+    )
     return tuple(
         sorted((project for project in projects if project is not None), key=str)
     )
@@ -462,12 +658,15 @@ def apply_config_plan(
     *,
     write: Callable[[Path, bytes], object],
     record_base: Callable[[str, bytes], object],
+    record_marker: Callable[[str, bytes], object] | None = None,
 ) -> bool:
     """Apply one frozen plan atomically and advance its managed merge base."""
     assert_config_plan_current(plan)
     if plan.changed:
         write(plan.destination, plan.result)
     record_base(plan.resource_id, plan.desired)
+    if plan.mcp_marker_id is not None and record_marker is not None:
+        record_marker(plan.mcp_marker_id, b"")
     return plan.changed
 
 

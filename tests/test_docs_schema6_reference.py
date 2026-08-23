@@ -168,7 +168,7 @@ def test_named_onboarding_yaml_examples_are_exact_schema6_configs(
         expected_version = {
             "readme-minimal-schema6": "6.2",
             "configuration-full-schema6": "6.2",
-            "tutorial-schema6": "6.4",
+            "tutorial-schema6": "6.5",
         }[name]
         assert config.schema_version == expected_version, name
         validation = CliRunner().invoke(

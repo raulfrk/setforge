@@ -448,6 +448,139 @@ def test_local_codex_overlay_requires_selected_project_mapping(tmp_path: Path) -
         )
 
 
+def test_local_codex_overlay_resolves_mcp_host_references(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "api": {
+                        "transport": "http",
+                        "scope": "project",
+                        "project": "app",
+                        "url": "https://mcp.example.test",
+                        "bearer_token_env_var": "api_token",
+                        "env_http_headers": {"X-Tenant": "tenant"},
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["api"]))},
+    )
+    path = tmp_path / "local.yaml"
+    path.write_text(
+        "codex:\n"
+        f"  project_paths: {{app: {project}}}\n"
+        "  environment_vars:\n"
+        "    api_token: SETFORGE_TEST_TOKEN\n"
+        "    tenant: SETFORGE_TEST_TENANT\n"
+    )
+
+    apply_host_local_codex_overlay(
+        cfg, resolve_profile(cfg, "default"), local_config_path=path
+    )
+
+    assert cfg._codex_project_paths["app"] == project
+    assert cfg._codex_environment_vars == {
+        "api_token": "SETFORGE_TEST_TOKEN",
+        "tenant": "SETFORGE_TEST_TENANT",
+    }
+
+
+def test_local_codex_overlay_requires_selected_mcp_environment_mapping(
+    tmp_path: Path,
+) -> None:
+    cfg = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "api": {
+                        "transport": "http",
+                        "url": "https://mcp.example.test",
+                        "bearer_token_env_var": "api_token",
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["api"]))},
+    )
+    path = tmp_path / "local.yaml"
+    path.write_text("codex: {}\n")
+
+    with pytest.raises(ConfigError, match=r"environment_vars.*api_token"):
+        apply_host_local_codex_overlay(
+            cfg, resolve_profile(cfg, "default"), local_config_path=path
+        )
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+@pytest.mark.parametrize(
+    "scope_fields",
+    [
+        {"scope": "project"},
+        {"scope": "user", "project": "app"},
+        {"scope": "project", "project": "/absolute"},
+        {"scope": "project", "project": "../escape"},
+    ],
+)
+def test_codex_mcp_scope_requires_safe_matching_project_locator(
+    transport: str, scope_fields: dict[str, str]
+) -> None:
+    server: dict[str, object] = {
+        "transport": transport,
+        **({"command": "tool"} if transport == "stdio" else {"url": "https://x.test"}),
+        **scope_fields,
+    }
+    with pytest.raises(ValidationError):
+        CodexSpec.model_validate({"mcp_servers": {"bad": server}})
+
+
+def test_codex_stdio_mcp_accepts_portable_project_scope() -> None:
+    spec = CodexSpec.model_validate(
+        {
+            "mcp_servers": {
+                "ok": {
+                    "transport": "stdio",
+                    "scope": "project",
+                    "project": "app",
+                    "command": "tool",
+                }
+            }
+        }
+    )
+    assert spec.mcp_servers["ok"].project == Path("app")
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://%zz/mcp", "https://-bad.example/mcp", "https://bad_.example/mcp"],
+)
+def test_codex_http_mcp_rejects_invalid_host(url: str) -> None:
+    with pytest.raises(ValidationError, match="invalid host"):
+        CodexSpec.model_validate(
+            {"mcp_servers": {"bad": {"transport": "http", "url": url}}}
+        )
+
+
+@pytest.mark.parametrize("header", ["Bad Header", "Bad:Header", "Bad\nHeader"])
+def test_codex_http_mcp_rejects_invalid_header_name(header: str) -> None:
+    with pytest.raises(ValidationError, match="valid HTTP tokens"):
+        CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "bad": {
+                        "transport": "http",
+                        "url": "https://x.test",
+                        "env_http_headers": {header: "token"},
+                    }
+                }
+            }
+        )
+
+
 @pytest.mark.parametrize("body", [None, "", "codex: {}\n"])
 def test_local_codex_overlay_noop_preserves_absent_namespace(
     tmp_path: Path, body: str | None
@@ -574,6 +707,37 @@ def test_codex_contract_requires_schema_and_floor_6_4(
 
     with pytest.raises(ConfigError, match="Codex resources require"):
         load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "minimum_version"),
+    [("6.4", "6.5"), ("6.5", "6.4")],
+)
+def test_scoped_codex_mcp_requires_schema_and_floor_6_5(
+    tmp_path: Path, schema_version: str, minimum_version: str
+) -> None:
+    path = tmp_path / "setforge.yaml"
+    path.write_text(
+        f"schema_version: '{schema_version}'\nminimum_version: '{minimum_version}'\n"
+        "tracked_files: {}\ncodex:\n  mcp_servers:\n    notes:\n"
+        "      transport: stdio\n      scope: project\n      project: app\n"
+        "      command: notes-mcp\nprofiles: {}\n"
+    )
+
+    with pytest.raises(ConfigError, match="scoped Codex MCP resources require"):
+        load_config(path)
+
+
+def test_scoped_codex_mcp_accepts_schema_and_floor_6_5(tmp_path: Path) -> None:
+    path = tmp_path / "setforge.yaml"
+    path.write_text(
+        "schema_version: '6.5'\nminimum_version: '6.5'\ntracked_files: {}\n"
+        "codex:\n  mcp_servers:\n    notes:\n      transport: stdio\n"
+        "      scope: project\n      project: app\n      command: notes-mcp\n"
+        "profiles: {}\n"
+    )
+
+    assert load_config(path).codex is not None
 
 
 def test_codex_references_are_product_qualified(tmp_path: Path) -> None:

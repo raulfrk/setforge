@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from ipaddress import ip_address
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, Self
 from urllib.parse import urlsplit
@@ -579,6 +580,8 @@ class CodexStdioMcpServerRef(BaseModel):
     model_config = _STRICT
 
     transport: Literal[CodexMcpTransport.STDIO] = CodexMcpTransport.STDIO
+    scope: CodexFileScope = CodexFileScope.USER
+    project: Path | None = None
     command: str
     args: list[str] = []
     cwd: Path | None = None
@@ -616,11 +619,18 @@ class CodexStdioMcpServerRef(BaseModel):
     def _portable_cwd(cls, value: Path | None) -> Path | None:
         return None if value is None else _validate_portable_source(value)
 
+    @model_validator(mode="after")
+    def _valid_scope(self) -> Self:
+        self.project = _validate_project_locator(self.project, self.scope)
+        return self
+
 
 class CodexHttpMcpServerRef(BaseModel):
     model_config = _STRICT
 
     transport: Literal[CodexMcpTransport.HTTP] = CodexMcpTransport.HTTP
+    scope: CodexFileScope = CodexFileScope.USER
+    project: Path | None = None
     url: str
     bearer_token_env_var: str | None = None
     env_http_headers: dict[str, str] = {}
@@ -655,6 +665,24 @@ class CodexHttpMcpServerRef(BaseModel):
             raise ValueError(
                 "Codex HTTP MCP url must be a credential-free http(s) endpoint"
             )
+        hostname = parsed.hostname
+        assert hostname is not None  # guarded above
+        try:
+            ip_address(hostname)
+        except ValueError:
+            try:
+                ascii_host = hostname.encode("idna").decode("ascii")
+            except UnicodeError as exc:
+                raise ValueError("Codex HTTP MCP url has an invalid host") from exc
+            labels = ascii_host.split(".")
+            if len(ascii_host) > 253 or any(
+                not label
+                or len(label) > 63
+                or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label)
+                is None
+                for label in labels
+            ):
+                raise ValueError("Codex HTTP MCP url has an invalid host") from None
         return value
 
     @field_validator("bearer_token_env_var")
@@ -665,6 +693,13 @@ class CodexHttpMcpServerRef(BaseModel):
     @field_validator("env_http_headers")
     @classmethod
     def _header_environment_names(cls, values: dict[str, str]) -> dict[str, str]:
+        invalid = [
+            name
+            for name in values
+            if re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", name) is None
+        ]
+        if invalid:
+            raise ValueError("Codex HTTP MCP header names must be valid HTTP tokens")
         return {name: _validate_env_name(value) for name, value in values.items()}
 
     @field_validator("startup_timeout_sec", "tool_timeout_sec")
@@ -673,6 +708,11 @@ class CodexHttpMcpServerRef(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("Codex MCP timeouts must be positive")
         return value
+
+    @model_validator(mode="after")
+    def _valid_scope(self) -> Self:
+        self.project = _validate_project_locator(self.project, self.scope)
+        return self
 
 
 CodexMcpServerRef = Annotated[
@@ -1112,6 +1152,7 @@ class Config(BaseModel):
     model_config = _STRICT
 
     _codex_project_paths: dict[str, Path] = PrivateAttr(default_factory=dict)
+    _codex_environment_vars: dict[str, str] = PrivateAttr(default_factory=dict)
 
     version: int = 1
     """Engine-owned ``setforge.yaml`` file-format version (currently always ``1``).
@@ -1242,8 +1283,6 @@ def _apply_codex_project_paths(  # noqa: C901 - preserve typed registry assignme
     if config.codex is None:
         return
 
-    resolved_paths: dict[str, Path] = {}
-
     def host_project(ref: object, field: str, name: str) -> None:
         project = getattr(ref, "project", None)
         if project is None:
@@ -1255,7 +1294,6 @@ def _apply_codex_project_paths(  # noqa: C901 - preserve typed registry assignme
                 f"local overlay.codex.project_paths has no host path for "
                 f"project locator {locator!r} used by {field}[{name!r}]"
             )
-        resolved_paths[locator] = host_path.expanduser().resolve(strict=False)
 
     for name in merged.config:
         config_ref = config.codex.config.get(name)
@@ -1269,7 +1307,40 @@ def _apply_codex_project_paths(  # noqa: C901 - preserve typed registry assignme
         skill_ref = config.codex.skills.get(name)
         if skill_ref is not None:
             host_project(skill_ref, "skills", name)
-    config._codex_project_paths = resolved_paths
+    for name in merged.mcp_servers:
+        mcp_ref = config.codex.mcp_servers.get(name)
+        if mcp_ref is not None:
+            host_project(mcp_ref, "mcp_servers", name)
+    config._codex_project_paths = {
+        name: path.expanduser().resolve(strict=False)
+        for name, path in project_paths.items()
+    }
+
+
+def _apply_codex_environment_vars(
+    config: Config, merged: CodexProfile, environment_vars: Mapping[str, str]
+) -> None:
+    """Retain host variable names required by selected portable MCP refs."""
+    if config.codex is None:
+        return
+    required: set[str] = set()
+    for name in merged.mcp_servers:
+        ref = config.codex.mcp_servers.get(name)
+        if isinstance(ref, CodexStdioMcpServerRef):
+            required.update(ref.env_vars)
+        elif isinstance(ref, CodexHttpMcpServerRef):
+            if ref.bearer_token_env_var is not None:
+                required.add(ref.bearer_token_env_var)
+            required.update(ref.env_http_headers.values())
+    missing = sorted(required - environment_vars.keys())
+    if missing:
+        raise ConfigError(
+            "local overlay.codex.environment_vars has no host variable for "
+            f"Codex MCP references: {', '.join(missing)}"
+        )
+    config._codex_environment_vars = {
+        name: environment_vars[name] for name in sorted(required)
+    }
 
 
 def apply_host_local_codex_overlay(
@@ -1301,6 +1372,7 @@ def apply_host_local_codex_overlay(
     merged = base.model_copy(update=updates)
     candidate = resolved.model_copy(update={"codex": merged})
     _apply_codex_project_paths(config, merged, overlay.project_paths)
+    _apply_codex_environment_vars(config, merged, overlay.environment_vars)
     _validate_resolved_codex_references(config, candidate, "local overlay")
     _raise_codex_ownership_collisions(config, candidate, "local overlay")
     return candidate
@@ -1709,6 +1781,21 @@ def _guard_codex_contract(config: Config, path: Path) -> None:
         )
     if not _meets_floor(config.minimum_version, "6.4"):
         raise ConfigError(f"{path}: Codex resources require minimum_version >= '6.4'")
+    scoped_mcp = config.codex is not None and any(
+        {"scope", "project"} & ref.model_fields_set
+        for ref in config.codex.mcp_servers.values()
+    )
+    if not scoped_mcp:
+        return
+    if not _meets_floor(config.schema_version, "6.5") or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: scoped Codex MCP resources require schema_version and "
+            "minimum_version >= '6.5'"
+        )
+    if not _meets_floor(config.minimum_version, "6.5"):
+        raise ConfigError(
+            f"{path}: scoped Codex MCP resources require minimum_version >= '6.5'"
+        )
 
 
 def _validate_tolerant(data: object) -> Config:

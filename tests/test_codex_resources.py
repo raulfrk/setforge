@@ -11,6 +11,7 @@ from setforge.codex_resources import (
     codex_home,
     compose_fragments,
     expand_filesystem_resources,
+    mcp_target_marker,
     plan_config_resources,
     project_is_trusted,
     reconcile_toml,
@@ -263,6 +264,333 @@ def test_config_plan_freezes_and_applies_managed_leaves(
     assert b'model = "new"' in writes[home / "config.toml"]
     assert list(bases.values()) == [b'model = "new"\n']
     assert next(iter(bases)).startswith("codex/config/")
+
+
+def test_mcp_stdio_plan_renders_policy_and_host_environment_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "notes": {
+                        "transport": "stdio",
+                        "command": "uvx",
+                        "args": ["notes-mcp"],
+                        "cwd": "workspace",
+                        "env_vars": ["notes_token"],
+                        "enabled": False,
+                        "required": True,
+                        "startup_timeout_sec": 12,
+                        "tool_timeout_sec": 34,
+                        "enabled_tools": ["read"],
+                        "disabled_tools": ["delete"],
+                        "default_tools_approval_mode": "writes",
+                        "tools": {"publish": {"approval_mode": "prompt"}},
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["notes"]))},
+    )
+    config._codex_environment_vars = {"notes_token": "NOTES_TOKEN"}
+
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda _resource_id: None,
+    )[0]
+    desired = plan.desired.decode()
+
+    assert "[mcp_servers.notes]" in desired
+    assert 'command = "uvx"' in desired
+    assert 'args = ["notes-mcp"]' in desired
+    assert 'cwd = "workspace"' in desired
+    assert 'env_vars = ["NOTES_TOKEN"]' in desired
+    assert "enabled = false" in desired
+    assert "required = true" in desired
+    assert "startup_timeout_sec = 12.0" in desired
+    assert "tool_timeout_sec = 34.0" in desired
+    assert 'enabled_tools = ["read"]' in desired
+    assert 'disabled_tools = ["delete"]' in desired
+    assert 'default_tools_approval_mode = "writes"' in desired
+    assert "[mcp_servers.notes.tools.publish]" in desired
+    assert 'approval_mode = "prompt"' in desired
+
+
+def test_mcp_http_deselection_removes_owned_server_and_preserves_host_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    old = (
+        b'[mcp_servers.api]\nurl = "https://old.example.test"\n'
+        b'bearer_token_env_var = "API_TOKEN"\nenabled = true\nrequired = false\n'
+    )
+    live = home / "config.toml"
+    live.write_bytes(old + b'\n[mcp_servers.personal]\ncommand = "mine"\n')
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "api": {
+                        "transport": "http",
+                        "url": "https://new.example.test",
+                        "bearer_token_env_var": "token",
+                        "env_http_headers": {"X-Key": "header_key"},
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile())},
+    )
+
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda _resource_id: old,
+    )[0]
+
+    assert b"mcp_servers.api" not in plan.result
+    assert b"mcp_servers.personal" in plan.result
+    assert b'command = "mine"' in plan.result
+
+
+def test_mcp_http_plan_uses_trusted_project_scope_and_host_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    (home / "config.toml").write_text(
+        f'[projects."{project}"]\ntrust_level = "trusted"\n'
+    )
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "api": {
+                        "transport": "http",
+                        "scope": "project",
+                        "project": "app",
+                        "url": "https://mcp.example.test",
+                        "bearer_token_env_var": "token",
+                        "env_http_headers": {"X-Key": "header_key"},
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["api"]))},
+    )
+    config._codex_project_paths = {"app": project}
+    config._codex_environment_vars = {
+        "token": "API_TOKEN",
+        "header_key": "API_HEADER_KEY",
+    }
+
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda _resource_id: None,
+    )[0]
+
+    assert plan.destination == project / ".codex/config.toml"
+    assert b'url = "https://mcp.example.test"' in plan.desired
+    assert b'bearer_token_env_var = "API_TOKEN"' in plan.desired
+    assert b'X-Key = "API_HEADER_KEY"' in plan.desired
+
+
+def test_mcp_registry_deletion_retires_marked_prior_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    live = home / "config.toml"
+    old = (
+        b'[mcp_servers.api]\nurl = "https://mcp.example.test"\n'
+        b"enabled = true\nrequired = false\n"
+    )
+    live.write_bytes(old + b'\n[mcp_servers.personal]\ncommand = "mine"\n')
+    marker = mcp_target_marker(live, None)
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec(),
+        profiles={"default": Profile(codex=CodexProfile())},
+    )
+
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda resource_id: (
+            old if resource_id.startswith("codex/config/") else b""
+        ),
+        stored_ids=(marker,),
+    )[0]
+
+    assert plan.generated_bytes == ()
+    assert plan.mcp_marker_id is None
+    assert b"mcp_servers.api" not in plan.result
+    assert b"mcp_servers.personal" in plan.result
+
+
+def test_prior_project_marker_refuses_symlinked_codex_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (project / ".codex").symlink_to(outside, target_is_directory=True)
+    (home / "config.toml").write_text(
+        f'[projects."{project}"]\ntrust_level = "trusted"\n'
+    )
+    marker = mcp_target_marker(project / ".codex/config.toml", project)
+    config = Config(tracked_files={}, profiles={"default": Profile()})
+
+    with pytest.raises(CodexResourceError, match="symbolic link"):
+        plan_config_resources(
+            config,
+            resolve_profile(config, "default"),
+            tmp_path,
+            read_base=lambda _resource_id: None,
+            stored_ids=(marker,),
+        )
+
+
+def test_selected_mcp_plan_records_reversible_destination_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {"mcp_servers": {"stdio": {"transport": "stdio", "command": "tool"}}}
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["stdio"]))},
+    )
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda _resource_id: None,
+    )[0]
+    markers: dict[str, bytes] = {}
+
+    apply_config_plan(
+        plan,
+        write=lambda _path, _data: None,
+        record_base=lambda _resource_id, _data: None,
+        record_marker=lambda resource_id, data: markers.__setitem__(resource_id, data),
+    )
+
+    assert markers == {mcp_target_marker(home / "config.toml", None): b""}
+
+
+def test_selected_mcp_update_reconciles_owned_fields_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    old = b'[mcp_servers.notes]\ncommand = "old"\nenabled = true\nrequired = false\n'
+    live = home / "config.toml"
+    live.write_bytes(old + b'\n[mcp_servers.personal]\ncommand = "mine"\n')
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "notes": {
+                        "transport": "stdio",
+                        "command": "new",
+                        "disabled_tools": ["delete"],
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["notes"]))},
+    )
+
+    plan = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda _resource_id: old,
+    )[0]
+
+    assert b'command = "new"' in plan.result
+    assert b'disabled_tools = ["delete"]' in plan.result
+    assert b"mcp_servers.personal" in plan.result
+    assert b'command = "mine"' in plan.result
+
+
+def test_mcp_user_to_project_move_plans_old_retirement_and_new_addition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    user_live = home / "config.toml"
+    old = b'[mcp_servers.notes]\ncommand = "tool"\nenabled = true\nrequired = false\n'
+    user_live.write_bytes(
+        f'[projects."{project}"]\ntrust_level = "trusted"\n'.encode() + old
+    )
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate(
+            {
+                "mcp_servers": {
+                    "notes": {
+                        "transport": "stdio",
+                        "scope": "project",
+                        "project": "app",
+                        "command": "tool",
+                    }
+                }
+            }
+        ),
+        profiles={"default": Profile(codex=CodexProfile(mcp_servers=["notes"]))},
+    )
+    config._codex_project_paths = {"app": project}
+    old_marker = mcp_target_marker(user_live, None)
+    old_resource = "codex/config/" + sha256(str(user_live).encode()).hexdigest()[:16]
+
+    plans = plan_config_resources(
+        config,
+        resolve_profile(config, "default"),
+        tmp_path,
+        read_base=lambda resource_id: old if resource_id == old_resource else None,
+        stored_ids=(old_marker,),
+    )
+    by_destination = {plan.destination: plan for plan in plans}
+
+    assert b"mcp_servers.notes" not in by_destination[user_live].result
+    project_plan = by_destination[project / ".codex/config.toml"]
+    assert b"mcp_servers.notes" in project_plan.result
+    assert project_plan.mcp_marker_id == mcp_target_marker(
+        project / ".codex/config.toml", project
+    )
 
 
 def test_config_plan_identity_is_stable_when_fragment_order_changes(
