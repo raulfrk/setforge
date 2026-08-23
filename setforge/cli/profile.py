@@ -150,6 +150,7 @@ def _run_profile_show(
         _render_host_local_sections(profile_ctx, console)
         _render_bootstrap(profile_ctx, console)
         _render_extensions(profile_ctx, console, overlay=effective.local_overlay)
+        _render_codex(profile_ctx, console)
 
     render(
         ctx_obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
@@ -179,6 +180,7 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
             {"name": mp_name, "kind": src.source.value, "target": target}
         )
     extensions = reconcile_adapter.extensions_input(profile_ctx.cfg, resolved)
+    codex = resolved.codex
     return {
         "profile": profile_ctx.profile,
         "tracked_files": list(resolved.tracked_files),
@@ -193,7 +195,47 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
             "exclude": list(extensions.exclude),
         },
         "preserve_user_keys": preserve_keys,
+        "codex": {
+            "config": list(codex.config) if codex is not None else [],
+            "instructions": list(codex.instructions) if codex is not None else [],
+            "skills": list(codex.skills) if codex is not None else [],
+            "plugins": list(codex.plugins) if codex is not None else [],
+            "mcp_servers": list(codex.mcp_servers) if codex is not None else [],
+        },
     }
+
+
+def _render_codex(ctx: ProfileContext, console: Console) -> None:
+    """Render effective Codex resource selections with profile provenance."""
+    codex = ctx.resolved.codex
+    fields = ("config", "instructions", "skills", "plugins", "mcp_servers")
+    for field in fields:
+        items = list(getattr(codex, field)) if codex is not None else []
+        console.print(f"codex.{field} ({len(items)} effective):")
+        if not items:
+            console.print("  (none)")
+            continue
+        chain: list[tuple[str, set[str]]] = []
+        for ancestor in resolve_chain(ctx.cfg, ctx.profile)[:-1]:
+            ancestor_name = _chain_label(ctx.cfg, ancestor)
+            ancestor_codex = ancestor.codex
+            chain.append(
+                (
+                    ancestor_name,
+                    set(getattr(ancestor_codex, field)) if ancestor_codex else set(),
+                )
+            )
+        table = Table.grid(padding=(0, 2))
+        table.add_column(no_wrap=True)
+        table.add_column()
+        for item in items:
+            table.add_row(
+                item,
+                _tag_provenance(
+                    item, chain_resolved_by_name=chain, leaf_name=ctx.profile
+                ),
+            )
+        console.print(table)
 
 
 # ---------------------------------------------------------------------------

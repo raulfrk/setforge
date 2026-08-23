@@ -318,6 +318,42 @@ def test_codex_install_compare_sync_and_revert_journey(repo: Path) -> None:
     assert fragment.read_text() == 'model = "old"\n'
 
 
+def test_codex_install_converges_empty_desired_prune(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import codex_plugins as codex_plugins_mod
+
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.4'\n"
+        "minimum_version: '6.4'\n"
+        "tracked_files: {}\n"
+        "codex: {}\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    codex:\n"
+        "      reconcile: {policy: prune}\n"
+    )
+    plugins = {
+        "old@official": codex_plugins_mod.InstalledPlugin(
+            "old@official", "old", "official"
+        )
+    }
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(codex_plugins_mod, "list_marketplaces", lambda: {})
+    monkeypatch.setattr(codex_plugins_mod, "plugin_remove", plugins.pop)
+
+    installed = _install(config)
+
+    assert installed.exit_code == 0, installed.output
+    assert plugins == {}
+    clean = CliRunner().invoke(
+        app,
+        ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"],
+    )
+    assert clean.exit_code == 0, clean.output
+
+
 def test_install_refuses_project_resource_after_trust_revocation(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -134,6 +134,51 @@ def test_profile_show_includes_all_sections(tmp_path: Path) -> None:
         assert section in result.output, f"missing section {section!r}: {result.output}"
 
 
+def test_profile_show_renders_inherited_codex_provenance_without_source_contents(
+    tmp_path: Path,
+) -> None:
+    tracked = tmp_path / "tracked/codex"
+    tracked.mkdir(parents=True)
+    (tracked / "model.toml").write_text(
+        'model = "SECRET_SENTINEL_MUST_NOT_RENDER"\n', encoding="utf-8"
+    )
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.4'\n"
+        "minimum_version: '6.4'\n"
+        "tracked_files: {}\n"
+        "codex:\n"
+        "  config:\n"
+        "    model: {source: codex/model.toml}\n"
+        "  marketplaces:\n"
+        "    official: {source: github, repo: owner/repo}\n"
+        "  plugins:\n"
+        "    review: {marketplace: official}\n"
+        "profiles:\n"
+        "  base:\n"
+        "    codex:\n"
+        "      config: [model]\n"
+        "  derived:\n"
+        "    extends: base\n"
+        "    codex:\n"
+        "      plugins: [review]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["profile", "show", "derived", f"--config={config}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "codex.config (1 effective):" in result.output
+    assert "model" in result.output
+    assert "[from profile base]" in result.output
+    assert "codex.plugins (1 effective):" in result.output
+    assert "review" in result.output
+    assert "[from profile derived]" in result.output
+    assert "SECRET_SENTINEL_MUST_NOT_RENDER" not in result.output
+
+
 def test_profile_show_renders_host_local_tracked_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

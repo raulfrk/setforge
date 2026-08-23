@@ -1,6 +1,5 @@
 """compare subcommand — read-only drift report (live vs tracked) for a profile."""
 
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -8,9 +7,8 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from setforge import codex_resources as codex_resources_mod
+from setforge import codex_lifecycle, transitions
 from setforge import compare as compare_mod
-from setforge import transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -34,8 +32,6 @@ from setforge.config import (
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.locking import profile_lock
-from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.types import file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.user_section_markers import extract_sections
 
@@ -100,38 +96,8 @@ def compare(
             ownership_authorized=ownership_authorized,
             resolved=resolved,
         )
-        codex_plans = codex_resources_mod.plan_config_resources(
-            cfg,
-            resolved,
-            repo_root,
-            read_base=lambda resource_id: reconcile_store.read_base(
-                profile, file_id(resource_id)
-            ),
-            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
-            reconcile=False,
-        )
-        codex_drift = False
-        for codex_plan in codex_plans:
-            matches = codex_resources_mod.config_plan_matches_live(codex_plan)
-            codex_drift = codex_drift or not matches
-            report.entries.append(
-                compare_mod.FileCompare(
-                    name=codex_plan.resource_id,
-                    status=(
-                        compare_mod.CompareStatus.UNCHANGED
-                        if matches
-                        else compare_mod.CompareStatus.DRIFTED
-                    ),
-                    diff="",
-                    drift_class=(
-                        None if matches else compare_mod.DriftClass.UNEXPECTED
-                    ),
-                    reason=None if matches else "managed Codex TOML keys differ",
-                )
-            )
-        report = replace(
-            report,
-            has_unexpected_drift=report.has_unexpected_drift or codex_drift,
+        report = codex_lifecycle.append_projection(
+            report, cfg, resolved, repo_root, profile=profile
         )
 
     console = Console()

@@ -34,8 +34,8 @@ import typer
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from setforge import codex_lifecycle, transitions
 from setforge import compare as compare_mod
-from setforge import transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -254,6 +254,9 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
         ownership_authorized=compare_mod.file_authorization_map(
             ctx.cfg, ctx.resolved, ctx.repo_root
         ),
+    )
+    report = codex_lifecycle.append_projection(
+        report, ctx.cfg, ctx.resolved, ctx.repo_root, profile=ctx.profile
     )
     drifted = 0
     for entry in report.entries:

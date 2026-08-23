@@ -232,7 +232,7 @@ def _snapshot_id(label: str, *, timestamp: datetime | None = None) -> str:
 
 
 def _resolve_dst_paths(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, profile: str
 ) -> list[Path]:
     """Resolve every ``tracked_files.dst`` for the resolved profile, plus local.yaml.
 
@@ -251,6 +251,14 @@ def _resolve_dst_paths(
             if sub_dst not in seen:
                 seen.add(sub_dst)
                 dst_paths.append(sub_dst)
+    from setforge import codex_lifecycle
+
+    for destination in codex_lifecycle.config_destinations(
+        cfg, resolved, repo_root, profile=profile
+    ):
+        if destination not in seen:
+            seen.add(destination)
+            dst_paths.append(destination)
     if LOCAL_CONFIG_PATH not in seen:
         dst_paths.append(LOCAL_CONFIG_PATH)
     return dst_paths
@@ -505,7 +513,7 @@ def create_snapshot(
     finalized = False
     try:
         captured = _capture_files(
-            partial_dir, _resolve_dst_paths(cfg, resolved, repo_root)
+            partial_dir, _resolve_dst_paths(cfg, resolved, repo_root, profile=profile)
         )
         meta = SnapshotMeta(
             snapshot_id=snapshot_id,
@@ -698,7 +706,8 @@ def _plan_restore_snapshot(
         raise SetforgeError("snapshot restore: incomplete effective-profile context")
     target = resolve_snapshot(snapshot_id_or_label, profile=profile)
     if cfg is not None and resolved is not None and repo_root is not None:
-        allowed = set(_resolve_dst_paths(cfg, resolved, repo_root))
+        assert profile is not None
+        allowed = set(_resolve_dst_paths(cfg, resolved, repo_root, profile=profile))
         unmanaged = tuple(path for path in target.files if path not in allowed)
         if unmanaged:
             raise SetforgeError(

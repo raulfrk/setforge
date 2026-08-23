@@ -88,6 +88,7 @@ from setforge.cli._welcome import (
 from setforge.config import (
     Config,
     LocalOverlayResolution,
+    ReconcilePolicy,
     ResolvedProfile,
     TrackedFile,
     TreeSymlinkPolicy,
@@ -504,12 +505,17 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             )
     codex_plugins: codex_plugins_mod.CodexPluginPlan | None = None
     codex_plugin_ids = reconcile_adapter.codex_plugin_ids(ctx.cfg, ctx.resolved)
-    if codex_plugin_ids and ctx.cfg.codex is not None:
+    codex_plugin_policy = reconcile_adapter.codex_plugin_policy(ctx.resolved)
+    if (
+        ctx.resolved.codex is not None
+        and ctx.cfg.codex is not None
+        and (codex_plugin_ids or codex_plugin_policy is ReconcilePolicy.PRUNE)
+    ):
         try:
             codex_plugins = codex_plugins_mod.plan_reconcile(
                 declared_plugin_ids=codex_plugin_ids,
                 marketplaces=ctx.cfg.codex.marketplaces,
-                policy=reconcile_adapter.codex_plugin_policy(ctx.resolved),
+                policy=codex_plugin_policy,
             )
         except PluginToolMissing as exc:
             typer.secho(
