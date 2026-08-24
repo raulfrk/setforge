@@ -6,7 +6,64 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-25
+
+The safe-adoption and Codex-integration release. SetForge can now discover,
+adopt, transfer, release, and recover authority over existing resources while
+keeping discovery read-only and destructive actions explicit. Its resource
+model now covers files and regions, generated resources, directory trees,
+typed application capabilities, packages with provenance, and
+platform-specific release assets.
+
+### Added
+
+- **Durable resource ownership and safe adoption.** Origin-neutral claims,
+  collision-safe checkout identities, explicit adoption, inline transfer,
+  release tombstones, history, revert, and recovery let users bring existing
+  resources under management without discovery silently granting authority.
+- **Broader resource capabilities.** Typed application graphs coordinate
+  dependencies across ecosystems; generated resources resolve host inputs at
+  deploy time; managed directory trees support inventory and orphan policy;
+  package reconciliation records provenance; and GitHub release packages can
+  select checksum-verified assets per platform.
+- **Full Codex configuration lifecycle.** SetForge validates and reconciles
+  Codex configuration, filesystem resources, MCP servers, plugins and
+  marketplaces, and durable lifecycle state, with a published parity contract
+  covering the supported Claude and Codex surfaces.
+
+### Changed
+
+- **Install and reconciliation are recoverable by construction.** Operations
+  use one immutable plan, durable restart recovery, reversible store pruning,
+  transactional snapshot restore, stable unit identities, and explicit staged
+  participation. Read-only commands remain mutation-free and shared units
+  require reconfirmation before writes.
+- **CLI output and profile resolution fail closed.** Human and structured
+  output modes share one effective-profile path, interactive capture retains
+  its diagnostics, and malformed global output combinations no longer fall
+  through ambiguously.
+- **Faster, more representative CI.** Local pytest has a fast lane; Docker
+  smoke and full suites have non-overlapping boundaries, isolated network
+  canaries, prebuilt images, current completion fixtures, and restart-recovery
+  coverage.
+
 ### Fixed
+
+- **Installed wheels now include every runtime dependency.** `pathspec`, used
+  by managed-tree exclusion matching, and `click`, used by CLI error handling,
+  are declared directly instead of arriving only through development or
+  transitive dependencies.
+- **Local package destinations are repaired when missing.** A valid receipt no
+  longer suppresses reinstall when the recorded destination has disappeared.
+- **Legacy and interrupted reconciliation state remains safe.** Legacy
+  identities are preserved, structured deletions are correctly subsumed,
+  reconcile drafts route by unit kind, Cargo lock pins are enforced, and
+  orphan restart recovery runs in CI.
+
+## [1.0.0] - 2026-08-08
+
+### Fixed
+
 - **`cleanup-orphans` no longer over-reaches.** Orphan detection now
   scopes candidates to currently-managed destination roots — an ancestor
   directory of a tracked file's destination, excluding generic shared
@@ -263,6 +320,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/raulfrk/setforge/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/raulfrk/setforge/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/raulfrk/setforge/compare/v0.2.0...v0.2.2
 [0.2.0]: https://github.com/raulfrk/setforge/releases/tag/v0.2.0

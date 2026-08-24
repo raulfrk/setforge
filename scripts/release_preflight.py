@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pre-tag local verification for setforge releases.
 
-Runs 8 checks before pushing a v*.*.* tag. Exits 0 on success; 1 on the
+Runs 7 checks before pushing a v*.*.* tag. Exits 0 on success; 1 on the
 first failing step (with the step name); 2 if the environment is
 unusable (no `uv` binary, no `pyproject.toml`).
 
@@ -160,7 +160,7 @@ def _run_step(name: str, fn: Callable[[], None]) -> bool:
 
 
 def main() -> int:
-    """Run the 8-step preflight; return 0 on success, 1 on first failure."""
+    """Run the 7-step preflight; return 0 on success, 1 on first failure."""
     try:
         version = _read_version()
     except (FileNotFoundError, KeyError) as exc:

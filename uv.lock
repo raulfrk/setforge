@@ -1325,14 +1325,16 @@ wheels = [
 
 [[package]]
 name = "setforge"
-version = "0.3.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "diff-match-patch" },
     { name = "jinja2" },
     { name = "json-five" },
     { name = "merge3" },
     { name = "packaging" },
+    { name = "pathspec" },
     { name = "patiencediff" },
     { name = "platformdirs" },
     { name = "prompt-toolkit" },
@@ -1366,6 +1368,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1" },
     { name = "diff-match-patch", specifier = ">=20241021" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "json-five", specifier = ">=1.1,<2" },
@@ -1373,6 +1376,7 @@ requires-dist = [
     { name = "mutmut", marker = "extra == 'dev'", specifier = "==3.6.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "packaging", specifier = ">=21" },
+    { name = "pathspec", specifier = ">=0.12" },
     { name = "patiencediff", specifier = ">=0.2.18" },
     { name = "pexpect", marker = "extra == 'dev'", specifier = ">=4.9" },
     { name = "platformdirs", specifier = ">=4.0" },
