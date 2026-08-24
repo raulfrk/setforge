@@ -66,6 +66,11 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.locking import mutation_locks
+from setforge.ownership import (
+    OwnershipStore,
+    read_owner_id_locked,
+    resolve_owner_common_dir,
+)
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -399,6 +404,7 @@ def _apply_revert(
     config: Path,
     *,
     path_guards: tuple[operations.PathGuard, ...] = (),
+    config_identity_fd: int | None = None,
 ) -> None:
     """Apply the reverse transition and print the post-success summary.
 
@@ -439,6 +445,7 @@ def _apply_revert(
 
     touched_paths = _load_meta_touched_paths(transition)
     filesystem_deltas = transitions.load_filesystem_deltas(transition)
+    ownership_transfers = transitions.load_ownership_transfers(transition)
     filesystem_paths = {item.path for item in filesystem_deltas}
     text_paths = [path for path in touched_paths if path not in filesystem_paths]
     file_pre = transitions.snapshot_paths(text_paths)
@@ -470,6 +477,14 @@ def _apply_revert(
     # refuses cleanly with zero mutation.
     _revert_symlink_deployments(config=config, profile=profile, dry_run=True)
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
+    ownership_store = OwnershipStore()
+    _validate_ownership_transfer_reverse(
+        ownership_transfers,
+        config=config,
+        profile=profile,
+        store=ownership_store,
+        config_identity_fd=config_identity_fd,
+    )
 
     transitions.apply_patch_reverse(transition)
     operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
@@ -479,6 +494,18 @@ def _apply_revert(
     # Restore each path's pre-install mode AFTER the patch reverse rewrote
     # its bytes (the content patch never carries permission bits).
     _restore_modes(pre_command_modes)
+    reverse_ownership: list[transitions.OwnershipTransferDelta] = []
+    for item in reversed(ownership_transfers):
+        restored = ownership_store.transfer_locked(
+            item.after.resource_id,
+            expected_owner=item.after.owner_id,
+            new_owner=item.before.owner_id,
+            expected_generation=item.after.generation,
+            declaration_refs=item.before.declaration_refs,
+        )
+        reverse_ownership.append(
+            transitions.OwnershipTransferDelta(item.after, restored)
+        )
 
     target = _write_reverse_transition(
         transition,
@@ -488,9 +515,103 @@ def _apply_revert(
         state_snapshots=reverse_store_state,
         file_modes=reverse_modes,
         filesystem_deltas=transitions.reverse_filesystem_deltas(filesystem_deltas),
+        ownership_transfers=tuple(reverse_ownership),
     )
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
+
+
+def _validate_ownership_transfer_reverse(
+    deltas: tuple[transitions.OwnershipTransferDelta, ...],
+    *,
+    config: Path,
+    profile: str,
+    store: OwnershipStore,
+    config_identity_fd: int | None,
+) -> None:
+    """Reconcile exact claims with current declarations and live fingerprints."""
+    if not deltas:
+        return
+    from setforge.cli.install import (
+        _preview_file_declaration_refs,
+        _preview_file_ownership,
+        _preview_package_ownership,
+    )
+    from setforge.provision.ownership import observation_fingerprint
+
+    if config_identity_fd is None:
+        raise RevertFailed("ownership transfer lacks a config identity lock")
+    owner_id = read_owner_id_locked(config.resolve().parent, config_identity_fd)
+    file_decisions = _preview_file_ownership(
+        config, profile, owner_id_override=owner_id
+    )
+    package_decisions = _preview_package_ownership(
+        config, profile, locked=False, owner_id_override=owner_id
+    )
+    fingerprints = {
+        decision.observation.resource_id: decision.observation.fingerprint
+        for decision in file_decisions
+    }
+    fingerprints.update(
+        {
+            decision.resource_id: observation_fingerprint(decision.observation)
+            for decision in package_decisions
+            if decision.observation is not None
+        }
+    )
+    declaration_refs = _preview_file_declaration_refs(config, profile)
+    for decision in package_decisions:
+        declaration_refs[decision.resource_id] = (
+            f"packages.{decision.item.type}.{decision.item.identity.key}",
+        )
+    for item in deltas:
+        current = store.read(item.after.resource_id)
+        if current != item.after:
+            raise RevertFailed(
+                "ownership claim changed since transition: "
+                f"{item.after.resource_id.canonical()}"
+            )
+        if owner_id != item.after.owner_id:
+            raise RevertFailed(
+                "only the current ownership recipient can reverse this transfer"
+            )
+        if declaration_refs.get(item.after.resource_id) != item.after.declaration_refs:
+            raise RevertFailed(
+                "ownership declaration changed since transition: "
+                f"{item.after.resource_id.canonical()}"
+            )
+        if fingerprints.get(item.after.resource_id) != item.after.fingerprint:
+            raise RevertFailed(
+                f"ownership resource changed since transition: {item.after.locator}"
+            )
+
+
+def _ownership_transfer_lock_targets(
+    transition_dirs: tuple[transitions.TransitionDir, ...],
+) -> tuple[Path, ...]:
+    """Freeze filesystem containers referenced by ownership sidecars."""
+    locators = {
+        Path(item.after.locator).absolute()
+        for transition_dir in transition_dirs
+        for item in transitions.load_ownership_transfers(transition_dir)
+        if item.after.resource_id.kind == "file"
+    }
+    targets = {
+        path if path.is_dir() and not path.is_symlink() else path.parent
+        for path in locators
+    }
+    return tuple(sorted(targets, key=str))
+
+
+def _ownership_transfer_identity_dir(
+    transition_dirs: tuple[transitions.TransitionDir, ...], config: Path
+) -> Path | None:
+    if any(
+        transitions.load_ownership_transfers(transition_dir)
+        for transition_dir in transition_dirs
+    ):
+        return resolve_owner_common_dir(config.resolve().parent)
+    return None
 
 
 def _recapture_modes(recorded: dict[Path, int]) -> dict[Path, int]:
@@ -681,9 +802,11 @@ def revert(
     with (
         mutation_locks(
             resources=True,
+            config_identity_dir=_ownership_transfer_identity_dir((transition,), config),
             config_dir=config.resolve().parent,
+            target_roots=_ownership_transfer_lock_targets((transition,)),
             profiles=state_profiles,
-        ),
+        ) as mutation_guards,
         operations.recover_on_error(profile, "revert"),
     ):
         operations.refuse_active(profile)
@@ -699,7 +822,18 @@ def revert(
             kind=operations.CheckpointKind.COMPENSATABLE,
             recovery="restore pre-revert files, stores, modes, and adapter inventories",
         )
-        _apply_revert(transition, profile, config, path_guards=journal.path_guards)
+        identity_guard = (
+            mutation_guards.config_identity if mutation_guards is not None else None
+        )
+        _apply_revert(
+            transition,
+            profile,
+            config,
+            path_guards=journal.path_guards,
+            config_identity_fd=(
+                identity_guard.directory_fd if identity_guard is not None else None
+            ),
+        )
         journal = operations.finish_checkpoint(journal)
         operations.complete(journal)
 
@@ -792,9 +926,13 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     with (
         mutation_locks(
             resources=True,
+            config_identity_dir=_ownership_transfer_identity_dir(
+                transition_dirs, config
+            ),
             config_dir=config.resolve().parent,
+            target_roots=_ownership_transfer_lock_targets(transition_dirs),
             profiles=state_profiles,
-        ),
+        ) as mutation_guards,
         operations.recover_on_error(profile, "revert"),
     ):
         operations.refuse_active(profile)
@@ -812,12 +950,19 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
             kind=operations.CheckpointKind.COMPENSATABLE,
             recovery="restore pre-chain files, stores, modes, and adapter inventories",
         )
+        identity_guard = (
+            mutation_guards.config_identity if mutation_guards is not None else None
+        )
+        config_identity_fd = (
+            identity_guard.directory_fd if identity_guard is not None else None
+        )
         for entry in chain:
             _apply_revert(
                 entry.directory,
                 profile,
                 config,
                 path_guards=journal.path_guards,
+                config_identity_fd=config_identity_fd,
             )
         journal = operations.finish_checkpoint(journal)
         operations.complete(journal)
@@ -838,6 +983,12 @@ def _prepare_revert_journal(
     mcp_names: dict[str, None] = {}
     generic_paths: dict[Path, None] = {}
     for transition in chain:
+        transfer_claim_paths = {
+            OwnershipStore().claim_path(item.after.resource_id): None
+            for item in transitions.load_ownership_transfers(transition)
+        }
+        touched.update(transfer_claim_paths)
+        generic_paths.update(transfer_claim_paths)
         touched.update(dict.fromkeys(_load_meta_touched_paths(transition)))
         generic_paths.update(
             dict.fromkeys(
@@ -1055,6 +1206,7 @@ def _transitions_list_json_data(
             "files": entry.file_count,
             "plugins": entry.plugin_count,
             "codex_plugins": entry.codex_plugin_count,
+            "ownership_transfers": entry.ownership_transfer_count,
             "ext": entry.ext_count,
         }
         for entry in listings
@@ -1105,6 +1257,7 @@ def _render_transitions_table(
     table.add_column("plugins", no_wrap=True, justify="right")
     table.add_column("codex", no_wrap=True, justify="right")
     table.add_column("ext", no_wrap=True, justify="right")
+    table.add_column("ownership", no_wrap=True, justify="right")
     for entry in listings:
         table.add_row(
             entry.directory.name,
@@ -1114,6 +1267,7 @@ def _render_transitions_table(
             str(entry.plugin_count),
             str(entry.codex_plugin_count),
             str(entry.ext_count),
+            str(entry.ownership_transfer_count),
         )
     if profile_filter:
         header = f"=== transitions for profile {', '.join(profile_filter)} ==="
@@ -1175,12 +1329,29 @@ def transitions_show(
     _render_plugins_section_show(target, console)
     _render_codex_plugins_section_show(target, console)
     _render_extensions_section_show(target, console)
+    _render_ownership_transfers_show(target, console)
 
     console.print("=== reverse this transition ===")
     console.print(f"  setforge revert --profile={profile} --to-before={target.name}")
     console.print(
         "    (will undo this transition AND every newer transition for this profile)"
     )
+
+
+def _render_ownership_transfers_show(
+    target: transitions.TransitionDir, console: Console
+) -> None:
+    deltas = transitions.load_ownership_transfers(target)
+    if not deltas:
+        return
+    console.print("=== ownership transfers ===")
+    for item in deltas:
+        console.print(f"  resource: {item.after.resource_id.canonical()}")
+        console.print(f"    from: {item.before.owner_id}")
+        console.print(f"    to:   {item.after.owner_id}")
+        console.print(
+            f"    generation: {item.before.generation} -> {item.after.generation}"
+        )
 
 
 def _render_files_section_show(

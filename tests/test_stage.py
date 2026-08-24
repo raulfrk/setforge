@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -554,6 +555,134 @@ def test_apply_adopts_container_without_rewriting_live(
     assert claim.authority is Authority.MANAGE
     assert claim.lifecycle is ClaimLifecycle.CLAIMED
     assert stage.dst.read_bytes() == before
+
+
+def test_apply_transfers_container_and_records_reversible_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from setforge import locking, transitions
+    from setforge.cli.stage import Decision, _apply
+    from setforge.file_ownership import (
+        decide_file,
+        observe_file,
+        publish_file_claim_locked,
+    )
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+    (collected,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    observation = observe_file(collected.dst)
+    foreign_owner = uuid4()
+    receiver_owner = load_or_create_owner_id(repo)
+    store = OwnershipStore()
+    initial = decide_file(observation, None, owner_id=foreign_owner)
+    with locking.install_resources_lock():
+        before = publish_file_claim_locked(
+            store,
+            initial,
+            owner_id=foreign_owner,
+            declaration_ref=f"tracked_files.{collected.sub_name}",
+            acquisition="adopted-external",
+        )
+    stage = replace(
+        collected,
+        ownership=decide_file(observation, before, owner_id=receiver_owner),
+    )
+    config_path = repo / "setforge.yaml"
+    config_payload = (
+        "schema_version: '6.0'\n"
+        "tracked_files:\n"
+        "  CLAUDE.md:\n"
+        "    src: CLAUDE.md\n"
+        f"    dst: {stage.dst}\n"
+        "profiles:\n"
+        "  p:\n"
+        "    tracked_files: [CLAUDE.md]\n"
+    )
+    config_path.write_text(config_payload, encoding="utf-8")
+    adopt_result = walk(
+        stage.hunks,
+        lambda h, _i, _n: (
+            Decision(
+                HunkClass.SHARED_DRAFTED,
+                draft=b"## Shell\nportable\n\n",
+                adopt=True,
+            )
+            if h.label == "## Shell"
+            else Decision(HunkClass.LOCAL)
+        ),
+    )
+    live_before = stage.dst.read_bytes()
+    with pytest.raises(
+        InvariantViolation, match="transfer ownership before adopting live content"
+    ):
+        _apply(
+            profile,
+            stage,
+            adopt_result,
+            config_dir=repo,
+            config_path=config_path,
+            owner_id=receiver_owner,
+        )
+    assert store.read(observation.resource_id) == before
+    assert stage.dst.read_bytes() == live_before
+
+    result = walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.SHARED))
+    real_read_locked = stage_mod.read_owner_id_locked
+    monkeypatch.setattr(stage_mod, "read_owner_id_locked", lambda *args: uuid4())
+    with pytest.raises(InvariantViolation, match="owner identity changed"):
+        _apply(
+            profile,
+            stage,
+            result,
+            config_dir=repo,
+            config_path=config_path,
+            owner_id=receiver_owner,
+        )
+    assert store.read(observation.resource_id) == before
+    monkeypatch.setattr(stage_mod, "read_owner_id_locked", real_read_locked)
+
+    config_path.write_text(
+        "schema_version: '6.0'\ntracked_files: {}\nprofiles: {p: {}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(InvariantViolation, match=r"declaration.*changed"):
+        _apply(
+            profile,
+            stage,
+            result,
+            config_dir=repo,
+            config_path=config_path,
+            owner_id=receiver_owner,
+        )
+    assert store.read(observation.resource_id) == before
+    config_path.write_text(config_payload, encoding="utf-8")
+
+    _apply(
+        profile,
+        stage,
+        result,
+        config_dir=repo,
+        config_path=config_path,
+        owner_id=receiver_owner,
+    )
+
+    after = store.read(observation.resource_id)
+    assert after is not None
+    assert after.owner_id == receiver_owner
+    assert after.generation == before.generation + 1
+    assert stage.dst.read_bytes() == live_before
+    transition = transitions.load_latest(profile)
+    assert transition is not None
+    assert (
+        transitions.load_meta(transition).command is transitions.TransitionCommand.STAGE
+    )
+    assert transitions.load_ownership_transfers(transition) == (
+        transitions.OwnershipTransferDelta(before, after),
+    )
 
 
 def test_apply_adoption_failure_recovers_claim_and_reconcile_record(

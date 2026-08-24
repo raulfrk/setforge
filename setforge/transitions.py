@@ -39,17 +39,20 @@ import shutil
 import stat
 import subprocess
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, NewType
+from typing import TYPE_CHECKING, Final, NewType
 
 from pydantic import ValidationError
 
 from setforge import __version__, atomicio
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+
+if TYPE_CHECKING:
+    from setforge.ownership import OwnershipClaim
 
 TransitionDir = NewType("TransitionDir", Path)
 """A directory containing transition metadata (``meta.json``, ``changes.patch``, etc.).
@@ -64,6 +67,7 @@ class TransitionCommand(StrEnum):
     """Closed set of state-changing commands that record transitions."""
 
     INSTALL = "install"
+    STAGE = "stage"
     SYNC = "sync"
     REVERT = "revert"
     MERGE = "merge"
@@ -99,6 +103,32 @@ class FilesystemDelta:
     path: Path
     pre: FilesystemImage
     post: FilesystemImage
+
+
+@dataclass(frozen=True, slots=True)
+class OwnershipTransferDelta:
+    """Exact claim states on the two sides of one ownership transfer."""
+
+    before: "OwnershipClaim"
+    after: "OwnershipClaim"
+
+    def __post_init__(self) -> None:
+        if self.before.owner_id == self.after.owner_id:
+            raise ValueError("ownership transfer must change owner")
+        from setforge.ownership import ClaimEvent
+
+        expected = replace(
+            self.before,
+            owner_id=self.after.owner_id,
+            declaration_refs=self.after.declaration_refs,
+            generation=self.before.generation + 1,
+            history=(
+                *self.before.history,
+                ClaimEvent("transfer", self.after.owner_id, self.before.generation + 1),
+            ),
+        )
+        if self.after != expected:
+            raise ValueError("ownership transfer is not an exact claim successor")
 
 
 # The profile label recorded on a ``migrate`` transition. A schema migration
@@ -1492,6 +1522,75 @@ def _touched_paths(
 
 
 _FILESYSTEM_DELTAS_FILENAME: Final[str] = "filesystem_deltas.json"
+_OWNERSHIP_TRANSFERS_FILENAME: Final[str] = "ownership_transfers.json"
+
+
+def _serialize_ownership_transfers(
+    deltas: tuple[OwnershipTransferDelta, ...],
+) -> str | None:
+    from setforge.ownership import ownership_claim_to_json
+
+    if not deltas:
+        return None
+    identities = [item.before.resource_id for item in deltas]
+    if len(identities) != len(set(identities)):
+        raise SetforgeError("ownership transition resources must be unique")
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "before": ownership_claim_to_json(item.before),
+                        "after": ownership_claim_to_json(item.after),
+                    }
+                    for item in deltas
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def load_ownership_transfers(
+    transition_dir: TransitionDir,
+) -> tuple[OwnershipTransferDelta, ...]:
+    """Load the optional exact ownership-transfer sidecar."""
+    path = transition_dir / _OWNERSHIP_TRANSFERS_FILENAME
+    if not path.exists():
+        return ()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            raise ValueError("unsupported ownership transfer schema")
+        entries = raw.get("entries")
+        if not isinstance(entries, list):
+            raise TypeError("entries must be a list")
+        deltas = tuple(_ownership_transfer_from_json(entry) for entry in entries)
+        identities = [item.before.resource_id for item in deltas]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate ownership transfer resource")
+        return deltas
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise InvalidTransitionRecord(
+            f"invalid {_OWNERSHIP_TRANSFERS_FILENAME} at {path}: {exc}"
+        ) from exc
+
+
+def _ownership_transfer_from_json(raw: object) -> OwnershipTransferDelta:
+    from setforge.ownership import ownership_claim_from_json
+
+    if not isinstance(raw, dict) or set(raw) != {"before", "after"}:
+        raise TypeError("ownership transfer entry must contain before and after")
+    before = raw["before"]
+    after = raw["after"]
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise TypeError("ownership transfer claim states must be objects")
+    return OwnershipTransferDelta(
+        ownership_claim_from_json(before), ownership_claim_from_json(after)
+    )
 
 
 def _canonical_filesystem_path(path: Path) -> Path:
@@ -1771,6 +1870,7 @@ def write_transition(
     file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[FilesystemDelta, ...] = (),
     codex_plugin_delta: CodexPluginDelta | None = None,
+    ownership_transfers: tuple[OwnershipTransferDelta, ...] = (),
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1824,6 +1924,7 @@ def write_transition(
     """
     filesystem_deltas = _canonicalize_filesystem_deltas(filesystem_deltas)
     filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
+    ownership_transfer_payload = _serialize_ownership_transfers(ownership_transfers)
     root = transitions_root()
     dirname = transition_dirname(meta.timestamp, meta.command.value, meta.profile)
     target = TransitionDir(root / dirname)
@@ -1869,6 +1970,11 @@ def write_transition(
 
     if filesystem_payload is not None:
         _write_text_durable(pending / _FILESYSTEM_DELTAS_FILENAME, filesystem_payload)
+
+    if ownership_transfer_payload is not None:
+        _write_text_durable(
+            pending / _OWNERSHIP_TRANSFERS_FILENAME, ownership_transfer_payload
+        )
 
     _stage_state_snapshots(pending, state_snapshots)
 
@@ -2245,6 +2351,7 @@ class TransitionListing:
     ext_count: int
     plugin_count: int = 0
     codex_plugin_count: int = 0
+    ownership_transfer_count: int = 0
 
 
 def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
@@ -2319,6 +2426,10 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
         except (OSError, json.JSONDecodeError):
             codex_plugin_count = 0
 
+    ownership_transfer_count = len(
+        load_ownership_transfers(TransitionDir(transition_dir))
+    )
+
     return TransitionListing(
         directory=TransitionDir(transition_dir),
         timestamp=timestamp,
@@ -2328,6 +2439,7 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
         ext_count=ext_count,
         plugin_count=plugin_count,
         codex_plugin_count=codex_plugin_count,
+        ownership_transfer_count=ownership_transfer_count,
     )
 
 

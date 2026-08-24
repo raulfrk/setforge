@@ -47,6 +47,7 @@ __all__ = [
     "ResourceScope",
     "ScopeKind",
     "load_or_create_owner_id",
+    "load_or_create_owner_id_locked",
     "ownership_claim_from_json",
     "ownership_claim_to_json",
     "read_owner_id",
@@ -1076,6 +1077,24 @@ def read_owner_id_locked(config_dir: Path, common_fd: int) -> uuid.UUID:
         finally:
             os.close(owner_dir_fd)
     finally:
+        _require_common_dir_binding(config_dir, common_fd)
+    return owner_id
+
+
+def load_or_create_owner_id_locked(
+    config_dir: Path, common_fd: int, candidate: uuid.UUID
+) -> uuid.UUID:
+    """Establish ``candidate`` through an already-held config identity lock."""
+    _require_common_dir_binding(config_dir, common_fd)
+    owner_dir_fd = _open_child_dir_at(
+        common_fd, _OWNER_ID_RELATIVE.parent.name, create=True
+    )
+    try:
+        owner_id = _create_or_read_owner_id_at(
+            owner_dir_fd, _OWNER_ID_RELATIVE.name, candidate
+        )
+    finally:
+        os.close(owner_dir_fd)
         _require_common_dir_binding(config_dir, common_fd)
     return owner_id
 

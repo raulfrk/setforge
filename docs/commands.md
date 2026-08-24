@@ -94,7 +94,7 @@ setforge ships nine subcommand groups for narrow inspections and edits. Run
 | `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugin packages by default; pass `--product codex` for Codex. Cache sync remains Claude-specific. |
 | `marketplace` | `add`, `remove`, `update` | Claude marketplaces by default; pass `--product codex` for Codex sources. |
 | `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extension packages selected by a profile. |
-| `transitions` | `list`, `show` | Inspect install/sync/revert history. |
+| `transitions` | `list`, `show` | Inspect install/sync/stage/revert history. |
 | `ownership` | `list`, `release`, `history`, `revert`, `recover` | Inspect durable claims and explicitly change their authority without changing resource bytes. |
 | `profile` | `list`, `show` | Inspect profile definitions and resolved overlays. |
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
@@ -125,6 +125,17 @@ Revert succeeds only while the recorded post-state is still current and, when
 it would restore authority, the current declaration, resource identity, and
 live fingerprint still match. Interrupted publication remains visible through
 `ownership recover`; `--apply` completes only unambiguous pending work.
+
+When `install` or `stage` finds an active claim owned by a different config
+checkout, it offers an explicit inline transfer. Accepting with the prompt (or
+`--yes` for `install`) revalidates the exact owner, generation, declaration,
+resource identity, and live fingerprint under mutation locks, then changes only
+the claim—not the file bytes or installed package. The transfer appears in the
+normal profile transition history and `setforge revert --profile=PROFILE`
+reverses it only when invoked by the current recipient while that exact
+post-transfer state is still current. In `stage`, transfer and “adopt locally”
+are separate invocations: transfer the claim first, then rerun stage to change
+live content. Released, drifted, stale, corrupt, or non-Git cases fail closed.
 
 <a id="codex-lifecycle"></a>
 ## Codex lifecycle

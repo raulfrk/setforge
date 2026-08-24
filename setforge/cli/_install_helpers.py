@@ -920,6 +920,7 @@ def _install_recorded_nothing(
     seeded: bool,
     codex_base_mutated: bool = False,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
+    ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> bool:
     """True iff nothing revertable changed (ANDs the patch with every delta below)."""
     if transitions.compute_patch(file_pre, file_post):
@@ -935,6 +936,8 @@ def _install_recorded_nothing(
     if mcp_delta is not None and not mcp_delta.is_empty():
         return False
     if filesystem_deltas:
+        return False
+    if ownership_transfers:
         return False
     return not (reconcile_outcomes or seeded or codex_base_mutated)
 
@@ -953,6 +956,7 @@ def _write_install_transition(
     file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
     codex_plugin_delta: transitions.CodexPluginDelta | None = None,
+    ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -999,6 +1003,7 @@ def _write_install_transition(
         file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
         codex_plugin_delta=codex_plugin_delta,
+        ownership_transfers=ownership_transfers,
     )
 
 

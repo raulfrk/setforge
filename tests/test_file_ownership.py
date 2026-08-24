@@ -156,32 +156,51 @@ def test_decision_refuses_claim_for_another_resource(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("foreign", [False, True])
-def test_released_or_foreign_claim_holds_file(tmp_path: Path, foreign: bool) -> None:
+def test_matching_foreign_claim_is_transferable(tmp_path: Path) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("local\n")
+    receiver = uuid.uuid4()
+    observed = observe_file(path)
+    claim = _claim(path, owner=uuid.uuid4(), fingerprint=observed.fingerprint)
+
+    decision = decide_file(observed, claim, owner_id=receiver)
+
+    assert decision.action is FileAction.TRANSFER
+    assert "another configuration" in decision.detail
+
+
+def test_released_claim_holds_file(tmp_path: Path) -> None:
     path = tmp_path / "settings.ini"
     path.write_text("local\n")
     owner = uuid.uuid4()
     observed = observe_file(path)
-    claim_owner = uuid.uuid4() if foreign else owner
-    claim = _claim(path, owner=claim_owner, fingerprint=observed.fingerprint)
-    if not foreign:
-        claim = OwnershipClaim(
-            resource_id=claim.resource_id,
-            owner_id=claim.owner_id,
-            declaration_refs=claim.declaration_refs,
-            authority=Authority.NONE,
-            lifecycle=ClaimLifecycle.RELEASED,
-            provenance=claim.provenance,
-            locator=claim.locator,
-            fingerprint=claim.fingerprint,
-            generation=2,
-            history=(
-                claim.history[0],
-                ClaimEvent("release", claim.owner_id, 2),
-            ),
-        )
+    claim = _claim(path, owner=owner, fingerprint=observed.fingerprint)
+    claim = OwnershipClaim(
+        resource_id=claim.resource_id,
+        owner_id=claim.owner_id,
+        declaration_refs=claim.declaration_refs,
+        authority=Authority.NONE,
+        lifecycle=ClaimLifecycle.RELEASED,
+        provenance=claim.provenance,
+        locator=claim.locator,
+        fingerprint=claim.fingerprint,
+        generation=2,
+        history=(claim.history[0], ClaimEvent("release", claim.owner_id, 2)),
+    )
 
     assert decide_file(observed, claim, owner_id=owner).action is FileAction.HOLD
+
+
+def test_drifted_foreign_claim_holds_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("before\n")
+    owner = uuid.uuid4()
+    claim = _claim(path, owner=uuid.uuid4(), fingerprint=observe_file(path).fingerprint)
+    path.write_text("after\n")
+
+    assert (
+        decide_file(observe_file(path), claim, owner_id=owner).action is FileAction.HOLD
+    )
 
 
 def test_drift_is_reviewable_but_protected_removal_holds(tmp_path: Path) -> None:

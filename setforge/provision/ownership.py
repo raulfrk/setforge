@@ -26,6 +26,7 @@ class PackageAction(StrEnum):
     INSTALL = "install"
     ADOPT = "adopt"
     UPGRADE = "upgrade"
+    TRANSFER = "transfer"
     HOLD = "hold"
     NONE = "none"
 
@@ -108,6 +109,19 @@ def decide_package(
             "present, external, unowned",
         )
     if claim.owner_id != owner_id:
+        if (
+            claim.authority is Authority.MANAGE
+            and claim.lifecycle is ClaimLifecycle.CLAIMED
+            and claim.fingerprint == observation_fingerprint(observation)
+        ):
+            return PackageDecision(
+                item,
+                resource_id,
+                observation,
+                claim,
+                PackageAction.TRANSFER,
+                "present, claimed by another configuration; explicit transfer required",
+            )
         return PackageDecision(
             item,
             resource_id,

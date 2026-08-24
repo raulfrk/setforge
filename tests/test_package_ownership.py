@@ -66,7 +66,7 @@ def test_adopt_then_second_run_allows_upgrade(tmp_path) -> None:
     assert claim.fingerprint == observation_fingerprint(observed)
 
 
-def test_matching_claim_is_noop_and_foreign_or_drifted_claim_holds(tmp_path) -> None:
+def test_matching_claim_is_noop_and_matching_foreign_claim_transfers(tmp_path) -> None:
     owner = uuid.uuid4()
     observed = _observation(version="2")
     store = OwnershipStore(tmp_path / "ownership")
@@ -85,11 +85,15 @@ def test_matching_claim_is_noop_and_foreign_or_drifted_claim_holds(tmp_path) -> 
     )
     assert (
         decide_package(_item(), observed, claim, owner_id=uuid.uuid4()).action
-        is PackageAction.HOLD
+        is PackageAction.TRANSFER
     )
     changed = _observation(version="3")
     assert (
         decide_package(_item(), changed, claim, owner_id=owner).action
+        is PackageAction.HOLD
+    )
+    assert (
+        decide_package(_item(), changed, claim, owner_id=uuid.uuid4()).action
         is PackageAction.HOLD
     )
     assert (

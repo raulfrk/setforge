@@ -24,7 +24,7 @@ from setforge.config import (
 from setforge.errors import ConfigError, InvariantViolation
 from setforge.file_ownership import file_resource_id, observe_file
 from setforge.generated import resolve_generated
-from setforge.ownership import OwnershipStore, ProvenanceFactKind
+from setforge.ownership import OwnershipStore, ProvenanceFactKind, read_owner_id
 
 
 def _generated() -> GeneratedContent:
@@ -370,6 +370,32 @@ def test_generated_adoption_is_metadata_only(
     assert refreshed is not None
     assert refreshed.generation > claim.generation
     assert refreshed.fingerprint == observe_file(live).fingerprint
+
+
+def test_generated_output_transfer_is_metadata_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "live" / "generated.txt"
+    live.parent.mkdir()
+    live.write_text("external\n", encoding="utf-8")
+    config_a = _write_generated_repo(tmp_path / "repo-a", live)
+    assert _install(config_a).exit_code == 0
+    store = OwnershipStore()
+    before = store.read(file_resource_id(live))
+    assert before is not None
+
+    config_b = _write_generated_repo(tmp_path / "repo-b", live)
+    result = _install(config_b)
+
+    assert result.exit_code == 0, result.output
+    assert "transferred tracked file ownership" in result.output
+    assert live.read_text(encoding="utf-8") == "external\n"
+    after = store.read(file_resource_id(live))
+    assert after is not None
+    assert after.owner_id == read_owner_id(config_b.parent)
+    assert after.generation == before.generation + 1
 
 
 def test_install_refuses_changed_host_input_before_write(

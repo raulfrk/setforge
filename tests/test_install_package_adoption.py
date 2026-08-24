@@ -8,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 import setforge.cli.install as install_mod
+from setforge import transitions
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
 from setforge.ownership import Authority, OwnershipStore, read_owner_id
@@ -135,6 +136,78 @@ def test_install_refuses_noninteractive_adoption_without_yes(
     assert "requires confirmation" in str(result.exception)
     resource_id = package_resource_id(ProvisionItem(type="cargo", identity=identity))
     assert OwnershipStore().read(resource_id) is None
+
+
+def test_install_transfers_foreign_package_without_invoking_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config_a = _write_config(tmp_path / "repo-a")
+    identity = Identity("ripgrep", "ripgrep")
+    observation = PackageObservation(
+        identity,
+        ObservationOrigin.EXTERNAL,
+        version="14.1.0",
+        source="crates.io",
+    )
+    monkeypatch.setattr(CargoProvisioner, "probe", lambda self: {identity})
+    monkeypatch.setattr(
+        CargoProvisioner, "observations", lambda self, installed: (observation,)
+    )
+    monkeypatch.setattr(
+        CargoProvisioner,
+        "apply_one",
+        lambda self, item: pytest.fail("package transfer invoked provider"),
+    )
+    args = [
+        "install",
+        "--profile=p",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+        "--no-secrets-scan",
+    ]
+    adopted = CliRunner().invoke(app, [*args, f"--config={config_a}"])
+    assert adopted.exit_code == 0, adopted.output
+    resource_id = package_resource_id(ProvisionItem(type="cargo", identity=identity))
+    store = OwnershipStore()
+    before = store.read(resource_id)
+    assert before is not None
+
+    config_b = _write_config(tmp_path / "repo-b")
+    transferred = CliRunner().invoke(app, [*args, f"--config={config_b}"])
+
+    assert transferred.exit_code == 0, transferred.output
+    assert "transferred package ownership: ripgrep" in transferred.output
+    after = store.read(resource_id)
+    assert after is not None
+    assert after.owner_id == read_owner_id(config_b.parent)
+    assert after.generation == before.generation + 1
+    transition = transitions.load_latest("p")
+    assert transition is not None
+    assert transitions.load_ownership_transfers(transition) == (
+        transitions.OwnershipTransferDelta(before, after),
+    )
+    config_b_before = config_b.read_bytes()
+    config_b.write_text(
+        config_b.read_text(encoding="utf-8").replace("packages: [rg]", "packages: []"),
+        encoding="utf-8",
+    )
+    refused = CliRunner().invoke(
+        app, ["revert", "--profile=p", f"--config={config_b}", "--yes"]
+    )
+    assert refused.exit_code != 0
+    assert "ownership declaration changed" in str(refused.exception)
+    assert store.read(resource_id) == after
+    config_b.write_bytes(config_b_before)
+
+    reverted = CliRunner().invoke(
+        app, ["revert", "--profile=p", f"--config={config_b}", "--yes"]
+    )
+    assert reverted.exit_code == 0, reverted.output
+    restored = store.read(resource_id)
+    assert restored is not None
+    assert restored.owner_id == before.owner_id
 
 
 def test_later_install_failure_recovers_new_adoption_claim(

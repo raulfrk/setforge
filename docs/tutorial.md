@@ -363,6 +363,17 @@ adopting a mixed file does not make its LOCAL hunks portable. `capture` and
 `compare` fail closed when a staged Git-backed file has no current container
 claim.
 
+If another independent config clone currently owns that same destination,
+`install` (or interactive `stage`) identifies the foreign owner and asks to
+transfer the exact claim. A confirmed transfer preserves the live bytes and
+changes only durable authority; it is recorded in profile transition history
+and can be reversed with `setforge revert --profile=default`. Linked Git
+worktrees share one checkout owner and therefore do not transfer. A stale
+generation, changed fingerprint, released claim, or non-Git receiver is refused.
+If a stage walk also chooses “adopt locally,” finish the metadata-only transfer
+without that content choice, then rerun stage as the new owner; SetForge will
+not combine a foreign-claim transfer with a live-byte rewrite.
+
 **When to use:** when the host is the source of truth for a change and you want
 it back in the repo.
 
@@ -538,6 +549,9 @@ the package. When its evidence is one unambiguous legacy receipt, adoption also
 migrates that receipt to the provider-qualified format in the same reversible
 metadata transaction. Later upgrades and cleanup are allowed only through the
 same current claim. Cleanup is separate from filesystem orphan handling.
+An active matching package claim owned by another config checkout can instead
+be explicitly transferred during `install`; SetForge does not invoke the
+package provider for that metadata-only handoff.
 
 Without `--scan`, this is the legacy, transition-history-attributed mode: it
 finds live files attributed to removed `tracked_files` entries. It is a dry-run
@@ -889,6 +903,15 @@ worktrees can. Reverting a release restores authority only if the current
 declaration, resource identity, and live fingerprint still match. Inspect an
 interrupted publication with `setforge ownership recover --config=setforge.yaml`
 and complete unambiguous work by adding `--apply --yes`.
+
+Foreign active claims are resolved from the receiving workflow: rerun
+`setforge install --profile=default` and confirm the offered transfer (or use
+`--yes` in automation). The operation preserves resource bytes, records the
+old and new exact claims in the profile transition, and remains guarded by
+`setforge revert --profile=default`. Only the current transfer recipient can
+authorize that reversal; after reversal, that restored owner controls any redo.
+`ownership release` remains the separate authority-reducing workflow initiated
+by the current owner.
 
 **Config** — granular CRUD over `setforge.yaml` / `local.yaml`:
 

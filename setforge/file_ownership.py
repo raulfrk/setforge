@@ -30,6 +30,7 @@ class FileAction(StrEnum):
     ADOPT = "adopt"
     MANAGE = "manage"
     REVIEW = "review"
+    TRANSFER = "transfer"
     HOLD = "hold"
 
 
@@ -253,6 +254,18 @@ def decide_file(
             )
         return FileDecision(observation, claim, FileAction.INSTALL, "absent")
     if claim.owner_id != owner_id:
+        if (
+            claim.authority is Authority.MANAGE
+            and claim.lifecycle is ClaimLifecycle.CLAIMED
+            and observation.present
+            and claim.fingerprint == observation.fingerprint
+        ):
+            return FileDecision(
+                observation,
+                claim,
+                FileAction.TRANSFER,
+                "claimed by another configuration; explicit transfer required",
+            )
         return FileDecision(
             observation, claim, FileAction.HOLD, "claimed by another configuration"
         )

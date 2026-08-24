@@ -100,9 +100,10 @@ def test_install_reads_host_local_overlay_under_lock(
 
     assert "enter" in events, "install never acquired the profile lock"
     assert "read" in events, "install never read the host-local overlay"
-    assert events.index("enter") < events.index("read"), (
+    read_index = events.index("read")
+    assert events[:read_index].count("enter") > events[:read_index].count("exit"), (
         f"overlay read must happen inside the lock; observed order: {events}"
     )
-    assert events.index("read") < events.index("exit"), (
+    assert "exit" in events[read_index + 1 :], (
         f"overlay read must happen before lock release; observed order: {events}"
     )

@@ -1347,6 +1347,7 @@ def _write_reverse_transition(
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
+    ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> Path:
     """Reverse plugin/extension deltas from ``transition`` and write the redo record.
 
@@ -1425,4 +1426,5 @@ def _write_reverse_transition(
         file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
         codex_plugin_delta=reverse_codex_plugin_delta,
+        ownership_transfers=ownership_transfers,
     )

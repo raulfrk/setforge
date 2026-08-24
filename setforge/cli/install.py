@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import typer
 
@@ -101,6 +101,7 @@ from setforge.file_ownership import (
     FileAction,
     FileDecision,
     decide_file,
+    file_resource_id,
     observe_file,
     observe_tree,
     publish_file_claim_locked,
@@ -113,8 +114,10 @@ from setforge.ownership import (
     OwnershipStore,
     ProvenanceFact,
     ProvenanceFactKind,
-    load_or_create_owner_id,
+    ResourceId,
+    load_or_create_owner_id_locked,
     read_owner_id,
+    resolve_owner_common_dir,
 )
 from setforge.provision.bundle import resolve_bundle_items
 from setforge.provision.capability_graph import (
@@ -461,7 +464,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             **_file_ownership_authorization(tracked_entries, file_ownership),
             **{
                 tree.name: tree.decision.action
-                not in {FileAction.ADOPT, FileAction.HOLD}
+                not in {FileAction.ADOPT, FileAction.TRANSFER, FileAction.HOLD}
                 for tree in trees
             },
         },
@@ -581,7 +584,7 @@ def _hold_generated_adoptions(
     adopting = {
         decision.observation.locator
         for decision in decisions
-        if decision.action is FileAction.ADOPT
+        if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
     }
     held: list[_PendingDeploy] = []
     for record in deploys:
@@ -762,7 +765,7 @@ def _file_ownership_authorization(
     return {
         name: all(
             by_locator[str(path.absolute())].action
-            not in {FileAction.ADOPT, FileAction.HOLD}
+            not in {FileAction.ADOPT, FileAction.TRANSFER, FileAction.HOLD}
             for path in _ownership_destinations(tracked, destination)
         )
         for tracked, name, _source, destination in tracked_entries
@@ -1066,7 +1069,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             anchor_fd = guard.target_fd
             if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
                 raise SetforgeError("managed tree target lock has no descriptor")
-            if tree.decision.action is FileAction.ADOPT:
+            if tree.decision.action in {FileAction.ADOPT, FileAction.TRANSFER}:
                 inventory = replace(
                     tree.plan.live,
                     owned_paths=tuple(entry.path for entry in tree.plan.live.entries),
@@ -1344,30 +1347,56 @@ def _gate_on_lock_coverage(
 
 
 def _confirm_package_adoptions(
-    decisions: tuple[PackageDecision, ...], *, yes: bool
+    decisions: tuple[PackageDecision, ...], *, yes: bool, receiver_owner: UUID | None
 ) -> None:
     """Confirm metadata-only ownership claims before the first effect."""
     decisions = tuple(
-        decision for decision in decisions if decision.action is PackageAction.ADOPT
+        decision
+        for decision in decisions
+        if decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
     )
-    if not decisions or yes:
+    if not decisions:
+        return
+    transfers = tuple(
+        decision for decision in decisions if decision.action is PackageAction.TRANSFER
+    )
+    if transfers:
+        if receiver_owner is None:
+            raise SetforgeError(
+                "package ownership transfer requires a Git-backed config"
+            )
+        for decision in transfers:
+            assert decision.claim is not None
+            typer.echo(
+                "package ownership transfer: "
+                f"{decision.resource_id.canonical()} "
+                f"{decision.claim.owner_id} -> {receiver_owner}"
+            )
+    if yes:
         return
     names = ", ".join(decision.item.identity.display for decision in decisions)
     if not sys.stdin.isatty():
         raise SetforgeError(
-            f"package adoption requires confirmation for {names}; rerun with --yes"
+            f"package ownership change requires confirmation for {names}; "
+            "rerun with --yes"
         )
     if not typer.confirm(
-        f"Manage existing package(s) without reinstalling: {names}?",
+        f"Manage or transfer existing package(s) without reinstalling: {names}?",
         default=False,
     ):
-        raise SetforgeError("package adoption declined; no package changes applied")
+        raise SetforgeError(
+            "package ownership change declined; no package changes applied"
+        )
 
 
-def _confirm_file_adoptions(decisions: tuple[FileDecision, ...], *, yes: bool) -> None:
+def _confirm_file_adoptions(
+    decisions: tuple[FileDecision, ...], *, yes: bool, receiver_owner: UUID | None
+) -> None:
     """Confirm container claims separately from reconcile content choices."""
     adopt = tuple(
-        decision for decision in decisions if decision.action is FileAction.ADOPT
+        decision
+        for decision in decisions
+        if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
     )
     blocked = tuple(
         decision for decision in decisions if decision.action is FileAction.HOLD
@@ -1375,18 +1404,36 @@ def _confirm_file_adoptions(decisions: tuple[FileDecision, ...], *, yes: bool) -
     if blocked:
         names = ", ".join(decision.observation.locator for decision in blocked)
         raise SetforgeError(f"tracked file ownership blocks install for {names}")
-    if not adopt or yes:
+    if not adopt:
+        return
+    for decision in adopt:
+        if decision.action is not FileAction.TRANSFER:
+            continue
+        if decision.claim is None or receiver_owner is None:
+            raise SetforgeError("file ownership transfer requires a Git-backed config")
+        typer.echo(
+            "file ownership transfer: "
+            f"{decision.observation.resource_id.canonical()} "
+            f"{decision.claim.owner_id} -> {receiver_owner} "
+            f"({decision.observation.locator})"
+        )
+    if yes:
         return
     names = ", ".join(decision.observation.locator for decision in adopt)
+    operation = (
+        "file ownership transfer"
+        if any(decision.action is FileAction.TRANSFER for decision in adopt)
+        else "file adoption"
+    )
     if not sys.stdin.isatty():
         raise SetforgeError(
-            f"file adoption requires confirmation for {names}; rerun with --yes"
+            f"{operation} requires confirmation for {names}; rerun with --yes"
         )
     if not typer.confirm(
-        f"Manage existing tracked file(s) without replacing them first: {names}?",
+        f"Manage or transfer tracked file(s) without changing their bytes: {names}?",
         default=False,
     ):
-        raise SetforgeError("file adoption declined; no file changes applied")
+        raise SetforgeError("file ownership change declined; no file changes applied")
 
 
 def _prepare_package_owner_id(
@@ -1399,27 +1446,58 @@ def _prepare_package_owner_id(
     if not decisions and not required:
         return None
     try:
-        return load_or_create_owner_id(repo_root)
+        return read_owner_id(repo_root)
     except OwnershipError:
-        return None
+        try:
+            resolve_owner_common_dir(repo_root)
+        except OwnershipError:
+            return None
+        return uuid4()
 
 
-def _preview_file_ownership(config: Path, profile: str) -> tuple[FileDecision, ...]:
+def _preview_file_ownership(
+    config: Path, profile: str, *, owner_id_override: UUID | None = None
+) -> tuple[FileDecision, ...]:
     """Build the file consent surface without holding mutation locks."""
     cfg = load_config(config)
     resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
     )
-    try:
-        owner_id = read_owner_id(config.parent)
-    except OwnershipError:
-        owner_id = None
+    owner_id = owner_id_override
+    if owner_id is None:
+        try:
+            owner_id = read_owner_id(config.parent)
+        except OwnershipError:
+            owner_id = None
     regular = _plan_file_ownership(
         tuple(_iter_all_tracked_files(ctx)), profile=profile, owner_id=owner_id
     )
     trees = _plan_trees(tuple(_iter_all_trees(ctx)), profile=profile, owner_id=owner_id)
     return regular + tuple(tree.decision for tree in trees)
+
+
+def _preview_file_declaration_refs(
+    config: Path, profile: str
+) -> dict[ResourceId, tuple[str, ...]]:
+    """Resolve exact current declaration refs for every file-container resource."""
+    cfg = load_config(config)
+    resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
+    )
+    refs: dict[ResourceId, list[str]] = {}
+    for tracked, name, _source, destination in _iter_all_tracked_files(ctx):
+        for owned_destination in _ownership_destinations(tracked, destination):
+            resource_id = file_resource_id(owned_destination)
+            refs.setdefault(resource_id, []).append(f"tracked_files.{name}")
+    for _tracked, name, _source, destination in _iter_all_trees(ctx):
+        resource_id = file_resource_id(destination)
+        refs.setdefault(resource_id, []).append(f"tracked_files.{name}")
+    return {
+        resource_id: tuple(sorted(set(declaration_refs)))
+        for resource_id, declaration_refs in refs.items()
+    }
 
 
 def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
@@ -1452,15 +1530,17 @@ def _read_package_owner_id(repo_root: Path) -> UUID | None:
         return None
 
 
-def _publish_package_adoptions(plan: InstallPlan) -> None:
+def _publish_package_adoptions(
+    plan: InstallPlan,
+) -> tuple[transitions.OwnershipTransferDelta, ...]:
     """Publish confirmed claims after exact locked plan revalidation."""
     decisions = tuple(
         decision
         for decision in plan.provisioning.ownership
-        if decision.action is PackageAction.ADOPT
+        if decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
     )
     if not decisions:
-        return
+        return ()
     owner_id = plan.package_owner_id
     if owner_id is None:
         typer.secho(
@@ -1469,12 +1549,31 @@ def _publish_package_adoptions(plan: InstallPlan) -> None:
             err=True,
             fg=typer.colors.YELLOW,
         )
-        return
+        return ()
     store = OwnershipStore()
     receipts = ReceiptStore(default_receipt_root())
+    transfers: list[transitions.OwnershipTransferDelta] = []
     for decision in decisions:
         if store.read(decision.resource_id) != decision.claim:
             raise SetforgeError("package ownership changed after confirmation; retry")
+        if decision.action is PackageAction.TRANSFER:
+            if decision.claim is None:
+                raise SetforgeError("package transfer lost its current claim")
+            after = store.transfer_locked(
+                decision.resource_id,
+                expected_owner=decision.claim.owner_id,
+                new_owner=owner_id,
+                expected_generation=decision.claim.generation,
+                declaration_refs=(
+                    f"packages.{decision.item.type}.{decision.item.identity.key}",
+                ),
+            )
+            transfers.append(transitions.OwnershipTransferDelta(decision.claim, after))
+            typer.echo(
+                f"transferred package ownership: {decision.item.identity.display} "
+                "(no package bytes changed)"
+            )
+            continue
         claimed_decision = decision
         if (
             decision.observation is not None
@@ -1500,19 +1599,20 @@ def _publish_package_adoptions(plan: InstallPlan) -> None:
             f"adopted package ownership: {decision.item.identity.display} "
             "(no package bytes changed)"
         )
+    return tuple(transfers)
 
 
 def _publish_adoptions_checkpoint(
     plan: InstallPlan, journal: operations.OperationJournal
-) -> operations.OperationJournal:
+) -> tuple[operations.OperationJournal, tuple[transitions.OwnershipTransferDelta, ...]]:
     """Journal and publish metadata-only adoption claims."""
     claim_paths = tuple(
         OwnershipStore().claim_path(decision.resource_id)
         for decision in plan.provisioning.ownership
-        if decision.action is PackageAction.ADOPT
+        if decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
     )
     if not claim_paths:
-        return journal
+        return journal, ()
     receipt_paths = _legacy_adoption_receipt_paths(plan)
     applying = operations.begin_checkpoint(
         journal,
@@ -1524,8 +1624,8 @@ def _publish_adoptions_checkpoint(
         restore_transitions=False,
         adapters=(),
     )
-    _publish_package_adoptions(plan)
-    return operations.finish_checkpoint(applying)
+    transfers = _publish_package_adoptions(plan)
+    return operations.finish_checkpoint(applying), transfers
 
 
 def _publish_file_claims(
@@ -1650,14 +1750,14 @@ def _generated_file_provenance(
 
 def _publish_file_adoptions_checkpoint(
     plan: InstallPlan, journal: operations.OperationJournal
-) -> operations.OperationJournal:
+) -> tuple[operations.OperationJournal, tuple[transitions.OwnershipTransferDelta, ...]]:
     claim_paths = tuple(
         OwnershipStore().claim_path(decision.observation.resource_id)
         for decision in plan.file_ownership
-        if decision.action is FileAction.ADOPT
+        if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
     )
     if not claim_paths:
-        return journal
+        return journal, ()
     applying = operations.begin_checkpoint(
         journal,
         name="file-adoption",
@@ -1668,8 +1768,61 @@ def _publish_file_adoptions_checkpoint(
         restore_transitions=False,
         adapters=(),
     )
+    transfers: list[transitions.OwnershipTransferDelta] = []
+    store = OwnershipStore()
+    declarations = {
+        str(path.absolute()): name
+        for tracked, name, _source, destination in plan.tracked_entries
+        for path in _ownership_destinations(tracked, destination)
+    }
+    declarations.update(
+        {str(tree.destination.absolute()): tree.name for tree in plan.trees}
+    )
+    trees_by_locator = {str(tree.destination.absolute()): tree for tree in plan.trees}
+    for decision in plan.file_ownership:
+        if decision.action is not FileAction.TRANSFER:
+            continue
+        before = decision.claim
+        if before is None or store.read(decision.observation.resource_id) != before:
+            raise SetforgeError(
+                "tracked file ownership changed after confirmation; retry"
+            )
+        tree = trees_by_locator.get(decision.observation.locator)
+        if tree is None:
+            observed = observe_file(
+                Path(decision.observation.locator),
+                allow_topology=decision.observation.topology,
+            )
+        else:
+            assert tree.tracked_file.tree is not None
+            live_policy = tree.tracked_file.tree.model_copy(
+                update={"symlinks": TreeSymlinkPolicy.PRESERVE}
+            )
+            live_inventory = scan_tree(tree.destination, live_policy).inventory
+            observed = observe_tree(tree.destination, live_inventory.fingerprint)
+        if observed != decision.observation:
+            raise SetforgeError(
+                "tracked file changed after transfer confirmation; retry"
+            )
+        owner_id = plan.package_owner_id
+        if owner_id is None:
+            raise SetforgeError("ownership transfer requires a Git-backed config")
+        after = store.transfer_locked(
+            before.resource_id,
+            expected_owner=before.owner_id,
+            new_owner=owner_id,
+            expected_generation=before.generation,
+            declaration_refs=(
+                f"tracked_files.{declarations[decision.observation.locator]}",
+            ),
+        )
+        transfers.append(transitions.OwnershipTransferDelta(before, after))
+        typer.echo(
+            f"transferred tracked file ownership: {decision.observation.locator} "
+            "(no file bytes changed)"
+        )
     _publish_file_claims(plan, actions=frozenset({FileAction.ADOPT}))
-    return operations.finish_checkpoint(applying)
+    return operations.finish_checkpoint(applying), tuple(transfers)
 
 
 def _refresh_file_claims_checkpoint(
@@ -1748,7 +1901,11 @@ def _legacy_adoption_receipt_paths(plan: InstallPlan) -> tuple[Path, ...]:
 
 
 def _preview_package_ownership(
-    config: Path, profile: str, *, locked: bool
+    config: Path,
+    profile: str,
+    *,
+    locked: bool,
+    owner_id_override: UUID | None = None,
 ) -> tuple[PackageDecision, ...]:
     """Build the consent surface without holding mutation locks."""
     cfg = load_config(config)
@@ -1762,10 +1919,12 @@ def _preview_package_ownership(
     if not direct_items and not bundle_items:
         return ()
     active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
-    try:
-        owner_id = read_owner_id(config.parent)
-    except OwnershipError:
-        owner_id = None
+    owner_id = owner_id_override
+    if owner_id is None:
+        try:
+            owner_id = read_owner_id(config.parent)
+        except OwnershipError:
+            owner_id = None
     return plan_provisioning(
         cfg,
         resolved,
@@ -1937,24 +2096,48 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _render_install_plan(plan, scan_result)
         return
 
+    install_source = resolve_source_for_git_check(repo_root)
+    with mutation_locks(resources=True):
+        _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
+        run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
     ownership_config = config.read_bytes()
     ownership_preview = _preview_package_ownership(config, profile, locked=locked)
     file_ownership_preview = _preview_file_ownership(config, profile)
     tree_target_preview = _preview_tree_targets(config, profile)
     if config.read_bytes() != ownership_config:
         raise SetforgeError("install configuration changed while loading; retry")
-    _confirm_package_adoptions(ownership_preview, yes=yes)
-    if (repo_root / ".git").exists():
-        _confirm_file_adoptions(file_ownership_preview, yes=yes)
     package_owner_id = _prepare_package_owner_id(
         repo_root,
         ownership_preview,
         required=bool(file_ownership_preview),
     )
+    _confirm_package_adoptions(
+        ownership_preview, yes=yes, receiver_owner=package_owner_id
+    )
+    if (repo_root / ".git").exists():
+        _confirm_file_adoptions(
+            file_ownership_preview, yes=yes, receiver_owner=package_owner_id
+        )
+    has_transfer = any(
+        decision.action is PackageAction.TRANSFER for decision in ownership_preview
+    ) or any(
+        decision.action is FileAction.TRANSFER for decision in file_ownership_preview
+    )
+    if has_transfer and package_owner_id is None:
+        raise SetforgeError("ownership transfer requires a Git-backed config")
+    if has_transfer and no_transition:
+        raise SetforgeError(
+            "ownership transfer requires transition recording; remove --no-transition"
+        )
 
     with (
         mutation_locks(
             resources=True,
+            config_identity_dir=(
+                resolve_owner_common_dir(repo_root)
+                if package_owner_id is not None
+                else None
+            ),
             config_dir=config.parent,
             target_roots=tree_target_preview,
             profile=profile,
@@ -1962,9 +2145,13 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         operations.recover_on_error(profile, "install"),
     ):
         operations.refuse_active(profile)
-        install_source = resolve_source_for_git_check(repo_root)
-        _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
-        run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
+        if config.read_bytes() != ownership_config:
+            raise SetforgeError(
+                "install configuration changed after confirmation; retry"
+            )
+        identity_guard = (
+            mutation_guards.config_identity if mutation_guards is not None else None
+        )
         ctx, active_lock, local_overlay, input_baseline = _load_install_context(
             config, profile, repo_root, locked=locked
         )
@@ -2020,7 +2207,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 "package ownership inputs changed after confirmation; retry"
             )
         if plan.file_ownership != file_ownership_preview:
-            confirmation_actions = {FileAction.ADOPT, FileAction.HOLD}
+            confirmation_actions = {
+                FileAction.ADOPT,
+                FileAction.TRANSFER,
+                FileAction.HOLD,
+            }
             if any(
                 decision.action in confirmation_actions
                 for decision in (*file_ownership_preview, *plan.file_ownership)
@@ -2091,7 +2282,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             OwnershipStore().claim_path(decision.resource_id)
             for decision in plan.provisioning.ownership
             if decision.action
-            in {PackageAction.ADOPT, PackageAction.INSTALL, PackageAction.UPGRADE}
+            in {
+                PackageAction.ADOPT,
+                PackageAction.TRANSFER,
+                PackageAction.INSTALL,
+                PackageAction.UPGRADE,
+            }
         )
         file_ownership_paths = tuple(
             OwnershipStore().claim_path(decision.observation.resource_id)
@@ -2099,6 +2295,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             if decision.action
             in {
                 FileAction.ADOPT,
+                FileAction.TRANSFER,
                 FileAction.INSTALL,
                 FileAction.MANAGE,
                 FileAction.REVIEW,
@@ -2154,6 +2351,18 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         }
         adapter_snapshots = _install_adapter_snapshots(plan)
         adapter_kinds = {item.kind for item in adapter_snapshots}
+        if package_owner_id is not None:
+            if identity_guard is None:
+                raise SetforgeError("config owner identity lock was not acquired")
+            if (
+                load_or_create_owner_id_locked(
+                    repo_root, identity_guard.directory_fd, package_owner_id
+                )
+                != package_owner_id
+            ):
+                raise SetforgeError(
+                    "config owner identity changed after confirmation; retry"
+                )
         journal = operations.prepare(
             command="install",
             profile=profile,
@@ -2170,21 +2379,34 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             bootstrap=plan.bootstrap,
             checkpoint_paths=secrets_checkpoint_paths,
         )
-        journal = _publish_adoptions_checkpoint(plan, journal)
-        journal = _publish_file_adoptions_checkpoint(plan, journal)
+        journal, package_transfers = _publish_adoptions_checkpoint(plan, journal)
+        journal, file_transfers = _publish_file_adoptions_checkpoint(plan, journal)
+        ownership_transfers = (*package_transfers, *file_transfers)
 
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
         # path itself: GNU patch refuses to patch a symlink as a regular
         # file, so a transition recording the link path would brick revert.
-        dst_paths = [*plan.dst_paths, *plan.ownership_pre]
+        transfer_claim_paths = {
+            OwnershipStore().claim_path(transfer.after.resource_id)
+            for transfer in ownership_transfers
+        }
+        transition_ownership_pre = {
+            path: payload
+            for path, payload in plan.ownership_pre.items()
+            if path not in transfer_claim_paths
+        }
+        dst_paths = [*plan.dst_paths, *transition_ownership_pre]
         # Store files (byte bases, spans sidecars, scalar-base manifests) do
         # NOT ride this patch snapshot: their pre-install state is captured
         # at the pass-2 barrier (state_snapshots below) and revert restores
         # them through that mechanism — recording them here too would
         # double-restore (Invariant I5 now lives in the snapshot path).
 
-        file_pre = {**plan.file_pre, **plan.ownership_pre}
+        # Transfer claims have an exact, generation-checked sidecar inverse.
+        # Keeping those same claim files in changes.patch would reverse them
+        # once as text and then attempt the ownership CAS a second time.
+        file_pre = {**plan.file_pre, **transition_ownership_pre}
 
         capability_result = _apply_capability_targets(
             plan,
@@ -2260,6 +2482,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 for entry in state_pre
             ),
             filesystem_deltas=tree_filesystem_deltas,
+            ownership_transfers=ownership_transfers,
         ):
             journal = operations.begin_checkpoint(
                 journal,
@@ -2284,6 +2507,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 mcp_delta=mcp_delta,
                 file_modes=deploy_outcome.prior_modes,
                 filesystem_deltas=tree_filesystem_deltas,
+                ownership_transfers=ownership_transfers,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")

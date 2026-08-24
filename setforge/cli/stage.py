@@ -55,8 +55,11 @@ from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipError,
     OwnershipStore,
+    ResourceId,
     load_or_create_owner_id,
     read_owner_id,
+    read_owner_id_locked,
+    resolve_owner_common_dir,
 )
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import index_model
@@ -423,6 +426,7 @@ def _apply_structured(
     result: StructuredWalkResult,
     *,
     config_dir: Path | None = None,
+    config_path: Path | None = None,
     owner_id: UUID | None = None,
 ) -> None:
     """Persist a structured walk's classifications + drafts under ONE profile lock.
@@ -432,16 +436,35 @@ def _apply_structured(
     whole record here (and, once adopt-locally lands, its live write too) —
     mirroring :func:`_apply` so a concurrent install/sync cannot interleave.
     """
+    identity_dir = (
+        resolve_owner_common_dir(config_dir)
+        if owner_id is not None and config_dir is not None
+        else None
+    )
     with (
         operations.recover_on_error(profile, "stage"),
         mutation_locks(
             resources=owner_id is not None,
+            config_identity_dir=identity_dir,
             config_dir=config_dir,
             target_roots=(stage.dst.parent,),
             profile=profile,
-        ),
+        ) as mutation_guards,
     ):
         operations.refuse_active(profile)
+        if owner_id is not None and config_dir is not None:
+            identity_guard = (
+                mutation_guards.config_identity if mutation_guards is not None else None
+            )
+            if identity_guard is None:
+                raise InvariantViolation("config owner identity lock was not acquired")
+            if (
+                read_owner_id_locked(config_dir, identity_guard.directory_fd)
+                != owner_id
+            ):
+                raise InvariantViolation(
+                    "config owner identity changed after confirmation; retry stage"
+                )
         locked_live = stage.dst.read_bytes()
         plan = _prepare_structured_persist(
             profile, stage, result, locked_live, observed_live=locked_live
@@ -455,6 +478,7 @@ def _apply_structured(
                 plan,
                 owner_id=owner_id,
                 config_dir=config_dir,
+                config_path=config_path,
                 refresh_claim=(
                     stage.ownership is not None
                     and stage.ownership.action is FileAction.ADOPT
@@ -836,6 +860,7 @@ def _apply(
     result: WalkResult,
     *,
     config_dir: Path | None = None,
+    config_path: Path | None = None,
     owner_id: UUID | None = None,
 ) -> None:
     """Apply the walk under ONE profile lock: rewrite live for any Adopt (atomic,
@@ -846,16 +871,43 @@ def _apply(
     concurrent install/sync cannot land between the write and the record and leave
     a live tree whose bytes no longer match the classifications persisted here.
     """
+    if (
+        stage.ownership is not None
+        and stage.ownership.action is FileAction.TRANSFER
+        and result.adopt_refs
+    ):
+        raise InvariantViolation(
+            "transfer ownership before adopting live content; no changes applied"
+        )
+    identity_dir = (
+        resolve_owner_common_dir(config_dir)
+        if owner_id is not None and config_dir is not None
+        else None
+    )
     with (
         operations.recover_on_error(profile, "stage"),
         mutation_locks(
             resources=owner_id is not None,
+            config_identity_dir=identity_dir,
             config_dir=config_dir,
             target_roots=(stage.dst.parent,),
             profile=profile,
-        ),
+        ) as mutation_guards,
     ):
         operations.refuse_active(profile)
+        if owner_id is not None and config_dir is not None:
+            identity_guard = (
+                mutation_guards.config_identity if mutation_guards is not None else None
+            )
+            if identity_guard is None:
+                raise InvariantViolation("config owner identity lock was not acquired")
+            if (
+                read_owner_id_locked(config_dir, identity_guard.directory_fd)
+                != owner_id
+            ):
+                raise InvariantViolation(
+                    "config owner identity changed after confirmation; retry stage"
+                )
         locked_live = stage.dst.read_bytes()
         if result.adopt_refs and locked_live != stage.live:
             raise InvariantViolation(
@@ -878,6 +930,7 @@ def _apply(
                 plan,
                 owner_id=owner_id,
                 config_dir=config_dir,
+                config_path=config_path,
                 refresh_claim=(
                     stage.ownership is not None
                     and stage.ownership.action is FileAction.ADOPT
@@ -902,6 +955,42 @@ def _store_snapshots(
     )
 
 
+def _validate_stage_transfer_declaration(
+    config_path: Path | None,
+    profile: str,
+    stage: FileStage | StructuredFileStage,
+) -> None:
+    """Prove the locked config still declares this exact staged resource."""
+    if config_path is None:
+        return  # Private unit seams may apply a fully constructed stage directly.
+    cfg = load_config(config_path)
+    repo_root = config_path.resolve().parent
+    resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    declared: set[tuple[str, ResourceId]] = set()
+    for name in resolved.tracked_files:
+        tracked = cfg.tracked_files[name]
+        source = resolve_src(tracked, repo_root)
+        destination = resolve_dst(tracked)
+        declared.update(
+            (sub_name, observe_file(sub_dst).resource_id)
+            for sub_name, _sub_src, sub_dst in expand_tracked_file(
+                name, source, destination
+            )
+        )
+    expected = stage.ownership
+    if (
+        expected is None
+        or (
+            stage.sub_name,
+            expected.observation.resource_id,
+        )
+        not in declared
+    ):
+        raise InvariantViolation(
+            f"tracked file declaration for {stage.sub_name!r} changed; run stage again"
+        )
+
+
 def _commit_owned_persist(
     profile: str,
     stage: FileStage | StructuredFileStage,
@@ -909,6 +998,7 @@ def _commit_owned_persist(
     *,
     owner_id: UUID,
     config_dir: Path | None,
+    config_path: Path | None = None,
     refresh_claim: bool = True,
     live_payload: bytes | None = None,
 ) -> None:
@@ -916,6 +1006,8 @@ def _commit_owned_persist(
     expected = stage.ownership
     if expected is None or expected.action is FileAction.HOLD:
         raise InvariantViolation("stage ownership decision was not usable")
+    if expected.action is FileAction.TRANSFER:
+        _validate_stage_transfer_declaration(config_path, profile, stage)
     observed = observe_file(stage.dst)
     store = OwnershipStore()
     current = store.read(observed.resource_id)
@@ -954,19 +1046,52 @@ def _commit_owned_persist(
         atomicio.atomic_write_bytes(stage.dst, live_payload, mode=mode)
         observed = observe_file(stage.dst)
         locked = decide_file(observed, current, owner_id=owner_id)
-    publish_file_claim_locked(
-        store,
-        locked,
-        owner_id=owner_id,
-        declaration_ref=f"tracked_files.{stage.sub_name}",
-        acquisition=(
-            "adopted-external"
-            if expected.action is FileAction.ADOPT
-            else "observed-local"
-        ),
-    )
+    transfer: transitions.OwnershipTransferDelta | None = None
+    if expected.action is FileAction.TRANSFER:
+        before = expected.claim
+        if before is None:
+            raise InvariantViolation("stage transfer lost its current claim")
+        after = store.transfer_locked(
+            before.resource_id,
+            expected_owner=before.owner_id,
+            new_owner=owner_id,
+            expected_generation=before.generation,
+            declaration_refs=(f"tracked_files.{stage.sub_name}",),
+        )
+        transfer = transitions.OwnershipTransferDelta(before, after)
+    else:
+        publish_file_claim_locked(
+            store,
+            locked,
+            owner_id=owner_id,
+            declaration_ref=f"tracked_files.{stage.sub_name}",
+            acquisition=(
+                "adopted-external"
+                if expected.action is FileAction.ADOPT
+                else "observed-local"
+            ),
+        )
     _commit_persist(profile, stage.fid, stage.base, plan)
     journal = operations.finish_checkpoint(journal)
+    if transfer is not None:
+        journal = operations.begin_checkpoint(
+            journal,
+            name="transition-record",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="remove the ownership-transfer transition",
+            paths=(),
+            restore_state=False,
+            restore_transitions=True,
+            adapters=(),
+        )
+        transitions.write_transition(
+            transitions.make_meta(transitions.TransitionCommand.STAGE, profile),
+            {},
+            {},
+            None,
+            ownership_transfers=(transfer,),
+        )
+        journal = operations.finish_checkpoint(journal)
     operations.complete(journal)
 
 
@@ -1196,6 +1321,7 @@ def stage(
             stage_item,
             result,
             config_dir=repo_root,
+            config_path=config,
             owner_id=owner_id,
         )
         tally = counts(result.hunks)
@@ -1219,6 +1345,7 @@ def stage(
             struct_item,
             sresult,
             config_dir=repo_root,
+            config_path=config,
             owner_id=owner_id,
         )
         stally = _struct_counts(sresult.units)
@@ -1241,6 +1368,28 @@ def _confirm_file_ownership(
         raise InvariantViolation("stage did not collect a file ownership decision")
     if decision.action is FileAction.HOLD:
         raise InvariantViolation(f"cannot stage {stage.sub_name!r}: {decision.detail}")
+    if decision.action is FileAction.TRANSFER:
+        if decision.claim is None:
+            raise InvariantViolation("file ownership transfer lost its source claim")
+        try:
+            receiver_owner = read_owner_id(repo_root)
+        except OwnershipError as exc:
+            raise InvariantViolation(
+                "file ownership transfer requires a Git-backed config identity"
+            ) from exc
+        typer.echo(
+            "file ownership transfer: "
+            f"{decision.observation.resource_id.canonical()} "
+            f"{decision.claim.owner_id} -> {receiver_owner} "
+            f"({decision.observation.locator})"
+        )
+        if not typer.confirm(
+            "Transfer this exact claim without changing its bytes?", default=False
+        ):
+            raise InvariantViolation(
+                "file ownership transfer declined; no changes applied"
+            )
+        return receiver_owner
     if decision.action is FileAction.ADOPT and not typer.confirm(
         f"Manage existing tracked file {stage.sub_name!r} without changing its bytes?",
         default=False,
