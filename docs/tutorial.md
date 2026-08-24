@@ -873,6 +873,23 @@ id                                       type     age      files  plugins  ext
 $ setforge transitions show <id>        # full audit-detail panel
 ```
 
+**Ownership** — inspect or explicitly hand off management authority without
+removing the underlying file or package:
+
+```console
+$ setforge ownership list
+$ setforge ownership release <claim-id> --config=setforge.yaml --yes
+$ setforge ownership history --config=setforge.yaml
+$ setforge ownership revert <transition-id> --config=setforge.yaml --yes
+```
+
+Release preserves resource bytes and records an owner-scoped tombstone. A
+normal clone cannot see another clone's release history, while linked
+worktrees can. Reverting a release restores authority only if the current
+declaration, resource identity, and live fingerprint still match. Inspect an
+interrupted publication with `setforge ownership recover --config=setforge.yaml`
+and complete unambiguous work by adding `--apply --yes`.
+
 **Config** — granular CRUD over `setforge.yaml` / `local.yaml`:
 
 ```console
@@ -905,9 +922,10 @@ $ setforge completion install zsh    # install shell completion (or bash / fish)
 - `--version` — print the version and exit.
 
 The structured read-only set is `compare`, `status`, `inspect`, `profile show`,
-`transitions list`, `stage --list`, and `config show --effective`. Other
-commands reject `--quiet` and `--format=json` before doing work, and the two
-non-default modes cannot be combined.
+`transitions list`, `ownership list`, `ownership history`, `stage --list`, and
+`config show --effective`. Other commands reject `--quiet` and
+`--format=json` before doing work, and the two non-default modes cannot be
+combined.
 
 ---
 

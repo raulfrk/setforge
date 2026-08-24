@@ -41,6 +41,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
 
 EXPECTED_SUBGROUPS: tuple[str, ...] = (
     "transitions",
+    "ownership",
     "ext",
     "plugin",
     "marketplace",

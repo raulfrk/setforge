@@ -34,6 +34,8 @@ _SUPPORTED_OUTPUT_PATHS: frozenset[tuple[str, ...]] = frozenset(
         ("compare",),
         ("config", "show"),
         ("inspect",),
+        ("ownership", "history"),
+        ("ownership", "list"),
         ("profile", "show"),
         ("stage",),
         ("status",),
@@ -288,7 +290,8 @@ def _root(
         "--format",
         "-o",
         help="Output for compare, status, inspect, profile show, transitions list, "
-        "stage --list, and config show --effective: 'human' or versioned 'json'.",
+        "ownership list/history, stage --list, and config show --effective: "
+        "'human' or versioned 'json'.",
     ),
     version: bool = typer.Option(
         False,
@@ -381,6 +384,7 @@ from setforge.cli import cleanup as _cleanup  # noqa: E402, F401
 from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
 from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
 from setforge.cli import recover as _recover  # noqa: E402, F401
+from setforge.cli import ownership as _ownership  # noqa: E402, F401
 from setforge.cli import ext as _ext  # noqa: E402, F401
 from setforge.cli import plugins as _plugins  # noqa: E402, F401 (plugin + marketplace subgroups)
 from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + fetch)

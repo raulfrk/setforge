@@ -47,7 +47,11 @@ __all__ = [
     "ResourceScope",
     "ScopeKind",
     "load_or_create_owner_id",
+    "ownership_claim_from_json",
+    "ownership_claim_to_json",
     "read_owner_id",
+    "read_owner_id_locked",
+    "resolve_owner_common_dir",
     "scan_legacy_receipts",
     "scan_legacy_reconcile",
 ]
@@ -55,7 +59,10 @@ __all__ = [
 _SCHEMA = "1.0"
 _FILE_MODE = 0o600
 _OWNER_ID_RELATIVE = Path("setforge") / "owner-id"
-_CLAIM_ACTIONS = frozenset({"claim", "move", "refresh", "release", "transfer"})
+_CLAIM_ACTIONS = frozenset(
+    {"claim", "move", "refresh", "release", "revert", "transfer"}
+)
+_CLAIM_ID_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class ScopeKind(StrEnum):
@@ -401,6 +408,19 @@ class OwnershipStore:
         """Return the deterministic ledger path for journal snapshots."""
         return self._claim_path(resource_id)
 
+    def claim_id(self, resource_id: ResourceId) -> str:
+        """Return the full canonical public identifier for one resource claim."""
+        return self._claim_path(resource_id).stem
+
+    def read_claim_id(self, claim_id: str) -> OwnershipClaim | None:
+        """Resolve one exact full claim ID without accepting prefixes or aliases."""
+        if _CLAIM_ID_RE.fullmatch(claim_id) is None:
+            raise OwnershipError(
+                "ownership claim ID must be exactly 64 lowercase hexadecimal characters"
+            )
+        self._refuse_unresolved_intents()
+        return self._read_path(self.claims_root / f"{claim_id}.json")
+
     def list_claims(self) -> tuple[OwnershipClaim, ...]:
         """Return every validated claim in canonical identity order."""
         self._refuse_unresolved_intents()
@@ -568,6 +588,41 @@ class OwnershipStore:
             )
             self._write_claim(released, directory_fd=claims_fd)
             return released
+
+    def restore_locked(self, expected_claim: OwnershipClaim) -> OwnershipClaim:
+        """Restore authority to one exact current tombstone.
+
+        The tombstone itself supplies every retained declaration, provenance,
+        locator, and fingerprint field. Callers must independently validate
+        those retained facts against the current declaration and live resource
+        before invoking this authority-granting primitive.
+        """
+        require_resources_lock()
+        if expected_claim.lifecycle is not ClaimLifecycle.RELEASED:
+            raise OwnershipError("ownership restore requires a released claim")
+        with _open_dir_chain(self.claims_root, create=False) as claims_fd:
+            if claims_fd is None:
+                raise OwnershipError("ownership claim not found; retry from discovery")
+            current = self._require_claim(
+                expected_claim.resource_id, directory_fd=claims_fd
+            )
+            if current != expected_claim:
+                raise OwnershipError(
+                    "released ownership claim changed before restore; retry"
+                )
+            generation = current.generation + 1
+            restored = replace(
+                current,
+                authority=Authority.MANAGE,
+                lifecycle=ClaimLifecycle.CLAIMED,
+                generation=generation,
+                history=(
+                    *current.history,
+                    ClaimEvent("revert", current.owner_id, generation),
+                ),
+            )
+            self._write_claim(restored, directory_fd=claims_fd)
+            return restored
 
     def move_locked(
         self,
@@ -1001,13 +1056,28 @@ def load_or_create_owner_id(config_dir: Path) -> uuid.UUID:
 def read_owner_id(config_dir: Path) -> uuid.UUID:
     """Read an existing checkout UUID without creating one."""
     with _locked_common_dir(config_dir) as common_fd:
+        return read_owner_id_locked(config_dir, common_fd)
+
+
+def resolve_owner_common_dir(config_dir: Path) -> Path:
+    """Resolve the verified Git common directory used for owner locking."""
+    return _git_common_dir(config_dir)
+
+
+def read_owner_id_locked(config_dir: Path, common_fd: int) -> uuid.UUID:
+    """Read an existing owner through its already-held common-dir lock."""
+    _require_common_dir_binding(config_dir, common_fd)
+    try:
         owner_dir_fd = _open_child_dir_at(
             common_fd, _OWNER_ID_RELATIVE.parent.name, create=False
         )
         try:
-            return _parse_owner_id_at(owner_dir_fd, _OWNER_ID_RELATIVE.name)
+            owner_id = _parse_owner_id_at(owner_dir_fd, _OWNER_ID_RELATIVE.name)
         finally:
             os.close(owner_dir_fd)
+    finally:
+        _require_common_dir_binding(config_dir, common_fd)
+    return owner_id
 
 
 @contextmanager
@@ -1316,7 +1386,8 @@ def _atomic_write_at(directory_fd: int, name: str, payload: bytes) -> None:
             os.unlink(temporary, dir_fd=directory_fd)
 
 
-def _claim_to_json(claim: OwnershipClaim) -> dict[str, object]:
+def ownership_claim_to_json(claim: OwnershipClaim) -> dict[str, object]:
+    """Return the versioned additive wire representation of one claim."""
     return {
         "authority": claim.authority.value,
         "declaration_refs": list(claim.declaration_refs),
@@ -1341,7 +1412,8 @@ def _claim_to_json(claim: OwnershipClaim) -> dict[str, object]:
     }
 
 
-def _claim_from_json(raw: Mapping[str, object]) -> OwnershipClaim:
+def ownership_claim_from_json(raw: Mapping[str, object]) -> OwnershipClaim:
+    """Validate and decode one versioned ownership claim mapping."""
     _require_exact_keys(
         raw,
         {
@@ -1388,6 +1460,10 @@ def _claim_from_json(raw: Mapping[str, object]) -> OwnershipClaim:
         generation=_require_int(raw, "generation"),
         history=tuple(_claim_event_from_json(value) for value in history_raw),
     )
+
+
+_claim_to_json = ownership_claim_to_json
+_claim_from_json = ownership_claim_from_json
 
 
 def _resource_scope_from_json(raw: Mapping[str, object]) -> ResourceScope:

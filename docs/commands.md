@@ -23,9 +23,10 @@ Apply to every command (`setforge [OPTIONS] COMMAND`):
 - `--version` — print the installed version and exit.
 
 Structured output is supported by `compare`, `status`, `inspect`, `profile
-show`, `transitions list`, `stage --list`, and `config show --effective`.
-Every other command rejects `--quiet` and `--format=json` before doing work.
-`--quiet` and `--format=json` are mutually exclusive.
+show`, `transitions list`, `ownership list`, `ownership history`, `stage
+--list`, and `config show --effective`. Every other command rejects `--quiet`
+and `--format=json` before doing work. `--quiet` and `--format=json` are
+mutually exclusive.
 
 ## Daily workflow
 
@@ -73,6 +74,7 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `stage` | Classify and stage selected plain-file changes. |
 | `inspect` | Inspect reconcile base/live/merge state. |
 | `transitions` | Inspect transition history. |
+| `ownership` | Inspect claims and explicitly release, reverse, or recover authority. |
 | `ext` | Manage VSCode extension package declarations. |
 | `plugin` | Manage Claude or Codex plugin declarations (`--product`). |
 | `marketplace` | Manage Claude or Codex marketplaces (`--product`). |
@@ -84,7 +86,7 @@ This table is intentionally complete and is checked against `setforge --help`.
 
 ## Subcommand groups
 
-setforge ships eight subcommand groups for narrow inspections and edits. Run
+setforge ships nine subcommand groups for narrow inspections and edits. Run
 `setforge <group> --help` for each:
 
 | Group | Subcommands | Purpose |
@@ -93,10 +95,36 @@ setforge ships eight subcommand groups for narrow inspections and edits. Run
 | `marketplace` | `add`, `remove`, `update` | Claude marketplaces by default; pass `--product codex` for Codex sources. |
 | `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extension packages selected by a profile. |
 | `transitions` | `list`, `show` | Inspect install/sync/revert history. |
+| `ownership` | `list`, `release`, `history`, `revert`, `recover` | Inspect durable claims and explicitly change their authority without changing resource bytes. |
 | `profile` | `list`, `show` | Inspect profile definitions and resolved overlays. |
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
+
+### Ownership authority
+
+`ownership list` is global and read-only: it does not load a config file or
+create a checkout identity. Claim IDs are full 64-character lowercase hashes.
+Release and owner history resolve `--config` normally, then read the existing
+Git checkout owner ID; they never create one.
+
+```console
+$ setforge ownership list
+$ setforge ownership release <claim-id> --config=setforge.yaml --yes
+$ setforge ownership history --config=setforge.yaml
+$ setforge ownership history <transition-id> --config=setforge.yaml
+$ setforge ownership revert <transition-id> --config=setforge.yaml --yes
+$ setforge ownership recover --config=setforge.yaml
+$ setforge ownership recover --config=setforge.yaml --apply --yes
+```
+
+Release removes SetForge's management authority while retaining the live
+resource, its tombstone, provenance, and immutable owner-scoped history. A
+normal clone has a different owner namespace; linked Git worktrees share one.
+Revert succeeds only while the recorded post-state is still current and, when
+it would restore authority, the current declaration, resource identity, and
+live fingerprint still match. Interrupted publication remains visible through
+`ownership recover`; `--apply` completes only unambiguous pending work.
 
 <a id="codex-lifecycle"></a>
 ## Codex lifecycle

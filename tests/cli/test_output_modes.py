@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from click import Command, Group
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -445,13 +444,14 @@ def test_quiet_json_mutex_exits_2(runner: CliRunner) -> None:
     assert "mutually exclusive" in result.stderr
 
 
-def _leaf_paths(command: Command, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+def _leaf_paths(command: Any, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
     """Return every registered leaf path below a Click command tree."""
-    if not isinstance(command, Group):
+    commands = getattr(command, "commands", None)
+    if not isinstance(commands, dict):
         return {prefix}
     return {
         path
-        for name, child in command.commands.items()
+        for name, child in commands.items()
         for path in _leaf_paths(child, (*prefix, name))
     }
 
@@ -462,6 +462,8 @@ _EXPECTED_SUPPORTED_OUTPUT_PATHS = frozenset(
         ("compare",),
         ("config", "show"),
         ("inspect",),
+        ("ownership", "history"),
+        ("ownership", "list"),
         ("profile", "show"),
         ("stage",),
         ("status",),

@@ -82,6 +82,14 @@ def require_resources_lock() -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigIdentityGuard:
+    """Verified Git common-directory descriptor held through publication."""
+
+    common_dir: Path
+    directory_fd: int
+
+
+@dataclass(frozen=True, slots=True)
 class TargetLockRequest:
     """One target root whose parent must already exist."""
 
@@ -329,6 +337,7 @@ class MutationLockGuards:
     """Descriptor-bound guards returned by canonical mutation lock composition."""
 
     targets: tuple[TargetLockGuard, ...] = ()
+    config_identity: ConfigIdentityGuard | None = None
 
     def verify_targets(self) -> None:
         """Revalidate every target immediately before coupled publication."""
@@ -527,6 +536,7 @@ def _acquire_fd(fd: object, *, timeout: float | None, timeout_message: str) -> N
 def mutation_locks(
     *,
     resources: bool = False,
+    config_identity_dir: Path | None = None,
     config_dir: Path | None = None,
     config_dirs: tuple[Path, ...] = (),
     target_roots: tuple[Path, ...] = (),
@@ -537,16 +547,27 @@ def mutation_locks(
 ) -> Iterator[MutationLockGuards]:
     """Acquire requested mutation locks in canonical rank order.
 
-    The order is global mutation gate, user-global resources, canonical config
-    repository, then profile state. Callers declare scopes instead of spelling
-    nested context managers, making the ordering contract structural and
-    reviewable. The gate also closes the pre-journal-publication race for
-    migrations that later acquire several concrete profile locks.
+    The order is global mutation gate, user-global resources, optional verified
+    Git common-directory identity, canonical config repository, target roots,
+    then profile state. Callers declare scopes instead of spelling nested
+    context managers, making the ordering contract structural and reviewable.
+    The gate also closes the pre-journal-publication race for migrations that
+    later acquire several concrete profile locks.
     """
     with ExitStack() as stack:
         stack.enter_context(_mutation_gate_lock(timeout=timeout))
         if resources:
             stack.enter_context(install_resources_lock(timeout=timeout))
+        identity_guard = None
+        if config_identity_dir is not None:
+            resolved_identity_dir = config_identity_dir.resolve(strict=True)
+            identity_fd = stack.enter_context(
+                config_identity_lock(resolved_identity_dir, timeout=timeout)
+            )
+            identity_guard = ConfigIdentityGuard(
+                resolved_identity_dir,
+                identity_fd,
+            )
         requested_config_dirs = tuple(
             sorted(
                 {
@@ -588,4 +609,4 @@ def mutation_locks(
                 profile=None,
                 allow_operation_id=allow_operation_id,
             )
-        yield MutationLockGuards(target_guards)
+        yield MutationLockGuards(target_guards, identity_guard)

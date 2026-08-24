@@ -47,6 +47,7 @@ TOP_LEVEL_COMMANDS = frozenset(
         "stage",
         "inspect",
         "transitions",
+        "ownership",
         "ext",
         "plugin",
         "marketplace",

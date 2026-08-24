@@ -163,11 +163,11 @@ Beyond the daily commands above, setforge's full surface groups as:
 
 - **Lifecycle:** install · compare · capture · sync · revert · status · validate
 - **Config and packages:** init · fetch · migrate · upgrade · lock
-- **Inspection and recovery:** stage · inspect · recover · transitions · profile
+- **Inspection and recovery:** stage · inspect · recover · transitions · ownership · profile
 - **Cleanup:** cleanup (provisioning receipts) · cleanup-orphans (tracked-file
   transition history or an explicit bounded scan)
-- **Subcommand groups:** ext · plugin · marketplace · transitions · profile ·
-  snapshot · completion · config
+- **Subcommand groups:** ext · plugin · marketplace · transitions · ownership ·
+  profile · snapshot · completion · config
 
 New to setforge, or want to see what the main commands' output looks like? The
 **[guided tutorial](docs/tutorial.md)** walks the lifecycle with worked examples
@@ -180,7 +180,7 @@ and terminal mockups. The complete inventory and flags live in
   output mockups: [docs/tutorial.md](docs/tutorial.md).
 - **Configuration & the config repo** — source discovery, the `setforge.yaml`
   schema, per-host preservation: [docs/configuration.md](docs/configuration.md).
-- **Command reference & subcommand groups** — every command, the eight
+- **Command reference & subcommand groups** — every command, the nine
   subcommand groups, and `--auto=*` confirmation:
   [docs/commands.md](docs/commands.md).
 - **Cutting a release** — CI gates and the tag-push flow:

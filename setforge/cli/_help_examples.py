@@ -138,6 +138,54 @@ Examples:
   setforge transitions show 20260519T120000Z
 """
 
+OWNERSHIP_LIST_EXAMPLES: str = """\
+Examples:
+
+
+  # List every durable ownership claim without loading configuration
+  setforge ownership list
+"""
+
+OWNERSHIP_RELEASE_EXAMPLES: str = """\
+Examples:
+
+
+  # Release one exact claim while preserving the resource itself
+  setforge ownership release <claim-id> --config=setforge.yaml --yes
+"""
+
+OWNERSHIP_HISTORY_EXAMPLES: str = """\
+Examples:
+
+
+  # List this checkout owner's authority transitions
+  setforge ownership history --config=setforge.yaml
+
+
+  # Show one exact transition
+  setforge ownership history <transition-id> --config=setforge.yaml
+"""
+
+OWNERSHIP_REVERT_EXAMPLES: str = """\
+Examples:
+
+
+  # Reverse one exact current ownership transition
+  setforge ownership revert <transition-id> --config=setforge.yaml --yes
+"""
+
+OWNERSHIP_RECOVER_EXAMPLES: str = """\
+Examples:
+
+
+  # Inspect interrupted ownership publication
+  setforge ownership recover --config=setforge.yaml
+
+
+  # Complete an unambiguous interrupted publication
+  setforge ownership recover --config=setforge.yaml --apply --yes
+"""
+
 EXT_LIST_EXAMPLES: str = """\
 Examples:
 
