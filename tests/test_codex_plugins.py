@@ -197,7 +197,18 @@ def test_codex_transition_inverse_dispatches_only_codex(
 
     removed: list[str] = []
     marketplaces_removed: list[str] = []
-    monkeypatch.setattr(codex_plugins, "plugin_remove", removed.append)
+    plugins = {
+        "review@official": codex_plugins.InstalledPlugin(
+            "review@official", "review", "official"
+        )
+    }
+
+    def remove_plugin(plugin_id: str) -> None:
+        removed.append(plugin_id)
+        plugins.pop(plugin_id)
+
+    monkeypatch.setattr(codex_plugins, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(codex_plugins, "plugin_remove", remove_plugin)
     monkeypatch.setattr(codex_plugins, "plugin_install", pytest.fail)
     monkeypatch.setattr(
         codex_plugins,
@@ -287,6 +298,10 @@ def test_replacement_and_prune_reverse_restores_marketplace_before_plugin(
     from setforge.transitions import CodexPluginDelta
 
     calls: list[str] = []
+    plugins = {
+        "new@official": codex_plugins.InstalledPlugin("new@official", "new", "official")
+    }
+    monkeypatch.setattr(codex_plugins, "list_installed", lambda: dict(plugins))
     monkeypatch.setattr(
         codex_plugins,
         "list_marketplaces",
@@ -298,11 +313,12 @@ def test_replacement_and_prune_reverse_restores_marketplace_before_plugin(
             )
         },
     )
-    monkeypatch.setattr(
-        codex_plugins,
-        "plugin_remove",
-        lambda plugin_id: calls.append(f"remove-plugin:{plugin_id}"),
-    )
+
+    def remove_plugin(plugin_id: str) -> None:
+        calls.append(f"remove-plugin:{plugin_id}")
+        plugins.pop(plugin_id)
+
+    monkeypatch.setattr(codex_plugins, "plugin_remove", remove_plugin)
     monkeypatch.setattr(
         codex_plugins,
         "marketplace_remove",
@@ -313,11 +329,13 @@ def test_replacement_and_prune_reverse_restores_marketplace_before_plugin(
         "marketplace_add",
         lambda source: calls.append(f"add-marketplace:{source.path}"),
     )
-    monkeypatch.setattr(
-        codex_plugins,
-        "plugin_install",
-        lambda plugin_id: calls.append(f"install-plugin:{plugin_id}"),
-    )
+
+    def install_plugin(plugin_id: str) -> None:
+        calls.append(f"install-plugin:{plugin_id}")
+        name, _, marketplace = plugin_id.partition("@")
+        plugins[plugin_id] = codex_plugins.InstalledPlugin(plugin_id, name, marketplace)
+
+    monkeypatch.setattr(codex_plugins, "plugin_install", install_plugin)
     _reverse_codex_plugins(
         CodexPluginDelta(
             installed=("new@official",),
