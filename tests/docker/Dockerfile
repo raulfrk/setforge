@@ -83,6 +83,7 @@ RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project
 FROM smoke-deps AS smoke
 
 COPY --chown=tester:tester README.md ./
+COPY --chown=tester:tester .gitignore ./
 COPY --chown=tester:tester setforge/ ./setforge/
 COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
 COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py
@@ -130,6 +131,7 @@ RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project
 FROM full-deps AS full
 
 COPY --chown=tester:tester README.md ./
+COPY --chown=tester:tester .gitignore ./
 COPY --chown=tester:tester setforge/ ./setforge/
 COPY --chown=tester:tester tests/fixtures/e2e/ ./tests/fixtures/e2e/
 COPY --chown=tester:tester tests/docker/_button_bar_demo.py ./tests/docker/_button_bar_demo.py

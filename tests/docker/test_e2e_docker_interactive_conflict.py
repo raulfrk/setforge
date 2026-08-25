@@ -114,7 +114,7 @@ def _seed_conflict_through_file_adoption(
         ],
         timeout=120.0,
     )
-    session.expect_in_display("Manage existing tracked file(s)", timeout=30)
+    session.expect_in_display("Manage or transfer tracked file(s)", timeout=30)
     session.send_keys("y\r")
     session.wait_for_exit(timeout=60, expected_code=0)
     assert c.read_text(_LIVE) == _BASE

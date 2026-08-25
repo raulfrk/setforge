@@ -13,8 +13,8 @@ Two modes:
   changed in the core files, run mutmut ONLY over those files, and keep a
   survivor only when the function it lives in overlaps a changed line. An empty
   core intersection is a fast exit-0 no-op.
-* **``--full``** — the nightly gate. Skip the diff filter entirely and block on
-  every non-allowlisted survivor across the whole core.
+* **``--full``** — the nightly gate. Skip the diff filter and require a mutation
+  score strictly above 80% across the whole core.
 
 The GATE decision is THIS SCRIPT'S OWN exit code (0 clean / 1 blocked / 2
 fail-closed) — never mutmut's raw exit code (``mutmut run`` exits nonzero on
@@ -51,9 +51,9 @@ missing or unresolvable diff base ref is likewise a :class:`GateFailClosed`
 exit 2, never a traceback. This mirrors the 0/1/2 fail-closed convention of the
 sibling gates ``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
 
-Statuses collected as survivors: ``survived``, ``timeout``, ``suspicious``
-(NOT ``survived`` alone — a timeout or suspicious mutant is unkilled too, and
-NOT the aggregate ``export-cicd-stats`` counts, which lose the mutant ids).
+Diff mode treats ``survived``, ``timeout``, and ``suspicious`` as unkilled.
+Full mode follows the project score contract: killed / (killed + survived),
+excluding no-test, timeout, and suspicious outcomes from the denominator.
 
 Allowlist: :data:`ALLOWLIST_PATH` (``tests/mutmut_allowlist.txt``), one mutant
 id per line (``#`` comments allowed). Listed ids are subtracted before the
@@ -72,6 +72,7 @@ import ast
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,6 +95,10 @@ CORE_FILES: tuple[str, ...] = (
 ALLOWLIST_PATH = REPO_ROOT / "tests" / "mutmut_allowlist.txt"
 
 UNKILLED_STATUSES: frozenset[str] = frozenset({"survived", "timeout", "suspicious"})
+KNOWN_STATUSES: frozenset[str] = frozenset(
+    {"killed", "survived", "no tests", "timeout", "suspicious", "not checked"}
+)
+FULL_SCORE_THRESHOLD = 0.80
 
 # --unified=0 gives one hunk per changed region; `+N[,M]` is the new-file start
 # + count (M omitted means 1, M==0 means a pure deletion, no new line).
@@ -104,6 +109,13 @@ _DIFF_NEWFILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 # then an `x_`-prefixed function or an `xǁClassǁmethod` method form.
 _MUTMUT_SUFFIX_RE = re.compile(r"__mutmut_\d+$")
 _METHOD_SEP = "ǁ"  # mutmut's class/method mangling separator
+_CORE_MODULES = tuple(path.removesuffix(".py").replace("/", ".") for path in CORE_FILES)
+_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+_MUTMUT_NAME_RE = re.compile(
+    rf"^(?:{'|'.join(re.escape(module) for module in _CORE_MODULES)})\."
+    rf"(?:x_{_IDENTIFIER}|x{_METHOD_SEP}{_IDENTIFIER}{_METHOD_SEP}{_IDENTIFIER})"
+    r"__mutmut_\d+$"
+)
 
 EXIT_CLEAN = 0  # mirrors check_policy_lints.py / check_schema_gates.py 0/1/2
 EXIT_BLOCKED = 1
@@ -197,20 +209,32 @@ def changed_lines_from_diff(diff_text: str) -> dict[str, set[int]]:
 def _result_lines(results_text: str) -> list[tuple[str, str]]:
     """Every ``    <mutant_name>: <status>`` data line as ``(name, status)``.
 
-    Non-data lines (blanks, banners) yield nothing. This is the total-mutant
-    view — every status, not just the unkilled ones — so callers can tell
-    "0 survivors of N mutants" (a clean pass) from "0 mutants parsed" (a
-    baseline abort that wrote no results)."""
+    Non-data lines (blanks, unindented banners) yield nothing. Indented
+    colon-delimited records must match the pinned mutmut mutant-name grammar
+    and known status vocabulary; otherwise the result stream is unusable and
+    the gate fails closed. This is the total-mutant view — every status, not
+    just the unkilled ones — so callers can tell "0 survivors of N mutants"
+    (a clean pass) from "0 mutants parsed" (a baseline abort that wrote no
+    results)."""
     out: list[tuple[str, str]] = []
     for raw in results_text.splitlines():
-        line = raw.strip()
-        if ": " not in line:
+        if not raw[:1].isspace():
             continue
+        line = raw.strip()
+        if not line:
+            continue
+        if ": " not in line:
+            raise GateFailClosed(
+                f"`mutmut results` contained a malformed indented record: {line!r}."
+            )
         name, _, status = line.rpartition(": ")
         name = name.strip()
         status = status.strip()
-        if name and status:
-            out.append((name, status))
+        if not _MUTMUT_NAME_RE.fullmatch(name) or status not in KNOWN_STATUSES:
+            raise GateFailClosed(
+                f"`mutmut results` contained an unrecognized mutant record: {line!r}."
+            )
+        out.append((name, status))
     return out
 
 
@@ -220,6 +244,19 @@ def count_mutants(results_text: str) -> int:
     Zero means mutmut wrote no usable results (e.g. a clean-baseline abort),
     which is distinct from "0 survivors of N" and is the fail-closed signal."""
     return len(_result_lines(results_text))
+
+
+def mutation_score(results_text: str, allowlist: set[str]) -> float | None:
+    """Return killed / (killed + non-allowlisted survived), if scoreable."""
+    killed = 0
+    survived = 0
+    for name, status in _result_lines(results_text):
+        if status == "killed":
+            killed += 1
+        elif status == "survived" and name not in allowlist:
+            survived += 1
+    denominator = killed + survived
+    return killed / denominator if denominator else None
 
 
 def parse_results(results_text: str) -> list[Survivor]:
@@ -426,10 +463,10 @@ def _run_mutmut(patterns: list[str] | None) -> MutmutRun:
 
 
 def _mutmut_results() -> str:
-    """``mutmut results`` stdout. An infra-level failure (nonzero exit) is
+    """Complete ``mutmut results`` stdout. An infra-level failure (nonzero exit) is
     surfaced as a :class:`GateFailClosed` (exit 2), matching :func:`_git_merge_base`
     — never an uncaught ``CalledProcessError`` traceback."""
-    proc = _run(["uv", "run", "mutmut", "results"], check=False)
+    proc = _run(["uv", "run", "mutmut", "results", "--all", "true"], check=False)
     if proc.returncode != 0:
         raise GateFailClosed(
             "`mutmut results` failed — cannot read mutation outcomes "
@@ -463,14 +500,16 @@ def _print_failclosed(reason: str) -> None:
 
 
 def _run_full(allowlist: set[str]) -> int:
-    """Nightly ``--full`` path: gate the results the WORKFLOW already produced.
+    """Nightly ``--full`` path: score the results the workflow already produced.
 
     The nightly workflow runs ``mutmut run || true`` itself (the ``|| true``
     swallows mutmut's survivors-present nonzero), so this does NOT re-run the
     whole-engine pass — it only reads + gates the existing results. Because the
     workflow's ``|| true`` hides a baseline-abort exit too, the fail-closed
     protection here rides on the results-side detector: zero total mutants
-    parsed (an empty/unusable results file) is treated as catastrophic."""
+    parsed (an empty/unusable results file) is treated as catastrophic. The
+    score excludes timeout/no-test/suspicious outcomes, matching the governing
+    mutation policy and mutmut's standard denominator."""
     results_text = _mutmut_results()
     if catastrophic_run(MutmutRun(0, ""), results_text, expected=True):
         _print_failclosed(
@@ -478,11 +517,34 @@ def _run_full(allowlist: set[str]) -> int:
             "the nightly `mutmut run` likely aborted on a red clean baseline."
         )
         return EXIT_FAILCLOSED
-    survivors = parse_results(results_text)
-    remaining, code = decide(survivors, allowlist)
-    if remaining:
-        _print_block(remaining)
-    return code
+    if any(status == "not checked" for _, status in _result_lines(results_text)):
+        _print_failclosed(
+            "mutation results contain `not checked` mutants — the whole-core "
+            "run did not complete."
+        )
+        return EXIT_FAILCLOSED
+    score = mutation_score(results_text, allowlist)
+    if score is None:
+        _print_failclosed(
+            "mutation results contain no killed/survived score denominator."
+        )
+        return EXIT_FAILCLOSED
+    result_lines = _result_lines(results_text)
+    counts = Counter(status for _, status in result_lines)
+    killed = counts["killed"]
+    survived = sum(
+        status == "survived" and name not in allowlist for name, status in result_lines
+    )
+    allowlisted = counts["survived"] - survived
+    message = (
+        f"Mutation score: {score:.2%} ({killed} killed / "
+        f"{killed + survived} scored; required > {FULL_SCORE_THRESHOLD:.0%}). "
+        f"Outcomes: {counts['survived']} survived ({allowlisted} allowlisted), "
+        f"{counts['no tests']} no tests, {counts['timeout']} timeout, "
+        f"{counts['suspicious']} suspicious."
+    )
+    print(message, file=sys.stderr if score <= FULL_SCORE_THRESHOLD else sys.stdout)
+    return EXIT_CLEAN if score > FULL_SCORE_THRESHOLD else EXIT_BLOCKED
 
 
 def _run_diff(allowlist: set[str], base_ref: str) -> int:
@@ -507,8 +569,19 @@ def _run_diff(allowlist: set[str], base_ref: str) -> int:
         )
         return EXIT_FAILCLOSED
 
-    survivors = parse_results(results_text)
     sources = _read_sources(set(changed))
+    incomplete = [
+        Survivor(name, status)
+        for name, status in _result_lines(results_text)
+        if status == "not checked"
+    ]
+    if survivors_on_changed_lines(incomplete, changed, sources):
+        _print_failclosed(
+            "mutation results contain `not checked` mutants in changed "
+            "functions — the scoped run did not complete."
+        )
+        return EXIT_FAILCLOSED
+    survivors = parse_results(results_text)
     on_diff = survivors_on_changed_lines(survivors, changed, sources)
     remaining, code = decide(on_diff, allowlist)
     if remaining:

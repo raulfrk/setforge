@@ -59,7 +59,6 @@ jobs:
   network-canaries:
     name: Live-upstream E2E canaries
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    needs: e2e-docker-full
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -137,9 +136,8 @@ jobs:
       # `|| true` keeps the STEP green when survivors remain: `mutmut run` exits
       # nonzero on survivors, which is expected — the gate, not mutmut, decides.
       - run: uv run mutmut run || true
-      # The gate reads `mutmut results` (it does NOT re-run the whole-engine
-      # pass — the step above owns that) and blocks on every non-allowlisted
-      # survivor. Since `|| true` above hides a baseline-abort exit, the gate
-      # fail-closes (exit 2) when the results are empty/unusable (0 mutants
-      # parsed). NO continue-on-error: a survivor or a fail-close ends the job.
+      # The gate reads all outcomes (it does NOT re-run the whole-engine pass)
+      # and requires the documented >80% killed/(killed+survived) score. Since
+      # `|| true` above hides a baseline-abort exit, empty/unusable results still
+      # fail closed. NO continue-on-error: a low score or fail-close ends the job.
       - run: uv run python scripts/mutmut_diff_gate.py --full

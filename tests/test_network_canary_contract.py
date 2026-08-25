@@ -52,8 +52,10 @@ _INFRA_SUPPORT_FILES = {
 
 
 def test_nightly_canary_lane_is_bounded_grouped_and_cleans_containers() -> None:
+    workflow_data = _workflow("nightly.yml")
     workflow = (_ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
+    assert "needs" not in workflow_data["jobs"]["network-canaries"]
     assert "timeout-minutes: 60" in workflow
     assert workflow.count("timeout --kill-after=30s 20m uv run pytest") == 2
     assert workflow.count("--dist=loadgroup") == 2

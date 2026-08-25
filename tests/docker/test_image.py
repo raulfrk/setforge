@@ -26,6 +26,12 @@ def test_ensure_docker_image_returns_none_when_docker_is_unavailable(
     assert image.ensure_docker_image() is None
 
 
+def test_root_gitignore_is_a_hashed_image_input() -> None:
+    assert image.REPO_ROOT / ".gitignore" in image._HASH_INPUT_FILES
+    dockerfile = image.DOCKERFILE.read_text(encoding="utf-8")
+    assert dockerfile.count("COPY --chown=tester:tester .gitignore ./") == 2
+
+
 def test_ensure_docker_image_reuses_existing_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

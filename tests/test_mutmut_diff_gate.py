@@ -27,6 +27,7 @@ from scripts.mutmut_diff_gate import (
     count_mutants,
     decide,
     function_spans,
+    mutation_score,
     parse_results,
     read_allowlist,
     span_for_mutant,
@@ -266,6 +267,41 @@ def test_count_mutants_zero_on_empty_results() -> None:
     assert count_mutants("Failed to run clean test\n") == 0
 
 
+def test_result_parser_ignores_unindented_colon_banner() -> None:
+    assert count_mutants("Mutation testing: complete\n") == 0
+
+
+def test_result_parser_failclosed_on_unknown_status() -> None:
+    results = "    setforge.scalar_merge.x_f__mutmut_1: newly invented"
+    with pytest.raises(GateFailClosed, match="unrecognized mutant record"):
+        count_mutants(results)
+
+
+def test_result_parser_failclosed_on_non_mutant_data_record() -> None:
+    with pytest.raises(GateFailClosed, match="unrecognized mutant record"):
+        count_mutants("    summary: killed\n")
+
+
+def test_result_parser_failclosed_on_deceptive_mutant_suffix() -> None:
+    with pytest.raises(GateFailClosed, match="unrecognized mutant record"):
+        count_mutants("    summary__mutmut_1: killed\n")
+
+
+def test_result_parser_failclosed_on_indented_record_without_delimiter() -> None:
+    results = "    malformed without delimiter\n    setforge.x_f__mutmut_1: killed"
+    with pytest.raises(GateFailClosed, match="malformed indented record"):
+        count_mutants(results)
+
+
+def test_mutation_score_uses_killed_and_survived_only() -> None:
+    assert mutation_score(_RESULTS, set()) == pytest.approx(1 / 3)
+
+
+def test_mutation_score_excludes_allowlisted_survivors() -> None:
+    allowlist = {"setforge.scalar_merge.x_resolve_scalar__mutmut_4"}
+    assert mutation_score(_RESULTS, allowlist) == pytest.approx(1 / 2)
+
+
 def test_catastrophic_when_nonzero_exit_with_baseline_abort_signature() -> None:
     run = MutmutRun(returncode=1, output="...\nFailed to run clean test\n")
     assert catastrophic_run(run, _RESULTS, expected=True) is True
@@ -331,16 +367,77 @@ def _stub_edge(
 
 def test_full_mode_does_not_rerun_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
     # --full must only read results the nightly workflow already produced.
-    calls = _stub_edge(monkeypatch, results=_RESULTS)
+    complete_results = "\n".join(
+        line for line in _RESULTS.splitlines() if not line.endswith(": not checked")
+    )
+    calls = _stub_edge(monkeypatch, results=complete_results)
     code = gate.main(["--full"])
     assert calls["run"] == 0
     assert code == EXIT_BLOCKED
+
+
+def test_full_mode_passes_above_eighty_percent_with_survivors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results = "\n".join(
+        [f"    setforge.scalar_merge.x_f__mutmut_{i}: killed" for i in range(81)]
+        + [
+            f"    setforge.scalar_merge.x_f__mutmut_{i}: survived"
+            for i in range(81, 100)
+        ]
+        + ["    setforge.scalar_merge.x_f__mutmut_100: timeout"]
+    )
+    _stub_edge(monkeypatch, results=results)
+    assert gate.main(["--full"]) == EXIT_CLEAN
+    assert (
+        "Outcomes: 19 survived (0 allowlisted), 0 no tests, 1 timeout, 0 suspicious."
+    ) in capsys.readouterr().out
+
+
+def test_full_mode_blocks_at_exactly_eighty_percent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = "\n".join(
+        [f"    setforge.scalar_merge.x_f__mutmut_{i}: killed" for i in range(80)]
+        + [
+            f"    setforge.scalar_merge.x_f__mutmut_{i}: survived"
+            for i in range(80, 100)
+        ]
+    )
+    _stub_edge(monkeypatch, results=results)
+    assert gate.main(["--full"]) == EXIT_BLOCKED
 
 
 def test_full_mode_failclosed_on_empty_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_edge(monkeypatch, results="")
+    assert gate.main(["--full"]) == EXIT_FAILCLOSED
+
+
+def test_full_mode_failclosed_without_a_score_denominator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = "\n".join(
+        [
+            "    setforge.scalar_merge.x_f__mutmut_1: no tests",
+            "    setforge.scalar_merge.x_f__mutmut_2: timeout",
+        ]
+    )
+    _stub_edge(monkeypatch, results=results)
+    assert gate.main(["--full"]) == EXIT_FAILCLOSED
+
+
+def test_full_mode_failclosed_on_not_checked_mutants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = "\n".join(
+        [f"    setforge.scalar_merge.x_f__mutmut_{i}: killed" for i in range(81)]
+        + ["    setforge.scalar_merge.x_f__mutmut_82: survived"]
+        + ["    setforge.scalar_merge.x_f__mutmut_83: not checked"]
+    )
+    _stub_edge(monkeypatch, results=results)
     assert gate.main(["--full"]) == EXIT_FAILCLOSED
 
 
@@ -361,6 +458,27 @@ def test_diff_mode_failclosed_on_baseline_abort(
     )
     assert gate.main([]) == EXIT_FAILCLOSED
     assert calls["run"] == 1
+
+
+def test_diff_mode_failclosed_on_not_checked_changed_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -1 +1 @@ def f():\n"
+        "+def f():\n"
+    )
+    results = "    setforge.scalar_merge.x_f__mutmut_1: not checked"
+    _stub_edge(
+        monkeypatch, mutmut_run=MutmutRun(1, "aborted"), results=results, diff=diff
+    )
+    monkeypatch.setattr(
+        gate,
+        "_read_sources",
+        lambda paths: {"setforge/scalar_merge.py": "def f():\n    pass\n"},
+    )
+    assert gate.main([]) == EXIT_FAILCLOSED
 
 
 def test_diff_mode_failclosed_on_missing_origin_main(
@@ -405,6 +523,20 @@ def test_mutmut_results_raises_gatefailclosed_on_nonzero(
     monkeypatch.setattr(gate, "_run", fake_run)
     with pytest.raises(GateFailClosed):
         gate._mutmut_results()
+
+
+def test_mutmut_results_requests_every_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    recorded: list[str] = []
+
+    def fake_run(cmd, *, check):
+        recorded.extend(cmd)
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(gate, "_run", fake_run)
+    gate._mutmut_results()
+    assert recorded == ["uv", "run", "mutmut", "results", "--all", "true"]
 
 
 def _stub_git_base(

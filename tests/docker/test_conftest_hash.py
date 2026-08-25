@@ -300,6 +300,7 @@ def test_hash_inputs_match_explicit_runtime_copy_surface() -> None:
     }
 
     assert relative_files == {
+        ".gitignore",
         "README.md",
         "pyproject.toml",
         "tests/docker/Dockerfile",

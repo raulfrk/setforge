@@ -163,12 +163,9 @@ exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECK
 
 [tool.mutmut]
 # Mutation testing over the merge/reconcile/store core — RFC §6's "real
-# anti-change-detector measure". REPORT-BASELINE only: run it by hand
-# (`uv run mutmut run || true; uv run mutmut results`), record the score in
-# docs/mutation-baseline.md. It is NOT a gate and NOT in pre-commit — the
-# `|| true` is mandatory because `mutmut run` exits nonzero on survivors.
-# Enforcement (a >80% gate, CI diff-mode on PR + full nightly) is wired
-# separately once the test audit-and-prune lands.
+# anti-change-detector measure". CI enforces changed-function survivors on PRs
+# and a >80% whole-core score nightly. It stays out of pre-commit because a full
+# run is slow; `mutmut run` itself exits nonzero when survivors remain.
 #
 # source_paths must be the WHOLE package: mutmut copies these into a mutants/
 # sandbox and runs the tests there, so the entire `setforge` package has to be

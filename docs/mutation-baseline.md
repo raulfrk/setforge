@@ -1,42 +1,34 @@
 # Mutation-testing baseline — merge/reconcile/store core
 
-> **ADVISORY — NOT ENFORCED.** This is a recorded baseline, not a gate. Nothing
-> in CI or pre-commit fails on this score. A `>80%` mutation-score gate (CI
-> diff-mode on PR + full nightly) is wired separately once the test
-> audit-and-prune lands. Treat the survivor list below as a backlog of
-> assertion gaps to investigate, not a pass/fail signal.
+The nightly workflow enforces a mutation score strictly above 80% over this
+whole core. Pull requests separately block unkilled mutants whose functions
+overlap changed core lines. Survivors remain an assertion-gap backlog; they do
+not imply a 100% nightly requirement.
 
 ## Headline
 
 | metric | value |
 |---|---|
-| **Mutation score** | **≈79.0%** (1914 killed ÷ 2423 tested) |
-| Mutants generated | 2517 |
-| 🎉 killed | 1914 |
-| 🙁 survived | 509 |
-| 🫥 skipped (no covering test in scope) | 94 |
-| ⏰ timeout / 🤔 suspicious | 0 / 0 |
+| **Mutation score** | **80.48%** (1101 killed ÷ 1368 scored) |
+| Mutants generated | 1487 |
+| 🎉 killed | 1101 |
+| 🙁 survived | 267 |
+| 🫥 skipped (no covering test in scope) | 114 |
+| ⏰ timeout / 🤔 suspicious | 5 / 0 |
 
 Score = killed ÷ (killed + survived); skipped/timeout/suspicious are excluded
 from the denominator (mutmut's standard reporting).
-
-> **STALE headline — the 2026-06-24 numbers above predate two changes:** (1)
-> the legacy disposition/sections/spans subsystem was retired, dropping
-> `only_mutate` from 10 files to 7 (see below); (2) the test selection was
-> broadened with two hermetic integration suites (this change). The count-drop
-> re-baseline is **DEFERRED to the merge gate** — see "Regenerate" below. The
-> per-module survivor table further down is likewise pre-retirement and no
-> longer authoritative.
 
 ## Provenance
 
 | field | value |
 |---|---|
-| measured | 2026-06-24 (headline; **stale** — see note above) |
-| base commit | `3fafc26` |
-| tool | `mutmut` (see the pinned dev extra) |
+| measured | 2026-08-25 |
+| base commit | `8e0577b` |
+| tool | `mutmut 3.6.0` |
 | mutated (`source_paths` + `only_mutate`) | the **7** core files below |
 | test scope (`pytest_add_cli_args_test_selection`) | 9 focused per-module unit files **+ 2 hermetic integration suites** |
+| observed runtime | about 10.8 minutes (2.29 mutations/second) |
 
 ## Scope & why the score is a conservative lower bound
 
@@ -90,30 +82,27 @@ the copied sandbox. Hermetic on paths, but no-kill-power dead weight — left ou
 
 | module | survivors |
 |---|---|
-| structural_merge | 182 |
-| disposition_merge | 137 |
-| yaml_merge | 56 |
-| section_reconcile | 34 |
-| spans_store | 31 |
+| structural_merge | 193 |
+| yaml_merge | 4 |
 | scalar_base_store | 27 |
-| markdown_merge | 13 |
+| markdown_merge | 14 |
 | base_store | 13 |
 | scalar_merge | 10 |
 | base_store_format | 6 |
-| **total** | **509** |
+| **total** | **267** |
 
-The two biggest (`structural_merge`, `disposition_merge`) are also the largest
-modules and the ones most exercised by integration tests excluded from this
-run — expect their real gap to shrink most under the full suite.
+`structural_merge` remains the dominant assertion-gap backlog. The five timeout
+outcomes also occur there and are excluded from the score denominator.
 
 ## Regenerate / inspect
 
-Non-gating; run by hand (the `|| true` is mandatory — `mutmut run` exits
-nonzero when mutants survive):
+Run by hand (`|| true` is mandatory because survivors make `mutmut run` exit
+nonzero):
 
 ```sh
 uv run mutmut run || true        # full run (regenerates the mutants/ sandbox)
-uv run mutmut results            # list killed/survived per mutant
+uv run mutmut results --all true # list every outcome, including killed
+uv run python scripts/mutmut_diff_gate.py --full
 uv run mutmut show <mutant-id>   # exact diff of one mutant, e.g. setforge.yaml_merge.x__deep_merge_dicts__mutmut_6
 uv run mutmut browse             # interactive TUI over survivors
 ```

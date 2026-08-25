@@ -55,6 +55,7 @@ def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
 
 _HASH_INPUT_FILES: tuple[Path, ...] = (
     DOCKERFILE,
+    REPO_ROOT / ".gitignore",
     REPO_ROOT / "pyproject.toml",
     REPO_ROOT / "uv.lock",
     REPO_ROOT / "README.md",

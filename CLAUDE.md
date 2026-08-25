@@ -92,6 +92,9 @@ function overlaps the change. It is deliberately NOT in pre-commit or the
 always-on review fan (a mutmut run is too slow for either), so this is a
 documented manual trigger; CI enforces it non-locally via the `pr-mutmut-diff`
 PR job (diff-scoped) and the `mutmut-full` nightly job (whole core).
+The nightly gate enforces the project-wide score strictly above 80%, calculated
+as killed / (killed + survived); no-test, timeout, and suspicious outcomes are
+reported but excluded from that denominator.
 
 **Why `--no-cov` on the Docker e2e invocation:** pytest-cov's controller is
 selected at master `pytest_configure` time (before xdist worker setup). With
