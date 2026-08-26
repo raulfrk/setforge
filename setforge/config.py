@@ -33,6 +33,7 @@ from ruamel.yaml.scalarint import OctalInt, ScalarInt
 from setforge.errors import ConfigError, ProfileNotFound
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.migrations import (
+    _guard_file_format_version,
     _meets_floor,
     current_expected_schema_version,
     parse_schema_version,
@@ -1157,8 +1158,8 @@ class Config(BaseModel):
     version: int = 1
     """Engine-owned ``setforge.yaml`` file-format version (currently always ``1``).
 
-    A strict-mode schema-contract member reserved for a future format-gating
-    check; not gated at runtime today. Distinct from :attr:`schema_version`.
+    :func:`_guard_schema_version` refuses every other explicit value before
+    model validation. Distinct from :attr:`schema_version`.
     """
     schema_version: str = "1.0"
     """User-declared schema version for ``setforge migrate`` compatibility checks.
@@ -1888,7 +1889,12 @@ def _strip_extra_locs(data: object, locs: Sequence[tuple[object, ...]]) -> objec
 
 
 def _guard_schema_version(data: object, path: Path) -> None:
-    """Refuse a cross-major-newer config cleanly, BEFORE model validation.
+    """Refuse unsupported config versions cleanly, BEFORE model validation.
+
+    The engine-owned ``version`` field identifies the ``setforge.yaml`` file
+    format. Omission defaults to version 1; every explicit value except a
+    non-boolean integer 1 is refused before Pydantic can coerce strings or
+    booleans into an apparently supported value.
 
     Reads ``schema_version`` from the raw mapping (default ``"1.0"`` on
     absence), parses it semantically, and compares MAJORS against the
@@ -1917,6 +1923,8 @@ def _guard_schema_version(data: object, path: Path) -> None:
     :class:`ConfigError` via
     :func:`~setforge.migrations.parse_schema_version`.
     """
+    _guard_file_format_version(data, path)
+
     raw = data.get("schema_version") if isinstance(data, Mapping) else None
     detected = str(raw) if raw is not None else "1.0"
     detected_major = parse_schema_version(detected)[0]
@@ -1957,16 +1965,16 @@ def _refuse_below_floor(raw_floor: object, path: Path) -> None:
 
 
 def guard_minimum_version(cfg_path: Path) -> None:
-    """Enforce the ``minimum_version`` floor from a config file path.
+    """Enforce file-format support and the minimum-version floor from a path.
 
     Verbs that inspect the schema via
     :func:`~setforge.migrations.detect_current_schema` rather than
     :func:`load_config` (notably ``migrate --check`` / ``--apply`` / ``--pin``)
-    bypass the floor baked into :func:`_guard_schema_version`. Call this on
-    those paths so a below-floor engine refuses there too — and, for
-    ``--apply``, BEFORE any mutation. No-op when the file is absent / empty or
-    declares no floor; a malformed ``minimum_version`` raises a clean
-    :class:`ConfigError`.
+    bypass the guards baked into :func:`_guard_schema_version`. Call this on
+    those paths so unsupported file formats and below-floor engines refuse
+    there too — and, for mutating modes, BEFORE any lock or mutation. No-op
+    when the file is absent / empty or declares neither marker; malformed or
+    unsupported values raise a clean :class:`ConfigError`.
     """
     if not cfg_path.exists():
         return
@@ -1976,6 +1984,7 @@ def guard_minimum_version(cfg_path: Path) -> None:
             data = yaml.load(fh)
     except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"invalid YAML in {cfg_path}: {exc}") from exc
+    _guard_file_format_version(data, cfg_path)
     raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
     _refuse_below_floor(raw_floor, cfg_path)
 

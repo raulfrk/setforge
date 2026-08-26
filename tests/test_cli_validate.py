@@ -152,6 +152,24 @@ def test_validate_non_mapping_root_exits_cleanly(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_validate_unsupported_file_format_version_exits_cleanly(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_config(
+        tmp_path,
+        "version: 2\ntracked_files: {}\nprofiles: {}\n",
+    )
+
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
+
+    assert result.exit_code == 1, result.output
+    assert str(cfg) in result.output
+    assert "file-format version 2" in result.output
+    assert "upgrade setforge" in result.output
+    assert "ValidationError" not in result.output
+    assert "Traceback" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # Test 3: missing profile
 # ---------------------------------------------------------------------------

@@ -66,7 +66,7 @@ loads. Everything else has a default:
 |---|---|---|---|
 | `tracked_files` | yes | — | Map of stable id → tracked-file definition. |
 | `profiles` | yes | — | Map of profile name → profile definition. |
-| `version` | no | `1` | Config format version. |
+| `version` | no | `1` | Engine-owned config format; only integer `1` is supported. Other explicit values refuse cleanly with upgrade guidance. |
 | `schema_version` | no | `"1.0"` | Migration schema version; author new configs as `"6.5"`. |
 | `minimum_version` | no | — | Lowest schema-aware engine the operator permits. |
 | `marketplaces` | no | `{}` | Claude plugin marketplaces. |

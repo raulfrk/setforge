@@ -369,6 +369,23 @@ def test_detect_current_schema_reads_declared_version(tmp_path: Path) -> None:
     assert detect_current_schema(yaml_path) == "1.1"
 
 
+def test_detect_current_schema_refuses_unsupported_file_format(
+    tmp_path: Path,
+) -> None:
+    yaml_path = tmp_path / "setforge.yaml"
+    yaml_path.write_text(
+        "schema_version: '1.1'\nversion: 2\ntracked_files: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="upgrade setforge") as exc_info:
+        detect_current_schema(yaml_path)
+
+    message = str(exc_info.value)
+    assert str(yaml_path) in message
+    assert "file-format version 2" in message
+
+
 def test_detect_current_schema_empty_file_returns_default(tmp_path: Path) -> None:
     yaml_path = tmp_path / "empty.yaml"
     yaml_path.write_text("", encoding="utf-8")

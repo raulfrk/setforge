@@ -115,6 +115,37 @@ def test_load_config_non_mapping_root(tmp_path: Path, name: str, content: str) -
     assert str(bad) in str(exc_info.value)
 
 
+@pytest.mark.parametrize("raw_version", ["2", '"2"', "true"])
+def test_load_config_rejects_unsupported_file_format_version(
+    tmp_path: Path, raw_version: str
+) -> None:
+    bad = tmp_path / "setforge.yaml"
+    bad.write_text(
+        f"version: {raw_version}\ntracked_files: {{}}\nprofiles: {{}}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="upgrade setforge") as exc_info:
+        load_config(bad)
+
+    message = str(exc_info.value)
+    assert str(bad) in message
+    assert "file-format version" in message
+
+
+@pytest.mark.parametrize("version_line", ["", "version: 1\n"])
+def test_load_config_accepts_supported_file_format_version(
+    tmp_path: Path, version_line: str
+) -> None:
+    config_path = tmp_path / "setforge.yaml"
+    config_path.write_text(
+        f"{version_line}tracked_files: {{}}\nprofiles: {{}}\n",
+        encoding="utf-8",
+    )
+
+    assert load_config(config_path).version == 1
+
+
 def test_load_config_malformed_yaml(tmp_path: Path) -> None:
     # A YAML syntax error must surface as a clean ConfigError (naming the
     # file), not a raw ruamel ParserError/ScannerError traceback — the

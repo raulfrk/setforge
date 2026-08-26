@@ -243,3 +243,36 @@ def test_migrate_apply_refuses_below_floor_without_mutating(tmp_path: Path) -> N
     assert isinstance(result.exception, ConfigError)
     assert "minimum_version" in str(result.exception)
     assert cfg.read_bytes() == before
+
+
+def test_migrate_check_refuses_unsupported_file_format(tmp_path: Path) -> None:
+    """``migrate --check`` cleanly refuses an unsupported file format."""
+    cfg = _make_repo(tmp_path, floor=None, files={"a.md": _NO_MARKERS})
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace("version: 1", "version: 2"))
+
+    result = CliRunner().invoke(app, ["migrate", "--check", f"--config={cfg}"])
+
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, ConfigError)
+    message = str(result.exception)
+    assert str(cfg) in message
+    assert "file-format version 2" in message
+    assert "upgrade setforge" in message
+    assert "Traceback" not in result.output
+
+
+def test_migrate_apply_refuses_unsupported_file_format_without_mutating(
+    tmp_path: Path,
+) -> None:
+    """``migrate --apply`` refuses before changing config or transition state."""
+    cfg = _make_repo(tmp_path, floor=None, files={"a.md": _NO_MARKERS})
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace("version: 1", "version: 2"))
+    before = cfg.read_bytes()
+
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, ConfigError)
+    assert "upgrade setforge" in str(result.exception)
+    assert cfg.read_bytes() == before
+    assert _latest_migrate_transition() is None

@@ -71,6 +71,23 @@ def parse_schema_version(raw: str) -> tuple[int, int]:
     return (int(major), int(minor))
 
 
+def _guard_file_format_version(data: object, path: Path) -> None:
+    """Cleanly refuse an unsupported raw ``version`` file-format marker."""
+    if isinstance(data, Mapping) and "version" in data:
+        raw_version = data["version"]
+        is_supported_version = (
+            isinstance(raw_version, int)
+            and not isinstance(raw_version, bool)
+            and raw_version == 1
+        )
+        if not is_supported_version:
+            raise ConfigError(
+                f"{path}: setforge.yaml file-format version {raw_version!r} "
+                "is unsupported (this build supports version 1); upgrade "
+                "setforge to read this config"
+            )
+
+
 def _meets_floor(supported: str, floor: str) -> bool:
     """Return whether an engine supporting ``supported`` schema satisfies ``floor``.
 
@@ -721,6 +738,7 @@ def detect_current_schema(yaml_path: Path) -> str:
     if data is None:
         return _DEFAULT_SCHEMA_VERSION
     data = _require_mapping_root(data, yaml_path)
+    _guard_file_format_version(data, yaml_path)
     raw = data.get("schema_version")
     if raw is None:
         return _DEFAULT_SCHEMA_VERSION

@@ -145,9 +145,9 @@ def migrate(
             "--finalize cannot be combined with --check/--apply/--pin/--to"
         )
     cfg_path = _resolve_config_arg(config)
-    # The floor gates migrate too: --check/--apply/--pin read the schema via
-    # detect_current_schema (not load_config), so enforce it here BEFORE any
-    # read/mutation — a below-floor engine must not inspect or migrate the repo.
+    # File-format support and the floor gate migrate too: --check/--apply/--pin
+    # read via detect_current_schema (not load_config), so enforce both here
+    # BEFORE locks or mutation.
     guard_minimum_version(cfg_path)
     # mutation_locks includes the user-global pre-publication gate. Do not add a
     # synthetic outer profile lock here: chain cutovers acquire their concrete
