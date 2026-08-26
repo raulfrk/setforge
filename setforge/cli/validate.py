@@ -42,6 +42,7 @@ from setforge.config import (
     collect_orphan_overlays,
     load_config,
     resolve_and_expand,
+    resolve_project_profile,
 )
 from setforge.errors import (
     ConfigError,
@@ -110,6 +111,19 @@ def _check_profile(
     _check_package_refs(cfg, prof_name, ctx, failures)
     if not cross_ref_ran:
         _check_marketplaces(cfg, resolved, ctx, failures)
+
+
+def _check_project_profiles(
+    cfg: Config,
+    repo_root: Path,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Resolve every portable project profile and collect source failures."""
+    for project_profile_name in cfg.project_profiles:
+        try:
+            resolve_project_profile(cfg, project_profile_name, repo_root)
+        except ConfigError as exc:
+            failures.append(str(exc))
 
 
 def _apply_tracked_file_overlay_check(
@@ -1320,6 +1334,8 @@ def validate(
 
     for prof_name in profiles_to_check:
         _check_profile(cfg, prof_name, repo_root, failures)
+
+    _check_project_profiles(cfg, repo_root, failures)
 
     # Check 7: host-local local.yaml schema + parse errors
     # with mockup-D UX. Collect into the same failures list so the

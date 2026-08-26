@@ -53,6 +53,8 @@ from setforge.config import (
     PluginPackage,
     PluginReconcile,
     Profile,
+    ProjectFile,
+    ProjectProfile,
     PythonPackage,
     ReconcileSpec,
     ResolvedProfile,
@@ -67,6 +69,8 @@ SCHEMA_MAJOR: int = 6
 _MODELS: tuple[type[BaseModel], ...] = (
     Config,
     Profile,
+    ProjectProfile,
+    ProjectFile,
     TrackedFile,
     GeneratedContent,
     TreePolicy,
@@ -154,6 +158,16 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         ),
         "bundles": "dict[str, setforge.config.BundleSpec]",
         "profiles": "dict[str, setforge.config.Profile]",
+        "project_profiles": "dict[str, setforge.config.ProjectProfile]",
+    },
+    "ProjectProfile": {
+        "extends": "str | None",
+        "default_visibility": "setforge.config.ProjectVisibility | None",
+        "files": "dict[str, setforge.config.ProjectFile]",
+    },
+    "ProjectFile": {
+        "src": "<class 'pathlib.Path'>",
+        "dst": "<class 'pathlib.Path'>",
     },
     "Profile": {
         "extends": "str | None",

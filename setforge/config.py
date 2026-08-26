@@ -1102,6 +1102,97 @@ class CodexProfile(BaseModel):
     reconcile: PluginReconcile = PluginReconcile()
 
 
+class ProjectVisibility(StrEnum):
+    """Default Git visibility for files declared by a project profile."""
+
+    HIDDEN = "hidden"
+    TRACKED = "tracked"
+
+
+def _normalize_project_destination(value: Path) -> Path:
+    raw = value.as_posix()
+    if (
+        not raw
+        or raw == "."
+        or Path(raw).is_absolute()
+        or PureWindowsPath(raw).is_absolute()
+    ):
+        raise ValueError("project file destination must be a non-empty relative path")
+    parts = PurePosixPath(raw).parts
+    if ".." in parts:
+        raise ValueError("project file destination must not contain '..'")
+    normalized = Path(*(part for part in parts if part != "."))
+    if not normalized.parts:
+        raise ValueError("project file destination must not resolve to '.'")
+    if normalized.parts[0] == ".git":
+        raise ValueError("project file destination must not target .git")
+    return normalized
+
+
+class ProjectFile(BaseModel):
+    """One portable file declaration in a project profile."""
+
+    model_config = _STRICT
+
+    src: Path
+    dst: Path
+
+    @field_validator("src")
+    @classmethod
+    def _validate_src(cls, value: Path) -> Path:
+        if value.is_absolute() or PureWindowsPath(str(value)).is_absolute():
+            raise ValueError("project file source must be relative")
+        if ".." in value.parts:
+            raise ValueError("project file source must not contain '..'")
+        return value
+
+    @field_validator("dst")
+    @classmethod
+    def _validate_dst(cls, value: Path) -> Path:
+        return _normalize_project_destination(value)
+
+
+class ProjectProfile(BaseModel):
+    """Portable project-file intent with optional single-parent inheritance."""
+
+    model_config = _STRICT
+
+    extends: str | None = None
+    default_visibility: ProjectVisibility | None = None
+    files: dict[str, ProjectFile] = {}
+
+    @model_validator(mode="after")
+    def _reject_duplicate_destinations(self) -> Self:
+        owners: dict[Path, str] = {}
+        for file_id, project_file in self.files.items():
+            previous = owners.setdefault(project_file.dst, file_id)
+            if previous != file_id:
+                raise ValueError(
+                    "duplicate normalized destination "
+                    f"{project_file.dst.as_posix()!r} for files "
+                    f"{previous!r} and {file_id!r}"
+                )
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedProjectFile:
+    """A project file with provenance and a confined absolute source."""
+
+    id: str
+    declaring_profile: str
+    src: Path
+    dst: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedProjectProfile:
+    """Fully inherited project-file intent in deterministic destination order."""
+
+    default_visibility: ProjectVisibility
+    files: tuple[ResolvedProjectFile, ...]
+
+
 class Profile(BaseModel):
     model_config = _STRICT
 
@@ -1201,6 +1292,7 @@ class Config(BaseModel):
     packages: dict[str, Package] = {}
     bundles: dict[str, BundleSpec] = {}
     profiles: dict[str, Profile]
+    project_profiles: dict[str, ProjectProfile] = {}
 
 
 def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:
@@ -1426,6 +1518,135 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
             codex=_merge_codex_profile(resolved.codex, profile.codex),
         )
     return resolved
+
+
+def _resolve_project_chain(
+    config: Config, name: str
+) -> list[tuple[str, ProjectProfile]]:
+    chain: list[tuple[str, ProjectProfile]] = []
+    visited: list[str] = []
+    current: str | None = name
+    while current is not None:
+        if current in visited:
+            visited.append(current)
+            raise ConfigError(f"project profile cycle: {' → '.join(visited)}")
+        profile = config.project_profiles.get(current)
+        if profile is None:
+            raise ConfigError(f"project profile not found: {current}")
+        visited.append(current)
+        chain.append((current, profile))
+        current = profile.extends
+    chain.reverse()
+    return chain
+
+
+def _resolve_project_source_root(config_root: Path, declaring_profile: str) -> Path:
+    try:
+        lexical_project_root = config_root.resolve(strict=True) / "project"
+        if lexical_project_root.is_symlink():
+            raise ConfigError(
+                f"project source directory must not be a symlink: "
+                f"{lexical_project_root}"
+            )
+        project_root = lexical_project_root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(
+            f"cannot resolve project source directory beneath {config_root}: {exc}"
+        ) from exc
+    if Path(declaring_profile).parts != (declaring_profile,) or declaring_profile in {
+        "",
+        ".",
+        "..",
+    }:
+        raise ConfigError(
+            f"project profile name is unsafe for a source directory: "
+            f"{declaring_profile!r}"
+        )
+    lexical_source_root = project_root / declaring_profile
+    try:
+        if lexical_source_root.is_symlink():
+            raise ConfigError(
+                f"project profile {declaring_profile!r} source root must not be "
+                f"a symlink: {lexical_source_root}"
+            )
+        return lexical_source_root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(
+            f"cannot resolve project profile {declaring_profile!r} source root "
+            f"{lexical_source_root}: {exc}"
+        ) from exc
+
+
+def _resolve_project_source(
+    *,
+    config_root: Path,
+    requested_profile: str,
+    declaring_profile: str,
+    file_id: str,
+    source_path: Path,
+) -> Path:
+    source_root = _resolve_project_source_root(config_root, declaring_profile)
+    candidate = source_root / source_path
+    try:
+        source = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"project profile {requested_profile!r} file {file_id!r} source does "
+            f"not exist: {candidate}"
+        ) from exc
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(
+            f"project profile {requested_profile!r} file {file_id!r} source cannot "
+            f"be resolved: {candidate}: {exc}"
+        ) from exc
+    try:
+        source.relative_to(source_root)
+    except ValueError as exc:
+        raise ConfigError(
+            f"project profile {requested_profile!r} file {file_id!r} source escapes "
+            f"source root {source_root}: {candidate}"
+        ) from exc
+    if not source.is_file():
+        raise ConfigError(
+            f"project profile {requested_profile!r} file {file_id!r} source is not "
+            f"a regular file: {source}"
+        )
+    return source
+
+
+def resolve_project_profile(
+    config: Config, name: str, config_root: Path
+) -> ResolvedProjectProfile:
+    """Resolve inheritance and confine sources below their declaring profile."""
+    visibility = ProjectVisibility.HIDDEN
+    merged: dict[Path, tuple[str, str, ProjectFile]] = {}
+    for profile_name, profile in _resolve_project_chain(config, name):
+        if profile.default_visibility is not None:
+            visibility = profile.default_visibility
+        for file_id, project_file in profile.files.items():
+            merged[project_file.dst] = (file_id, profile_name, project_file)
+
+    resolved_files: list[ResolvedProjectFile] = []
+    for destination, (file_id, declaring_profile, project_file) in merged.items():
+        source = _resolve_project_source(
+            config_root=config_root,
+            requested_profile=name,
+            declaring_profile=declaring_profile,
+            file_id=file_id,
+            source_path=project_file.src,
+        )
+        resolved_files.append(
+            ResolvedProjectFile(
+                id=file_id,
+                declaring_profile=declaring_profile,
+                src=source,
+                dst=destination,
+            )
+        )
+    return ResolvedProjectProfile(
+        default_visibility=visibility,
+        files=tuple(resolved_files),
+    )
 
 
 _BAD_ID_SUBSTRINGS: tuple[str, ...] = ("/", "..")
@@ -1703,6 +1924,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _validate_codex_ownership(config)
     _validate_package_references(config)
     _validate_section_slot_references(config)
+    _validate_project_profile_references(config)
     _guard_generated_resources(config, path)
     _guard_directory_trees(config, path)
     _guard_platform_release_assets(config, path)
@@ -2498,6 +2720,12 @@ def _validate_section_slot_references(config: Config) -> None:
             f"profile section_slots reference undeclared template(s): "
             f"{details} (add to top-level section_templates:)"
         )
+
+
+def _validate_project_profile_references(config: Config) -> None:
+    """Resolve every project inheritance chain to reject missing parents/cycles."""
+    for profile_name in config.project_profiles:
+        _resolve_project_chain(config, profile_name)
 
 
 def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:

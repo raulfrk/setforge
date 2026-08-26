@@ -76,6 +76,50 @@ loads. Everything else has a default:
 | `section_templates` | no | `{}` | Reusable host-local section bodies. |
 | `packages` | no | `{}` | Named package declarations. |
 | `bundles` | no | `{}` | Ordered, dependency-aware package/file groups. |
+| `project_profiles` | no | `{}` | Portable files that SetForge can later apply inside project repositories. |
+
+## Project profiles
+
+`project_profiles` describes portable, project-relative files independently of
+the host profiles above. This first schema capability resolves and validates
+the declarations; it does not yet write into a target project or change Git
+visibility.
+
+```yaml
+project_profiles:
+  base:
+    default_visibility: tracked
+    files:
+      instructions:
+        src: AGENTS.md
+        dst: AGENTS.md
+      guide:
+        src: guide.md
+        dst: docs/guide.md
+  application:
+    extends: base
+    files:
+      instructions:
+        src: AGENTS.md
+        dst: ./AGENTS.md
+```
+
+Each source lives under `project/<declaring-profile>/` in the config repo. In
+the example, `base.guide` resolves from `project/base/guide.md`, while the
+replacement `application.instructions` resolves from
+`project/application/AGENTS.md`. Inherited files retain their original source
+profile.
+
+Destinations are normalized relative paths. Empty paths, absolute paths,
+parent traversal, and anything below `.git/` are rejected. Two files in one
+profile cannot normalize to the same destination. During inheritance, a child
+file targeting the same normalized destination replaces its parent in place;
+child-only destinations append in declaration order.
+
+`default_visibility` is `hidden` or `tracked`. It inherits from the parent and
+defaults to `hidden` only after the full chain is resolved. `setforge validate`
+also requires every resolved source to be a regular file confined to its
+declaring profile's source directory, including after resolving symlinks.
 
 <a id="codex-profile"></a>
 ## Complete mixed Codex profile
