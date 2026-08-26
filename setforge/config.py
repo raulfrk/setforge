@@ -1663,9 +1663,10 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     validate`` passes ``False`` so an unknown key surfaces as a strict
     schema error with a "did you mean" suggestion instead.
 
-    Raises :class:`ConfigError` on file-not-found, YAML parse errors, or
-    cross-field violations (e.g. a profile plugin package referencing
-    a name absent from the top-level ``claude_plugins:`` registry).
+    Raises :class:`ConfigError` on file-not-found, YAML parse errors, a
+    non-mapping document root, or cross-field violations (e.g. a profile
+    plugin package referencing a name absent from the top-level
+    ``claude_plugins:`` registry).
     Pydantic validation errors are propagated unchanged so the caller
     sees the full field-level message.
 
@@ -1687,6 +1688,10 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
         raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
+    if not isinstance(data, Mapping):
+        raise ConfigError(
+            f"setforge.yaml root must be a mapping, got {type(data).__name__}: {path}"
+        )
     _guard_schema_version(data, path)
     config = (
         _validate_tolerant(data) if tolerate_unknown else Config.model_validate(data)

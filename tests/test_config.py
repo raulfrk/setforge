@@ -101,6 +101,20 @@ def test_load_config_empty_file(tmp_path: Path) -> None:
         load_config(empty)
 
 
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [("list.yaml", "- just\n- a\n- list\n"), ("scalar.yaml", "not-a-mapping\n")],
+)
+def test_load_config_non_mapping_root(tmp_path: Path, name: str, content: str) -> None:
+    bad = tmp_path / name
+    bad.write_text(content, encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="root must be a mapping") as exc_info:
+        load_config(bad)
+
+    assert str(bad) in str(exc_info.value)
+
+
 def test_load_config_malformed_yaml(tmp_path: Path) -> None:
     # A YAML syntax error must surface as a clean ConfigError (naming the
     # file), not a raw ruamel ParserError/ScannerError traceback — the

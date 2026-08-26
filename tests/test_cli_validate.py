@@ -140,6 +140,18 @@ profiles:
     assert "not_a_real_field" in result.output or "schema" in result.output
 
 
+def test_validate_non_mapping_root_exits_cleanly(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path, "- just\n- a\n- list\n")
+
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
+
+    assert result.exit_code == 1, result.output
+    assert str(cfg) in result.output
+    assert "root must be a mapping" in result.output
+    assert "ValidationError" not in result.output
+    assert "Traceback" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # Test 3: missing profile
 # ---------------------------------------------------------------------------
