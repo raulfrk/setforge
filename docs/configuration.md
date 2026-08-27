@@ -81,9 +81,29 @@ loads. Everything else has a default:
 ## Project profiles
 
 `project_profiles` describes portable, project-relative files independently of
-the host profiles above. This first schema capability resolves and validates
-the declarations; it does not yet write into a target project or change Git
-visibility.
+the host profiles above. SetForge can resolve and validate these declarations,
+then inject them reversibly into an existing Git worktree:
+
+```console
+setforge project inject application /path/to/worktree --dry-run
+setforge project inject application /path/to/worktree --yes
+setforge project remove application /path/to/worktree --yes
+```
+
+Injection creates missing files, retains byte-and-mode-identical untracked
+files, and snapshots differing untracked files so `remove` can restore their
+exact bytes and mode. Removal refuses if an injected file has drifted. Both
+commands support `--dry-run`; live non-interactive use requires `--yes`.
+
+G2 records either hidden or tracked visibility intent (`--git-hidden` or
+`--git-tracked`) but does not yet edit Git excludes or the index. Existing
+Git-tracked destinations fail closed until mixed-file projection support lands.
+Non-Git target directories are likewise a later capability. Project metadata
+is stored in SetForge's private state directory, not in the target worktree.
+
+Injection and the future optional worktree auto-carry hook have independent
+lifecycles: `project remove` never changes that hook, and disabling the hook
+will preserve existing injections.
 
 ```yaml
 project_profiles:

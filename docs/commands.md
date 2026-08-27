@@ -82,11 +82,12 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `snapshot` | Create, list, and restore directory snapshots. |
 | `completion` | Install shell completions. |
 | `config` | Read or edit tracked and host-local configuration. |
+| `project` | Inject and remove reusable files in a project worktree. |
 <!-- setforge-doc-command-inventory:end -->
 
 ## Subcommand groups
 
-setforge ships nine subcommand groups for narrow inspections and edits. Run
+setforge ships ten subcommand groups for narrow inspections and edits. Run
 `setforge <group> --help` for each:
 
 | Group | Subcommands | Purpose |
@@ -100,6 +101,7 @@ setforge ships nine subcommand groups for narrow inspections and edits. Run
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
+| `project` | `inject`, `remove` | Reversibly materialize project profiles; Git visibility effects remain deferred. |
 
 ### Ownership authority
 

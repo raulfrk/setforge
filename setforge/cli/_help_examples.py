@@ -489,3 +489,29 @@ Examples:
   # Re-resolve a single package by its lock key, preserving the rest
   setforge lock --profile=<profile> --update=<key>
 """
+
+
+PROJECT_INJECT_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Preview a reversible injection into an existing Git worktree
+  setforge project inject <profile> /path/to/worktree --dry-run
+
+\b
+  # Apply non-interactively and record tracked publication intent
+  setforge project inject <profile> /path/to/worktree --git-tracked --yes
+"""
+
+
+PROJECT_REMOVE_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Preview exact restoration without changing the worktree
+  setforge project remove <profile> /path/to/worktree --dry-run
+
+\b
+  # Restore the pre-injection state non-interactively
+  setforge project remove <profile> /path/to/worktree --yes
+"""

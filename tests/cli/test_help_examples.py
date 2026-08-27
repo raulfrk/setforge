@@ -67,6 +67,8 @@ LEAF_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("snapshot", "list"),
     ("snapshot", "restore"),
     ("completion", "install"),
+    ("project", "inject"),
+    ("project", "remove"),
 )
 
 # Strip Click/Rich ANSI escapes so substring asserts on flag names

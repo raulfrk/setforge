@@ -55,6 +55,7 @@ TOP_LEVEL_COMMANDS = frozenset(
         "snapshot",
         "completion",
         "config",
+        "project",
     }
 )
 DOCUMENTED_FLAGS = {
