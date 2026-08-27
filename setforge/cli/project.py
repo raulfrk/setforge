@@ -44,10 +44,14 @@ def _confirm(command: str, *, yes: bool) -> bool:
 def _render_injection(plan: ProjectInjectionPlan) -> None:
     typer.echo(f"project profile: {plan.profile}")
     typer.echo(f"target: {plan.target}")
-    typer.echo(
-        f"visibility intent: {plan.visibility.value} "
-        "(recorded; Git publication is G3/G5)"
-    )
+    typer.echo(f"Git visibility: {plan.visibility.value}")
+    if plan.visibility_plan.changed:
+        action = (
+            "add private exclude claims"
+            if plan.visibility_plan.added
+            else "release private exclude claims"
+        )
+        typer.echo(f"  {action}: {plan.visibility_plan.exclude_path}")
     for item in plan.files:
         typer.echo(f"  {item.action.value}: {item.relative_destination}")
 
@@ -66,10 +70,10 @@ def project_inject(
     path: Path = typer.Argument(..., help="Existing Git worktree root."),
     config: Path = _CONFIG_OPTION,
     git_hidden: bool = typer.Option(
-        False, "--git-hidden", help="Record hidden visibility intent."
+        False, "--git-hidden", help="Hide injected files with private Git excludes."
     ),
     git_tracked: bool = typer.Option(
-        False, "--git-tracked", help="Record tracked visibility intent."
+        False, "--git-tracked", help="Leave injected files as normal Git content."
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview without changing files."
@@ -99,12 +103,16 @@ def project_inject(
         visibility=visibility,
     )
     if plan.no_op:
-        apply_injection(plan)
+        changed = apply_injection(plan, mutate_visibility=not dry_run)
         _render_injection(plan)
         if dry_run:
             typer.echo("dry run: no changes applied")
         else:
-            typer.echo("no changes: this exact injection is already current")
+            typer.echo(
+                "visibility activated for the existing injection"
+                if changed
+                else "no changes: this exact injection is already current"
+            )
         return
     _render_injection(plan)
     if dry_run:

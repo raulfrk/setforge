@@ -95,11 +95,21 @@ files, and snapshots differing untracked files so `remove` can restore their
 exact bytes and mode. Removal refuses if an injected file has drifted. Both
 commands support `--dry-run`; live non-interactive use requires `--yes`.
 
-G2 records either hidden or tracked visibility intent (`--git-hidden` or
-`--git-tracked`) but does not yet edit Git excludes or the index. Existing
-Git-tracked destinations fail closed until mixed-file projection support lands.
-Non-Git target directories are likewise a later capability. Project metadata
-is stored in SetForge's private state directory, not in the target worktree.
+SetForge applies either hidden or tracked visibility (`--git-hidden` or
+`--git-tracked`) while injecting. Hidden files receive exact, root-anchored
+claims in the repository's private `.git/info/exclude`; they do not appear in
+normal `git status`, and no hide metadata is committed. Tracked files remain
+ordinary untracked Git content until you stage them—SetForge never stages them.
+Removal releases only that injection's private claims and preserves both user
+exclude text and claims still used by sibling linked worktrees.
+
+Linked worktrees share the repository's `info/exclude`. Compatible hidden
+claims for the same relative path coexist, but hidden and tracked intent for the
+same path cannot differ between siblings; SetForge refuses that conflict before
+mutation. Existing Git-tracked destinations still fail closed until mixed-file
+projection support lands. Non-Git target directories are likewise a later
+capability. Project metadata is stored in SetForge's private state directory,
+not in the target worktree.
 
 Injection and the future optional worktree auto-carry hook have independent
 lifecycles: `project remove` never changes that hook, and disabling the hook

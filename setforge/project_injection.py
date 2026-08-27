@@ -22,6 +22,15 @@ from setforge.config import (
     ResolvedProjectProfile,
 )
 from setforge.errors import SetforgeError
+from setforge.git_visibility import (
+    VisibilityClaim,
+    VisibilityPlan,
+    apply_claims,
+    claim_id,
+    info_exclude_path,
+    plan_claims,
+    read_claims,
+)
 from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.orphan_scan import capture_parent_path_guards
 from setforge.ownership import (
@@ -80,6 +89,7 @@ class ProjectInjectionPlan:
     config_root: Path
     files: tuple[ProjectFilePlan, ...]
     manifest_path: Path
+    visibility_plan: VisibilityPlan
     no_op: bool = False
 
 
@@ -93,6 +103,7 @@ class ProjectRemovePlan:
     owner_id: uuid.UUID
     files: tuple[ProjectFilePlan, ...]
     created_parents: tuple[Path, ...]
+    visibility_plan: VisibilityPlan
 
 
 def _sha256(payload: bytes) -> str:
@@ -285,6 +296,27 @@ def plan_injection(
     root, git_dir, target_stat = _verified_git_worktree(target)
     state_path = manifest_path(root, profile)
     files = tuple(_plan_file(root, item) for item in resolved.files)
+    visibility_claims = tuple(
+        VisibilityClaim(
+            claim_id=claim_id(
+                target_git_dir=git_dir,
+                profile=profile,
+                relative_path=item.relative_destination.as_posix(),
+            ),
+            relative_path=item.relative_destination.as_posix(),
+        )
+        for item in files
+    )
+    _require_compatible_visibility(
+        target=root,
+        manifest=state_path,
+        visibility=visibility,
+        claims=visibility_claims,
+    )
+    visibility_plan = plan_claims(
+        root,
+        add=visibility_claims if visibility is ProjectVisibility.HIDDEN else (),
+    )
     plan = ProjectInjectionPlan(
         profile=profile,
         target=root,
@@ -295,6 +327,7 @@ def plan_injection(
         config_root=config_root.resolve(strict=True),
         files=files,
         manifest_path=state_path,
+        visibility_plan=visibility_plan,
     )
     if state_path.exists():
         _validate_existing_injection(plan)
@@ -308,9 +341,59 @@ def plan_injection(
             config_root=plan.config_root,
             files=plan.files,
             manifest_path=plan.manifest_path,
+            visibility_plan=plan.visibility_plan,
             no_op=True,
         )
     return plan
+
+
+def _require_compatible_visibility(
+    *,
+    target: Path,
+    manifest: Path,
+    visibility: ProjectVisibility,
+    claims: tuple[VisibilityClaim, ...],
+) -> None:
+    """Refuse repository-common hidden/tracked ambiguity before mutation."""
+    exclude_path, _, _, hidden_claims = read_claims(target)
+    hidden_paths = {claim.relative_path for claim in hidden_claims}
+    requested_paths = {claim.relative_path for claim in claims}
+    if visibility is ProjectVisibility.TRACKED and requested_paths & hidden_paths:
+        conflict = sorted(requested_paths & hidden_paths)[0]
+        raise SetforgeError(
+            f"project visibility conflicts across linked worktrees for {conflict}: "
+            "the repository already has a hidden claim"
+        )
+    records = state_root() / "project-injections"
+    if not records.is_dir():
+        return
+    for path in records.glob("*.json"):
+        if path == manifest:
+            continue
+        try:
+            raw = _load_manifest(path)
+            other_target = Path(str(raw["target"]))
+            if info_exclude_path(other_target) != exclude_path:
+                continue
+            other_visibility = ProjectVisibility(str(raw["visibility"]))
+            raw_files = raw["files"]
+            assert isinstance(raw_files, list)
+            other_paths = {
+                str(item["destination"])
+                for item in raw_files
+                if isinstance(item, dict) and "destination" in item
+            }
+        except (AssertionError, OSError, SetforgeError, ValueError) as exc:
+            raise SetforgeError(
+                f"cannot validate sibling project visibility record: {path}"
+            ) from exc
+        conflicts = requested_paths & other_paths
+        if conflicts and other_visibility is not visibility:
+            conflict = sorted(conflicts)[0]
+            raise SetforgeError(
+                f"project visibility conflicts across linked worktrees for {conflict}: "
+                f"recorded {other_visibility.value}, requested {visibility.value}"
+            )
 
 
 def _resource_id(target: Path, relative: Path) -> ResourceId:
@@ -563,7 +646,9 @@ def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
             os.fsync(parent_fd)
 
 
-def apply_injection(plan: ProjectInjectionPlan) -> bool:
+def apply_injection(
+    plan: ProjectInjectionPlan, *, mutate_visibility: bool = True
+) -> bool:
     """Apply a previously confirmed plan; return False for an exact no-op."""
     operation_profile = f"project-{_injection_key(plan.target, plan.profile)}"
     with mutation_locks(
@@ -616,7 +701,32 @@ def apply_injection(plan: ProjectInjectionPlan) -> bool:
                 raise SetforgeError(
                     "project injection ownership state is missing or mismatched"
                 )
-            return False
+            if not fresh.visibility_plan.changed or not mutate_visibility:
+                return False
+            visibility_paths = (fresh.visibility_plan.exclude_path,)
+            journal = operations.prepare(
+                command="project-inject",
+                profile=operation_profile,
+                config_dir=plan.config_root,
+                resources_lock=True,
+                command_line=("project", "inject", plan.profile, str(plan.target)),
+                paths=visibility_paths,
+                path_guards=capture_parent_path_guards(visibility_paths),
+            )
+            with operations.recover_on_error(operation_profile, "project-inject"):
+                journal = operations.begin_checkpoint(
+                    journal,
+                    name="activate-project-visibility",
+                    kind=operations.CheckpointKind.REVERSIBLE,
+                    recovery="restore the repository-private Git visibility file",
+                    paths=visibility_paths,
+                    restore_state=False,
+                    restore_transitions=False,
+                )
+                apply_claims(fresh.visibility_plan)
+                journal = operations.finish_checkpoint(journal)
+                operations.complete(journal)
+            return True
         if any(
             claim is not None
             and not _claim_matches_plan(
@@ -636,6 +746,7 @@ def apply_injection(plan: ProjectInjectionPlan) -> bool:
             *(item.destination for item in plan.files),
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
+            plan.visibility_plan.exclude_path,
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(
@@ -686,6 +797,7 @@ def apply_injection(plan: ProjectInjectionPlan) -> bool:
                     fingerprint=_claim_fingerprint(item),
                     expected_generation=expected_generation,
                 )
+            apply_claims(plan.visibility_plan)
             atomicio.atomic_write_bytes(
                 plan.manifest_path, _manifest_payload(plan, owner_id), mode=0o600
             )
@@ -859,6 +971,33 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 created_parents=parents,
             )
         )
+    try:
+        visibility = ProjectVisibility(str(raw["visibility"]))
+    except ValueError as exc:
+        raise SetforgeError("project injection state has invalid visibility") from exc
+    hidden_to_remove: tuple[VisibilityClaim, ...] = ()
+    if visibility is ProjectVisibility.HIDDEN:
+        expected_claims = tuple(
+            VisibilityClaim(
+                claim_id=claim_id(
+                    target_git_dir=git_dir,
+                    profile=profile,
+                    relative_path=item.relative_destination.as_posix(),
+                ),
+                relative_path=item.relative_destination.as_posix(),
+            )
+            for item in files
+        )
+        _, _, _, current_claims = read_claims(root)
+        current_by_id = {claim.claim_id: claim for claim in current_claims}
+        for claim in expected_claims:
+            observed = current_by_id.get(claim.claim_id)
+            if observed is not None and observed != claim:
+                raise SetforgeError("Git visibility claim identity collides")
+        hidden_to_remove = tuple(
+            claim for claim in expected_claims if claim.claim_id in current_by_id
+        )
+    visibility_plan = plan_claims(root, remove=hidden_to_remove)
     return ProjectRemovePlan(
         profile=profile,
         target=root,
@@ -868,6 +1007,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         created_parents=tuple(
             sorted(all_parents, key=lambda path: len(path.parts), reverse=True)
         ),
+        visibility_plan=visibility_plan,
     )
 
 
@@ -949,6 +1089,7 @@ def apply_removal(plan: ProjectRemovePlan, *, config_root: Path) -> None:
             *plan.created_parents,
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
+            plan.visibility_plan.exclude_path,
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(
@@ -971,6 +1112,7 @@ def apply_removal(plan: ProjectRemovePlan, *, config_root: Path) -> None:
                 restore_transitions=False,
             )
             _restore_planned_files(plan, resources, claims, store, guards)
+            apply_claims(plan.visibility_plan)
             for parent in plan.created_parents:
                 _remove_created_parent(
                     guards.targets[0], parent.relative_to(plan.target)

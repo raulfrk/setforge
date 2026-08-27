@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,12 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.git_visibility import (
+    apply_claims,
+    info_exclude_path,
+    plan_claims,
+    read_claims,
+)
 from setforge.locking import TargetLockGuard
 from setforge.ownership import (
     Authority,
@@ -20,7 +27,7 @@ from setforge.ownership import (
     ownership_claim_to_json,
     resolve_owner_common_dir,
 )
-from setforge.project_injection import manifest_path
+from setforge.project_injection import ProjectInjectionPlan, manifest_path
 
 
 def _git_repo(path: Path) -> Path:
@@ -60,7 +67,16 @@ def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> No
     )
     assert injected.exit_code == 0, injected.output
     assert (target / "AGENTS.md").read_text() == "managed instructions\n"
-    assert "visibility intent: hidden" in injected.output
+    assert "Git visibility: hidden" in injected.output
+    assert (
+        subprocess.run(
+            ["git", "-C", str(target), "status", "--short"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        == ""
+    )
 
     removed = CliRunner().invoke(
         app,
@@ -364,7 +380,7 @@ def test_visibility_flags_are_exclusive_and_tracked_intent_is_only_recorded(
 
     tracked = CliRunner().invoke(app, [*base, "--git-tracked", "--yes"])
     assert tracked.exit_code == 0, tracked.exception
-    assert "visibility intent: tracked" in tracked.output
+    assert "Git visibility: tracked" in tracked.output
     status = subprocess.run(
         ["git", "-C", str(target), "status", "--short"],
         check=True,
@@ -465,6 +481,32 @@ def test_full_preflight_and_mid_apply_failure_leave_target_unchanged(
     assert not manifest_path(target, "demo").exists()
 
 
+def test_failure_after_visibility_write_compensates_every_effect(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    exclude = target / ".git" / "info" / "exclude"
+    original_exclude = exclude.read_bytes()
+
+    def fail_manifest(_plan: ProjectInjectionPlan, _owner_id: uuid.UUID) -> bytes:
+        raise OSError("forced manifest failure")
+
+    monkeypatch.setattr("setforge.project_injection._manifest_payload", fail_manifest)
+    failed = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+
+    assert failed.exit_code == 1
+    assert isinstance(failed.exception, OSError)
+    assert not (target / "AGENTS.md").exists()
+    assert not manifest_path(target, "demo").exists()
+    assert OwnershipStore().list_claims() == ()
+    assert exclude.read_bytes() == original_exclude
+
+
 def test_linked_worktrees_have_independent_injections(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -521,6 +563,239 @@ def test_linked_worktrees_have_independent_injections(
     assert manifest_path(target, "demo") != manifest_path(linked, "demo")
     assert manifest_path(target, "demo").exists()
     assert manifest_path(linked, "demo").exists()
+
+
+def test_linked_hidden_claims_release_independently_and_conflict_with_tracked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "-c",
+            "user.name=SetForge Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        check=True,
+    )
+    linked = tmp_path / "linked"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            str(linked),
+        ],
+        check=True,
+    )
+    base = ["project", "inject", "demo"]
+    for worktree in (target, linked):
+        result = CliRunner().invoke(
+            app,
+            [*base, str(worktree), "--config", str(config), "--yes"],
+        )
+        assert result.exit_code == 0, result.exception
+    assert len(read_claims(target)[3]) == 2
+
+    removed = CliRunner().invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, removed.exception
+    assert len(read_claims(linked)[3]) == 1
+    assert (
+        subprocess.run(
+            ["git", "-C", str(linked), "status", "--short"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        == ""
+    )
+
+    tracked_conflict = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--git-tracked",
+            "--yes",
+        ],
+    )
+    assert tracked_conflict.exit_code == 1
+    assert tracked_conflict.exception is not None
+    assert "linked worktrees" in str(tracked_conflict.exception)
+    assert not (target / "AGENTS.md").exists()
+
+    remove_linked = CliRunner().invoke(
+        app,
+        ["project", "remove", "demo", str(linked), "--config", str(config), "--yes"],
+    )
+    assert remove_linked.exit_code == 0, remove_linked.exception
+    tracked = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--git-tracked",
+            "--yes",
+        ],
+    )
+    assert tracked.exit_code == 0, tracked.exception
+    hidden_conflict = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(linked),
+            "--config",
+            str(config),
+            "--yes",
+        ],
+    )
+    assert hidden_conflict.exit_code == 1
+    assert hidden_conflict.exception is not None
+    assert "recorded tracked, requested hidden" in str(hidden_conflict.exception)
+    assert not (linked / "AGENTS.md").exists()
+
+
+def test_existing_g2_hidden_record_activates_only_on_live_reinject(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    command = [
+        "project",
+        "inject",
+        "demo",
+        str(target),
+        "--config",
+        str(config),
+    ]
+    first = CliRunner().invoke(app, [*command, "--yes"])
+    assert first.exit_code == 0, first.exception
+    claim = read_claims(target)[3][0]
+    apply_claims(plan_claims(target, remove=(claim,)))
+    assert (
+        subprocess.run(
+            ["git", "-C", str(target), "status", "--short"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        == "?? AGENTS.md\n"
+    )
+
+    dry = CliRunner().invoke(app, [*command, "--dry-run"])
+    assert dry.exit_code == 0, dry.exception
+    assert read_claims(target)[3] == ()
+    live = CliRunner().invoke(app, [*command, "--yes"])
+    assert live.exit_code == 0, live.exception
+    assert "visibility activated" in live.output
+    assert read_claims(target)[3] == (claim,)
+
+
+def test_corrupt_sibling_manifest_blocks_visibility_without_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "-c",
+            "user.name=SetForge Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        check=True,
+    )
+    linked = tmp_path / "linked"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked-corrupt",
+            str(linked),
+        ],
+        check=True,
+    )
+    tracked = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--git-tracked",
+            "--yes",
+        ],
+    )
+    assert tracked.exit_code == 0, tracked.exception
+    sibling_manifest = manifest_path(target, "demo")
+    sibling_manifest.write_bytes(b"{corrupt")
+    exclude = info_exclude_path(target)
+    before_exclude = exclude.read_bytes()
+
+    hidden = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(linked),
+            "--config",
+            str(config),
+            "--yes",
+        ],
+    )
+
+    assert hidden.exit_code == 1
+    assert hidden.exception is not None
+    assert "cannot validate sibling project visibility record" in str(hidden.exception)
+    assert not (linked / "AGENTS.md").exists()
+    assert exclude.read_bytes() == before_exclude
+    assert sibling_manifest.read_bytes() == b"{corrupt"
 
 
 def test_remove_then_reinject_reclaims_released_ownership(
