@@ -38,18 +38,17 @@ git push origin vX.Y.Z
 
 The tag push fires two workflows:
 
-- [`publish-pypi.yml`](../.github/workflows/publish-pypi.yml) — `uv build` +
-  `twine check` + PyPI upload. It is idempotent (`skip-existing: true`), so
-  re-pushing the same tag is safe.
+- [`publish-pypi.yml`](../.github/workflows/publish-pypi.yml) — currently
+  disabled with `if: false` until PyPI publishing credentials are configured.
+  Tag pushes therefore skip package build and upload.
 - [`release.yml`](../.github/workflows/release.yml) — `gh release create` with
   auto-generated notes for the commit range since the previous tag.
 
-Verify on <https://pypi.org/project/setforge/> and the GitHub Releases tab.
+Verify the GitHub Releases tab and confirm the PyPI workflow was skipped.
 
 ### PyPI credentials
 
-The publish workflow authenticates to PyPI via a `PYPI_API_TOKEN` secret in a
-`pypi` GitHub environment. If neither that secret nor a configured PyPI Trusted
-Publisher (with `id-token: write` on the job) is present, the upload step fails
-while build + twine-check still pass — re-run the publish job after wiring up
-credentials.
+Before enabling the publish job, configure either a `PYPI_API_TOKEN` secret in
+the `pypi` GitHub environment or a PyPI Trusted Publisher with `id-token: write`.
+Enabling publication is a separate release-infrastructure change; do not remove
+the guard merely to cut a GitHub release.

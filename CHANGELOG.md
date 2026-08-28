@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-28
+
+The project-profile release. SetForge can now describe a project once, inject it
+into selected Git checkouts and worktrees, and atomically reconcile every
+recorded Claude and Codex injection for one named target while preserving
+explicit membership, visibility, and host-local choices.
+
+### Added
+
+- **Project profiles across repositories and worktrees.** Typed project
+  declarations resolve repository identities, profile membership, and target
+  visibility without conflating linked worktrees or unrelated clones.
+- **Explicit project injection and removal.** Operators can add or remove a
+  project profile from selected Claude and Codex targets while retaining
+  unrelated configuration and refusing ambiguous legacy state.
+- **Atomic target-wide project sync.** One command plans and applies the full
+  target set with deterministic multi-config locking, exact stale-plan checks,
+  transactional rollback, restart recovery, and hunk-level conflict resolution.
+- **Private Git visibility controls.** Exact project paths can be published to a
+  repository's private `.git/info/exclude`, shared by its linked worktrees, so
+  hidden paths stay out of normal Git status while no hide metadata is committed.
+
+### Changed
+
+- **Configuration failures are stricter and clearer.** Non-mapping roots and
+  unsupported file-format versions now refuse with focused diagnostics instead
+  of failing later or accepting an unsafe shape.
+- **Nightly verification is more reliable.** Quality-gate fixtures isolate
+  parallel workers and keep mutation/static-analysis execution hermetic.
+
 ## [1.1.0] - 2026-08-25
 
 The safe-adoption and Codex-integration release. SetForge can now discover,
@@ -320,7 +350,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/raulfrk/setforge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/raulfrk/setforge/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/raulfrk/setforge/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/raulfrk/setforge/compare/v0.2.0...v0.2.2
