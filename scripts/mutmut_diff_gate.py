@@ -78,18 +78,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Mirrors [tool.mutmut].only_mutate; absent files are skipped (config predates
-# the disposition/sections retirement, so the nominal scope is stale-but-larger).
+# Mirrors [tool.mutmut].only_mutate.
 CORE_FILES: tuple[str, ...] = (
-    "setforge/disposition_merge.py",
     "setforge/markdown_merge.py",
     "setforge/scalar_merge.py",
     "setforge/structural_merge.py",
     "setforge/yaml_merge.py",
-    "setforge/section_reconcile.py",
     "setforge/base_store.py",
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
+    "setforge/project_sync.py",
 )
 
 ALLOWLIST_PATH = REPO_ROOT / "tests" / "mutmut_allowlist.txt"

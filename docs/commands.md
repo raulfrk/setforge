@@ -82,7 +82,7 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `snapshot` | Create, list, and restore directory snapshots. |
 | `completion` | Install shell completions. |
 | `config` | Read or edit tracked and host-local configuration. |
-| `project` | Inject and remove reusable files in a project worktree. |
+| `project` | Inject, synchronize, and remove reusable files in a project worktree. |
 <!-- setforge-doc-command-inventory:end -->
 
 ## Subcommand groups
@@ -101,7 +101,30 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
-| `project` | `inject`, `remove` | Reversibly materialize project profiles with private hidden or ordinary tracked Git visibility. |
+| `project` | `inject`, `sync`, `remove` | Reversibly materialize and synchronize project profiles while preserving private hidden or ordinary tracked Git visibility. |
+
+### Project profile synchronization
+
+`setforge project sync <path>` discovers every recorded profile injection for
+that exact Git worktree and plans them as one transaction. `--dry-run` prints
+updates, membership additions/removals, legacy records, and conflict counts
+without changing files or private state. A live run preserves independent local
+edits with three-way reconciliation and opens the existing per-region wizard for
+overlapping edits when stdin is a TTY.
+
+For non-interactive use, pass both `--yes` and either `--auto=keep-live` or
+`--auto=use-profile` when conflicts are possible. Without an explicit automatic
+policy, unresolved non-TTY conflicts fail without mutation. A cancellation or
+deferred region also leaves the whole target batch unchanged.
+Membership additions that collide with differing local files follow the same
+conflict policy. For conflicts involving an absent file, the wizard records
+whether Ours or Theirs was selected so deletion remains distinct from choosing
+an intentionally empty file.
+
+```console
+$ setforge project sync /path/to/worktree --dry-run
+$ setforge project sync /path/to/worktree --auto=keep-live --yes
+```
 
 ### Ownership authority
 

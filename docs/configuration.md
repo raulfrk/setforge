@@ -87,6 +87,7 @@ then inject them reversibly into an existing Git worktree:
 ```console
 setforge project inject application /path/to/worktree --dry-run
 setforge project inject application /path/to/worktree --yes
+setforge project sync /path/to/worktree --dry-run
 setforge project remove application /path/to/worktree --yes
 ```
 
@@ -94,6 +95,34 @@ Injection creates missing files, retains byte-and-mode-identical untracked
 files, and snapshots differing untracked files so `remove` can restore their
 exact bytes and mode. Removal refuses if an injected file has drifted. Both
 commands support `--dry-run`; live non-interactive use requires `--yes`.
+
+After profile sources or membership change, `project sync <path>` reconciles
+every injection recorded for the exact target atomically—even when those
+profiles came from different config repositories. Existing members use the
+stored upstream ancestor, current project bytes, and current profile bytes for
+a three-way merge. Independent project edits survive automatically; overlapping
+regions use the same Ours/Theirs/Edit/Claude-merge/Skip wizard as ordinary
+reconciliation. `--auto=keep-live` and `--auto=use-profile` are the explicit
+non-interactive alternatives.
+An executable-mode conflict also fails closed unless one of those explicit
+automatic policies chooses the live or profile mode.
+When one side of a conflict is an absent file, the wizard records whether Ours
+or Theirs was selected so deletion remains distinct from choosing an
+intentionally empty file.
+
+Older injection records did not retain ancestor bytes. Their first sync exposes
+each differing line hunk as a conflict instead of guessing its author. A
+successful resolution upgrades only that record to the current private schema
+and establishes the profile bytes as the ancestor for later true three-way
+syncs. Dry runs, unresolved conflicts, cancellation, and faults do not migrate
+records or partially update another profile at the target.
+
+New profile members inherit their injection's visibility. A new member whose
+destination already contains differing local bytes or mode is a conflict, not
+an implicit replacement. Removed members
+reconcile toward the exact pre-injection state and release only their ownership
+and visibility claims. Existing members keep their visibility throughout sync;
+hidden files therefore remain absent from normal `git status`.
 
 SetForge applies either hidden or tracked visibility (`--git-hidden` or
 `--git-tracked`) while injecting. Hidden files receive exact, root-anchored
@@ -111,7 +140,7 @@ projection support lands. Non-Git target directories are likewise a later
 capability. Project metadata is stored in SetForge's private state directory,
 not in the target worktree.
 
-Injection and the future optional worktree auto-carry hook have independent
+Injection, synchronization, and the future optional worktree auto-carry hook have independent
 lifecycles: `project remove` never changes that hook, and disabling the hook
 will preserve existing injections.
 

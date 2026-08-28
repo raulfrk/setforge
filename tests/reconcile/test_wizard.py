@@ -86,6 +86,7 @@ def test_ours_folds_exact_bytes() -> None:
     assert out.merged.merged() == b"A\n"
     assert out.merged.clean
     assert out.deferred is False
+    assert out.selections == ("ours",)
 
 
 def test_theirs_folds_exact_bytes() -> None:
@@ -93,6 +94,7 @@ def test_theirs_folds_exact_bytes() -> None:
     assert isinstance(out, WizardResult)
     assert out.merged.merged() == b"B\n"
     assert out.deferred is False
+    assert out.selections == ("theirs",)
 
 
 def test_skip_keeps_ours_and_marks_deferred() -> None:
@@ -100,6 +102,7 @@ def test_skip_keeps_ours_and_marks_deferred() -> None:
     assert isinstance(out, WizardResult)
     assert out.merged.merged() == b"A\n"
     assert out.deferred is True
+    assert out.selections == ("ours",)
 
 
 def test_multi_region_interleaves_clean_runs() -> None:
@@ -113,6 +116,7 @@ def test_multi_region_interleaves_clean_runs() -> None:
     out = _run(result, b"to")  # region 1 -> Theirs, region 2 -> Ours
     assert isinstance(out, WizardResult)
     assert out.merged.merged() == b"B\nmiddle\nC\n"
+    assert out.selections == ("theirs", "ours")
 
 
 def test_clean_segments_pass_through_identically() -> None:

@@ -47,7 +47,8 @@ from setforge.ownership import (
 )
 from setforge.transitions import state_root
 
-_MANIFEST_SCHEMA = 1
+_MANIFEST_SCHEMA = 2
+_LEGACY_MANIFEST_SCHEMA = 1
 
 
 class ProjectFileAction(StrEnum):
@@ -87,6 +88,7 @@ class ProjectInjectionPlan:
     git_dir: Path
     visibility: ProjectVisibility
     config_root: Path
+    config_path: Path
     files: tuple[ProjectFilePlan, ...]
     manifest_path: Path
     visibility_plan: VisibilityPlan
@@ -289,6 +291,7 @@ def plan_injection(
     profile: str,
     target: Path,
     config_root: Path,
+    config_path: Path | None = None,
     resolved: ResolvedProjectProfile,
     visibility: ProjectVisibility,
 ) -> ProjectInjectionPlan:
@@ -317,6 +320,18 @@ def plan_injection(
         root,
         add=visibility_claims if visibility is ProjectVisibility.HIDDEN else (),
     )
+    canonical_config_root = config_root.resolve(strict=True)
+    canonical_config_path = (
+        config_path.resolve(strict=True)
+        if config_path is not None
+        else (canonical_config_root / "setforge.yaml").resolve(strict=True)
+    )
+    try:
+        canonical_config_path.relative_to(canonical_config_root)
+    except ValueError as exc:
+        raise SetforgeError(
+            f"project config must be inside its config root: {canonical_config_path}"
+        ) from exc
     plan = ProjectInjectionPlan(
         profile=profile,
         target=root,
@@ -324,7 +339,8 @@ def plan_injection(
         target_inode=target_stat.st_ino,
         git_dir=git_dir,
         visibility=visibility,
-        config_root=config_root.resolve(strict=True),
+        config_root=canonical_config_root,
+        config_path=canonical_config_path,
         files=files,
         manifest_path=state_path,
         visibility_plan=visibility_plan,
@@ -339,6 +355,7 @@ def plan_injection(
             git_dir=plan.git_dir,
             visibility=plan.visibility,
             config_root=plan.config_root,
+            config_path=plan.config_path,
             files=plan.files,
             manifest_path=plan.manifest_path,
             visibility_plan=plan.visibility_plan,
@@ -450,6 +467,9 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
                 "action": item.action.value,
                 "applied_digest": item.source_digest,
                 "applied_mode": item.source_mode,
+                "applied_payload": base64.b64encode(item.source_payload).decode(
+                    "ascii"
+                ),
                 "created_parents": [
                     parent.relative_to(plan.target).as_posix()
                     for parent in item.created_parents
@@ -464,11 +484,16 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
                 ),
                 "source": str(item.source),
                 "source_digest": item.source_digest,
+                "upstream_mode": item.source_mode,
+                "upstream_payload": base64.b64encode(item.source_payload).decode(
+                    "ascii"
+                ),
                 "destination": item.relative_destination.as_posix(),
             }
         )
     payload = {
         "config_owner_id": str(owner_id),
+        "config_path": str(plan.config_path),
         "config_root": str(plan.config_root),
         "files": files,
         "git_dir": str(plan.git_dir),
@@ -482,7 +507,8 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
     return (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
 
 
-def _load_manifest(path: Path) -> dict[str, object]:
+def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
+    """Load and validate a manifest while retaining its exact bound bytes."""
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError as exc:
@@ -510,7 +536,17 @@ def _load_manifest(path: Path) -> dict[str, object]:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-    if not isinstance(raw, dict) or raw.get("schema") != _MANIFEST_SCHEMA:
+    schema = raw.get("schema") if isinstance(raw, dict) else None
+    if (
+        not isinstance(raw, dict)
+        or not isinstance(schema, int)
+        or isinstance(schema, bool)
+        or schema
+        not in {
+            _LEGACY_MANIFEST_SCHEMA,
+            _MANIFEST_SCHEMA,
+        }
+    ):
         raise SetforgeError(
             f"project injection state has an unsupported schema: {path}"
         )
@@ -526,8 +562,15 @@ def _load_manifest(path: Path) -> dict[str, object]:
         "target_inode",
         "visibility",
     }
+    if raw["schema"] == _MANIFEST_SCHEMA:
+        required.add("config_path")
     if set(raw) != required or not isinstance(raw["files"], list):
         raise SetforgeError(f"project injection state has invalid fields: {path}")
+    return raw, payload
+
+
+def _load_manifest(path: Path) -> dict[str, object]:
+    raw, _payload = _load_manifest_payload(path)
     return raw
 
 
@@ -540,6 +583,10 @@ def _validate_existing_injection(plan: ProjectInjectionPlan) -> None:
         or raw["target_inode"] != plan.target_inode
         or raw["git_dir"] != str(plan.git_dir)
         or raw["config_root"] != str(plan.config_root)
+        or (
+            raw["schema"] == _MANIFEST_SCHEMA
+            and raw["config_path"] != str(plan.config_path)
+        )
         or raw["visibility"] != plan.visibility.value
     ):
         raise SetforgeError(
@@ -867,6 +914,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             "source",
             "source_digest",
         }
+        if raw["schema"] == _MANIFEST_SCHEMA:
+            expected_fields |= {
+                "applied_payload",
+                "upstream_mode",
+                "upstream_payload",
+            }
         if set(entry) != expected_fields:
             raise SetforgeError("project injection state has invalid file fields")
         try:
@@ -884,9 +937,30 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             file_ids.add(file_id)
             destination = root / relative
             action = ProjectFileAction(str(entry["action"]))
-            applied_digest = str(entry["applied_digest"])
             source_digest = str(entry["source_digest"])
-            applied_mode = int(entry["applied_mode"])
+            if raw["schema"] == _MANIFEST_SCHEMA:
+                applied_payload_raw = entry["applied_payload"]
+                applied_digest_raw = entry["applied_digest"]
+                applied_mode_raw = entry["applied_mode"]
+                applied_payload = (
+                    base64.b64decode(str(applied_payload_raw), validate=True)
+                    if applied_payload_raw is not None
+                    else None
+                )
+                applied_digest = (
+                    str(applied_digest_raw) if applied_digest_raw is not None else None
+                )
+                applied_mode = (
+                    int(applied_mode_raw) if applied_mode_raw is not None else None
+                )
+                upstream_payload = base64.b64decode(
+                    str(entry["upstream_payload"]), validate=True
+                )
+                upstream_mode = int(entry["upstream_mode"])
+            else:
+                applied_digest = str(entry["applied_digest"])
+                applied_mode = int(entry["applied_mode"])
+                applied_payload = None
             previous_mode_raw = entry["previous_mode"]
             previous_mode = (
                 int(previous_mode_raw) if previous_mode_raw is not None else None
@@ -908,10 +982,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             destination.relative_to(root)
             _created_parents(root, destination)
             info = destination.lstat()
-        except (ValueError, FileNotFoundError) as exc:
+        except ValueError as exc:
             raise SetforgeError(
-                f"injected project file is missing or unsafe: {destination}"
+                f"injected project file is unsafe: {destination}"
             ) from exc
+        except FileNotFoundError:
+            info = None
         for parent in parents:
             try:
                 relative_parent = parent.relative_to(root)
@@ -925,35 +1001,73 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 or ".." in relative_parent.parts
             ):
                 raise SetforgeError("project injection state has an invalid parent")
-        applied_payload = destination.read_bytes()
+        live_payload = destination.read_bytes() if info is not None else None
         baseline_absent = previous_payload is None and previous_mode is None
         baseline_complete = previous_payload is not None and previous_mode is not None
+        applied_absent = (
+            applied_payload is None and applied_digest is None and applied_mode is None
+        )
+        applied_complete = (
+            applied_payload is not None
+            and applied_digest is not None
+            and applied_mode is not None
+        )
         if (
-            applied_digest != source_digest
+            (
+                raw["schema"] == _LEGACY_MANIFEST_SCHEMA
+                and applied_digest != source_digest
+            )
+            or (
+                raw["schema"] == _MANIFEST_SCHEMA
+                and (
+                    (not applied_absent and not applied_complete)
+                    or (
+                        applied_payload is not None
+                        and _sha256(applied_payload) != applied_digest
+                    )
+                    or _sha256(upstream_payload) != source_digest
+                    or upstream_mode < 0
+                )
+            )
             or (action is ProjectFileAction.CREATE and not baseline_absent)
             or (action is not ProjectFileAction.CREATE and not baseline_complete)
             or (
-                action is ProjectFileAction.RETAIN
-                and (
-                    previous_payload != applied_payload or previous_mode != applied_mode
-                )
+                raw["schema"] == _LEGACY_MANIFEST_SCHEMA
+                and action is ProjectFileAction.RETAIN
+                and (previous_payload != live_payload or previous_mode != applied_mode)
             )
             or (
-                action is ProjectFileAction.REPLACE
-                and previous_payload == applied_payload
+                raw["schema"] == _LEGACY_MANIFEST_SCHEMA
+                and action is ProjectFileAction.REPLACE
+                and previous_payload == live_payload
                 and previous_mode == applied_mode
             )
         ):
             raise SetforgeError(
                 "project injection state has an inconsistent file record"
             )
-        if (
-            stat.S_ISLNK(info.st_mode)
-            or not stat.S_ISREG(info.st_mode)
-            or _sha256(applied_payload) != applied_digest
-            or stat.S_IMODE(info.st_mode) != applied_mode
-        ):
+        live_matches_absent = info is None and applied_absent
+        live_matches_present = (
+            info is not None
+            and not stat.S_ISLNK(info.st_mode)
+            and stat.S_ISREG(info.st_mode)
+            and live_payload is not None
+            and applied_digest is not None
+            and _sha256(live_payload) == applied_digest
+            and stat.S_IMODE(info.st_mode) == applied_mode
+        )
+        if not live_matches_absent and not live_matches_present:
             raise SetforgeError(f"injected project file has drifted: {destination}")
+        if raw["schema"] == _MANIFEST_SCHEMA:
+            claim_payload = upstream_payload
+            claim_mode = upstream_mode
+        else:
+            if live_payload is None or applied_mode is None:
+                raise SetforgeError(
+                    "legacy project injection has incomplete applied state"
+                )
+            claim_payload = live_payload
+            claim_mode = applied_mode
         all_parents.update(parents)
         files.append(
             ProjectFilePlan(
@@ -962,9 +1076,9 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 source=Path(str(entry["source"])),
                 destination=destination,
                 relative_destination=relative,
-                source_payload=applied_payload,
-                source_mode=applied_mode,
-                source_digest=applied_digest,
+                source_payload=claim_payload,
+                source_mode=claim_mode,
+                source_digest=source_digest,
                 action=action,
                 previous_payload=previous_payload,
                 previous_mode=previous_mode,
@@ -1021,16 +1135,33 @@ def _restore_planned_files(
     for item, resource, claim in zip(plan.files, resources, claims, strict=True):
         guards.verify_targets()
         if item.action is ProjectFileAction.CREATE:
-            _unlink_project_file(guards.targets[0], item.relative_destination)
-        elif item.action is ProjectFileAction.REPLACE:
+            try:
+                item.destination.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                _unlink_project_file(guards.targets[0], item.relative_destination)
+        else:
             if item.previous_payload is None or item.previous_mode is None:
-                raise SetforgeError("project injection replacement baseline is corrupt")
-            _write_project_file(
-                guards.targets[0],
-                item.relative_destination,
-                item.previous_payload,
-                item.previous_mode,
+                raise SetforgeError("project injection restoration baseline is corrupt")
+            current_payload = (
+                item.destination.read_bytes() if item.destination.exists() else None
             )
+            current_mode = (
+                stat.S_IMODE(item.destination.stat().st_mode)
+                if item.destination.exists()
+                else None
+            )
+            if (
+                current_payload != item.previous_payload
+                or current_mode != item.previous_mode
+            ):
+                _write_project_file(
+                    guards.targets[0],
+                    item.relative_destination,
+                    item.previous_payload,
+                    item.previous_mode,
+                )
         if claim is None:
             raise SetforgeError("project injection ownership state changed")
         store.release_locked(

@@ -88,6 +88,7 @@ class WizardResult:
 
     merged: MergeResult
     deferred: bool
+    selections: tuple[str | None, ...] = ()
 
 
 class _Choice(StrEnum):
@@ -254,7 +255,7 @@ def _resolve_region(
     index: int,
     total: int,
     claude_merge: ClaudeMergeFn,
-) -> tuple[bytes, bool] | Cancelled:
+) -> tuple[bytes, bool, str | None] | Cancelled:
     """Drive one region to a ``(chosen_bytes, was_skipped)`` outcome.
 
     Returns :data:`CANCEL` only when the user backs out of the region menu
@@ -270,21 +271,21 @@ def _resolve_region(
         if choice is CANCEL:
             return CANCEL
         if choice is _Choice.OURS:
-            return (conflict.ours, False)
+            return (conflict.ours, False, _Choice.OURS.value)
         if choice is _Choice.THEIRS:
-            return (conflict.theirs, False)
+            return (conflict.theirs, False, _Choice.THEIRS.value)
         if choice is _Choice.SKIP:
-            return (conflict.ours, True)
+            return (conflict.ours, True, _Choice.OURS.value)
         if choice is _Choice.EDIT:
             edited = _edit_region(conflict)
             if edited is CANCEL:
                 continue
-            return (edited, False)
+            return (edited, False, None)
         # _Choice.CLAUDE_MERGE
         merged = claude_merge(conflict)
         if merged is CANCEL:
             continue
-        return (merged, False)
+        return (merged, False, None)
 
 
 def resolve_conflicts(
@@ -313,6 +314,7 @@ def resolve_conflicts(
     total = sum(1 for seg in result.segments if isinstance(seg, Conflict))
     out: list[Segment] = []
     deferred = False
+    selections: list[str | None] = []
     index = 0
     for seg in result.segments:
         if isinstance(seg, Clean):
@@ -324,7 +326,10 @@ def resolve_conflicts(
         )
         if outcome is CANCEL:
             return CANCEL
-        chosen, was_skip = outcome
+        chosen, was_skip, selection = outcome
         out.append(Clean(chosen))
         deferred = deferred or was_skip
-    return WizardResult(MergeResult(tuple(out), absent=result.absent), deferred)
+        selections.append(selection)
+    return WizardResult(
+        MergeResult(tuple(out), absent=result.absent), deferred, tuple(selections)
+    )

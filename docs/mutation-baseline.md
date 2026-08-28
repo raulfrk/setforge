@@ -44,6 +44,12 @@ The mutmut run executes a **sandbox-clean test selection** (see
 `mutants/` sandbox and any test that reads uncopied repo files
 (CHANGELOG/docs/migrations) fails there and aborts the run under mutmut's `-x`.
 
+G4 adds `project_sync` and `tests/test_project_sync.py` to the enforced mutation
+scope. The score and counts above remain the last complete historical baseline;
+the next full nightly run must establish the expanded-scope baseline. G4's
+pre-commit evidence is selective over its changed planner, compatibility,
+conflict-policy, and transaction functions.
+
 ### Broadened selection (this change)
 
 The core is reached at runtime through `deploy.py` / `reconcile/` /

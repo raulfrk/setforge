@@ -171,6 +171,12 @@ def _filesystem_identity(path: Path) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+def _config_identity_key(path: Path) -> str:
+    """Return the same ordering key used by ``config_identity_lock``."""
+    device, inode = _filesystem_identity(path)
+    return f"{device}:{inode}"
+
+
 def _target_snapshot(request: TargetLockRequest) -> _TargetLockSnapshot:
     target = request.target.absolute()
     if not target.name:
@@ -338,6 +344,7 @@ class MutationLockGuards:
 
     targets: tuple[TargetLockGuard, ...] = ()
     config_identity: ConfigIdentityGuard | None = None
+    config_identities: tuple[ConfigIdentityGuard, ...] = ()
 
     def verify_targets(self) -> None:
         """Revalidate every target immediately before coupled publication."""
@@ -537,6 +544,7 @@ def mutation_locks(
     *,
     resources: bool = False,
     config_identity_dir: Path | None = None,
+    config_identity_dirs: tuple[Path, ...] = (),
     config_dir: Path | None = None,
     config_dirs: tuple[Path, ...] = (),
     target_roots: tuple[Path, ...] = (),
@@ -558,15 +566,29 @@ def mutation_locks(
         stack.enter_context(_mutation_gate_lock(timeout=timeout))
         if resources:
             stack.enter_context(install_resources_lock(timeout=timeout))
-        identity_guard = None
-        if config_identity_dir is not None:
-            resolved_identity_dir = config_identity_dir.resolve(strict=True)
+        requested_identity_dirs = tuple(
+            sorted(
+                {
+                    *(path.resolve(strict=True) for path in config_identity_dirs),
+                    *(
+                        (config_identity_dir.resolve(strict=True),)
+                        if config_identity_dir is not None
+                        else ()
+                    ),
+                },
+                key=_config_identity_key,
+            )
+        )
+        identity_guards: list[ConfigIdentityGuard] = []
+        for resolved_identity_dir in requested_identity_dirs:
             identity_fd = stack.enter_context(
                 config_identity_lock(resolved_identity_dir, timeout=timeout)
             )
-            identity_guard = ConfigIdentityGuard(
-                resolved_identity_dir,
-                identity_fd,
+            identity_guards.append(
+                ConfigIdentityGuard(
+                    resolved_identity_dir,
+                    identity_fd,
+                )
             )
         requested_config_dirs = tuple(
             sorted(
@@ -609,4 +631,8 @@ def mutation_locks(
                 profile=None,
                 allow_operation_id=allow_operation_id,
             )
-        yield MutationLockGuards(target_guards, identity_guard)
+        yield MutationLockGuards(
+            target_guards,
+            identity_guards[0] if len(identity_guards) == 1 else None,
+            tuple(identity_guards),
+        )

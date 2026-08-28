@@ -504,6 +504,19 @@ Examples:
 """
 
 
+PROJECT_SYNC_EXAMPLES: str = """\
+Examples:
+
+
+  # Preview every recorded injection at one project target
+  setforge project sync /path/to/worktree --dry-run
+
+
+  # Resolve all conflicts toward the profile in CI
+  setforge project sync /path/to/worktree --auto=use-profile --yes
+"""
+
+
 PROJECT_REMOVE_EXAMPLES: str = """\
 Examples:
 

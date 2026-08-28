@@ -1,4 +1,4 @@
-"""CLI for reversible project-profile injection and removal."""
+"""CLI for reversible project-profile injection, sync, and removal."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     PROJECT_INJECT_EXAMPLES,
     PROJECT_REMOVE_EXAMPLES,
+    PROJECT_SYNC_EXAMPLES,
 )
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
@@ -22,9 +23,17 @@ from setforge.project_injection import (
     plan_injection,
     plan_removal,
 )
+from setforge.project_sync import (
+    AutoResolution,
+    ProjectSyncPlan,
+    apply_sync,
+    plan_sync,
+    resolve_sync_plan,
+)
+from setforge.reconcile.merge_model import Conflict
 
 project_app = typer.Typer(
-    help="Inject and remove reusable files in a project worktree.",
+    help="Inject, synchronize, and remove reusable files in a project worktree.",
     no_args_is_help=True,
     rich_markup_mode=None,
 )
@@ -64,6 +73,37 @@ def _render_removal(plan: ProjectRemovePlan) -> None:
     typer.echo("worktree auto-carry hook: unchanged")
 
 
+def _render_sync(plan: ProjectSyncPlan) -> None:
+    typer.echo(f"target: {plan.target}")
+    typer.echo(
+        "project profiles: " + ", ".join(item.profile for item in plan.injections)
+    )
+    for item in plan.files:
+        status = item.kind.value
+        if (
+            item.kind.value == "update"
+            and item.stored is not None
+            and not item.legacy
+            and item.result.clean
+            and not item.mode_conflict
+            and item.result.merged() == item.live
+            and item.result_mode == item.live_mode
+            and item.desired_upstream == item.stored.upstream_payload
+            and item.desired_mode == item.stored.upstream_mode
+        ):
+            status = "unchanged"
+        if not item.result.clean:
+            conflicts = sum(
+                isinstance(segment, Conflict) for segment in item.result.segments
+            )
+            status += f" ({conflicts} content conflict(s))"
+        if item.mode_conflict:
+            status += " (mode conflict)"
+        if item.legacy:
+            status += " (legacy two-way)"
+        typer.echo(f"  {item.profile}: {status}: {item.relative_destination}")
+
+
 @project_app.command("inject", epilog=PROJECT_INJECT_EXAMPLES)
 def project_inject(
     profile: str = typer.Argument(..., help="Project profile name."),
@@ -99,6 +139,7 @@ def project_inject(
         profile=profile,
         target=path,
         config_root=config.parent,
+        config_path=config,
         resolved=resolved,
         visibility=visibility,
     )
@@ -125,6 +166,42 @@ def project_inject(
     typer.echo(
         "injection complete" if changed else "no changes: injection already current"
     )
+
+
+@project_app.command("sync", epilog=PROJECT_SYNC_EXAMPLES)
+def project_sync(
+    path: Path = typer.Argument(..., help="Existing Git worktree root."),
+    auto: AutoResolution | None = typer.Option(
+        None,
+        "--auto",
+        help="Resolve every conflict with keep-live or use-profile.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview without changing files or private state."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Apply without an interactive prompt."
+    ),
+) -> None:
+    """Synchronize every recorded profile injection at PATH atomically."""
+    plan = plan_sync(path)
+    _render_sync(plan)
+    if dry_run:
+        typer.echo("dry run: no changes applied")
+        return
+    if not _confirm("sync", yes=yes):
+        typer.echo("aborted: no changes applied")
+        return
+    resolved = resolve_sync_plan(
+        plan,
+        auto=auto,
+        interactive=sys.stdin.isatty(),
+    )
+    if resolved is None:
+        typer.echo("aborted: unresolved project sync; no changes applied")
+        raise typer.Exit(1)
+    changed = apply_sync(resolved)
+    typer.echo("sync complete" if changed else "no changes: project is already current")
 
 
 @project_app.command("remove", epilog=PROJECT_REMOVE_EXAMPLES)
