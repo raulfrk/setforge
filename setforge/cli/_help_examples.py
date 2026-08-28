@@ -499,8 +499,12 @@ Examples:
   setforge project inject <profile> /path/to/worktree --dry-run
 
 \b
-  # Apply non-interactively and record tracked publication intent
-  setforge project inject <profile> /path/to/worktree --git-tracked --yes
+  # Resolve collisions in already-tracked files toward the profile
+  setforge project inject <profile> /path/to/worktree --auto=use-profile --yes
+
+
+  # Inject into a plain directory (Git visibility is not applicable)
+  setforge project inject <profile> /path/to/project --yes
 """
 
 

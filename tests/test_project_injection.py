@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -28,6 +31,22 @@ from setforge.ownership import (
     resolve_owner_common_dir,
 )
 from setforge.project_injection import ProjectInjectionPlan, manifest_path
+
+
+@pytest.fixture(autouse=True)
+def _candidate_filter_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Make Git filter children execute this exact source candidate."""
+    binary_dir = tmp_path / "candidate-bin"
+    binary_dir.mkdir()
+    entrypoint = binary_dir / "setforge"
+    entrypoint.write_text(
+        f"#!{sys.executable}\nfrom setforge.cli import main\nmain()\n"
+    )
+    entrypoint.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1]))
 
 
 def _git_repo(path: Path) -> Path:
@@ -86,24 +105,266 @@ def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> No
     assert not (target / "AGENTS.md").exists()
 
 
-def test_project_inject_refuses_tracked_collision_without_mutation(
+def test_project_inject_and_remove_in_plain_directory(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
+    target = tmp_path / "plain-target"
+    target.mkdir()
+
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+
+    assert injected.exit_code == 0, injected.exception
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+    assert "Git visibility: not applicable" in injected.output
+    assert not (target / ".git").exists()
+
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text("updated\n")
+    synced = CliRunner().invoke(
+        app,
+        ["project", "sync", str(target), "--auto", "use-profile", "--yes"],
+    )
+    repeated = CliRunner().invoke(
+        app,
+        ["project", "sync", str(target), "--auto", "use-profile", "--yes"],
+    )
+    assert synced.exit_code == repeated.exit_code == 0
+    assert (target / "AGENTS.md").read_text() == "updated\n"
+    assert "no changes" in repeated.output
+    assert not (target / ".git").exists()
+
+    removed = CliRunner().invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, removed.exception
+    assert not (target / "AGENTS.md").exists()
+    assert not (target / ".git").exists()
+
+
+def test_tracked_injection_uses_interactive_wizard_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile.merge_model import Clean, MergeResult
+    from setforge.reconcile.wizard import WizardResult
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        "setforge.cli.project.sys",
+        SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True)),
+    )
+    config = _config(tmp_path)
     target = _git_repo(tmp_path / "target")
     destination = target / "AGENTS.md"
-    destination.write_text("team instructions\n")
+    destination.write_text("local\n")
     subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    monkeypatch.setattr(
+        "setforge.reconcile.wizard.resolve_conflicts",
+        lambda *args, **kwargs: WizardResult(
+            MergeResult((Clean(b"wizard selected\n"),)), False, ("theirs",)
+        ),
+    )
 
     result = CliRunner().invoke(
         app,
         ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
     )
-    assert result.exit_code == 1
-    assert result.exception is not None
-    assert "tracked" in str(result.exception)
-    assert destination.read_text() == "team instructions\n"
+
+    assert result.exit_code == 0, result.exception
+    assert destination.read_bytes() == b"wizard selected\n"
+
+
+def test_tracked_injection_wizard_cancel_and_non_tty_leave_state_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile.merge_model import Clean, MergeResult
+    from setforge.reconcile.wizard import WizardResult
+    from setforge.ui.primitives import CANCEL
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("local\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    command_sys = SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("setforge.cli.project.sys", command_sys)
+    monkeypatch.setattr(
+        "setforge.reconcile.wizard.resolve_conflicts", lambda *args, **kwargs: CANCEL
+    )
+    command = [
+        "project",
+        "inject",
+        "demo",
+        str(target),
+        "--config",
+        str(config),
+        "--yes",
+    ]
+
+    cancelled = CliRunner().invoke(app, command)
+    assert cancelled.exit_code == 0
+    assert "aborted" in cancelled.output
+    assert destination.read_text() == "local\n"
+    assert not manifest_path(target, "demo").exists()
+
+    monkeypatch.setattr(
+        "setforge.reconcile.wizard.resolve_conflicts",
+        lambda *args, **kwargs: WizardResult(
+            MergeResult((Clean(b"local\n"),)), True, ("skip",)
+        ),
+    )
+    deferred = CliRunner().invoke(app, command)
+    assert deferred.exit_code == 0
+    assert "aborted" in deferred.output
+    assert destination.read_text() == "local\n"
+    assert not manifest_path(target, "demo").exists()
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(target),
+                "config",
+                "--local",
+                "--get-regexp",
+                "^filter\\.setforge-project\\.",
+            ],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 1
+    )
+    assert not (_git_dir_for_test(target) / "info" / "attributes").exists()
+    assert not OwnershipStore().list_claims()
+
+    command_sys.stdin = SimpleNamespace(isatty=lambda: False)
+    non_tty = CliRunner().invoke(app, command)
+    assert non_tty.exit_code == 1
+    assert non_tty.exception is not None
+    assert "use a TTY or --auto" in str(non_tty.exception)
+    assert destination.read_text() == "local\n"
+    assert not manifest_path(target, "demo").exists()
+
+
+def _git_dir_for_test(target: Path) -> Path:
+    raw = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--git-dir"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    git_dir = Path(raw)
+    return (target / git_dir).resolve() if not git_dir.is_absolute() else git_dir
+
+
+def test_project_inject_tracks_only_unrelated_edits_and_removes_local_hunk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "-c",
+            "user.name=SetForge Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "base",
+        ],
+        check=True,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto",
+            "use-profile",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.exception
+    assert destination.read_text() == "team instructions\nmanaged instructions\n"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        == b""
+    )
+
+    destination.write_text("team instructions edited\nmanaged instructions\n")
+    repeated = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto",
+            "use-profile",
+            "--yes",
+        ],
+    )
+    assert repeated.exit_code == 0, repeated.exception
+    assert destination.read_text() == "team instructions edited\nmanaged instructions\n"
+    diff = subprocess.run(
+        ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert b"team instructions edited" in diff
+    assert b"managed instructions" not in diff
+
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions v2\n"
+    )
+    synced = CliRunner().invoke(
+        app,
+        ["project", "sync", str(target), "--auto", "use-profile", "--yes"],
+    )
+    assert synced.exit_code == 0, synced.exception
+    assert destination.read_text() == (
+        "team instructions edited\nmanaged instructions v2\n"
+    )
+    synced_diff = subprocess.run(
+        ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert b"team instructions edited" in synced_diff
+    assert b"managed instructions v2" not in synced_diff
+
+    removed = CliRunner().invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, removed.exception
+    assert destination.read_text() == "team instructions edited\n"
 
 
 def test_replace_untracked_restores_exact_bytes_and_mode(
@@ -393,9 +654,7 @@ def test_visibility_flags_are_exclusive_and_tracked_intent_is_only_recorded(
     )
 
 
-def test_corrupt_manifest_and_non_git_target_fail_closed(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_corrupt_manifest_fails_closed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
     target = _git_repo(tmp_path / "target")
@@ -411,16 +670,6 @@ def test_corrupt_manifest_and_non_git_target_fail_closed(
     assert corrupt.exception is not None
     assert "unsupported schema" in str(corrupt.exception)
     assert not (target / "AGENTS.md").exists()
-
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    non_git = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(plain), "--config", str(config), "--yes"],
-    )
-    assert non_git.exit_code == 1
-    assert non_git.exception is not None
-    assert "Git worktree" in str(non_git.exception)
 
 
 def test_full_preflight_and_mid_apply_failure_leave_target_unchanged(

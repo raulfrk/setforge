@@ -15,6 +15,12 @@ from pathlib import Path
 from setforge import atomicio, operations
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
 from setforge.errors import SetforgeError, StructuredParseError
+from setforge.git_overlay import (
+    OverlayClaim,
+    apply_overlay_git,
+    overlay_claim_id,
+    plan_overlay_git,
+)
 from setforge.git_visibility import VisibilityClaim, apply_claims, claim_id, plan_claims
 from setforge.locking import mutation_locks
 from setforge.orphan_scan import capture_parent_path_guards
@@ -40,8 +46,16 @@ from setforge.project_injection import (
     _resource_id,
     _sha256,
     _unlink_project_file,
-    _verified_git_worktree,
+    _verified_project_target,
     _write_project_file,
+)
+from setforge.project_overlay import (
+    build_overlay,
+    clean_content,
+    overlay_path,
+    read_overlay,
+    update_local_content,
+    write_overlay,
 )
 from setforge.reconcile.merge import merge as line_merge
 from setforge.reconcile.merge import split_lines
@@ -70,7 +84,7 @@ class RecordedProjectInjection:
 
     profile: str
     target: Path
-    git_dir: Path
+    git_dir: Path | None
     config_root: Path
     config_path: Path
     manifest_path: Path
@@ -124,6 +138,7 @@ class ProjectSyncFilePlan:
     legacy: bool
     stored: StoredProjectFile | None = None
     addition: ProjectFilePlan | None = None
+    overlay_base: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +162,7 @@ class ProjectSyncPlan:
 
 def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
     """Discover every injection for exactly one verified Git worktree."""
-    root, git_dir, target_stat = _verified_git_worktree(target)
+    root, git_dir, target_stat = _verified_project_target(target)
     records_dir = state_root() / "project-injections"
     if not records_dir.exists():
         return ()
@@ -160,7 +175,7 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
         if (
             raw["target_device"] != target_stat.st_dev
             or raw["target_inode"] != target_stat.st_ino
-            or raw["git_dir"] != str(git_dir)
+            or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
         ):
             raise SetforgeError(
                 f"project injection state does not match target identity: {path}"
@@ -378,7 +393,9 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
     return tuple(files)
 
 
-def _read_live(target: Path, relative: Path) -> tuple[MergeInput, int | None]:
+def _read_live(
+    target: Path, relative: Path, *, allow_tracked: bool, git: bool
+) -> tuple[MergeInput, int | None]:
     destination = target / relative
     try:
         info = destination.lstat()
@@ -388,10 +405,9 @@ def _read_live(target: Path, relative: Path) -> tuple[MergeInput, int | None]:
         raise SetforgeError(
             f"injected project file is not an ordinary regular file: {destination}"
         )
-    if _is_tracked(target, relative):
+    if git and _is_tracked(target, relative) and not allow_tracked:
         raise SetforgeError(
-            f"project destination is now tracked by Git: {relative}; "
-            "tracked and mixed-file projection is planned for G5"
+            f"project destination unexpectedly became tracked by Git: {relative}"
         )
     return destination.read_bytes(), stat.S_IMODE(info.st_mode)
 
@@ -442,6 +458,16 @@ def _merge_mode(
     return ours, True
 
 
+def _merge_overlay_update(
+    relative: Path, old_profile: bytes, live: bytes, desired: bytes
+) -> MergeResult:
+    """Apply exact profile deltas, falling back to the normal conflict model."""
+    try:
+        return _clean_result(update_local_content(old_profile, desired, live))
+    except SetforgeError:
+        return merge_project_content(relative, old_profile, live, desired)
+
+
 def plan_sync(target: Path) -> ProjectSyncPlan:
     """Build an immutable target-wide sync plan without changing any state."""
     injections = discover_injections(target)
@@ -472,7 +498,9 @@ def plan_sync(target: Path) -> ProjectSyncPlan:
             current = current_by_destination.get(relative)
             if stored is None:
                 assert current is not None
-                addition = _plan_file(injection.target, current)
+                addition = _plan_file(
+                    injection.target, current, git=injection.git_dir is not None
+                )
                 live: MergeInput = (
                     ABSENT
                     if addition.previous_payload is None
@@ -504,18 +532,44 @@ def plan_sync(target: Path) -> ProjectSyncPlan:
                         result=result,
                         legacy=False,
                         addition=addition,
+                        overlay_base=(
+                            addition.previous_payload
+                            if addition.action is ProjectFileAction.OVERLAY
+                            else None
+                        ),
                     )
                 )
                 continue
-            live, live_mode = _read_live(injection.target, relative)
+            live, live_mode = _read_live(
+                injection.target,
+                relative,
+                allow_tracked=stored.action is ProjectFileAction.OVERLAY,
+                git=injection.git_dir is not None,
+            )
+            overlay_base: bytes | None = None
+            if stored.action is ProjectFileAction.OVERLAY:
+                if not isinstance(live, bytes):
+                    raise SetforgeError(
+                        f"tracked project overlay is absent: {relative}"
+                    )
+                overlay = read_overlay(injection.target, relative)
+                if overlay is None or overlay.local != stored.applied_payload:
+                    raise SetforgeError(
+                        f"tracked project overlay is missing or mismatched: {relative}"
+                    )
+                overlay_base = clean_content(overlay, live)
             if current is None:
                 desired: MergeInput = (
-                    ABSENT
+                    overlay_base
+                    if overlay_base is not None
+                    else ABSENT
                     if stored.previous_payload is None
                     else stored.previous_payload
                 )
                 result = (
-                    merge_project_content(
+                    _clean_result(overlay_base)
+                    if overlay_base is not None
+                    else merge_project_content(
                         relative, stored.upstream_payload, live, desired
                     )
                     if stored.upstream_payload is not None
@@ -554,10 +608,25 @@ def plan_sync(target: Path) -> ProjectSyncPlan:
                     )
                 )
                 continue
-            addition = _plan_file(injection.target, current)
+            addition = _plan_file(
+                injection.target, current, git=injection.git_dir is not None
+            )
             desired = addition.source_payload
             result = (
-                merge_project_content(relative, stored.upstream_payload, live, desired)
+                _merge_overlay_update(
+                    relative,
+                    stored.upstream_payload,
+                    live,
+                    desired,
+                )
+                if (
+                    stored.action is ProjectFileAction.OVERLAY
+                    and stored.upstream_payload is not None
+                    and isinstance(live, bytes)
+                )
+                else merge_project_content(
+                    relative, stored.upstream_payload, live, desired
+                )
                 if stored.upstream_payload is not None
                 else _legacy_result(
                     live=live,
@@ -592,6 +661,7 @@ def plan_sync(target: Path) -> ProjectSyncPlan:
                     legacy=injection.schema == 1,
                     stored=stored,
                     addition=addition,
+                    overlay_base=overlay_base,
                 )
             )
     return ProjectSyncPlan(
@@ -768,6 +838,13 @@ def render_sync_manifests(plan: ProjectSyncPlan) -> dict[Path, bytes]:
                 stored.previous_mode if stored is not None else addition.previous_mode
             )
             action = stored.action if stored is not None else addition.action
+            if action is ProjectFileAction.OVERLAY:
+                if item.overlay_base is None:
+                    raise SetforgeError(
+                        "tracked project sync has no Git-facing overlay base"
+                    )
+                previous_payload = item.overlay_base
+                previous_mode = item.live_mode
             created_parents = (
                 stored.created_parents
                 if stored is not None
@@ -821,6 +898,7 @@ def _basis(item: ProjectSyncFilePlan) -> tuple[object, ...]:
         item.stored,
         item.addition,
         item.legacy,
+        item.overlay_base,
     )
 
 
@@ -858,6 +936,8 @@ def _ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
             parents = addition.created_parents
     if mode is None:
         raise SetforgeError("project ownership state has no upstream mode")
+    merged = item.result.merged() if item.result.clean else None
+    applied_payload = merged if isinstance(merged, bytes) else None
     return ProjectFilePlan(
         file_id=item.file_id,
         declaring_profile=item.declaring_profile,
@@ -867,6 +947,7 @@ def _ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
         source_payload=payload,
         source_mode=mode,
         source_digest=_sha256(payload),
+        applied_payload=applied_payload,
         action=action,
         previous_payload=previous_payload,
         previous_mode=previous_mode,
@@ -900,6 +981,7 @@ def _prior_ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFil
         source_payload=payload,
         source_mode=mode,
         source_digest=digest,
+        applied_payload=(item.live if isinstance(item.live, bytes) else None),
         action=stored.action,
         previous_payload=stored.previous_payload,
         previous_mode=stored.previous_mode,
@@ -999,20 +1081,46 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
 
         visibility_add: list[VisibilityClaim] = []
         visibility_remove: list[VisibilityClaim] = []
+        overlay_add: list[OverlayClaim] = []
+        overlay_remove: list[OverlayClaim] = []
         for item in plan.files:
             raw = raw_by_profile[item.profile]
+            git_dir = next(
+                injection.git_dir
+                for injection in plan.injections
+                if injection.profile == item.profile
+            )
+            action = (
+                item.stored.action
+                if item.stored is not None
+                else item.addition.action
+                if item.addition is not None
+                else None
+            )
+            if action is ProjectFileAction.OVERLAY and git_dir is not None:
+                overlay_claim = OverlayClaim(
+                    overlay_claim_id(
+                        git_dir=git_dir,
+                        profile=item.profile,
+                        relative_path=item.relative_destination.as_posix(),
+                    ),
+                    item.relative_destination.as_posix(),
+                )
+                if item.kind is SyncFileKind.REMOVE:
+                    overlay_remove.append(overlay_claim)
+                else:
+                    overlay_add.append(overlay_claim)
+                continue
             if (
                 ProjectVisibility(str(raw["visibility"]))
                 is not ProjectVisibility.HIDDEN
             ):
                 continue
+            if git_dir is None:
+                continue
             visibility_claim = VisibilityClaim(
                 claim_id=claim_id(
-                    target_git_dir=next(
-                        injection.git_dir
-                        for injection in plan.injections
-                        if injection.profile == item.profile
-                    ),
+                    target_git_dir=git_dir,
                     profile=item.profile,
                     relative_path=item.relative_destination.as_posix(),
                 ),
@@ -1022,8 +1130,24 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 visibility_add.append(visibility_claim)
             elif item.kind is SyncFileKind.REMOVE:
                 visibility_remove.append(visibility_claim)
-        visibility_plan = plan_claims(
-            plan.target, add=tuple(visibility_add), remove=tuple(visibility_remove)
+        git_target = any(injection.git_dir is not None for injection in plan.injections)
+        visibility_plan = (
+            plan_claims(
+                plan.target,
+                add=tuple(visibility_add),
+                remove=tuple(visibility_remove),
+            )
+            if git_target
+            else None
+        )
+        overlay_git_plan = (
+            plan_overlay_git(
+                plan.target,
+                add=tuple(overlay_add),
+                remove=tuple(overlay_remove),
+            )
+            if git_target and (overlay_add or overlay_remove)
+            else None
         )
         manifests = render_sync_manifests(plan)
         state_changed = any(
@@ -1036,7 +1160,33 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     *(plan.target / item.relative_destination for item in plan.files),
                     *manifests,
                     *(store.claim_path(resource) for resource in resources.values()),
-                    visibility_plan.exclude_path,
+                    *(
+                        (visibility_plan.exclude_path,)
+                        if visibility_plan is not None
+                        else ()
+                    ),
+                    *(
+                        (
+                            overlay_git_plan.config_path,
+                            overlay_git_plan.attributes_path,
+                        )
+                        if overlay_git_plan is not None
+                        else ()
+                    ),
+                    *(
+                        overlay_path(plan.target, item.relative_destination)
+                        for item in plan.files
+                        if (
+                            (
+                                item.stored is not None
+                                and item.stored.action is ProjectFileAction.OVERLAY
+                            )
+                            or (
+                                item.addition is not None
+                                and item.addition.action is ProjectFileAction.OVERLAY
+                            )
+                        )
+                    ),
                     *(
                         parent
                         for item in plan.files
@@ -1088,6 +1238,30 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                         item.result_mode,
                     )
                     changed = True
+                action = (
+                    item.stored.action
+                    if item.stored is not None
+                    else item.addition.action
+                    if item.addition is not None
+                    else None
+                )
+                if (
+                    action is ProjectFileAction.OVERLAY
+                    and item.kind is not SyncFileKind.REMOVE
+                ):
+                    if item.overlay_base is None or not isinstance(merged, bytes):
+                        raise SetforgeError(
+                            "tracked project sync has incomplete overlay state"
+                        )
+                    write_overlay(
+                        build_overlay(
+                            plan.target,
+                            item.relative_destination,
+                            item.overlay_base,
+                            merged,
+                        )
+                    )
+                    changed = True
                 key = (item.profile, item.relative_destination)
                 resource = resources[key]
                 claim = prior_claims[key]
@@ -1125,7 +1299,17 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                         fingerprint=_claim_fingerprint(ownership_plan),
                         expected_generation=expected_generation,
                     )
-            apply_claims(visibility_plan)
+            if visibility_plan is not None:
+                apply_claims(visibility_plan)
+            if overlay_git_plan is not None:
+                apply_overlay_git(overlay_git_plan)
+            for item in plan.files:
+                if (
+                    item.kind is SyncFileKind.REMOVE
+                    and item.stored is not None
+                    and item.stored.action is ProjectFileAction.OVERLAY
+                ):
+                    overlay_path(plan.target, item.relative_destination).unlink()
             for path, payload in manifests.items():
                 atomicio.atomic_write_bytes(path, payload, mode=0o600)
             for item in plan.files:
@@ -1141,4 +1325,8 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     )
             journal = operations.finish_checkpoint(journal)
             operations.complete(journal)
-        return changed or visibility_plan.changed or state_changed
+        return (
+            changed
+            or (visibility_plan is not None and visibility_plan.changed)
+            or state_changed
+        )

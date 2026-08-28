@@ -22,7 +22,9 @@ from setforge.project_injection import (
     apply_removal,
     plan_injection,
     plan_removal,
+    resolve_injection_plan,
 )
+from setforge.project_overlay import process_filter
 from setforge.project_sync import (
     AutoResolution,
     ProjectSyncPlan,
@@ -40,6 +42,12 @@ project_app = typer.Typer(
 app.add_typer(project_app, name="project")
 
 
+@project_app.command("filter-process", hidden=True)
+def project_filter_process() -> None:
+    """Serve the private Git filter protocol for tracked project overlays."""
+    process_filter()
+
+
 def _confirm(command: str, *, yes: bool) -> bool:
     if yes:
         return True
@@ -53,8 +61,11 @@ def _confirm(command: str, *, yes: bool) -> bool:
 def _render_injection(plan: ProjectInjectionPlan) -> None:
     typer.echo(f"project profile: {plan.profile}")
     typer.echo(f"target: {plan.target}")
-    typer.echo(f"Git visibility: {plan.visibility.value}")
-    if plan.visibility_plan.changed:
+    if plan.git_dir is None:
+        typer.echo("Git visibility: not applicable (target is not a Git worktree)")
+    else:
+        typer.echo(f"Git visibility: {plan.visibility.value}")
+    if plan.visibility_plan is not None and plan.visibility_plan.changed:
         action = (
             "add private exclude claims"
             if plan.visibility_plan.added
@@ -107,13 +118,18 @@ def _render_sync(plan: ProjectSyncPlan) -> None:
 @project_app.command("inject", epilog=PROJECT_INJECT_EXAMPLES)
 def project_inject(
     profile: str = typer.Argument(..., help="Project profile name."),
-    path: Path = typer.Argument(..., help="Existing Git worktree root."),
+    path: Path = typer.Argument(..., help="Existing project directory."),
     config: Path = _CONFIG_OPTION,
     git_hidden: bool = typer.Option(
         False, "--git-hidden", help="Hide injected files with private Git excludes."
     ),
     git_tracked: bool = typer.Option(
         False, "--git-tracked", help="Leave injected files as normal Git content."
+    ),
+    auto: AutoResolution | None = typer.Option(
+        None,
+        "--auto",
+        help="Resolve tracked-file conflicts with keep-live or use-profile.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview without changing files."
@@ -162,7 +178,15 @@ def project_inject(
     if not _confirm("inject", yes=yes):
         typer.echo("aborted: no changes applied")
         return
-    changed = apply_injection(plan)
+    resolved_plan = resolve_injection_plan(
+        plan,
+        auto=auto.value if auto is not None else None,
+        interactive=sys.stdin.isatty(),
+    )
+    if resolved_plan is None:
+        typer.echo("aborted: no changes applied")
+        return
+    changed = apply_injection(resolved_plan)
     typer.echo(
         "injection complete" if changed else "no changes: injection already current"
     )
@@ -170,7 +194,7 @@ def project_inject(
 
 @project_app.command("sync", epilog=PROJECT_SYNC_EXAMPLES)
 def project_sync(
-    path: Path = typer.Argument(..., help="Existing Git worktree root."),
+    path: Path = typer.Argument(..., help="Existing project directory."),
     auto: AutoResolution | None = typer.Option(
         None,
         "--auto",
@@ -207,7 +231,7 @@ def project_sync(
 @project_app.command("remove", epilog=PROJECT_REMOVE_EXAMPLES)
 def project_remove(
     profile: str = typer.Argument(..., help="Project profile name."),
-    path: Path = typer.Argument(..., help="Existing Git worktree root."),
+    path: Path = typer.Argument(..., help="Existing project directory."),
     config: Path = _CONFIG_OPTION,
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview without changing files."

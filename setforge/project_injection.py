@@ -11,7 +11,7 @@ import subprocess
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -22,6 +22,13 @@ from setforge.config import (
     ResolvedProjectProfile,
 )
 from setforge.errors import SetforgeError
+from setforge.git_overlay import (
+    OverlayClaim,
+    OverlayGitPlan,
+    apply_overlay_git,
+    overlay_claim_id,
+    plan_overlay_git,
+)
 from setforge.git_visibility import (
     VisibilityClaim,
     VisibilityPlan,
@@ -45,6 +52,14 @@ from setforge.ownership import (
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
+from setforge.project_overlay import (
+    ProjectOverlay,
+    build_overlay,
+    clean_content,
+    overlay_path,
+    read_overlay,
+    write_overlay,
+)
 from setforge.transitions import state_root
 
 _MANIFEST_SCHEMA = 2
@@ -57,6 +72,7 @@ class ProjectFileAction(StrEnum):
     CREATE = "create"
     RETAIN = "retain-identical"
     REPLACE = "replace-untracked"
+    OVERLAY = "overlay-tracked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +87,12 @@ class ProjectFilePlan:
     source_payload: bytes
     source_mode: int
     source_digest: str
+    applied_payload: bytes | None
     action: ProjectFileAction
     previous_payload: bytes | None
     previous_mode: int | None
     created_parents: tuple[Path, ...]
+    overlay: ProjectOverlay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,13 +103,14 @@ class ProjectInjectionPlan:
     target: Path
     target_device: int
     target_inode: int
-    git_dir: Path
+    git_dir: Path | None
     visibility: ProjectVisibility
     config_root: Path
     config_path: Path
     files: tuple[ProjectFilePlan, ...]
     manifest_path: Path
-    visibility_plan: VisibilityPlan
+    visibility_plan: VisibilityPlan | None
+    overlay_git_plan: OverlayGitPlan | None
     no_op: bool = False
 
 
@@ -105,7 +124,8 @@ class ProjectRemovePlan:
     owner_id: uuid.UUID
     files: tuple[ProjectFilePlan, ...]
     created_parents: tuple[Path, ...]
-    visibility_plan: VisibilityPlan
+    visibility_plan: VisibilityPlan | None
+    overlay_git_plan: OverlayGitPlan | None
 
 
 def _sha256(payload: bytes) -> str:
@@ -188,6 +208,32 @@ def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
     return resolved, git_dir, target_stat
 
 
+def _verified_project_target(
+    path: Path,
+) -> tuple[Path, Path | None, os.stat_result]:
+    """Resolve an exact directory and classify an optional Git worktree root."""
+    lexical = path.expanduser().absolute()
+    try:
+        resolved = lexical.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise SetforgeError(
+            f"project target cannot be resolved: {lexical}: {exc}"
+        ) from exc
+    if lexical != resolved:
+        raise SetforgeError(
+            f"project target must not use a symlink or alias path: {lexical}"
+        )
+    if not resolved.is_dir():
+        raise SetforgeError(f"project target is not a directory: {resolved}")
+    result = _run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
+    if result.returncode != 0:
+        if (resolved / ".git").exists():
+            detail = result.stderr.strip() or "unknown Git error"
+            raise SetforgeError(f"project target has invalid Git metadata: {detail}")
+        return resolved, None, resolved.stat()
+    return _verified_git_worktree(resolved)
+
+
 def _is_tracked(target: Path, relative: Path) -> bool:
     result = _run_git(
         target,
@@ -238,7 +284,9 @@ def _read_source(source: Path) -> tuple[bytes, int, str]:
     return payload, stat.S_IMODE(before.st_mode), _sha256(payload)
 
 
-def _plan_file(target: Path, resolved_file: ResolvedProjectFile) -> ProjectFilePlan:
+def _plan_file(
+    target: Path, resolved_file: ResolvedProjectFile, *, git: bool
+) -> ProjectFilePlan:
     destination = target / resolved_file.dst
     try:
         destination.relative_to(target)
@@ -248,10 +296,12 @@ def _plan_file(target: Path, resolved_file: ResolvedProjectFile) -> ProjectFileP
         ) from exc
     parents = _created_parents(target, destination)
     payload, source_mode, source_digest = _read_source(resolved_file.src)
+    applied_payload: bytes | None
     try:
         info = destination.lstat()
     except FileNotFoundError:
         action = ProjectFileAction.CREATE
+        applied_payload = payload
         previous_payload = None
         previous_mode = None
     else:
@@ -259,16 +309,17 @@ def _plan_file(target: Path, resolved_file: ResolvedProjectFile) -> ProjectFileP
             raise SetforgeError(
                 f"project destination is not an ordinary regular file: {destination}"
             )
-        if _is_tracked(target, resolved_file.dst):
-            raise SetforgeError(
-                f"project destination is already tracked by Git: {resolved_file.dst}; "
-                "tracked and mixed-file projection is planned for G5"
-            )
+        tracked = git and _is_tracked(target, resolved_file.dst)
+        if tracked:
+            action = ProjectFileAction.OVERLAY
+            applied_payload = None
+        else:
+            applied_payload = payload
         previous_payload = destination.read_bytes()
         previous_mode = stat.S_IMODE(info.st_mode)
-        if previous_payload == payload and previous_mode == source_mode:
+        if not tracked and previous_payload == payload and previous_mode == source_mode:
             action = ProjectFileAction.RETAIN
-        else:
+        elif not tracked:
             action = ProjectFileAction.REPLACE
     return ProjectFilePlan(
         file_id=resolved_file.id,
@@ -279,6 +330,7 @@ def _plan_file(target: Path, resolved_file: ResolvedProjectFile) -> ProjectFileP
         source_payload=payload,
         source_mode=source_mode,
         source_digest=source_digest,
+        applied_payload=applied_payload,
         action=action,
         previous_payload=previous_payload,
         previous_mode=previous_mode,
@@ -296,9 +348,11 @@ def plan_injection(
     visibility: ProjectVisibility,
 ) -> ProjectInjectionPlan:
     """Build a complete injection plan without changing target or state."""
-    root, git_dir, target_stat = _verified_git_worktree(target)
+    root, git_dir, target_stat = _verified_project_target(target)
     state_path = manifest_path(root, profile)
-    files = tuple(_plan_file(root, item) for item in resolved.files)
+    files = tuple(
+        _plan_file(root, item, git=git_dir is not None) for item in resolved.files
+    )
     visibility_claims = tuple(
         VisibilityClaim(
             claim_id=claim_id(
@@ -309,17 +363,35 @@ def plan_injection(
             relative_path=item.relative_destination.as_posix(),
         )
         for item in files
+        if git_dir is not None and item.action is not ProjectFileAction.OVERLAY
     )
-    _require_compatible_visibility(
-        target=root,
-        manifest=state_path,
-        visibility=visibility,
-        claims=visibility_claims,
+    overlay_claims = tuple(
+        OverlayClaim(
+            overlay_claim_id(
+                git_dir=git_dir,
+                profile=profile,
+                relative_path=item.relative_destination.as_posix(),
+            ),
+            item.relative_destination.as_posix(),
+        )
+        for item in files
+        if git_dir is not None and item.action is ProjectFileAction.OVERLAY
     )
-    visibility_plan = plan_claims(
-        root,
-        add=visibility_claims if visibility is ProjectVisibility.HIDDEN else (),
-    )
+    if git_dir is None:
+        visibility_plan = None
+        overlay_git_plan = None
+    else:
+        _require_compatible_visibility(
+            target=root,
+            manifest=state_path,
+            visibility=visibility,
+            claims=visibility_claims,
+        )
+        visibility_plan = plan_claims(
+            root,
+            add=visibility_claims if visibility is ProjectVisibility.HIDDEN else (),
+        )
+        overlay_git_plan = plan_overlay_git(root, add=overlay_claims)
     canonical_config_root = config_root.resolve(strict=True)
     canonical_config_path = (
         config_path.resolve(strict=True)
@@ -344,6 +416,7 @@ def plan_injection(
         files=files,
         manifest_path=state_path,
         visibility_plan=visibility_plan,
+        overlay_git_plan=overlay_git_plan,
     )
     if state_path.exists():
         _validate_existing_injection(plan)
@@ -359,9 +432,75 @@ def plan_injection(
             files=plan.files,
             manifest_path=plan.manifest_path,
             visibility_plan=plan.visibility_plan,
+            overlay_git_plan=plan.overlay_git_plan,
             no_op=True,
         )
     return plan
+
+
+def resolve_injection_plan(
+    plan: ProjectInjectionPlan,
+    *,
+    auto: str | None,
+    interactive: bool,
+) -> ProjectInjectionPlan | None:
+    """Resolve initial tracked-file collisions without mutating state."""
+    from setforge.project_sync import legacy_two_way_merge
+    from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
+    from setforge.reconcile.types import FileId
+    from setforge.ui.primitives import CANCEL
+
+    resolved_files: list[ProjectFilePlan] = []
+    for item in plan.files:
+        if item.action is not ProjectFileAction.OVERLAY:
+            resolved_files.append(item)
+            continue
+        assert item.previous_payload is not None
+        result = legacy_two_way_merge(item.previous_payload, item.source_payload)
+        if result.clean:
+            merged = result.merged()
+        elif auto is not None:
+            if auto not in {"keep-live", "use-profile"}:
+                raise SetforgeError(f"unknown project injection resolution: {auto}")
+            segments = tuple(
+                segment
+                if isinstance(segment, Clean)
+                else Clean(segment.ours if auto == "keep-live" else segment.theirs)
+                for segment in result.segments
+            )
+            merged = MergeResult(segments).merged()
+        elif interactive:
+            from setforge.reconcile.claude_merge import make_claude_merge_fn
+            from setforge.reconcile.wizard import resolve_conflicts
+
+            wizard = resolve_conflicts(
+                FileId(f"project/{plan.profile}/{item.file_id}"),
+                result,
+                display_path=item.relative_destination.as_posix(),
+                claude_merge=make_claude_merge_fn(
+                    display_path=item.relative_destination.as_posix()
+                ),
+            )
+            if wizard is CANCEL or wizard.deferred:
+                return None
+            merged = wizard.merged.merged()
+        else:
+            conflicts = sum(
+                isinstance(segment, Conflict) for segment in result.segments
+            )
+            raise SetforgeError(
+                f"project injection has {conflicts} unresolved tracked-file "
+                f"conflict(s) in {item.relative_destination}; use a TTY or --auto"
+            )
+        assert isinstance(merged, bytes)
+        overlay = build_overlay(
+            plan.target,
+            item.relative_destination,
+            item.previous_payload,
+            merged,
+        )
+        resolved_files.append(replace(item, applied_payload=merged, overlay=overlay))
+    return replace(plan, files=tuple(resolved_files))
 
 
 def _require_compatible_visibility(
@@ -462,14 +601,21 @@ def _claim_matches_plan(
 def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
     files = []
     for item in plan.files:
+        applied_payload = item.applied_payload
+        if applied_payload is None:
+            raise SetforgeError(
+                f"project file resolution is incomplete: {item.relative_destination}"
+            )
         files.append(
             {
                 "action": item.action.value,
-                "applied_digest": item.source_digest,
-                "applied_mode": item.source_mode,
-                "applied_payload": base64.b64encode(item.source_payload).decode(
-                    "ascii"
+                "applied_digest": _sha256(applied_payload),
+                "applied_mode": (
+                    item.previous_mode
+                    if item.action is ProjectFileAction.OVERLAY
+                    else item.source_mode
                 ),
+                "applied_payload": base64.b64encode(applied_payload).decode("ascii"),
                 "created_parents": [
                     parent.relative_to(plan.target).as_posix()
                     for parent in item.created_parents
@@ -496,7 +642,7 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
         "config_path": str(plan.config_path),
         "config_root": str(plan.config_root),
         "files": files,
-        "git_dir": str(plan.git_dir),
+        "git_dir": str(plan.git_dir) if plan.git_dir is not None else None,
         "profile": plan.profile,
         "schema": _MANIFEST_SCHEMA,
         "target": str(plan.target),
@@ -581,7 +727,7 @@ def _validate_existing_injection(plan: ProjectInjectionPlan) -> None:
         or raw["target"] != str(plan.target)
         or raw["target_device"] != plan.target_device
         or raw["target_inode"] != plan.target_inode
-        or raw["git_dir"] != str(plan.git_dir)
+        or raw["git_dir"] != (str(plan.git_dir) if plan.git_dir is not None else None)
         or raw["config_root"] != str(plan.config_root)
         or (
             raw["schema"] == _MANIFEST_SCHEMA
@@ -609,18 +755,31 @@ def _validate_existing_injection(plan: ProjectInjectionPlan) -> None:
             "project profile or source changed since injection; use project sync "
             "when G4 is available"
         )
-    for item in plan.files:
+    for item, record in zip(plan.files, raw_files, strict=True):
+        assert isinstance(record, dict)
         try:
             info = item.destination.lstat()
         except FileNotFoundError as exc:
             raise SetforgeError(
                 f"injected project file is missing: {item.destination}"
             ) from exc
+        live_payload = item.destination.read_bytes()
+        valid_payload = _sha256(live_payload) == str(record.get("applied_digest"))
+        if record.get("action") == ProjectFileAction.OVERLAY.value:
+            overlay = read_overlay(plan.target, item.relative_destination)
+            if overlay is None:
+                valid_payload = False
+            else:
+                valid_payload = _sha256(overlay.local) == str(
+                    record.get("applied_digest")
+                )
+                if valid_payload:
+                    clean_content(overlay, live_payload)
         if (
             not stat.S_ISREG(info.st_mode)
             or stat.S_ISLNK(info.st_mode)
-            or _sha256(item.destination.read_bytes()) != item.source_digest
-            or stat.S_IMODE(info.st_mode) != item.source_mode
+            or not valid_payload
+            or stat.S_IMODE(info.st_mode) != int(record.get("applied_mode", -1))
         ):
             raise SetforgeError(
                 f"injected project file has drifted: {item.destination}"
@@ -693,7 +852,7 @@ def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
             os.fsync(parent_fd)
 
 
-def apply_injection(
+def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
     plan: ProjectInjectionPlan, *, mutate_visibility: bool = True
 ) -> bool:
     """Apply a previously confirmed plan; return False for an exact no-op."""
@@ -713,7 +872,13 @@ def apply_injection(
             resolved=_resolved_from_plan(plan),
             visibility=plan.visibility,
         )
-        if fresh != plan:
+        unresolved_files = tuple(
+            replace(item, applied_payload=None, overlay=None)
+            if item.action is ProjectFileAction.OVERLAY
+            else item
+            for item in plan.files
+        )
+        if fresh != replace(plan, files=unresolved_files):
             raise SetforgeError("project injection plan changed before apply; retry")
         identity = guards.config_identity
         if identity is None:
@@ -748,9 +913,13 @@ def apply_injection(
                 raise SetforgeError(
                     "project injection ownership state is missing or mismatched"
                 )
-            if not fresh.visibility_plan.changed or not mutate_visibility:
+            if (
+                fresh.visibility_plan is None
+                or not fresh.visibility_plan.changed
+                or not mutate_visibility
+            ):
                 return False
-            visibility_paths = (fresh.visibility_plan.exclude_path,)
+            visibility_paths: tuple[Path, ...] = (fresh.visibility_plan.exclude_path,)
             journal = operations.prepare(
                 command="project-inject",
                 profile=operation_profile,
@@ -789,11 +958,28 @@ def apply_injection(
             raise SetforgeError(
                 "a project destination already has an active ownership claim"
             )
+        visibility_paths = (
+            (plan.visibility_plan.exclude_path,)
+            if plan.visibility_plan is not None
+            else ()
+        )
+        overlay_paths = tuple(
+            overlay_path(plan.target, item.relative_destination)
+            for item in plan.files
+            if item.action is ProjectFileAction.OVERLAY
+        )
+        overlay_git_paths = (
+            (plan.overlay_git_plan.config_path, plan.overlay_git_plan.attributes_path)
+            if plan.overlay_git_plan is not None
+            else ()
+        )
         paths = (
             *(item.destination for item in plan.files),
+            *overlay_paths,
+            *overlay_git_paths,
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
-            plan.visibility_plan.exclude_path,
+            *visibility_paths,
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(
@@ -820,12 +1006,22 @@ def apply_injection(
             ):
                 guards.verify_targets()
                 if item.action is not ProjectFileAction.RETAIN:
+                    if item.applied_payload is None:
+                        raise SetforgeError(
+                            f"project file resolution is incomplete: "
+                            f"{item.relative_destination}"
+                        )
                     _write_project_file(
                         guards.targets[0],
                         item.relative_destination,
-                        item.source_payload,
-                        item.source_mode,
+                        item.applied_payload,
+                        item.previous_mode
+                        if item.action is ProjectFileAction.OVERLAY
+                        and item.previous_mode is not None
+                        else item.source_mode,
                     )
+                if item.overlay is not None:
+                    write_overlay(item.overlay)
                 expected_generation = None
                 if prior_claim is not None:
                     restored = store.restore_locked(prior_claim)
@@ -844,7 +1040,10 @@ def apply_injection(
                     fingerprint=_claim_fingerprint(item),
                     expected_generation=expected_generation,
                 )
-            apply_claims(plan.visibility_plan)
+            if plan.visibility_plan is not None:
+                apply_claims(plan.visibility_plan)
+            if plan.overlay_git_plan is not None:
+                apply_overlay_git(plan.overlay_git_plan)
             atomicio.atomic_write_bytes(
                 plan.manifest_path, _manifest_payload(plan, owner_id), mode=0o600
             )
@@ -872,7 +1071,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     *, profile: str, target: Path, config_root: Path
 ) -> ProjectRemovePlan:
     """Load and drift-check the exact injection to remove."""
-    root, git_dir, target_stat = _verified_git_worktree(target)
+    root, git_dir, target_stat = _verified_project_target(target)
     state_path = manifest_path(root, profile)
     raw = _load_manifest(state_path)
     if (
@@ -880,7 +1079,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         or raw["target"] != str(root)
         or raw["target_device"] != target_stat.st_dev
         or raw["target_inode"] != target_stat.st_ino
-        or raw["git_dir"] != str(git_dir)
+        or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
         or raw["config_root"] != str(config_root.resolve(strict=True))
     ):
         raise SetforgeError(
@@ -1046,6 +1245,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             raise SetforgeError(
                 "project injection state has an inconsistent file record"
             )
+        overlay: ProjectOverlay | None = None
         live_matches_absent = info is None and applied_absent
         live_matches_present = (
             info is not None
@@ -1056,6 +1256,33 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             and _sha256(live_payload) == applied_digest
             and stat.S_IMODE(info.st_mode) == applied_mode
         )
+        if action is ProjectFileAction.OVERLAY:
+            if (
+                raw["schema"] != _MANIFEST_SCHEMA
+                or info is None
+                or stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISREG(info.st_mode)
+                or live_payload is None
+                or applied_payload is None
+                or previous_payload is None
+                or applied_mode is None
+                or stat.S_IMODE(info.st_mode) != applied_mode
+            ):
+                raise SetforgeError(
+                    f"tracked project overlay has invalid state: {destination}"
+                )
+            overlay = read_overlay(root, relative)
+            if (
+                overlay is None
+                or overlay.base != previous_payload
+                or overlay.local != applied_payload
+            ):
+                raise SetforgeError(
+                    f"tracked project overlay state is missing or mismatched: "
+                    f"{destination}"
+                )
+            clean_content(overlay, live_payload)
+            live_matches_present = True
         if not live_matches_absent and not live_matches_present:
             raise SetforgeError(f"injected project file has drifted: {destination}")
         if raw["schema"] == _MANIFEST_SCHEMA:
@@ -1079,10 +1306,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 source_payload=claim_payload,
                 source_mode=claim_mode,
                 source_digest=source_digest,
+                applied_payload=applied_payload,
                 action=action,
                 previous_payload=previous_payload,
                 previous_mode=previous_mode,
                 created_parents=parents,
+                overlay=overlay,
             )
         )
     try:
@@ -1090,7 +1319,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     except ValueError as exc:
         raise SetforgeError("project injection state has invalid visibility") from exc
     hidden_to_remove: tuple[VisibilityClaim, ...] = ()
-    if visibility is ProjectVisibility.HIDDEN:
+    if visibility is ProjectVisibility.HIDDEN and git_dir is not None:
         expected_claims = tuple(
             VisibilityClaim(
                 claim_id=claim_id(
@@ -1111,7 +1340,26 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         hidden_to_remove = tuple(
             claim for claim in expected_claims if claim.claim_id in current_by_id
         )
-    visibility_plan = plan_claims(root, remove=hidden_to_remove)
+    visibility_plan = (
+        plan_claims(root, remove=hidden_to_remove) if git_dir is not None else None
+    )
+    overlay_to_remove = tuple(
+        OverlayClaim(
+            overlay_claim_id(
+                git_dir=git_dir,
+                profile=profile,
+                relative_path=item.relative_destination.as_posix(),
+            ),
+            item.relative_destination.as_posix(),
+        )
+        for item in files
+        if git_dir is not None and item.action is ProjectFileAction.OVERLAY
+    )
+    overlay_git_plan = (
+        plan_overlay_git(root, remove=overlay_to_remove)
+        if git_dir is not None and overlay_to_remove
+        else None
+    )
     return ProjectRemovePlan(
         profile=profile,
         target=root,
@@ -1122,6 +1370,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             sorted(all_parents, key=lambda path: len(path.parts), reverse=True)
         ),
         visibility_plan=visibility_plan,
+        overlay_git_plan=overlay_git_plan,
     )
 
 
@@ -1141,10 +1390,25 @@ def _restore_planned_files(
                 pass
             else:
                 _unlink_project_file(guards.targets[0], item.relative_destination)
+        elif item.action is ProjectFileAction.OVERLAY:
+            if item.overlay is None:
+                raise SetforgeError("tracked project overlay state is missing")
+            overlay_live_payload = item.destination.read_bytes()
+            restored = clean_content(item.overlay, overlay_live_payload)
+            _write_project_file(
+                guards.targets[0],
+                item.relative_destination,
+                restored,
+                (
+                    item.previous_mode
+                    if item.previous_mode is not None
+                    else item.source_mode
+                ),
+            )
         else:
             if item.previous_payload is None or item.previous_mode is None:
                 raise SetforgeError("project injection restoration baseline is corrupt")
-            current_payload = (
+            current_payload: bytes | None = (
                 item.destination.read_bytes() if item.destination.exists() else None
             )
             current_mode = (
@@ -1215,12 +1479,29 @@ def apply_removal(plan: ProjectRemovePlan, *, config_root: Path) -> None:
             raise SetforgeError(
                 "project injection ownership state is missing or mismatched"
             )
+        visibility_paths = (
+            (plan.visibility_plan.exclude_path,)
+            if plan.visibility_plan is not None
+            else ()
+        )
+        overlay_paths = tuple(
+            overlay_path(plan.target, item.relative_destination)
+            for item in plan.files
+            if item.action is ProjectFileAction.OVERLAY
+        )
+        overlay_git_paths = (
+            (plan.overlay_git_plan.config_path, plan.overlay_git_plan.attributes_path)
+            if plan.overlay_git_plan is not None
+            else ()
+        )
         paths = (
             *(item.destination for item in plan.files),
+            *overlay_paths,
+            *overlay_git_paths,
             *plan.created_parents,
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
-            plan.visibility_plan.exclude_path,
+            *visibility_paths,
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(
@@ -1243,7 +1524,12 @@ def apply_removal(plan: ProjectRemovePlan, *, config_root: Path) -> None:
                 restore_transitions=False,
             )
             _restore_planned_files(plan, resources, claims, store, guards)
-            apply_claims(plan.visibility_plan)
+            if plan.visibility_plan is not None:
+                apply_claims(plan.visibility_plan)
+            if plan.overlay_git_plan is not None:
+                apply_overlay_git(plan.overlay_git_plan)
+            for overlay_state in overlay_paths:
+                overlay_state.unlink()
             for parent in plan.created_parents:
                 _remove_created_parent(
                     guards.targets[0], parent.relative_to(plan.target)

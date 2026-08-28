@@ -82,7 +82,7 @@ loads. Everything else has a default:
 
 `project_profiles` describes portable, project-relative files independently of
 the host profiles above. SetForge can resolve and validate these declarations,
-then inject them reversibly into an existing Git worktree:
+then inject them reversibly into an existing project directory:
 
 ```console
 setforge project inject application /path/to/worktree --dry-run
@@ -93,7 +93,11 @@ setforge project remove application /path/to/worktree --yes
 
 Injection creates missing files, retains byte-and-mode-identical untracked
 files, and snapshots differing untracked files so `remove` can restore their
-exact bytes and mode. Removal refuses if an injected file has drifted. Both
+exact bytes and mode. In a Git worktree, an already-tracked destination opens
+the standard per-hunk resolver; accepted profile hunks remain in the live file
+but a required private Git filter keeps only those hunks out of `git diff`.
+Unrelated edits in the same file remain visible. Non-interactive tracked-file
+resolution requires `--auto=keep-live` or `--auto=use-profile`. Both
 commands support `--dry-run`; live non-interactive use requires `--yes`.
 
 After profile sources or membership change, `project sync <path>` reconciles
@@ -132,13 +136,16 @@ ordinary untracked Git content until you stage them—SetForge never stages them
 Removal releases only that injection's private claims and preserves both user
 exclude text and claims still used by sibling linked worktrees.
 
-Linked worktrees share the repository's `info/exclude`. Compatible hidden
+Linked worktrees share the repository's `info/exclude`, `info/attributes`, and
+local filter configuration. Compatible hidden
 claims for the same relative path coexist, but hidden and tracked intent for the
 same path cannot differ between siblings; SetForge refuses that conflict before
-mutation. Existing Git-tracked destinations still fail closed until mixed-file
-projection support lands. Non-Git target directories are likewise a later
-capability. Project metadata is stored in SetForge's private state directory,
-not in the target worktree.
+mutation. Tracked-file attribute claims are reference-counted, and the generic
+filter passes content through unchanged when the current worktree/path has no
+active overlay. In a non-Git target, injection, sync, and removal still work;
+Git visibility is reported as not applicable and SetForge does not initialize
+Git. Project metadata is stored in SetForge's private state directory, not in
+the target directory.
 
 Injection, synchronization, and the future optional worktree auto-carry hook have independent
 lifecycles: `project remove` never changes that hook, and disabling the hook
