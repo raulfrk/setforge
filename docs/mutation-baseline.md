@@ -26,7 +26,7 @@ from the denominator (mutmut's standard reporting).
 | measured | 2026-08-25 |
 | base commit | `8e0577b` |
 | tool | `mutmut 3.6.0` |
-| mutated (`source_paths` + `only_mutate`) | the **7** core files below |
+| mutated (`source_paths` + `only_mutate`) | the **8** core files below |
 | test scope (`pytest_add_cli_args_test_selection`) | 9 focused per-module unit files **+ 2 hermetic integration suites** |
 | observed runtime | about 10.8 minutes (2.29 mutations/second) |
 
@@ -34,10 +34,10 @@ from the denominator (mutmut's standard reporting).
 
 Mutation is restricted to the merge/reconcile/store **core** (RFC §6), the
 modules where "coverage ≠ assertion" historically let bugs through. The current
-7 `only_mutate` files:
+8 `only_mutate` files:
 
 `markdown_merge · scalar_merge · structural_merge · yaml_merge · base_store ·
-base_store_format · scalar_base_store`
+base_store_format · scalar_base_store · project_sync`
 
 The mutmut run executes a **sandbox-clean test selection** (see
 `pyproject.toml [tool.mutmut]`), because mutmut runs the suite from a copied
@@ -49,6 +49,10 @@ scope. The score and counts above remain the last complete historical baseline;
 the next full nightly run must establish the expanded-scope baseline. G4's
 pre-commit evidence is selective over its changed planner, compatibility,
 conflict-policy, and transaction functions.
+
+G6 also includes `tests/test_project_visibility.py` in the sandbox-clean test
+selection so mutations in shared sync/visibility state handling are exercised
+through the per-file CLI journeys.
 
 ### Broadened selection (this change)
 
@@ -79,7 +83,7 @@ branch (`.json`/`.yaml`/`.yml` → True, non-structural → False), killing all 
 
 **Excluded — `tests/integration/test_lockflow.py`:** it exercises the lock /
 provision path (`setforge.provision.*`, `lockfile`), which does **not** import
-any of the 7 `only_mutate` core files, so it has no kill power over core mutants
+any of the 8 `only_mutate` core files, so it has no kill power over core mutants
 and would add only latency. It also drives the verbs **without** the
 `integration_subprocess` guard (unmocked real subprocess), which is fragile in
 the copied sandbox. Hermetic on paths, but no-kill-power dead weight — left out.

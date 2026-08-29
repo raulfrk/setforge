@@ -95,6 +95,7 @@ def test_discover_injections_uses_canonical_config_for_legacy_record(
     payload["schema"] = 1
     del payload["config_path"]
     for file_record in payload["files"]:
+        del file_record["visibility"]
         del file_record["applied_payload"]
         del file_record["upstream_mode"]
         del file_record["upstream_payload"]
@@ -187,6 +188,7 @@ def test_plan_sync_rejects_out_of_range_legacy_applied_mode(
     payload["schema"] = 1
     del payload["config_path"]
     file_record = payload["files"][0]
+    del file_record["visibility"]
     del file_record["applied_payload"]
     del file_record["upstream_mode"]
     del file_record["upstream_payload"]
@@ -371,6 +373,7 @@ def test_plan_sync_legacy_drift_uses_multiple_hunks(
     payload["schema"] = 1
     del payload["config_path"]
     for file_record in payload["files"]:
+        del file_record["visibility"]
         del file_record["applied_payload"]
         del file_record["upstream_mode"]
         del file_record["upstream_payload"]
@@ -419,7 +422,8 @@ def test_plan_sync_legacy_drift_uses_multiple_hunks(
     )
     manifests = render_sync_manifests(kept)
     migrated = json.loads(next(iter(manifests.values())))
-    assert migrated["schema"] == 2
+    assert migrated["schema"] == 3
+    assert migrated["files"][0]["visibility"] == "hidden"
     assert base64.b64decode(migrated["files"][0]["applied_payload"]) == (
         b"one-local\nshared-a\nshared-b\nthree-local\n"
     )
@@ -448,6 +452,7 @@ def test_legacy_sync_requires_explicit_resolution_when_live_matches_record(
     payload["schema"] = 1
     del payload["config_path"]
     for file_record in payload["files"]:
+        del file_record["visibility"]
         del file_record["applied_payload"]
         del file_record["upstream_mode"]
         del file_record["upstream_payload"]
@@ -465,7 +470,9 @@ def test_legacy_sync_requires_explicit_resolution_when_live_matches_record(
     assert adopted is not None
     assert apply_sync(adopted)
     assert (target / "AGENTS.md").read_text() == "profile-new\n"
-    assert json.loads(record_path.read_text())["schema"] == 2
+    migrated = json.loads(record_path.read_text())
+    assert migrated["schema"] == 3
+    assert migrated["files"][0]["visibility"] == "hidden"
 
 
 def test_sync_interactive_absence_empty_uses_recorded_wizard_side(
@@ -640,6 +647,81 @@ def test_apply_sync_adds_and_removes_profile_membership_atomically(
     )
 
 
+def test_sync_preserves_overlay_visibility_and_reconciles_hidden_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    original_config = config.read_text()
+    target = _git_repo(tmp_path / "target")
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=target, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=target,
+        check=True,
+    )
+    (target / "AGENTS.md").write_text("team\n")
+    (target / "EXTRA.md").write_text("extra-team\n")
+    subprocess.run(["git", "add", "AGENTS.md", "EXTRA.md"], cwd=target, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=target, check=True)
+    injected = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto=use-profile",
+            "--yes",
+        ],
+    )
+    assert injected.exit_code == 0, injected.exception
+    source = config.parent / "project" / "demo" / "EXTRA.md"
+    source.write_text("extra-managed\n")
+    config.write_text(
+        original_config + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+
+    add_plan = resolve_sync_plan(plan_sync(target), auto=AutoResolution.USE_PROFILE)
+    assert add_plan is not None
+    assert apply_sync(add_plan)
+    attributes = target / ".git" / "info" / "attributes"
+    assert "/EXTRA.md filter=setforge-project" in attributes.read_text()
+    tracked = CliRunner().invoke(
+        app,
+        ["project", "visibility", str(target), "EXTRA.md", "--tracked", "--yes"],
+    )
+    assert tracked.exit_code == 0, tracked.output
+    assert "/EXTRA.md filter=setforge-project" not in attributes.read_text()
+    source.write_text("extra-updated\n")
+    update_plan = plan_sync(target)
+    extra = next(
+        item
+        for item in update_plan.files
+        if item.relative_destination == Path("EXTRA.md")
+    )
+    assert extra.stored is not None
+    assert extra.stored.visibility.value == "tracked"
+    rendered = json.loads(next(iter(render_sync_manifests(update_plan).values())))
+    rendered_extra = next(
+        entry for entry in rendered["files"] if entry["destination"] == "EXTRA.md"
+    )
+    assert rendered_extra["visibility"] == "tracked"
+    assert apply_sync(update_plan)
+    hidden = CliRunner().invoke(
+        app,
+        ["project", "visibility", str(target), "EXTRA.md", "--hidden", "--yes"],
+    )
+    assert hidden.exit_code == 0, hidden.output
+    assert "/EXTRA.md filter=setforge-project" in attributes.read_text()
+    config.write_text(original_config)
+
+    assert apply_sync(plan_sync(target))
+    assert "/EXTRA.md filter=setforge-project" not in attributes.read_text()
+
+
 def test_plan_sync_legacy_membership_removal_preserves_explicit_conflict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -656,6 +738,7 @@ def test_plan_sync_legacy_membership_removal_preserves_explicit_conflict(
     payload["schema"] = 1
     del payload["config_path"]
     for file_record in payload["files"]:
+        del file_record["visibility"]
         del file_record["applied_payload"]
         del file_record["upstream_mode"]
         del file_record["upstream_payload"]

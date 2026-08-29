@@ -62,7 +62,8 @@ from setforge.project_overlay import (
 )
 from setforge.transitions import state_root
 
-_MANIFEST_SCHEMA = 2
+_MANIFEST_SCHEMA = 3
+_PRIOR_MANIFEST_SCHEMA = 2
 _LEGACY_MANIFEST_SCHEMA = 1
 
 
@@ -385,13 +386,16 @@ def plan_injection(
             target=root,
             manifest=state_path,
             visibility=visibility,
-            claims=visibility_claims,
+            relative_paths={item.relative_destination.as_posix() for item in files},
         )
         visibility_plan = plan_claims(
             root,
             add=visibility_claims if visibility is ProjectVisibility.HIDDEN else (),
         )
-        overlay_git_plan = plan_overlay_git(root, add=overlay_claims)
+        overlay_git_plan = plan_overlay_git(
+            root,
+            add=overlay_claims if visibility is ProjectVisibility.HIDDEN else (),
+        )
     canonical_config_root = config_root.resolve(strict=True)
     canonical_config_path = (
         config_path.resolve(strict=True)
@@ -508,14 +512,17 @@ def _require_compatible_visibility(
     target: Path,
     manifest: Path,
     visibility: ProjectVisibility,
-    claims: tuple[VisibilityClaim, ...],
+    relative_paths: set[str],
+    ignored_claim_ids: set[str] | None = None,
 ) -> None:
     """Refuse repository-common hidden/tracked ambiguity before mutation."""
     exclude_path, _, _, hidden_claims = read_claims(target)
-    hidden_paths = {claim.relative_path for claim in hidden_claims}
-    requested_paths = {claim.relative_path for claim in claims}
-    if visibility is ProjectVisibility.TRACKED and requested_paths & hidden_paths:
-        conflict = sorted(requested_paths & hidden_paths)[0]
+    ignored = ignored_claim_ids or set()
+    hidden_paths = {
+        claim.relative_path for claim in hidden_claims if claim.claim_id not in ignored
+    }
+    if visibility is ProjectVisibility.TRACKED and relative_paths & hidden_paths:
+        conflict = sorted(relative_paths & hidden_paths)[0]
         raise SetforgeError(
             f"project visibility conflicts across linked worktrees for {conflict}: "
             "the repository already has a hidden claim"
@@ -531,11 +538,12 @@ def _require_compatible_visibility(
             other_target = Path(str(raw["target"]))
             if info_exclude_path(other_target) != exclude_path:
                 continue
-            other_visibility = ProjectVisibility(str(raw["visibility"]))
             raw_files = raw["files"]
             assert isinstance(raw_files, list)
-            other_paths = {
-                str(item["destination"])
+            other_visibilities = {
+                str(item["destination"]): ProjectVisibility(
+                    str(item.get("visibility", raw["visibility"]))
+                )
                 for item in raw_files
                 if isinstance(item, dict) and "destination" in item
             }
@@ -543,11 +551,20 @@ def _require_compatible_visibility(
             raise SetforgeError(
                 f"cannot validate sibling project visibility record: {path}"
             ) from exc
-        conflicts = requested_paths & other_paths
-        if conflicts and other_visibility is not visibility:
-            conflict = sorted(conflicts)[0]
+        conflicts = sorted(relative_paths & other_visibilities.keys())
+        mismatched = next(
+            (
+                relative
+                for relative in conflicts
+                if other_visibilities[relative] is not visibility
+            ),
+            None,
+        )
+        if mismatched is not None:
+            other_visibility = other_visibilities[mismatched]
             raise SetforgeError(
-                f"project visibility conflicts across linked worktrees for {conflict}: "
+                "project visibility conflicts across linked worktrees for "
+                f"{mismatched}: "
                 f"recorded {other_visibility.value}, requested {visibility.value}"
             )
 
@@ -635,6 +652,7 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
                     "ascii"
                 ),
                 "destination": item.relative_destination.as_posix(),
+                "visibility": plan.visibility.value,
             }
         )
     payload = {
@@ -690,6 +708,7 @@ def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
         or schema
         not in {
             _LEGACY_MANIFEST_SCHEMA,
+            _PRIOR_MANIFEST_SCHEMA,
             _MANIFEST_SCHEMA,
         }
     ):
@@ -708,7 +727,7 @@ def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
         "target_inode",
         "visibility",
     }
-    if raw["schema"] == _MANIFEST_SCHEMA:
+    if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
         required.add("config_path")
     if set(raw) != required or not isinstance(raw["files"], list):
         raise SetforgeError(f"project injection state has invalid fields: {path}")
@@ -730,7 +749,7 @@ def _validate_existing_injection(plan: ProjectInjectionPlan) -> None:
         or raw["git_dir"] != (str(plan.git_dir) if plan.git_dir is not None else None)
         or raw["config_root"] != str(plan.config_root)
         or (
-            raw["schema"] == _MANIFEST_SCHEMA
+            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
             and raw["config_path"] != str(plan.config_path)
         )
         or raw["visibility"] != plan.visibility.value
@@ -1074,6 +1093,9 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     root, git_dir, target_stat = _verified_project_target(target)
     state_path = manifest_path(root, profile)
     raw = _load_manifest(state_path)
+    schema = raw["schema"]
+    if not isinstance(schema, int):
+        raise SetforgeError("project injection state has invalid schema")
     if (
         raw["profile"] != profile
         or raw["target"] != str(root)
@@ -1092,6 +1114,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             "project injection state has an invalid owner identity"
         ) from exc
     files: list[ProjectFilePlan] = []
+    file_visibilities: dict[Path, ProjectVisibility] = {}
     all_parents: set[Path] = set()
     destinations: set[str] = set()
     file_ids: set[str] = set()
@@ -1113,12 +1136,14 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             "source",
             "source_digest",
         }
-        if raw["schema"] == _MANIFEST_SCHEMA:
+        if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
             expected_fields |= {
                 "applied_payload",
                 "upstream_mode",
                 "upstream_payload",
             }
+        if raw["schema"] == _MANIFEST_SCHEMA:
+            expected_fields.add("visibility")
         if set(entry) != expected_fields:
             raise SetforgeError("project injection state has invalid file fields")
         try:
@@ -1136,8 +1161,15 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             file_ids.add(file_id)
             destination = root / relative
             action = ProjectFileAction(str(entry["action"]))
+            file_visibility = ProjectVisibility(
+                str(
+                    entry["visibility"]
+                    if raw["schema"] == _MANIFEST_SCHEMA
+                    else raw["visibility"]
+                )
+            )
             source_digest = str(entry["source_digest"])
-            if raw["schema"] == _MANIFEST_SCHEMA:
+            if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
                 applied_payload_raw = entry["applied_payload"]
                 applied_digest_raw = entry["applied_digest"]
                 applied_mode_raw = entry["applied_mode"]
@@ -1217,7 +1249,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 and applied_digest != source_digest
             )
             or (
-                raw["schema"] == _MANIFEST_SCHEMA
+                raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
                 and (
                     (not applied_absent and not applied_complete)
                     or (
@@ -1258,7 +1290,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         )
         if action is ProjectFileAction.OVERLAY:
             if (
-                raw["schema"] != _MANIFEST_SCHEMA
+                raw["schema"] == _LEGACY_MANIFEST_SCHEMA
                 or info is None
                 or stat.S_ISLNK(info.st_mode)
                 or not stat.S_ISREG(info.st_mode)
@@ -1285,7 +1317,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             live_matches_present = True
         if not live_matches_absent and not live_matches_present:
             raise SetforgeError(f"injected project file has drifted: {destination}")
-        if raw["schema"] == _MANIFEST_SCHEMA:
+        if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
             claim_payload = upstream_payload
             claim_mode = upstream_mode
         else:
@@ -1296,6 +1328,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             claim_payload = live_payload
             claim_mode = applied_mode
         all_parents.update(parents)
+        file_visibilities[relative] = file_visibility
         files.append(
             ProjectFilePlan(
                 file_id=file_id,
@@ -1314,12 +1347,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 overlay=overlay,
             )
         )
-    try:
-        visibility = ProjectVisibility(str(raw["visibility"]))
-    except ValueError as exc:
-        raise SetforgeError("project injection state has invalid visibility") from exc
     hidden_to_remove: tuple[VisibilityClaim, ...] = ()
-    if visibility is ProjectVisibility.HIDDEN and git_dir is not None:
+    if git_dir is not None:
         expected_claims = tuple(
             VisibilityClaim(
                 claim_id=claim_id(
@@ -1330,6 +1359,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 relative_path=item.relative_destination.as_posix(),
             )
             for item in files
+            if item.action is not ProjectFileAction.OVERLAY
+            and file_visibilities[item.relative_destination] is ProjectVisibility.HIDDEN
         )
         _, _, _, current_claims = read_claims(root)
         current_by_id = {claim.claim_id: claim for claim in current_claims}
@@ -1353,7 +1384,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             item.relative_destination.as_posix(),
         )
         for item in files
-        if git_dir is not None and item.action is ProjectFileAction.OVERLAY
+        if git_dir is not None
+        and item.action is ProjectFileAction.OVERLAY
+        and (
+            schema < _MANIFEST_SCHEMA
+            or file_visibilities[item.relative_destination] is ProjectVisibility.HIDDEN
+        )
     )
     overlay_git_plan = (
         plan_overlay_git(root, remove=overlay_to_remove)

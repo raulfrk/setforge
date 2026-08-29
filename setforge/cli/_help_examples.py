@@ -508,6 +508,28 @@ Examples:
 """
 
 
+PROJECT_LIST_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Show every recorded target, profile, file, and actual visibility
+  setforge project list
+"""
+
+
+PROJECT_VISIBILITY_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Preview hiding one injected destination without changing bytes
+  setforge project visibility /path/to/worktree .claude/CLAUDE.md --hidden --dry-run
+
+\b
+  # Make injected hunks visible as ordinary Git diff
+  setforge project visibility /path/to/worktree .claude/CLAUDE.md --tracked --yes
+"""
+
+
 PROJECT_SYNC_EXAMPLES: str = """\
 Examples:
 

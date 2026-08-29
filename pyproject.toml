@@ -226,6 +226,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_base_store_format.py",
     "tests/test_scalar_base_store.py",
     "tests/test_project_sync.py",
+    "tests/test_project_visibility.py",
     "tests/integration/test_verbs.py",
     "tests/integration/test_smoke.py",
 ]

@@ -101,9 +101,28 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 | `config` | `show`, `add`, `remove` | Granular CRUD over `setforge.yaml` / `local.yaml`. |
 | `snapshot` | `create`, `list`, `restore` | Directory-copy snapshots. |
 | `completion` | `install` | Install shell completion scripts. |
-| `project` | `inject`, `sync`, `remove` | Reversibly materialize and synchronize project profiles in Git worktrees or plain directories, including private hunks in already-tracked files. |
+| `project` | `inject`, `list`, `visibility`, `sync`, `remove` | Inspect, materialize, change per-file Git visibility, synchronize, and remove project profiles in Git worktrees or plain directories. |
 
 ### Project profile synchronization
+
+`setforge project list` inventories every recorded project injection, grouped
+by target and profile, and reports each destination's actual state as `hidden`,
+`tracked`, `tracked-overlay`, or `not-applicable`. Stale, corrupt, drifted, or
+otherwise inconsistent records stay visible as errors and make the command
+exit nonzero.
+
+`setforge project visibility <path> <file>` changes one normalized,
+target-relative destination. `--tracked` exposes an injected hunk as an
+ordinary Git diff (or makes an injected file ordinary untracked/tracked
+content); `--hidden` restores SetForge's private filter or exclude claim.
+SetForge never stages content. Plain-directory targets report the operation as
+not applicable and remain unchanged.
+
+```console
+$ setforge project list
+$ setforge project visibility /path/to/worktree AGENTS.md --tracked --dry-run
+$ setforge project visibility /path/to/worktree AGENTS.md --hidden --yes
+```
 
 `setforge project sync <path>` discovers every recorded profile injection for
 that exact Git worktree and plans them as one transaction. `--dry-run` prints

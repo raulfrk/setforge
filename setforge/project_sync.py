@@ -33,6 +33,8 @@ from setforge.ownership import (
     resolve_owner_common_dir,
 )
 from setforge.project_injection import (
+    _MANIFEST_SCHEMA,
+    _PRIOR_MANIFEST_SCHEMA,
     ProjectFileAction,
     ProjectFilePlan,
     _claim_fingerprint,
@@ -109,6 +111,7 @@ class StoredProjectFile:
     previous_payload: bytes | None
     previous_mode: int | None
     created_parents: tuple[Path, ...]
+    visibility: ProjectVisibility
 
 
 class SyncFileKind(StrEnum):
@@ -189,12 +192,13 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
         config_root_raw = raw["config_root"]
         config_path_raw = raw.get("config_path")
         if not isinstance(config_root_raw, str) or (
-            raw["schema"] == 2 and not isinstance(config_path_raw, str)
+            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
+            and not isinstance(config_path_raw, str)
         ):
             raise SetforgeError(f"project injection config paths are invalid: {path}")
         try:
             config_root = Path(config_root_raw).resolve(strict=True)
-            if raw["schema"] == 2:
+            if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
                 assert isinstance(config_path_raw, str)
                 config_path = Path(config_path_raw).resolve(strict=True)
             else:
@@ -264,9 +268,14 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
         "upstream_mode",
         "upstream_payload",
     }
+    newest_fields = current_fields | {"visibility"}
     for entry in raw_files:
         if not isinstance(entry, dict) or set(entry) != (
-            current_fields if record.schema == 2 else legacy_fields
+            newest_fields
+            if record.schema == _MANIFEST_SCHEMA
+            else current_fields
+            if record.schema == _PRIOR_MANIFEST_SCHEMA
+            else legacy_fields
         ):
             raise SetforgeError("project injection state has invalid file fields")
         try:
@@ -277,6 +286,13 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
             action = ProjectFileAction(entry["action"])
             applied_digest = entry["applied_digest"]
             source_digest = entry["source_digest"]
+            visibility = ProjectVisibility(
+                str(
+                    entry["visibility"]
+                    if record.schema == _MANIFEST_SCHEMA
+                    else raw["visibility"]
+                )
+            )
             applied_mode = entry["applied_mode"]
             previous_mode = entry["previous_mode"]
             created_parents_raw = entry["created_parents"]
@@ -309,12 +325,12 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
         )
         applied_payload = (
             _decode_payload(entry["applied_payload"], field="applied payload")
-            if record.schema == 2
+            if record.schema in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
             else None
         )
         upstream_payload = (
             _decode_payload(entry["upstream_payload"], field="upstream payload")
-            if record.schema == 2
+            if record.schema in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
             else None
         )
         upstream_mode_raw = entry.get("upstream_mode")
@@ -327,7 +343,7 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
             and isinstance(applied_digest, str)
             and _valid_mode(applied_mode)
         )
-        if record.schema == 2 and (
+        if record.schema in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA} and (
             (not applied_absent and not applied_present)
             or upstream_payload is None
             or upstream_mode is None
@@ -388,6 +404,7 @@ def _stored_files(  # noqa: C901 - one fail-closed parser for untrusted state
                 previous_payload=previous_payload,
                 previous_mode=previous_mode,
                 created_parents=tuple(parents),
+                visibility=visibility,
             )
         )
     return tuple(files)
@@ -850,6 +867,11 @@ def render_sync_manifests(plan: ProjectSyncPlan) -> dict[Path, bytes]:
                 if stored is not None
                 else addition.created_parents
             )
+            visibility = (
+                stored.visibility
+                if stored is not None
+                else ProjectVisibility(str(raw["visibility"]))
+            )
             entries.append(
                 {
                     "action": action.value,
@@ -873,9 +895,10 @@ def render_sync_manifests(plan: ProjectSyncPlan) -> dict[Path, bytes]:
                     "source_digest": _sha256(item.desired_upstream),
                     "upstream_mode": item.desired_mode,
                     "upstream_payload": _encode_payload(item.desired_upstream),
+                    "visibility": visibility.value,
                 }
             )
-        raw["schema"] = 2
+        raw["schema"] = _MANIFEST_SCHEMA
         raw["config_path"] = str(injection.config_path)
         raw["files"] = entries
         rendered[injection.manifest_path] = (
@@ -1083,19 +1106,24 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
         visibility_remove: list[VisibilityClaim] = []
         overlay_add: list[OverlayClaim] = []
         overlay_remove: list[OverlayClaim] = []
+        injection_by_profile = {
+            injection.profile: injection for injection in plan.injections
+        }
         for item in plan.files:
             raw = raw_by_profile[item.profile]
-            git_dir = next(
-                injection.git_dir
-                for injection in plan.injections
-                if injection.profile == item.profile
-            )
+            injection = injection_by_profile[item.profile]
+            git_dir = injection.git_dir
             action = (
                 item.stored.action
                 if item.stored is not None
                 else item.addition.action
                 if item.addition is not None
                 else None
+            )
+            file_visibility = (
+                item.stored.visibility
+                if item.stored is not None
+                else ProjectVisibility(str(raw["visibility"]))
             )
             if action is ProjectFileAction.OVERLAY and git_dir is not None:
                 overlay_claim = OverlayClaim(
@@ -1106,15 +1134,17 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     ),
                     item.relative_destination.as_posix(),
                 )
-                if item.kind is SyncFileKind.REMOVE:
+                if item.kind is SyncFileKind.REMOVE and (
+                    injection.schema < _MANIFEST_SCHEMA
+                    or file_visibility is ProjectVisibility.HIDDEN
+                ):
                     overlay_remove.append(overlay_claim)
-                else:
+                elif file_visibility is ProjectVisibility.HIDDEN:
                     overlay_add.append(overlay_claim)
+                elif item.stored is not None and injection.schema < _MANIFEST_SCHEMA:
+                    overlay_remove.append(overlay_claim)
                 continue
-            if (
-                ProjectVisibility(str(raw["visibility"]))
-                is not ProjectVisibility.HIDDEN
-            ):
+            if file_visibility is not ProjectVisibility.HIDDEN:
                 continue
             if git_dir is None:
                 continue

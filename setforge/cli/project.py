@@ -10,8 +10,10 @@ import typer
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     PROJECT_INJECT_EXAMPLES,
+    PROJECT_LIST_EXAMPLES,
     PROJECT_REMOVE_EXAMPLES,
     PROJECT_SYNC_EXAMPLES,
+    PROJECT_VISIBILITY_EXAMPLES,
 )
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
@@ -31,6 +33,11 @@ from setforge.project_sync import (
     apply_sync,
     plan_sync,
     resolve_sync_plan,
+)
+from setforge.project_visibility import (
+    apply_project_visibility,
+    list_projects,
+    plan_project_visibility,
 )
 from setforge.reconcile.merge_model import Conflict
 
@@ -113,6 +120,75 @@ def _render_sync(plan: ProjectSyncPlan) -> None:
         if item.legacy:
             status += " (legacy two-way)"
         typer.echo(f"  {item.profile}: {status}: {item.relative_destination}")
+
+
+@project_app.command("list", epilog=PROJECT_LIST_EXAMPLES)
+def project_list() -> None:
+    """Show every recorded project injection and its actual visibility."""
+    rows = list_projects()
+    if not rows:
+        typer.echo("no project injections recorded")
+        return
+    current: tuple[Path | None, str | None] | None = None
+    failed = False
+    for row in rows:
+        group = (row.target, row.profile)
+        if group != current:
+            target = str(row.target) if row.target is not None else "unknown target"
+            profile = row.profile or "unknown profile"
+            typer.echo(f"{target}  [{profile}]")
+            current = group
+        if row.error is not None:
+            failed = True
+            destination = f"{row.destination}: " if row.destination is not None else ""
+            typer.echo(f"  error: {destination}{row.error} ({row.record.name})")
+        else:
+            assert row.destination is not None
+            assert row.visibility is not None
+            typer.echo(f"  {row.visibility.value}: {row.destination}")
+    if failed:
+        raise typer.Exit(1)
+
+
+@project_app.command("visibility", epilog=PROJECT_VISIBILITY_EXAMPLES)
+def project_visibility(
+    path: Path = typer.Argument(..., help="Existing project directory."),
+    file: Path = typer.Argument(..., help="Target-relative injected destination."),
+    hidden: bool = typer.Option(False, "--hidden", help="Keep this file private."),
+    tracked: bool = typer.Option(
+        False, "--tracked", help="Expose this file as ordinary Git content."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview without changing Git or private state."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Apply without an interactive prompt."
+    ),
+) -> None:
+    """Change one injected destination's private Git visibility."""
+    if hidden == tracked:
+        raise SetforgeError("exactly one of --hidden or --tracked is required")
+    requested = ProjectVisibility.HIDDEN if hidden else ProjectVisibility.TRACKED
+    plan = plan_project_visibility(path, file, requested)
+    typer.echo(f"target: {plan.target}")
+    typer.echo(f"project profile: {plan.profile}")
+    typer.echo(f"file: {plan.destination}")
+    typer.echo(f"visibility: {plan.current.value} -> {requested.value}")
+    if plan.git_dir is None:
+        typer.echo("Git visibility: not applicable (target is not a Git worktree)")
+        typer.echo("no changes: visibility is not applicable")
+        return
+    if not plan.changed:
+        typer.echo("no changes: visibility is already current")
+        return
+    if dry_run:
+        typer.echo("dry run: no changes applied")
+        return
+    if not _confirm("visibility", yes=yes):
+        typer.echo("aborted: no changes applied")
+        return
+    apply_project_visibility(plan)
+    typer.echo("visibility updated")
 
 
 @project_app.command("inject", epilog=PROJECT_INJECT_EXAMPLES)

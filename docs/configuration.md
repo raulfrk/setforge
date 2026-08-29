@@ -87,6 +87,8 @@ then inject them reversibly into an existing project directory:
 ```console
 setforge project inject application /path/to/worktree --dry-run
 setforge project inject application /path/to/worktree --yes
+setforge project list
+setforge project visibility /path/to/worktree AGENTS.md --tracked --dry-run
 setforge project sync /path/to/worktree --dry-run
 setforge project remove application /path/to/worktree --yes
 ```
@@ -135,6 +137,16 @@ normal `git status`, and no hide metadata is committed. Tracked files remain
 ordinary untracked Git content until you stage them—SetForge never stages them.
 Removal releases only that injection's private claims and preserves both user
 exclude text and claims still used by sibling linked worktrees.
+
+`project list` reports the observed state of every recorded destination rather
+than merely repeating its configured default. It distinguishes ordinary hidden
+and tracked files, filtered hunks in already-tracked files (`tracked-overlay`),
+and plain-directory files (`not-applicable`); invalid or drifted records are
+shown as errors. `project visibility <path> <file> --tracked|--hidden` changes
+one normalized target-relative destination. For an overlay, tracked mode makes
+the injected hunk visible in the ordinary Git diff and hidden mode restores the
+private filter. Older injection-wide visibility records are expanded to
+per-file state atomically on the first successful change.
 
 Linked worktrees share the repository's `info/exclude`, `info/attributes`, and
 local filter configuration. Compatible hidden
