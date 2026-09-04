@@ -14,6 +14,11 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.file_ownership import (
+    decide_file,
+    observe_file,
+    publish_file_claim_locked,
+)
 from setforge.git_visibility import (
     apply_claims,
     info_exclude_path,
@@ -144,6 +149,42 @@ def test_project_inject_and_remove_in_plain_directory(
     assert removed.exit_code == 0, removed.exception
     assert not (target / "AGENTS.md").exists()
     assert not (target / ".git").exists()
+
+
+def test_project_inject_refuses_tracked_file_ownership_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.locking import install_resources_lock
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = tmp_path / "plain-target"
+    target.mkdir()
+    destination = target / "AGENTS.md"
+    destination.write_text("ordinary tracked owner\n")
+    store = OwnershipStore()
+    observation = observe_file(destination)
+    owner_id = uuid.uuid4()
+    with install_resources_lock():
+        publish_file_claim_locked(
+            store,
+            decide_file(observation, None, owner_id=owner_id),
+            owner_id=owner_id,
+            declaration_ref="tracked_files.instructions",
+            acquisition="adopted-external",
+        )
+    before_claims = store.list_claims()
+
+    result = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+
+    assert result.exit_code != 0
+    assert "tracked-file ownership claim" in str(result.exception)
+    assert destination.read_text() == "ordinary tracked owner\n"
+    assert store.list_claims() == before_claims
+    assert not manifest_path(target, "demo").exists()
 
 
 def test_tracked_injection_uses_interactive_wizard_choice(

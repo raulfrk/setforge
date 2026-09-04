@@ -22,6 +22,7 @@ from setforge.config import (
     ResolvedProjectProfile,
 )
 from setforge.errors import SetforgeError
+from setforge.file_ownership import file_resource_id
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
@@ -41,6 +42,7 @@ from setforge.git_visibility import (
 from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.orphan_scan import capture_parent_path_guards
 from setforge.ownership import (
+    Authority,
     ClaimLifecycle,
     OwnershipClaim,
     OwnershipStore,
@@ -902,6 +904,24 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
         identity = guards.config_identity
         if identity is None:
             raise SetforgeError("project config identity lock is missing")
+        store = OwnershipStore()
+        resources = tuple(
+            _resource_id(plan.target, item.relative_destination) for item in plan.files
+        )
+        claims = tuple(store.read(resource) for resource in resources)
+        tracked_claims = tuple(
+            store.read(file_resource_id(item.destination)) for item in plan.files
+        )
+        if any(
+            claim is not None
+            and claim.authority is Authority.MANAGE
+            and claim.lifecycle is ClaimLifecycle.CLAIMED
+            for claim in tracked_claims
+        ):
+            raise SetforgeError(
+                "a project destination already has an active tracked-file "
+                "ownership claim"
+            )
         owner_id = (
             read_owner_id_locked(plan.config_root, identity.directory_fd)
             if fresh.no_op
@@ -909,11 +929,6 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
                 plan.config_root, identity.directory_fd, uuid.uuid4()
             )
         )
-        store = OwnershipStore()
-        resources = tuple(
-            _resource_id(plan.target, item.relative_destination) for item in plan.files
-        )
-        claims = tuple(store.read(resource) for resource in resources)
         if fresh.no_op:
             if any(
                 claim is None
