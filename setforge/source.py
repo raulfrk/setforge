@@ -802,11 +802,13 @@ def resolve_source(
     1. ``cli_path`` (from ``--source PATH`` on the command line).
     2. ``env[ENV_VAR]`` (``SETFORGE_SOURCE=PATH``).
     3. ``local_config_path`` ``source:`` block (path OR git source).
-    4. ``cwd / "setforge.yaml"`` exists (back-compat for run-from-repo).
+    4. ``cwd / "setforge.yaml"`` is a regular file (back-compat for
+       run-from-repo).
 
     Raises :class:`NoSourceConfigured` when no layer produces a source,
     listing all four layers in the message so the user knows where to
-    configure.
+    configure. Raises :class:`ConfigError` when the CWD candidate exists but
+    is not a regular file.
     """
     if cli_path is not None:
         return PathSource(path=cli_path)
@@ -818,8 +820,10 @@ def resolve_source(
         return local.source
     cwd_resolved = cwd or Path.cwd()
     cwd_yaml = cwd_resolved / CONFIG_FILENAME
-    if cwd_yaml.exists():
+    if cwd_yaml.is_file():
         return PathSource(path=cwd_resolved)
+    if cwd_yaml.exists():
+        raise ConfigError(f"CWD fallback config {cwd_yaml} is not a regular file")
     raise NoSourceConfigured(
         "no config source configured. Layers checked in order:\n"
         f"  1. CLI flag {CLI_FLAG} PATH (not provided)\n"
@@ -852,15 +856,19 @@ def validate_source_dir(source: Source) -> Path:
     """Verify the source's directory contains ``setforge.yaml``; return its path.
 
     Raises :class:`SourceNotCloned` if a :class:`GitSource`'s clone is
-    absent; raises :class:`ConfigError` if the directory exists but does
-    not contain ``setforge.yaml`` at its root. When a legacy
+    absent; raises :class:`ConfigError` if the directory does not contain a
+    regular ``setforge.yaml`` file at its root. When a legacy
     ``my_setup.yaml`` is present, the error message surfaces a ``git mv``
     migration recipe.
     """
     source_dir = resolve_source_dir(source)
     config_path = source_dir / CONFIG_FILENAME
-    if config_path.exists():
+    if config_path.is_file():
         return config_path
+    if config_path.exists():
+        raise ConfigError(
+            f"source {source.display_name!r} config {config_path} is not a regular file"
+        )
     # Friendly migration error for the my_setup.yaml -> setforge.yaml
     # rename. Mirrors the legacy-namespace detector pattern (a regex
     # prefix scan for the pre-rename ``my-setup:`` namespace).

@@ -313,6 +313,20 @@ class TestResolveSourcePrecedence:
         assert isinstance(result, PathSource)
         assert result.path == cwd_src
 
+    def test_cwd_fallback_rejects_directory_named_setforge_yaml(
+        self, tmp_path: Path
+    ) -> None:
+        cwd_src = tmp_path / "source"
+        (cwd_src / CONFIG_FILENAME).mkdir(parents=True)
+
+        with pytest.raises(ConfigError, match="not a regular file"):
+            resolve_source(
+                cli_path=None,
+                env={},
+                local_config_path=tmp_path / "nope.yaml",
+                cwd=cwd_src,
+            )
+
     def test_no_layer_produces_source_raises(self, tmp_path: Path) -> None:
         # cwd has no setforge.yaml; no other layers populated.
         empty_cwd = tmp_path / "empty_cwd"
@@ -403,6 +417,13 @@ class TestValidateSourceDir:
         src = PathSource(kind=SourceKind.PATH, path=empty_dir)
         with pytest.raises(ConfigError, match=r"does not contain setforge\.yaml"):
             validate_source_dir(src)
+
+    def test_rejects_directory_named_setforge_yaml(self, tmp_path: Path) -> None:
+        src_dir = tmp_path / "src"
+        (src_dir / CONFIG_FILENAME).mkdir(parents=True)
+
+        with pytest.raises(ConfigError, match="not a regular file"):
+            validate_source_dir(PathSource(path=src_dir))
 
     def test_propagates_source_not_cloned_for_git_source(self, tmp_path: Path) -> None:
         src = GitSource(

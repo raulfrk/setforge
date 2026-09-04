@@ -93,6 +93,14 @@ def test_scaffold_rejects_nonempty_non_repo_dir(tmp_path: Path) -> None:
         scaffold_config_repo(target)
 
 
+def test_scaffold_rejects_regular_file_target(tmp_path: Path) -> None:
+    target = tmp_path / "cfg"
+    target.write_text("occupied\n", encoding="utf-8")
+
+    with pytest.raises(ConfigRepoScaffoldError, match="not a directory"):
+        scaffold_config_repo(target)
+
+
 def test_scaffold_rejects_missing_parent(tmp_path: Path) -> None:
     target = tmp_path / "no" / "such" / "parent" / "cfg"
     with pytest.raises(ConfigRepoScaffoldError, match="parent directory"):

@@ -161,7 +161,8 @@ def _validate_target_dir(target_dir: Path) -> None:
 
     A pre-existing *git repo* is fine (idempotent reinit). A pre-existing
     *non-empty, non-repo* dir is rejected — scaffolding over arbitrary user
-    files is unsafe. This validates only; the caller materializes the dir.
+    files is unsafe. A non-directory target is rejected before iteration.
+    This validates only; the caller materializes the dir.
     At most one missing level is permitted (the immediate parent, e.g.
     ``~/projects`` for the default ``~/projects/<name>-config``, which the
     caller then creates); a deeper-missing tree is a clear error rather than
@@ -175,6 +176,11 @@ def _validate_target_dir(target_dir: Path) -> None:
         )
     if not target_dir.exists():
         return
+    if not target_dir.is_dir():
+        raise ConfigRepoScaffoldError(
+            f"target {target_dir} is not a directory — pick an empty or "
+            "non-existent directory."
+        )
     if (target_dir / ".git").exists():
         # Already a git repo: idempotent reuse, scaffold-into is safe.
         return

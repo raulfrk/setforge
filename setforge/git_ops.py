@@ -152,11 +152,20 @@ def _run_git(
 def git_clone(url: str, dest: Path) -> None:
     """Clone ``url`` into ``dest``.
 
-    ``dest`` must not already exist (git's standard behavior). The
-    parent dir is created if missing. Auth delegates to the user's
-    git config; if credentials fail, git's error surfaces unmodified.
+    ``dest`` must not already exist (git's standard behavior). The parent dir
+    is created if missing; invalid parent node types and creation races surface
+    as :class:`GitOpError`. Auth delegates to the user's git config; if
+    credentials fail, git's error surfaces unmodified.
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    parent = dest.parent
+    if parent.exists() and not parent.is_dir():
+        raise GitOpError(f"git clone destination parent {parent} is not a directory")
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise GitOpError(
+            f"git clone destination parent {parent} could not be created: {exc}"
+        ) from exc
     _run_git(["clone", url, str(dest)])
 
 

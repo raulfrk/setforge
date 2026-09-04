@@ -170,6 +170,29 @@ class TestGitClone:
         git_clone(str(upstream), nested_dest)
         assert (nested_dest / ".git").exists()
 
+    def test_clone_rejects_regular_file_parent(self, tmp_path: Path) -> None:
+        blocked = tmp_path / "blocked"
+        blocked.write_text("occupied\n", encoding="utf-8")
+
+        with pytest.raises(GitOpError, match=r"parent.*not a directory"):
+            git_clone(str(tmp_path / "source.git"), blocked / "clone")
+
+    def test_clone_wraps_parent_creation_race(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parent = tmp_path / "raced-parent"
+
+        def raise_race(path: Path, *args: object, **kwargs: object) -> NoReturn:
+            assert path == parent
+            raise FileExistsError("simulated parent creation race")
+
+        monkeypatch.setattr(Path, "mkdir", raise_race)
+
+        with pytest.raises(GitOpError, match="could not be created") as excinfo:
+            git_clone(str(tmp_path / "source.git"), parent / "clone")
+        assert str(parent) in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, FileExistsError)
+
 
 # ---------------------------------------------------------------------------
 # git_fetch
