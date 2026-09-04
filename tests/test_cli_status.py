@@ -44,6 +44,24 @@ def _write_minimal_config(tmp_path: Path, *, profile: str = "vm-headless") -> Pa
     return yaml_path
 
 
+def _write_codex_instruction_config(tmp_path: Path) -> Path:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\n"
+        "minimum_version: '6.4'\n"
+        "tracked_files: {}\n"
+        "codex:\n"
+        "  instructions:\n"
+        "    base: {source: codex/AGENTS.md}\n"
+        "profiles:\n"
+        "  vm-headless:\n"
+        "    codex:\n"
+        "      instructions: [base]\n",
+        encoding="utf-8",
+    )
+    return config
+
+
 def _invoke_status(
     *,
     source_dir: Path,
@@ -334,6 +352,29 @@ def test_status_renders_5_sections(
     assert "drift:" in result.output
     assert "overlay:" in result.output
     assert "capabilities:" in result.output
+
+
+def test_status_counts_drifted_selected_codex_instruction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tracked" / "codex" / "AGENTS.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("tracked instructions\n", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "AGENTS.md").write_text("live drift\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    _patch_git_for_clean_repo(monkeypatch)
+
+    result = _invoke_status(
+        source_dir=tmp_path,
+        config_path=_write_codex_instruction_config(tmp_path),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "drift:          1 drifted" in result.output
 
 
 def test_status_exit_0_when_capabilities_missing(

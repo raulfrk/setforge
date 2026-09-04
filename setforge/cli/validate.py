@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from setforge import codex_resources as codex_resources_mod
 from setforge import reconcile_adapter
 from setforge import source as source_mod
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
@@ -88,6 +89,13 @@ def _check_profile(
     resolved = _check_profile_resolution(cfg, prof_name, repo_root, ctx, failures)
     if resolved is None:
         return
+
+    try:
+        codex_resources_mod.expand_filesystem_resources(
+            cfg.model_copy(deep=True), resolved.model_copy(deep=True), repo_root
+        )
+    except SetforgeError as exc:
+        failures.append(f"{ctx}: {exc}")
 
     _apply_tracked_file_overlay_check(cfg, ctx, failures)
 

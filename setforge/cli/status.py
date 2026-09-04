@@ -254,6 +254,7 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
         ownership_authorized=compare_mod.file_authorization_map(
             ctx.cfg, ctx.resolved, ctx.repo_root
         ),
+        resolved=ctx.resolved,
     )
     report = codex_lifecycle.append_projection(
         report, ctx.cfg, ctx.resolved, ctx.repo_root, profile=ctx.profile
