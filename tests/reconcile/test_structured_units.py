@@ -76,6 +76,62 @@ def test_extract_yaml_scalar_type_change_mints_unit() -> None:
     assert [unit.path for unit in units] == ["enabled"]
 
 
+def test_reconstruct_shared_nested_add_materializes_only_promoted_path() -> None:
+    base = b"existing: keep\n"
+    live = b"existing: keep\nnew:\n  nested:\n    shared: 1\n    local: 2\n"
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    assert [unit.path for unit in fresh] == ["new.nested.local", "new.nested.shared"]
+    units = [
+        replace(
+            unit,
+            cls=(
+                HunkClass.SHARED
+                if unit.path == "new.nested.shared"
+                else HunkClass.LOCAL
+            ),
+        )
+        for unit in fresh
+    ]
+
+    try:
+        out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+    except KeyError:
+        out = None
+
+    assert out == b"existing: keep\nnew:\n  nested:\n    shared: 1\n"
+
+
+@pytest.mark.parametrize(
+    ("base", "live", "paths"),
+    [
+        pytest.param(
+            b"existing: keep\n",
+            b"existing: keep\nempty: {}\n",
+            ["empty"],
+            id="add",
+        ),
+        pytest.param(
+            b"existing: keep\nempty: {}\n",
+            b"existing: keep\n",
+            ["empty"],
+            id="delete",
+        ),
+        pytest.param(b"{}\n", b"a: 1\n", ["a"], id="empty-root-to-key"),
+        pytest.param(b"a: 1\n", b"{}\n", ["a"], id="key-to-empty-root"),
+    ],
+)
+def test_reconstruct_shared_empty_mapping_round_trips_exactly(
+    base: bytes, live: bytes, paths: list[str]
+) -> None:
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    assert [unit.path for unit in units] == paths
+    promoted = [replace(unit, cls=HunkClass.SHARED) for unit in units]
+    assert (
+        reconstruct_structured(base, live, promoted, {}, StructuredFormat.YAML) == live
+    )
+
+
 def test_reconstruct_all_local_returns_base_byte_identical() -> None:
     """Promoting nothing → base verbatim: comments/quotes/inline survive (SP5/SP6)."""
     base = b'# top\ntheme: "dark"\nfontSize: 14  # inline note\n'

@@ -211,9 +211,10 @@ def _own_items(node: Mapping[object, object]) -> Iterator[tuple[object, object]]
 def _walk_leaves(
     node: object, prefix: str | None = None
 ) -> Iterator[tuple[str, object]]:
-    """Yield ``(dotted_path, plain_value)`` for every LEAF under ``node``.
+    """Yield ``(dotted_path, plain_value)`` for every unit under ``node``.
 
-    A leaf is any non-mapping value. Mapping keys extend the dotted prefix via
+    A unit is a non-mapping leaf or an empty mapping container. Mapping keys
+    extend the dotted prefix via
     :func:`~setforge.structural_merge.append_key_segment`, whose injective
     encoding escapes a literal ``.`` (or ``\\``) inside a key — so a flat key
     named ``"a.b"`` and a nested ``a: {b: …}`` yield DISTINCT paths instead of
@@ -224,7 +225,10 @@ def _walk_leaves(
     :func:`_own_items`).
     """
     if isinstance(node, Mapping):
-        for key, value in _own_items(node):
+        items = list(_own_items(node))
+        if not items and prefix is not None:
+            yield (prefix, get_at_path(node, ""))
+        for key, value in items:
             if not isinstance(key, str):
                 raise StructuredParseError(
                     f"structured input has a non-string mapping key: {key!r} "
@@ -245,7 +249,8 @@ def extract_structured_units(
 ) -> list[KeyUnit]:
     """Extract the per-key base↔live diff units (each unclassified → PENDING).
 
-    YAML enumerates the union of leaf paths in both models. JSON/JSONC remains
+    YAML enumerates the union of leaf and empty-container paths in both models.
+    JSON/JSONC remains
     intentionally opaque and therefore produces at most one whole-document unit
     at ``path == ""``. Every differing path becomes one PENDING
     :class:`KeyUnit`; an empty result means live equals base (nothing to stage).
@@ -527,6 +532,25 @@ def _reconstruct_document_root(
     return live if _promotes(root) else base
 
 
+def _materialize_yaml_parents(
+    target: object, live: object, path: str, fmt: StructuredFormat
+) -> None:
+    """Create absent mapping parents needed by a promoted nested YAML unit."""
+    if fmt is not StructuredFormat.YAML:
+        return
+    segments = split_key_path(path)
+    for depth in range(1, len(segments)):
+        parent_path = join_key_segments(segments[:depth])
+        if get_node_at_path(target, parent_path) is not ABSENT:
+            continue
+        if not isinstance(get_node_at_path(live, parent_path), Mapping):
+            raise StructuredParseError(
+                f"promoted nested unit {path!r} has no mapping parent "
+                f"{parent_path!r} in live"
+            )
+        set_at_path(target, parent_path, {})
+
+
 def reconstruct_structured(
     base: bytes,
     live: bytes,
@@ -583,10 +607,12 @@ def reconstruct_structured(
                 raise InvariantViolation(
                     f"SHARED_DRAFTED key-unit {unit.path!r} has no draft in the store"
                 ) from err
+            _materialize_yaml_parents(base_model, live_model, operation_path, fmt)
             set_at_path(base_model, operation_path, parse_scalar_draft(draft, fmt))
         elif _promotes(unit):
             node = get_node_at_path(live_model, operation_path)
             if node is not ABSENT:
+                _materialize_yaml_parents(base_model, live_model, operation_path, fmt)
                 set_node_at_path(base_model, operation_path, node)
             elif get_node_at_path(original_base_model, operation_path) is not ABSENT:
                 # A promoted SHARED unit whose LIVE value was deleted (key
