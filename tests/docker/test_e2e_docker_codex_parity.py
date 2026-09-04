@@ -43,12 +43,18 @@ elif args[:3] == ["plugin", "marketplace", "add"]:
 elif args[:2] == ["plugin", "add"]:
     plugin_id = args[2]
     name, _, marketplace = plugin_id.partition("@")
-    state["plugins"] = [{
+    installed = {
         "pluginId": plugin_id,
         "name": name,
         "marketplaceName": marketplace,
-    }]
-    payload = {"success": True}
+    }
+    state["plugins"] = [installed]
+    payload = {
+        **installed,
+        "version": "1.0.0",
+        "installedPath": f"/tmp/codex-parity/plugins/{name}",
+        "authPolicy": None,
+    }
 elif args[:2] == ["plugin", "remove"]:
     state["plugins"] = [row for row in state["plugins"] if row["pluginId"] != args[2]]
     payload = {"success": True}

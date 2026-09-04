@@ -251,7 +251,7 @@ def test_config_show_effective_smoke_non_pty(
         "tracked_files:\n"
         "  foo:\n"
         "    src: foo.md\n"
-        "    dst: foo.md\n"
+        "    dst: /tmp/cfg/foo.md\n"
         "profiles:\n"
         "  base:\n"
         "    tracked_files:\n"
