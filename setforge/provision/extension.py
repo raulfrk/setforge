@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
 
 from setforge import vscode_extensions
 from setforge.errors import (
@@ -14,7 +13,6 @@ from setforge.errors import (
 from setforge.provision.protocol import (
     Identity,
     Outcome,
-    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -51,16 +49,6 @@ class ExtensionProvisioner(Provisioner):
         except (ExtensionToolMissing, ExtensionInstallFailed):
             return set()
         return {Identity(key=e.casefold(), display=e) for e in installed}
-
-    def plan(
-        self, items: Sequence[ProvisionItem], installed: set[Identity]
-    ) -> ProvisionDelta:
-        present = {i.key for i in installed}
-        return ProvisionDelta(
-            installed=tuple(
-                item.identity for item in items if item.identity.key not in present
-            )
-        )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         pin = self._pins.get(item.identity.key)

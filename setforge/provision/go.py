@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from collections.abc import Sequence
 from pathlib import Path
 
 from setforge.binaries import resolve_binary, stderr_of
@@ -14,7 +13,6 @@ from setforge.provision.protocol import (
     ObservationOrigin,
     Outcome,
     PackageObservation,
-    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -77,15 +75,6 @@ class GoProvisioner(Provisioner):
             if exists:
                 present.add(identity)
         return present
-
-    def plan(
-        self, items: Sequence[ProvisionItem], installed: set[Identity]
-    ) -> ProvisionDelta:
-        return ProvisionDelta(
-            installed=tuple(
-                item.identity for item in items if item.identity not in installed
-            )
-        )
 
     def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
         result: list[PackageObservation] = []

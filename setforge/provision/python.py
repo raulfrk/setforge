@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from collections.abc import Sequence
 
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.provision.protocol import (
@@ -13,7 +12,6 @@ from setforge.provision.protocol import (
     ObservationOrigin,
     Outcome,
     PackageObservation,
-    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -75,15 +73,6 @@ class PythonProvisioner(Provisioner):
                 source="uv-tool",
             )
             for identity in sorted(installed, key=lambda value: value.key)
-        )
-
-    def plan(
-        self, items: Sequence[ProvisionItem], installed: set[Identity]
-    ) -> ProvisionDelta:
-        return ProvisionDelta(
-            installed=tuple(
-                item.identity for item in items if item.identity not in installed
-            )
         )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:

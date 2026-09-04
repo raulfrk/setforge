@@ -13,13 +13,10 @@ an already-present no-op returns ``Outcome.SKIP`` (writes nothing). Both leave
 exit at 0.
 """
 
-from collections.abc import Sequence
-
 from setforge.errors import ProvisionItemFailed
 from setforge.provision.protocol import (
     Identity,
     Outcome,
-    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -61,16 +58,6 @@ class InMemoryProvisioner(Provisioner):
         if self._receipts is not None:
             return self._receipts.installed()
         return set(self._installed)
-
-    def plan(
-        self, items: Sequence[ProvisionItem], installed: set[Identity]
-    ) -> ProvisionDelta:
-        """Return the declared identities not yet installed. PURE — no writes."""
-        return ProvisionDelta(
-            installed=tuple(
-                item.identity for item in items if item.identity not in installed
-            )
-        )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         """Install one item, or raise HARD / return SOFT per the scripted sets."""

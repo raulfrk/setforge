@@ -21,7 +21,6 @@ from setforge.provision.protocol import (
     ObservationOrigin,
     Outcome,
     PackageObservation,
-    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -64,15 +63,6 @@ class GitHubReleaseProvisioner(Provisioner):
 
     def probe(self) -> set[Identity]:
         return self._receipts.installed_for(self.type)
-
-    def plan(
-        self, items: Sequence[ProvisionItem], installed: set[Identity]
-    ) -> ProvisionDelta:
-        return ProvisionDelta(
-            installed=tuple(
-                item.identity for item in items if item.identity not in installed
-            )
-        )
 
     def plan_fingerprint(
         self, items: Sequence[ProvisionItem], installed: set[Identity]

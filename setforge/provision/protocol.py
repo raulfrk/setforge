@@ -160,7 +160,6 @@ class Provisioner(ABC):
         del items
         return self.inventory_fingerprint(installed)
 
-    @abstractmethod
     def plan(
         self, items: Sequence[ProvisionItem], installed: set[Identity]
     ) -> ProvisionDelta:
@@ -175,6 +174,11 @@ class Provisioner(ABC):
         :meth:`plan` on the SAME instance immediately after :meth:`probe`; do
         not reuse a plan across instances or a replayed ``installed`` set.
         """
+        return ProvisionDelta(
+            installed=tuple(
+                item.identity for item in items if item.identity not in installed
+            )
+        )
 
     @abstractmethod
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:

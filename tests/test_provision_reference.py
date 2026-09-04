@@ -70,6 +70,27 @@ def test_second_run_is_idempotent_noop() -> None:
     assert second.outcomes == ()
 
 
+def test_default_plan_preserves_declared_order_duplicates_and_display() -> None:
+    present = ProvisionItem(
+        type="reference", identity=Identity(key="present", display="Declared Present")
+    )
+    first = ProvisionItem(
+        type="reference", identity=Identity(key="missing", display="First Display")
+    )
+    duplicate = ProvisionItem(
+        type="reference", identity=Identity(key="missing", display="Second Display")
+    )
+    installed = {Identity(key="present", display="Installed Display")}
+
+    delta = InMemoryProvisioner().plan([present, first, duplicate], installed)
+
+    assert [identity.display for identity in delta.installed] == [
+        "First Display",
+        "Second Display",
+    ]
+    assert delta.activated == ()
+
+
 def test_receipt_backed_idempotency(tmp_path: Path) -> None:
     store = ReceiptStore(tmp_path)
     prov = InMemoryProvisioner(receipts=store)
