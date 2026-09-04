@@ -1252,7 +1252,7 @@ def _dry_run_pipeline(
                 for name, sections in host_local_sections_map.items()
             },
         )
-    if deploys is not None and len(deploys) != len(drift_report.entries):
+    if deploys is not None and len(deploys) != len(tuple(_iter_all_tracked_files(ctx))):
         raise SetforgeError(
             "dry-run: immutable deploy plan does not match the drift report"
         )

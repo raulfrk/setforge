@@ -623,7 +623,11 @@ def apply_tree(
     destination = destination.absolute()
     payloads = plan.desired.payload_map()
     desired_by = {entry.path: entry for entry in plan.desired.inventory.entries}
-    root_mode = plan.desired.inventory.root_mode or _DIR_MODE
+    root_mode = (
+        plan.desired.inventory.root_mode
+        if plan.desired.inventory.root_mode is not None
+        else _DIR_MODE
+    )
     root_create = any(
         action.path == "." and action.kind is TreeActionKind.CREATE
         for action in plan.actions

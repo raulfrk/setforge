@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,42 @@ def test_apply_tree_creates_an_absent_root(tmp_path: Path) -> None:
 
     assert applied.root_present
     assert (destination / "file.txt").read_text(encoding="utf-8") == "content\n"
+
+
+def test_apply_tree_preserves_zero_root_mode(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    policy = TreePolicy()
+    desired = scan_tree(source, policy, capture_payloads=True)
+    inventory = replace(
+        desired.inventory,
+        root_mode=0o000,
+        fingerprint=tree_management._inventory_fingerprint(
+            root_present=True,
+            root_mode=0o000,
+            entries=desired.inventory.entries,
+        ),
+    )
+    desired = replace(desired, inventory=inventory)
+    destination = tmp_path / "live"
+    destination.mkdir()
+    live = scan_tree(destination, policy).inventory
+    root_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+
+    try:
+        applied = apply_tree(
+            plan_tree(desired, live, None, policy),
+            destination,
+            policy,
+            anchor_fd=root_fd,
+        )
+        observed_mode = stat.S_IMODE(destination.stat().st_mode)
+    finally:
+        os.close(root_fd)
+        destination.chmod(0o700)
+
+    assert applied.root_mode == 0o000
+    assert observed_mode == 0o000
 
 
 @pytest.mark.parametrize("operation", ["create", "update", "remove"])
