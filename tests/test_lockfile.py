@@ -128,6 +128,32 @@ def test_parse_dump_round_trip_equal() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "second",
+    [
+        pytest.param(_checksum_pin(), id="identical"),
+        pytest.param(
+            _checksum_pin().model_copy(update={"version": "v0.9.0"}),
+            id="conflicting",
+        ),
+    ],
+)
+def test_parse_rejects_duplicate_package_identity(second: ResolvedPin) -> None:
+    text = dump_lock(LockFile(packages=(_checksum_pin(), second)))
+
+    with pytest.raises(
+        MalformedLockError, match=r"duplicate.*github_release.*revdiff-bin"
+    ):
+        parse_lock(text)
+
+
+def test_parse_allows_same_key_for_different_package_types() -> None:
+    go_pin = _sum_pin().model_copy(update={"key": _checksum_pin().key})
+    lock = LockFile(packages=(_checksum_pin(), go_pin))
+
+    assert parse_lock(dump_lock(lock)) == lock
+
+
 def test_dump_is_byte_stable() -> None:
     lf = LockFile(packages=(_checksum_pin(), _sum_pin(), _sha_pin()))
     assert dump_lock(lf) == dump_lock(lf)
