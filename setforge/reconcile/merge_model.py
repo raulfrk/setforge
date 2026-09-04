@@ -48,10 +48,14 @@ class MergeResult:
     ``absent`` marks a clean merge whose result is "the file is absent" (a
     deletion that applied without conflict) — distinct from an empty file
     (``segments=()``, ``absent=False`` → ``merged() == b""``).
+    ``ours_absent`` and ``theirs_absent`` retain the file-level identity of an
+    absent conflict side even though :class:`Conflict` renders it as ``b""``.
     """
 
     segments: tuple[Segment, ...]
     absent: bool = False
+    ours_absent: bool = False
+    theirs_absent: bool = False
 
     @property
     def clean(self) -> bool:

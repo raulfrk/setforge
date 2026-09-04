@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from setforge.cli._install_helpers import DeployOutcome, _install_recorded_nothing
 from setforge.errors import InvalidTransitionRecord
 from setforge.transitions import (
     TransitionDir,
@@ -30,6 +31,23 @@ from setforge.transitions import (
 # ---------------------------------------------------------------------------
 # Finding 1 — no-trailing-newline files must produce a revertible patch
 # ---------------------------------------------------------------------------
+
+
+def test_empty_file_creation_is_not_classified_as_no_transition(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "empty.conf"
+
+    assert not _install_recorded_nothing(
+        file_pre={target: None},
+        file_post={target: ""},
+        deploy_outcome=DeployOutcome((), {}),
+        ext_delta=None,
+        plugin_delta=None,
+        mcp_delta=None,
+        reconcile_outcomes=(),
+        seeded=False,
+    )
 
 
 def _apply_reverse(

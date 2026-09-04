@@ -86,7 +86,9 @@ def _whole_file_conflict(
                 ours=b"" if ours is ABSENT else ours,
                 theirs=b"" if theirs is ABSENT else theirs,
             ),
-        )
+        ),
+        ours_absent=ours is ABSENT,
+        theirs_absent=theirs is ABSENT,
     )
 
 

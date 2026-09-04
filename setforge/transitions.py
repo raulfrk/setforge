@@ -1717,6 +1717,36 @@ def _canonicalize_filesystem_deltas(
     return canonical
 
 
+def _encode_empty_file_creations(
+    pre: Mapping[Path, str | None],
+    post: Mapping[Path, str | None],
+    filesystem_deltas: tuple[FilesystemDelta, ...],
+) -> tuple[FilesystemDelta, ...]:
+    """Encode zero-byte creations that unified diff cannot represent."""
+    encoded = list(filesystem_deltas)
+    covered = {_canonical_filesystem_path(item.path) for item in encoded}
+    for path in _touched_paths(pre, post):
+        if pre.get(path) is not None or post.get(path) != "":
+            continue
+        canonical = _canonical_filesystem_path(path)
+        if canonical in covered:
+            continue
+        current = snapshot_filesystem_image(canonical)
+        if current.kind is not FilesystemKind.FILE or current.payload != b"":
+            raise SetforgeError(
+                f"empty-file transition snapshot does not match live path: {canonical}"
+            )
+        encoded.append(
+            FilesystemDelta(
+                canonical,
+                FilesystemImage(FilesystemKind.ABSENT),
+                current,
+            )
+        )
+        covered.add(canonical)
+    return tuple(encoded)
+
+
 def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | None:
     if not deltas:
         return None
@@ -1922,6 +1952,9 @@ def write_transition(
             source dict with a non-str value (caller bypassed
             ``MarketplaceSource.model_dump(mode="json")``).
     """
+    filesystem_deltas = _encode_empty_file_creations(
+        file_pre, file_post, filesystem_deltas
+    )
     filesystem_deltas = _canonicalize_filesystem_deltas(filesystem_deltas)
     filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
     ownership_transfer_payload = _serialize_ownership_transfers(ownership_transfers)

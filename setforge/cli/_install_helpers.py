@@ -923,7 +923,10 @@ def _install_recorded_nothing(
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> bool:
     """True iff nothing revertable changed (ANDs the patch with every delta below)."""
-    if transitions.compute_patch(file_pre, file_post):
+    if any(
+        file_pre.get(path) != file_post.get(path)
+        for path in set(file_pre) | set(file_post)
+    ):
         return False
     if deploy_outcome.store_mutated or deploy_outcome.prior_modes:
         return False

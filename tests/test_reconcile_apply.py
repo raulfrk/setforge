@@ -173,6 +173,43 @@ class TestConflictOutcomes:
         # base advances to tracked (theirs), not to the merged content.
         assert out.new_base == b"theirs\n"
 
+    def test_auto_ours_preserves_local_deletion_as_remove(self) -> None:
+        fid = self._setup_conflict()
+
+        out = reconcile_plain_file(
+            _PROFILE,
+            fid,
+            live=ABSENT,
+            tracked=b"upstream edit\n",
+            auto=AutoSide.OURS,
+        )
+
+        assert out.kind is ReconcileKind.REMOVE
+        assert out.content is ABSENT
+        assert out.new_base == b"upstream edit\n"
+
+    def test_interactive_ours_preserves_local_deletion_as_remove(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fid = self._setup_conflict()
+        resolved = WizardResult(
+            MergeResult((Clean(b""),)), deferred=False, selections=("ours",)
+        )
+        monkeypatch.setattr(
+            reconcile_apply, "resolve_conflicts", lambda *a, **k: resolved
+        )
+
+        out = reconcile_plain_file(
+            _PROFILE,
+            fid,
+            live=ABSENT,
+            tracked=b"upstream edit\n",
+            interactive=True,
+        )
+
+        assert out.kind is ReconcileKind.REMOVE
+        assert out.content is ABSENT
+
 
 class TestSeed:
     """Divergent pre-existing live file with no recorded base → seed base."""

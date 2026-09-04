@@ -89,7 +89,9 @@ def test_absence_upstream_delete_local_unchanged_clean_absent() -> None:
 
 def test_absence_delete_vs_edit_conflict() -> None:
     # ours deleted, theirs edited
-    assert merge(b"x\n", ABSENT, b"x2\n").clean is False
+    result = merge(b"x\n", ABSENT, b"x2\n")
+    assert result.clean is False
+    assert result.ours_absent is True
 
 
 def test_absence_upstream_delete_with_local_edits_conflict() -> None:
@@ -99,6 +101,7 @@ def test_absence_upstream_delete_with_local_edits_conflict() -> None:
     (seg,) = r.segments
     assert isinstance(seg, Conflict)
     assert seg.theirs == b""  # absent side rendered as b""
+    assert r.theirs_absent is True
 
 
 def test_absence_both_delete_clean_absent() -> None:

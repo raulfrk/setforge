@@ -197,7 +197,7 @@ def _seed_outcome(
     return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
 
 
-def _take_side(result: MergeResult, side: AutoSide) -> bytes:
+def _take_side(result: MergeResult, side: AutoSide) -> MergeInput:
     """Resolve every conflict region to one side; clean regions pass through.
 
     The non-interactive ``--auto`` resolver: each clean (agreed) region is
@@ -205,6 +205,11 @@ def _take_side(result: MergeResult, side: AutoSide) -> bytes:
     (live) or ``theirs`` (tracked) bytes — the same per-region choice the
     wizard offers, applied uniformly without prompting.
     """
+    if side is AutoSide.OURS and result.ours_absent:
+        return ABSENT
+    if side is AutoSide.THEIRS and result.theirs_absent:
+        return ABSENT
+
     out: list[bytes] = []
     for seg in result.segments:
         if isinstance(seg, Clean):
@@ -212,6 +217,28 @@ def _take_side(result: MergeResult, side: AutoSide) -> bytes:
         else:  # Conflict
             out.append(seg.ours if side is AutoSide.OURS else seg.theirs)
     return b"".join(out)
+
+
+def _resolved_outcome(content: MergeInput, *, new_base: bytes) -> ReconcileOutcome:
+    """Map an explicitly resolved file image without collapsing absence."""
+    kind = ReconcileKind.REMOVE if content is ABSENT else ReconcileKind.WRITE
+    return ReconcileOutcome(kind, content=content, new_base=new_base)
+
+
+def _selected_absence(result: MergeResult, selections: tuple[str | None, ...]) -> bool:
+    """Whether a whole-file resolution selected its originally absent side."""
+    if len(selections) != 1:
+        return False
+    return (selections[0] == AutoSide.OURS and result.ours_absent) or (
+        selections[0] == AutoSide.THEIRS and result.theirs_absent
+    )
+
+
+def _wizard_content(result: MergeResult, wizard: WizardResult) -> MergeInput:
+    """Restore the file-level identity hidden by the wizard's byte rendering."""
+    if _selected_absence(result, wizard.selections):
+        return ABSENT
+    return wizard.merged.merged()
 
 
 def reconcile_plain_file(
@@ -285,14 +312,10 @@ def reconcile_plain_file(
             return ReconcileOutcome(ReconcileKind.CANCELLED)
         if wizard.deferred:
             return ReconcileOutcome(ReconcileKind.DEFERRED)
-        return ReconcileOutcome(
-            ReconcileKind.WRITE, content=wizard.merged.merged(), new_base=tracked
-        )
+        return _resolved_outcome(_wizard_content(result, wizard), new_base=tracked)
 
     if auto is not None:
-        return ReconcileOutcome(
-            ReconcileKind.WRITE, content=_take_side(result, auto), new_base=tracked
-        )
+        return _resolved_outcome(_take_side(result, auto), new_base=tracked)
 
     return ReconcileOutcome(ReconcileKind.DEFERRED)
 

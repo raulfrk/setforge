@@ -11,6 +11,7 @@ from typing import TextIO
 
 import pytest
 
+from setforge import operations, orphan_scan
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 from setforge.transitions import (
     CodexPluginDelta,
@@ -25,6 +26,7 @@ from setforge.transitions import (
     compute_patch,
     extension_delta_from_json,
     list_transitions,
+    load_filesystem_deltas,
     load_latest,
     load_meta,
     make_meta,
@@ -518,6 +520,27 @@ def test_write_transition_omits_empty_patch(
     assert (out / "meta.json").exists()
     assert not (out / "changes.patch").exists()
     assert (out / "extensions.json").exists()
+
+
+def test_write_transition_encodes_empty_file_creation_for_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target_file = tmp_path / "empty.txt"
+    target_file.touch()
+
+    out = write_transition(_make_meta(), {target_file: None}, {target_file: ""}, None)
+
+    (delta,) = load_filesystem_deltas(out)
+    assert delta.path == target_file
+    assert delta.pre.kind.value == "absent"
+    assert delta.post.kind.value == "file"
+    assert delta.post.payload == b""
+
+    operations.apply_filesystem_deltas_reverse_anchored(
+        (delta,), orphan_scan.capture_parent_path_guards((target_file,))
+    )
+    assert not target_file.exists()
 
 
 def test_write_transition_omits_empty_extension_delta(
