@@ -202,6 +202,27 @@ def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
     assert _transition_dirs() == transitions_before
 
 
+def test_converged_dry_run_previews_no_transition_and_mutates_nothing(
+    repo: Path,
+) -> None:
+    config = _write_config(repo)
+    _write_tracked(repo, "stable\n")
+    assert _install(config).exit_code == 0
+    transitions_before = _transition_dirs()
+    base_mtime_before = _base_mtime_ns()
+    live_mtime_before = _live().stat().st_mtime_ns
+
+    result = _install(config, "--dry-run")
+
+    assert result.exit_code == 0, result.output
+    assert "=== would-be transition record ===" in result.output
+    assert "no transition would be created" in result.output
+    assert "WOULD record" not in result.output
+    assert _transition_dirs() == transitions_before
+    assert _base_mtime_ns() == base_mtime_before
+    assert _live().stat().st_mtime_ns == live_mtime_before
+
+
 def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) -> None:
     """Transition provenance may be older even though deployed bytes match HEAD."""
     config = _write_config(repo)

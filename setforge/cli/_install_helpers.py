@@ -724,6 +724,24 @@ def _reconcile_keep_ids(pending: tuple[_PendingDeploy, ...]) -> set[FileId]:
     }
 
 
+def _planned_reconcile_store_mutation(
+    profile: str,
+    pending: tuple[_PendingDeploy, ...],
+) -> bool:
+    """Return whether the frozen file plan advances or prunes reconcile state."""
+    if reconcile_store.stored_file_ids(profile) - _reconcile_keep_ids(pending):
+        return True
+    return any(
+        record.reconcile is not None
+        and record.reconcile[1].kind
+        in {
+            reconcile_apply.ReconcileKind.WRITE,
+            reconcile_apply.ReconcileKind.REMOVE,
+        }
+        for record in pending
+    )
+
+
 @dataclass(slots=True, frozen=True)
 class DeployOutcome:
     """The pass-2 deploy outputs the caller threads into the transition.
@@ -1221,6 +1239,7 @@ def _dry_run_pipeline(
     extensions: vscode_extensions_mod.ExtensionPlan | None = None,
     plugins: claude_plugins_mod.PluginPlan | None = None,
     immutable_plan: bool = False,
+    record_transition: bool = True,
     secrets_scan: SecretsScanResult | None = None,
     host_local_sections_map: Mapping[
         str, Mapping[HostLocalSectionName, HostLocalSection]
@@ -1279,7 +1298,7 @@ def _dry_run_pipeline(
             verb = "add" if entry.prior is None else "update"
             typer.echo(f"  WOULD {verb:<7} {entry.name}")
     dry_run_packages(ctx.cfg, ctx.resolved, plan=provisioning)
-    _dry_run_emit_transition_path(ctx)
+    _dry_run_emit_transition_path(ctx, record=record_transition)
     typer.echo(_DRY_RUN_FINAL_LINE)
 
 
@@ -1560,11 +1579,16 @@ def _dry_run_emit_extension_reconcile(
         typer.echo("  nothing to reconcile")
 
 
-def _dry_run_emit_transition_path(ctx: ProfileContext) -> None:
+def _dry_run_emit_transition_path(
+    ctx: ProfileContext,
+    *,
+    record: bool = True,
+) -> None:
     """Emit the ``=== would-be transition record ===`` block.
 
-    Computes the would-be transition directory PATH (one line, prefixed
-    ``WOULD record``) without ever calling
+    When the frozen install plan has a recordable effect, computes the
+    would-be transition directory PATH (one line, prefixed ``WOULD record``).
+    Otherwise reports that no transition would be created. It never calls
     :func:`transitions.ensure_state_dir_writable`,
     :func:`transitions.write_meta`, or
     :func:`transitions.write_transition`. The state dir is NOT created
@@ -1572,6 +1596,9 @@ def _dry_run_emit_transition_path(ctx: ProfileContext) -> None:
     :func:`transitions.transition_dirname` against ``now_utc()``.
     """
     typer.echo("=== would-be transition record ===")
+    if not record:
+        typer.echo("  no transition would be created")
+        return
     dirname = transitions.transition_dirname(
         transitions.now_utc(),
         transitions.TransitionCommand.INSTALL.value,

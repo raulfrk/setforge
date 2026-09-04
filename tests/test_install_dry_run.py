@@ -32,11 +32,21 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.cli import install as install_mod
+from setforge.compare import CompareStatus
+from setforge.config import ReconcilePolicy
+from setforge.deploy import DeployAction
+from setforge.file_ownership import FileAction
+from setforge.provision.ownership import PackageAction
+from setforge.provision.protocol import Identity
+from setforge.transitions import transitions_root
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
 _FIXTURE_YAML = _FIXTURE_DIR / "setforge.test.yaml"
@@ -200,6 +210,246 @@ def test_no_write_transition(
     monkeypatch.setattr("setforge.transitions.write_transition", tripwire)
     _invoke_dry_run(fixture_repo)
     assert calls == []
+
+
+def test_mutating_preview_emits_transition_path_without_mutating(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """A first-install preview names its transition path but creates nothing."""
+    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-git-check",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"WOULD record  {transitions_root()}/" in result.output
+    assert not live.exists()
+    assert not transitions_root().exists()
+
+
+def test_no_transition_option_suppresses_mutating_preview_without_mutating(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """An explicit no-transition dry run neither previews nor creates one."""
+    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-transition",
+            "--no-git-check",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "no transition would be created" in result.output
+    assert "WOULD record" not in result.output
+    assert not live.exists()
+    assert not transitions_root().exists()
+
+
+def _empty_transition_plan() -> Any:
+    return SimpleNamespace(
+        drift_report=SimpleNamespace(entries=()),
+        deploys=(),
+        reconcile_store_mutation=False,
+        package_owner_id=None,
+        file_ownership=(),
+        trees=(),
+        codex_configs=(),
+        bootstrap=(),
+        provisioning=SimpleNamespace(
+            ownership=(),
+            bundles=(),
+            batches=(),
+            bundle_batches=(),
+            direct_keys=frozenset(),
+        ),
+        mcp=SimpleNamespace(value=SimpleNamespace(entries=())),
+        extensions=None,
+        plugins=None,
+        codex_plugins=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "effect",
+    [
+        "file",
+        "symlink",
+        "reconcile-store",
+        "tree",
+        "codex-config",
+        "bootstrap",
+        "package",
+        "bundle-package",
+        "mcp",
+        "extension",
+        "plugin",
+        "codex-plugin",
+        "ownership",
+    ],
+)
+def test_each_recordable_plan_effect_retains_transition_preview(
+    effect: str,
+    tmp_path: Path,
+) -> None:
+    plan = _empty_transition_plan()
+    if effect == "file":
+        plan.deploys = (
+            SimpleNamespace(
+                preview_action=DeployAction.CREATED,
+                sub_name="file",
+            ),
+        )
+    elif effect == "symlink":
+        plan.drift_report = SimpleNamespace(
+            entries=(SimpleNamespace(name="link", status=CompareStatus.MISSING),)
+        )
+        plan.deploys = (SimpleNamespace(preview_action=None, sub_name="link"),)
+    elif effect == "reconcile-store":
+        plan.reconcile_store_mutation = True
+    elif effect == "tree":
+        plan.trees = (SimpleNamespace(plan=SimpleNamespace(changed=True)),)
+    elif effect == "codex-config":
+        plan.codex_configs = (
+            SimpleNamespace(changed=False, base=b"old", desired=b"new"),
+        )
+    elif effect == "bootstrap":
+        plan.bootstrap = (tmp_path / "missing",)
+    elif effect == "package":
+        plan.provisioning.batches = (
+            SimpleNamespace(delta=SimpleNamespace(is_empty=lambda: False)),
+        )
+    elif effect == "bundle-package":
+        identity = Identity(key="tool", display="tool")
+        plan.provisioning.bundle_batches = (
+            SimpleNamespace(
+                provider_type="cargo",
+                delta=SimpleNamespace(
+                    installed=(identity,),
+                    activated=(),
+                    is_empty=lambda: False,
+                ),
+            ),
+        )
+        plan.provisioning.ownership = (
+            SimpleNamespace(
+                action=PackageAction.INSTALL,
+                item=SimpleNamespace(type="cargo", identity=identity),
+            ),
+        )
+    elif effect == "mcp":
+        plan.mcp.value.entries = (object(),)
+    elif effect == "extension":
+        plan.extensions = SimpleNamespace(
+            policy=ReconcilePolicy.ADDITIVE,
+            to_install=("publisher.extension",),
+            to_uninstall=(),
+        )
+    elif effect == "plugin":
+        plan.plugins = SimpleNamespace(
+            policy=ReconcilePolicy.ADDITIVE,
+            to_install=("plugin@marketplace",),
+            to_enable=(),
+            to_disable=(),
+            marketplaces_added=(),
+        )
+    elif effect == "codex-plugin":
+        plan.codex_plugins = SimpleNamespace(
+            policy=ReconcilePolicy.ADDITIVE,
+            to_install=("plugin@marketplace",),
+            to_remove=(),
+            marketplaces_to_add=(),
+            marketplaces_to_replace=(),
+        )
+    elif effect == "ownership":
+        plan.package_owner_id = object()
+        plan.file_ownership = (SimpleNamespace(action=FileAction.INSTALL),)
+
+    assert not install_mod._install_plan_recorded_nothing(plan)
+
+
+def test_selected_converged_bundle_does_not_preview_transition() -> None:
+    plan = _empty_transition_plan()
+    plan.provisioning.bundles = ("bundle",)
+    plan.provisioning.bundle_batches = (
+        SimpleNamespace(
+            provider_type="cargo",
+            delta=SimpleNamespace(installed=(), activated=()),
+        ),
+    )
+
+    assert install_mod._install_plan_recorded_nothing(plan)
+
+
+def test_held_bundle_delta_does_not_preview_transition() -> None:
+    plan = _empty_transition_plan()
+    identity = Identity(key="tool", display="tool")
+    plan.provisioning.bundles = ("bundle",)
+    plan.provisioning.bundle_batches = (
+        SimpleNamespace(
+            provider_type="cargo",
+            delta=SimpleNamespace(
+                installed=(identity,),
+                activated=(),
+                is_empty=lambda: False,
+            ),
+        ),
+    )
+    plan.provisioning.ownership = (
+        SimpleNamespace(
+            action=PackageAction.HOLD,
+            item=SimpleNamespace(type="cargo", identity=identity),
+        ),
+    )
+
+    assert install_mod._install_plan_recorded_nothing(plan)
+
+
+@pytest.mark.parametrize("adapter", ["extension", "plugin", "codex-plugin"])
+def test_report_only_adapter_plan_does_not_preview_transition(adapter: str) -> None:
+    plan = _empty_transition_plan()
+    if adapter == "extension":
+        plan.extensions = SimpleNamespace(
+            policy=ReconcilePolicy.REPORT,
+            to_install=("publisher.extension",),
+            to_uninstall=(),
+        )
+    elif adapter == "plugin":
+        plan.plugins = SimpleNamespace(
+            policy=ReconcilePolicy.REPORT,
+            to_install=("plugin@marketplace",),
+            to_enable=(),
+            to_disable=(),
+            marketplaces_added=(),
+        )
+    else:
+        plan.codex_plugins = SimpleNamespace(
+            policy=ReconcilePolicy.REPORT,
+            to_install=("plugin@marketplace",),
+            to_remove=(),
+            marketplaces_to_add=(),
+            marketplaces_to_replace=(),
+        )
+
+    assert install_mod._install_plan_recorded_nothing(plan)
 
 
 def test_no_allowlist_mutation(

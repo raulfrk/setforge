@@ -175,6 +175,7 @@ class InstallPlan:
     ]
     drift_report: compare_mod.CompareReport
     deploys: tuple[_PendingDeploy, ...]
+    reconcile_store_mutation: bool
     bootstrap: tuple[Path, ...]
     dst_paths: tuple[Path, ...]
     source_bytes: tuple[tuple[Path, bytes | None], ...]
@@ -224,8 +225,80 @@ class _CapabilityApplyResult:
 
 def _provisioning_plan_has_work(plan: ProvisioningPlan) -> bool:
     """Return whether applying the frozen package plan may change the host."""
-    return bool(plan.bundles) or any(
-        not batch.delta.is_empty() for batch in plan.batches
+    if any(not batch.delta.is_empty() for batch in plan.batches):
+        return True
+    eligible_bundle_items = {
+        (decision.item.type, decision.item.identity)
+        for decision in plan.ownership
+        if decision.action in {PackageAction.INSTALL, PackageAction.UPGRADE}
+        and (decision.item.type, decision.item.identity.key) not in plan.direct_keys
+    }
+    return any(
+        (batch.provider_type, identity) in eligible_bundle_items
+        for batch in plan.bundle_batches
+        for identity in (*batch.delta.installed, *batch.delta.activated)
+    )
+
+
+def _install_plan_recorded_nothing(plan: InstallPlan) -> bool:
+    """Plan-side equivalent of ``_install_recorded_nothing``."""
+    compared = {entry.name: entry for entry in plan.drift_report.entries}
+    file_change = any(
+        record.preview_action is not deploy.DeployAction.NOOP
+        if record.preview_action is not None
+        else compared[record.sub_name].status is not compare_mod.CompareStatus.UNCHANGED
+        for record in plan.deploys
+    )
+    ownership_change = plan.package_owner_id is not None and (
+        any(
+            decision.action
+            in {FileAction.INSTALL, FileAction.ADOPT, FileAction.TRANSFER}
+            for decision in plan.file_ownership
+        )
+        or any(
+            decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
+            for decision in plan.provisioning.ownership
+        )
+    )
+    extension_change = (
+        plan.extensions is not None
+        and plan.extensions.policy is not ReconcilePolicy.REPORT
+        and bool(plan.extensions.to_install or plan.extensions.to_uninstall)
+    )
+    plugin_change = (
+        plan.plugins is not None
+        and plan.plugins.policy is not ReconcilePolicy.REPORT
+        and bool(
+            plan.plugins.to_install
+            or plan.plugins.to_enable
+            or plan.plugins.to_disable
+            or plan.plugins.marketplaces_added
+        )
+    )
+    codex_plugin_change = (
+        plan.codex_plugins is not None
+        and plan.codex_plugins.policy is not ReconcilePolicy.REPORT
+        and bool(
+            plan.codex_plugins.to_install
+            or plan.codex_plugins.to_remove
+            or plan.codex_plugins.marketplaces_to_add
+            or plan.codex_plugins.marketplaces_to_replace
+        )
+    )
+    return not (
+        file_change
+        or plan.reconcile_store_mutation
+        or any(tree.plan.changed for tree in plan.trees)
+        or any(
+            codex.changed or codex.base != codex.desired for codex in plan.codex_configs
+        )
+        or any(not path.exists() for path in plan.bootstrap)
+        or _provisioning_plan_has_work(plan.provisioning)
+        or (plan.mcp.value is not None and bool(plan.mcp.value.entries))
+        or extension_change
+        or plugin_change
+        or codex_plugin_change
+        or ownership_change
     )
 
 
@@ -558,6 +631,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         host_local_sections=frozen_host_local,
         drift_report=drift_report,
         deploys=deploys,
+        reconcile_store_mutation=install_helpers_mod._planned_reconcile_store_mutation(
+            ctx.profile, deploys
+        ),
         bootstrap=tuple(
             Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
         ),
@@ -1247,7 +1323,12 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     )
 
 
-def _render_install_plan(plan: InstallPlan, scan_result: SecretsScanResult) -> None:
+def _render_install_plan(
+    plan: InstallPlan,
+    scan_result: SecretsScanResult,
+    *,
+    transition: bool = True,
+) -> None:
     """Render the same immutable plan the real install path consumes."""
     _dry_run_pipeline(
         ctx=plan.ctx,
@@ -1260,6 +1341,7 @@ def _render_install_plan(plan: InstallPlan, scan_result: SecretsScanResult) -> N
         immutable_plan=True,
         secrets_scan=scan_result,
         host_local_sections_map=plan.host_local_sections,
+        record_transition=transition and not _install_plan_recorded_nothing(plan),
     )
     if plan.codex_plugins is not None:
         report = codex_plugins_mod.apply_plan(plan.codex_plugins, dry_run=True)
@@ -2102,7 +2184,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             tracked_root=config.parent / "tracked",
             skip=no_secrets_scan,
         )
-        _render_install_plan(plan, scan_result)
+        _render_install_plan(plan, scan_result, transition=not no_transition)
         return
 
     with mutation_locks(resources=True):
@@ -2198,7 +2280,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             welcome_choice = prompt_welcome(
                 inventory=inventory,
                 yes=yes,
-                run_dry_run=lambda: _render_install_plan(plan, scan_result),
+                run_dry_run=lambda: _render_install_plan(
+                    plan, scan_result, transition=not no_transition
+                ),
             )
             if welcome_choice is not WelcomeChoice.PROCEED:
                 return
