@@ -11,16 +11,19 @@ real remote / detached state would balloon the fixture.
 from __future__ import annotations
 
 import subprocess
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.console import Console
 
 from setforge.cli._git_check import (
     GitCheckChoice,
     _format_porcelain_v2_line,
     _git_run,
     _is_detached_head,
+    _render_show_diff,
     check_git_source_fresh,
     check_path_source_clean,
     prompt_git_check_choice,
@@ -55,6 +58,34 @@ def _git_init(repo: Path, *, initial_branch: str = "main") -> Path:
         capture_output=True,
     )
     return repo
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _create_stale_feature_cache(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a cache whose main is fresh while configured feature is stale."""
+    publisher = _git_init(tmp_path / "publisher")
+    _git("switch", "-q", "-c", "feature", cwd=publisher)
+    (publisher / "README.md").write_text("# feature one\n", encoding="utf-8")
+    _git("commit", "-qam", "feature one", cwd=publisher)
+    _git("switch", "-q", "main", cwd=publisher)
+
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(publisher), str(origin)], check=True
+    )
+    cache = tmp_path / "cache"
+    subprocess.run(["git", "clone", "-q", str(origin), str(cache)], check=True)
+    _git("switch", "-q", "feature", cwd=cache)
+
+    _git("remote", "add", "origin", str(origin), cwd=publisher)
+    _git("switch", "-q", "feature", cwd=publisher)
+    (publisher / "README.md").write_text("# feature two\n", encoding="utf-8")
+    _git("commit", "-qam", "feature two", cwd=publisher)
+    _git("push", "-q", "origin", "feature", cwd=publisher)
+    return origin, cache
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +488,29 @@ class TestRunGitCheckOrRaise:
 
 
 class TestGitSourceCachePath:
+    def test_git_source_checks_configured_ref_not_remote_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        origin, cache = _create_stale_feature_cache(tmp_path)
+        source = GitSource(url=str(origin), ref="feature", clone_dest=cache)
+        monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: False)
+
+        with pytest.raises(ConfirmRequiresInteractive, match="stale state"):
+            run_git_check_or_raise(source=source, no_git_check=False)
+
+    def test_show_diff_uses_configured_ref(self, tmp_path: Path) -> None:
+        origin, cache = _create_stale_feature_cache(tmp_path)
+        _git("fetch", "-q", "origin", "feature", cwd=cache)
+        source = GitSource(url=str(origin), ref="feature", clone_dest=cache)
+        output = StringIO()
+
+        _render_show_diff(
+            source,
+            console=Console(file=output, color_system=None, width=120),
+        )
+
+        assert "feature two" in output.getvalue()
+
     def test_unclonable_git_source_cache_skips_silently(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

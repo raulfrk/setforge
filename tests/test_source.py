@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 from ruamel.yaml.scalarint import ScalarInt
 
-from setforge.errors import ConfigError, NoSourceConfigured, SourceNotCloned
+from setforge.errors import ConfigError, GitOpError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
     CONFIG_FILENAME,
     DEFAULT_CLONE_ROOT,
@@ -19,6 +20,7 @@ from setforge.source import (
     SourceKind,
     _load_local_source_config,
     _LocalTrackedFileOverlay,
+    fetch_source,
     load_local_codex_overlay,
     resolve_source,
     resolve_source_dir,
@@ -82,6 +84,28 @@ def _write_source_dir(tmp_path: Path, name: str = "src") -> Path:
     src.mkdir()
     (src / CONFIG_FILENAME).write_text("version: 1\n", encoding="utf-8")
     return src
+
+
+def _create_bare_source(tmp_path: Path, name: str, value: str) -> Path:
+    """Create a bare source repository with distinct tracked content."""
+    work = tmp_path / f"{name}-work"
+    bare = tmp_path / f"{name}.git"
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(work)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(work), "config", "user.name", "Test"], check=True)
+    (work / "tracked").mkdir()
+    (work / "tracked" / "value").write_text(f"{value}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-q", "-m", value], check=True)
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    return bare
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +365,25 @@ class TestResolveSourceDir:
         )
         with pytest.raises(SourceNotCloned, match="not cloned"):
             resolve_source_dir(src)
+
+
+def test_fetch_source_refuses_existing_clone_with_different_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_a = _create_bare_source(tmp_path, "repo-a", "A")
+    repo_b = _create_bare_source(tmp_path, "repo-b", "B")
+    cache = tmp_path / "cache"
+    subprocess.run(["git", "clone", "-q", str(repo_a), str(cache)], check=True)
+
+    source = GitSource(url=str(repo_b), ref="main", clone_dest=cache)
+    monkeypatch.setattr(
+        "setforge.source.git_ops.git_fetch",
+        lambda _repo: pytest.fail("wrong-origin cache was fetched"),
+    )
+
+    with pytest.raises(GitOpError, match=r"origin.*does not match"):
+        fetch_source(source)
+    assert (cache / "tracked" / "value").read_text(encoding="utf-8") == "A\n"
 
 
 class TestValidateSourceDir:

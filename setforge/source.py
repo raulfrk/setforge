@@ -61,6 +61,7 @@ from setforge.config import (
 from setforge.errors import (
     ConfigError,
     DirtySourceCheckout,
+    GitOpError,
     NoSourceConfigured,
     SourceNotCloned,
 )
@@ -911,10 +912,10 @@ def fetch_source(source: Source) -> str:
     Returns a one-line human-readable status message describing the
     operation performed. :class:`PathSource` returns
     ``"source is a path; nothing to fetch"`` immediately (no git ops).
-    GitSource: (1) compute clone_dest, clone if missing; (2) fetch
-    origin; (3) verify ``tracked/`` is clean; (4) check out the
-    pinned ref; (5) fast-forward the local branch to the fetched
-    upstream tip when ``ref`` is a branch (a no-op for SHAs/tags).
+    GitSource: (1) compute clone_dest, clone if missing or verify an existing
+    clone's origin matches ``url``; (2) fetch origin; (3) verify ``tracked/``
+    is clean; (4) check out the pinned ref; (5) fast-forward the local branch
+    to the fetched upstream tip when ``ref`` is a branch (a no-op for SHAs/tags).
     Errors propagate (:class:`GitOpError`, :class:`DirtySourceCheckout`).
     """
     if isinstance(source, PathSource):
@@ -924,6 +925,16 @@ def fetch_source(source: Source) -> str:
     if not clone_dest.exists():
         git_ops.git_clone(source.url, clone_dest)
         cloned = True
+    else:
+        origin = git_ops._run_git(
+            ["remote", "get-url", "origin"], cwd=clone_dest
+        ).stdout.strip()
+        if origin != source.url:
+            raise GitOpError(
+                f"existing git source cache at {clone_dest} has an origin that "
+                "does not match the configured source URL; remove the cache or "
+                "restore its origin before retrying"
+            )
     git_ops.git_fetch(clone_dest)
     porcelain = git_ops.status_porcelain(clone_dest, path="tracked")
     if porcelain:

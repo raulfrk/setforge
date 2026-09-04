@@ -244,8 +244,10 @@ def _format_porcelain_v2_line(line: str) -> str:
     return line
 
 
-def check_git_source_fresh(cache_dir: Path) -> tuple[str, ...]:
-    """Return the shortlog of commits the local cache lags behind remote by.
+def check_git_source_fresh(
+    cache_dir: Path, *, ref: str | None = None
+) -> tuple[str, ...]:
+    """Return commits the local cache's configured ref lags behind remote by.
 
     Empty tuple if the cache is up-to-date OR ``git ls-remote`` failed
     (network / timeout — warn-and-proceed so a transient remote outage
@@ -255,7 +257,8 @@ def check_git_source_fresh(cache_dir: Path) -> tuple[str, ...]:
     :class:`subprocess.TimeoutExpired` — those are local-only and
     should not fail under normal conditions; surfacing them as
     exceptions is intentional. Also returns an empty tuple when
-    ``cache_dir`` is not a git repo (defensive log-and-skip).
+    ``cache_dir`` is not a git repo (defensive log-and-skip). When ``ref`` is
+    omitted, resolve the remote's default branch for direct legacy callers.
     """
     if not _is_inside_git_work_tree(cache_dir):
         LOGGER.debug(
@@ -263,7 +266,7 @@ def check_git_source_fresh(cache_dir: Path) -> tuple[str, ...]:
             cache_dir,
         )
         return ()
-    ref = _resolve_default_branch(cache_dir)
+    ref = ref or _resolve_default_branch(cache_dir)
     if ref is None:
         LOGGER.warning(
             "could not resolve default branch for %s; skipping freshness check",
@@ -471,7 +474,7 @@ def _render_show_diff(source: Source, *, console: Console) -> None:
         )
         console.print(diff.stdout or "(no diff content)")
         return
-    ref = _resolve_default_branch(source_dir) or "main"
+    ref = source.ref
     remote_sha = _ls_remote_sha(source_dir, ref)
     if remote_sha is None:
         console.print(
@@ -479,11 +482,11 @@ def _render_show_diff(source: Source, *, console: Console) -> None:
         )
         return
     log = _git_run(
-        ["git", "-C", str(source_dir), "log", "--oneline", f"HEAD..{remote_sha}"],
+        ["git", "-C", str(source_dir), "log", "--oneline", f"{ref}..{remote_sha}"],
         cwd=source_dir,
     )
     diff = _git_run(
-        ["git", "-C", str(source_dir), "diff", f"HEAD..{remote_sha}"],
+        ["git", "-C", str(source_dir), "diff", f"{ref}..{remote_sha}"],
         cwd=source_dir,
     )
     console.print(f"[bold]=== pending commits ({source_dir}) ===[/bold]")
@@ -523,7 +526,7 @@ def run_git_check_or_raise(
         dirty_lines = check_path_source_clean(source_dir)
     else:
         # SourceKind.GIT — the cache_dir is the resolved on-disk clone.
-        dirty_lines = list(check_git_source_fresh(source_dir))
+        dirty_lines = list(check_git_source_fresh(source_dir, ref=source.ref))
     if not dirty_lines and not detached:
         return
     while True:
