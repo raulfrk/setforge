@@ -70,11 +70,11 @@ app: typer.Typer = typer.Typer(
 
 
 _CONFIG_OPTION = typer.Option(
-    Path("setforge.yaml"),
+    None,
     "--config",
     "-c",
-    help="Path to setforge.yaml.",
-    show_default=True,
+    help="Path to setforge.yaml. [default: setforge.yaml]",
+    show_default=False,
 )
 _PROFILE_OPTION = typer.Option(
     ...,
@@ -89,19 +89,19 @@ _SOURCE_OPTION = typer.Option(
     "Takes precedence over SETFORGE_SOURCE and "
     "~/.config/setforge/local.yaml `source:` block. Paths only — git "
     "sources live in local.yaml. The per-command --config flag, when "
-    "set explicitly, overrides this; the source-layer discovery only "
-    "fires when --config is left at its default AND the CWD has no "
-    "setforge.yaml.",
+    "set explicitly, overrides this; source-layer discovery only fires "
+    "when --config is omitted. The CWD is the final discovery fallback "
+    "when it contains setforge.yaml.",
 )
 
 
-def _resolve_config_arg(config: Path) -> Path:
+def _resolve_config_arg(config: Path | None) -> Path:
     """Resolve a command's ``--config`` arg through the source-layer fallback.
 
     Precedence:
 
-    1. ``--config`` explicitly set (non-default) → use it (legacy flow).
-    2. ``--config`` at its default → consult the source-layer (``--source``
+    1. ``--config`` explicitly set → use it (legacy flow).
+    2. ``--config`` omitted → consult the source-layer (``--source``
        > ``SETFORGE_SOURCE`` > ``~/.config/setforge/local.yaml`` > CWD
        fallback), then return the ``setforge.yaml`` inside the resolved
        source dir.
@@ -111,8 +111,7 @@ def _resolve_config_arg(config: Path) -> Path:
     is configured, ``setforge install`` from a CWD containing
     ``setforge.yaml`` still works without ``--config``.
     """
-    default = Path("setforge.yaml")
-    if config != default:
+    if config is not None:
         return config
     resolved_source = source_mod.get_resolved_source()
     return source_mod.validate_source_dir(resolved_source)
@@ -449,7 +448,7 @@ def _config_path_from_argv() -> Path:
     re-read.
     """
     argv = sys.argv[1:]
-    config = Path("setforge.yaml")
+    config: Path | None = None
     skip_next = False
     for i, arg in enumerate(argv):
         if skip_next:
@@ -474,7 +473,7 @@ def _config_path_from_argv() -> Path:
     try:
         return _resolve_config_arg(config)
     except SetforgeError:
-        return config
+        return config or Path("setforge.yaml")
 
 
 def _handle_config_validation_error(exc: ValidationError) -> None:
