@@ -105,6 +105,14 @@ def test_parse_schema_version_is_semantic_not_lexical() -> None:
     assert "1.10" < "1.9"  # the lexical trap this guards against
 
 
+def test_parse_schema_version_rejects_oversized_numeric_component_cleanly() -> None:
+    from setforge.migrations import parse_schema_version
+
+    oversized = f"{'9' * 5000}.0"
+    with pytest.raises(ConfigError, match=r"schema_version.*too long"):
+        parse_schema_version(oversized)
+
+
 @pytest.mark.parametrize("bad", ["1", "1.2.3", "", "v2", "2.0.0", "1.x", "1."])
 def test_parse_schema_version_rejects_malformed_cleanly(bad: str) -> None:
     """Malformed versions raise ConfigError, never ValueError/IndexError."""
@@ -279,6 +287,12 @@ def test_find_migration_path_reverse_one_step() -> None:
     chain = find_migration_path(from_v="1.1", to_v="1.0")
     assert len(chain) == 1
     assert (chain[0].from_version, chain[0].to_version) == ("1.1", "1.0")
+
+
+def test_find_migration_path_canonicalizes_leading_zero_version() -> None:
+    chain = find_migration_path(from_v="01.0", to_v="1.1")
+    assert len(chain) == 1
+    assert (chain[0].from_version, chain[0].to_version) == ("1.0", "1.1")
 
 
 def test_find_migration_path_unreachable_target_returns_empty() -> None:

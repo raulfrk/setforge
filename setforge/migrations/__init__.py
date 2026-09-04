@@ -48,6 +48,7 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 # path-finder from leaking a ``ValueError``/``IndexError`` traceback on a
 # malformed ``schema_version``.
 _SCHEMA_VERSION_RE: Final = re.compile(r"^\d+\.\d+$")
+_MAX_SCHEMA_VERSION_COMPONENT_DIGITS: Final = 64
 
 
 def parse_schema_version(raw: str) -> tuple[int, int]:
@@ -56,11 +57,14 @@ def parse_schema_version(raw: str) -> tuple[int, int]:
     The tuple form is what makes version comparison *semantic* rather than
     lexical: ``parse_schema_version("1.10") > parse_schema_version("1.9")``
     is ``True`` (a string sort gets this wrong). ``[0]`` is the major.
+    Components are length-bounded before integer conversion so hostile tokens
+    cannot escape through Python's integer-string limit.
 
     Raises :class:`ConfigError` — never a bare ``ValueError`` /
     ``IndexError`` — on any value that is not exactly two dot-separated
     integers (``"1"``, ``"1.2.3"``, ``""``, ``"v2"``, ``"2.0.0"`` …), so
-    callers get a clean, traceback-free message.
+    callers get a clean, traceback-free message. Overlong numeric components
+    are rejected through the same domain error.
     """
     if _SCHEMA_VERSION_RE.fullmatch(raw) is None:
         raise ConfigError(
@@ -68,6 +72,14 @@ def parse_schema_version(raw: str) -> tuple[int, int]:
             f"(two integers, e.g. '1.0')"
         )
     major, minor = raw.split(".")
+    if any(
+        len(component) > _MAX_SCHEMA_VERSION_COMPONENT_DIGITS
+        for component in (major, minor)
+    ):
+        raise ConfigError(
+            "malformed schema_version: numeric component is too long "
+            f"(maximum {_MAX_SCHEMA_VERSION_COMPONENT_DIGITS} digits)"
+        )
     return (int(major), int(minor))
 
 
@@ -789,24 +801,34 @@ def find_migration_path(*, from_v: str, to_v: str) -> tuple[Migration, ...]:
     if from_t == to_t:
         return ()
     chain: list[Migration] = []
-    cursor = from_v
+    cursor = from_t
     bound = len(MIGRATIONS) + 1
     forward = to_t > from_t
     for _ in range(bound):
-        if parse_schema_version(cursor) == to_t:
+        if cursor == to_t:
             return tuple(chain)
         if forward:
-            match = next((m for m in MIGRATIONS if m.from_version == cursor), None)
+            match = next(
+                (
+                    m
+                    for m in MIGRATIONS
+                    if parse_schema_version(m.from_version) == cursor
+                ),
+                None,
+            )
             if match is None:
                 return ()
             chain.append(match)
-            cursor = match.to_version
+            cursor = parse_schema_version(match.to_version)
         else:
-            match = next((m for m in MIGRATIONS if m.to_version == cursor), None)
+            match = next(
+                (m for m in MIGRATIONS if parse_schema_version(m.to_version) == cursor),
+                None,
+            )
             if match is None:
                 return ()
             chain.append(match.reverse)
-            cursor = match.from_version
+            cursor = parse_schema_version(match.from_version)
     return ()
 
 
