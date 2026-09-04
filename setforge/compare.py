@@ -34,6 +34,7 @@ from ruamel.yaml import YAML
 
 from setforge import (
     base_store,
+    deploy,
 )
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import (
@@ -832,16 +833,29 @@ def _compare_one(
             True,
         )
 
+    if dst.is_dir():
+        entry = FileCompare(
+            name=name,
+            status=CompareStatus.DRIFTED,
+            diff=f"expected regular file at {dst}, found directory",
+        )
+        return _classify_entry(
+            entry,
+            profile=profile,
+            src=src,
+            dst=dst,
+            tracked_file=tracked_file,
+            probe_stale=False,
+            ownership_authorized=ownership_authorized,
+        )
+
     diff = diff_file(src, dst, tracked_file)
 
     mode_drift = False
     live_mode: int | None = None
     tracked_mode: int | None = None
     if tracked_file.mode is not None:
-        # lstat (not stat) for symlink-posture parity with snapshots.py:
-        # a symlink dst reports drift on the LINK's own mode, never the
-        # target's — setforge never deploys through a live symlink.
-        live_mode = stat.S_IMODE(dst.lstat().st_mode)
+        live_mode = stat.S_IMODE(dst.stat().st_mode)
         tracked_mode = tracked_file.mode
         mode_drift = live_mode != tracked_file.mode
 
@@ -1182,7 +1196,7 @@ def _compare_symlinked(
     # the type-narrowed ``expected`` (str, non-None at this point) so
     # mypy sees a clean ``str`` argument to ``Path(...)`` rather than
     # the still-Optional ``tracked_file.symlink``.
-    target_path = Path(expected).expanduser()
+    target_path = deploy.resolve_symlink_target(dst, expected)
     # Symlinked targets deploy verbatim (no host-local overlay injection), so a
     # plain diff against the tracked source is correct.
     target_diff = diff_file(src, target_path, tracked_file)

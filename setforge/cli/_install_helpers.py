@@ -577,7 +577,8 @@ def _resolve_one_pending(
         # Symlink-deployed: freeze content/mode now and defer only the writes
         # to pass 2 (resolved=None). The link lands at ``sub_dst`` and the
         # frozen tracked content lands at
-        # ``Path(tracked_file.symlink).expanduser()``. The stored base
+        # the declared target resolved relative to ``sub_dst.parent``. The
+        # stored base
         # lifecycle is regular-file-only — never wired here.
         return _PendingDeploy(
             sub_name=sub_name,

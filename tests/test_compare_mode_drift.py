@@ -84,6 +84,24 @@ def test_mode_drift_true_after_manual_chmod(tmp_path: Path) -> None:
     assert unexpected is True
 
 
+def test_mode_drift_follows_existing_symlink_target(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.write_text("x\n")
+    target = tmp_path / "target"
+    target.write_text("x\n")
+    target.chmod(0o755)
+    dst = tmp_path / "dst"
+    dst.symlink_to(target)
+    tf = _make(src, dst, mode=0o755)
+
+    entry, unexpected = _compare_one("foo", src, dst, tf)
+
+    assert entry.status is CompareStatus.UNCHANGED
+    assert entry.mode_drift is False
+    assert entry.live_mode == 0o755
+    assert unexpected is False
+
+
 def test_mode_drift_uses_s_imode_not_raw_st_mode(tmp_path: Path) -> None:
     """The compare side uses :func:`stat.S_IMODE` to strip ``S_IFREG``
     high-bits — raw ``st_mode`` would always differ from a 12-bit

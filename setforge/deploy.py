@@ -19,7 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from setforge import atomicio
-from setforge.config import Config, ResolvedProfile, TrackedFile
+from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_symlink_target
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
 from setforge.structural_merge import PathConflict
@@ -345,9 +345,9 @@ def deploy_symlinked_file(
 
     Two-phase write:
 
-    1. Render the tracked content to ``Path(tracked_file.symlink).expanduser()``
-       (the target path) via :func:`_atomic_write` — the target file is
-       the one actually carrying bytes.
+    1. Render the tracked content to the declared target path via
+       :func:`_atomic_write`. Relative targets are anchored at ``dst.parent``,
+       matching filesystem symlink resolution.
     2. Create a symbolic link at ``dst`` pointing at the *raw user
        string* (``tracked_file.symlink``, NOT expanded) so cross-host
        portability survives. The link itself is staged at a sibling
@@ -398,7 +398,7 @@ def deploy_symlinked_file(
     if (source_content is None) != (source_mode is None):
         raise AssertionError("source_content and source_mode must be supplied together")
 
-    target = Path(tracked_file.symlink).expanduser()
+    target = resolve_symlink_target(dst, tracked_file.symlink)
     target.parent.mkdir(parents=True, exist_ok=True)
     dst.parent.mkdir(parents=True, exist_ok=True)
 

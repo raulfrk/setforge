@@ -419,7 +419,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         )
     dst_paths = tuple(
         [
-            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
+            deploy.resolve_symlink_target(sub_dst, tf.symlink)
+            if tf.symlink is not None
+            else sub_dst
             for tf, _, _, sub_dst in tracked_entries
         ]
         + [Path(str(path)).expanduser() for path in ctx.resolved.bootstrap]
@@ -430,7 +432,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         for tf, _, _, sub_dst in tracked_entries
         for path in (
             sub_dst,
-            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst,
+            deploy.resolve_symlink_target(sub_dst, tf.symlink)
+            if tf.symlink is not None
+            else sub_dst,
         )
     }
     live_paths.update(Path(str(path)).expanduser() for path in ctx.resolved.bootstrap)
@@ -592,7 +596,7 @@ def _hold_generated_adoptions(
             held.append(record)
             continue
         content_path = (
-            Path(record.tracked_file.symlink).expanduser()
+            deploy.resolve_symlink_target(record.sub_dst, record.tracked_file.symlink)
             if record.tracked_file.symlink is not None
             else record.sub_dst
         )
@@ -708,7 +712,7 @@ def _ownership_destinations(
     """Return every content/topology leaf mutated by one tracked-file entry."""
     if tracked.symlink is None:
         return (destination,)
-    target = Path(tracked.symlink).expanduser()
+    target = deploy.resolve_symlink_target(destination, tracked.symlink)
     return tuple(dict.fromkeys((target, destination)))
 
 
@@ -1725,7 +1729,7 @@ def _generated_file_provenance(
         if record.generated is None:
             continue
         content_path = (
-            Path(record.tracked_file.symlink).expanduser()
+            deploy.resolve_symlink_target(record.sub_dst, record.tracked_file.symlink)
             if record.tracked_file.symlink is not None
             else record.sub_dst
         )

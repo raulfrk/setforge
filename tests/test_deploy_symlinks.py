@@ -2,8 +2,8 @@
 
 Contract for :func:`setforge.deploy.deploy_symlinked_file`:
 
-- Writes tracked content to ``Path(tracked_file.symlink).expanduser()``
-  (the *target* path).
+- Writes tracked content to the declared target path, resolving a relative
+  target from ``dst.parent``.
 - Creates a symbolic link at ``dst`` pointing at the *raw* user
   string (``tracked_file.symlink``), NOT the expanded path —
   cross-host portability invariant. ``os.readlink(dst)`` returns
@@ -98,6 +98,26 @@ def test_deploy_symlink_preserves_raw_string_in_readlink(tmp_path: Path) -> None
     deploy.deploy_symlinked_file(src, dst, tf)
 
     assert str(dst.readlink()) == raw_target
+
+
+def test_deploy_relative_symlink_target_from_link_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src"
+    src.write_text("payload\n")
+    dst = tmp_path / "links" / "link"
+    raw_target = "targets/payload"
+    tf = _make(src, dst, symlink=raw_target)
+    unrelated_cwd = tmp_path / "elsewhere"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    deploy.deploy_symlinked_file(src, dst, tf)
+
+    assert dst.is_symlink()
+    assert str(dst.readlink()) == raw_target
+    assert (dst.parent / raw_target).read_text() == "payload\n"
+    assert not (unrelated_cwd / raw_target).exists()
 
 
 def test_deploy_symlink_refuses_regular_file_at_dst(tmp_path: Path) -> None:

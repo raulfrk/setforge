@@ -7,6 +7,7 @@ from rich.console import Console
 
 from setforge.compare import (
     CompareStatus,
+    _compare_one,
     compare_profile,
     compare_summary_table,
     diff_file,
@@ -45,6 +46,20 @@ def test_diff_file_missing_dst_is_empty(tmp_path: Path) -> None:
     dst = tmp_path / "dst"
     _write(src, "a\n")
     assert diff_file(src, dst) == ""
+
+
+def test_file_destination_directory_is_typed_drift(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    _write(src, "tracked\n")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    tracked_file = TrackedFile(src=src, dst=str(dst))
+
+    entry, unexpected = _compare_one("x", src, dst, tracked_file)
+
+    assert entry.status is CompareStatus.DRIFTED
+    assert "directory" in entry.diff
+    assert unexpected is True
 
 
 def _make_config(profile: Profile, tracked_file: TrackedFile, key: str) -> Config:

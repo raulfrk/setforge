@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from setforge.compare import (
     CompareStatus,
     _compare_one,
@@ -191,6 +193,31 @@ def test_correct_symlink_with_target_content_drift_is_drifted(
     assert was_drifted is True
     assert "tracked-payload" in entry.diff
     assert "user-edited-payload" in entry.diff
+
+
+def test_relative_symlink_target_content_is_resolved_from_link_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src"
+    src.write_text("payload\n")
+    dst = tmp_path / "links" / "link"
+    dst.parent.mkdir()
+    raw_target = "targets/payload"
+    target = dst.parent / raw_target
+    target.parent.mkdir()
+    target.write_text("live drift\n")
+    dst.symlink_to(raw_target)
+    tf = _make(src, dst, symlink=raw_target)
+    unrelated_cwd = tmp_path / "elsewhere"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    entry, unexpected = _compare_one("foo", src, dst, tf)
+
+    assert entry.status is CompareStatus.DRIFTED
+    assert "live drift" in entry.diff
+    assert "payload" in entry.diff
+    assert unexpected is True
 
 
 def test_symlink_dispatch_runs_before_not_exists_branch(tmp_path: Path) -> None:

@@ -80,6 +80,24 @@ def test_symlink_self_loop_rejected_absolute() -> None:
     assert "self-loop" in str(exc_info.value).lower()
 
 
+def test_symlink_self_loop_rejected_relative_to_destination_parent() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _make(dst="/tmp/links/link", symlink="link")
+    assert "self-loop" in str(exc_info.value).lower()
+
+
+@pytest.mark.parametrize("raw_target", ["targets/../link", "../links/link"])
+def test_symlink_self_loop_rejected_after_lexical_normalization(
+    tmp_path: Path, raw_target: str
+) -> None:
+    dst = tmp_path / "links" / "link"
+
+    with pytest.raises(ValidationError, match="self-loop"):
+        _make(dst=str(dst), symlink=raw_target)
+
+    assert not dst.parent.exists()
+
+
 def test_symlink_distinct_target_accepted() -> None:
     """Different ``dst`` and ``symlink`` — accepted."""
     tf = _make(dst="~/a", symlink="~/b")

@@ -7,6 +7,7 @@ writes that re-serialize the document.
 """
 
 import copy
+import os
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -320,6 +321,13 @@ def _validate_package_chmod(v: str) -> str:
     return v
 
 
+def resolve_symlink_target(dst: Path, raw_target: str) -> Path:
+    """Return the content path named by symlink metadata at ``dst``."""
+    target = Path(raw_target).expanduser()
+    anchored = target if target.is_absolute() else dst.parent / target
+    return Path(os.path.abspath(anchored))  # noqa: PTH100 - must not follow symlinks
+
+
 class TrackedFile(BaseModel):
     model_config = _STRICT
 
@@ -341,8 +349,9 @@ class TrackedFile(BaseModel):
     symlink: str | None = None
     """When set, deploy creates a symbolic link at ``dst`` whose target is
     this raw user string (e.g. ``~/.config/foo/bar``); the tracked
-    content is written to ``Path(symlink).expanduser()`` so the target
-    actually carries the deployed bytes.
+    content is written to the expanded target path, relative to ``dst.parent``
+    when the declaration is relative, so the target actually carries the
+    deployed bytes.
 
     The string is stored *verbatim* (no :func:`Path.expanduser`,
     no :func:`Path.resolve`) so the on-disk symlink target survives
@@ -368,8 +377,10 @@ class TrackedFile(BaseModel):
         """
         if self.symlink is None:
             return self
-        target = Path(self.symlink).expanduser()
-        dst = Path(self.dst).expanduser()
+        dst = Path(
+            os.path.abspath(Path(self.dst).expanduser())  # noqa: PTH100
+        )
+        target = resolve_symlink_target(dst, self.symlink)
         if target == dst:
             raise ValueError(
                 f"symlink target {self.symlink!r} equals dst {self.dst!r} "
