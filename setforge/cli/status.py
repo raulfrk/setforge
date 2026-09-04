@@ -83,6 +83,7 @@ class _GitInfo:
 @dataclass(slots=True, frozen=True)
 class _DriftCounts:
     drifted: int
+    deployed_current: bool
 
 
 def _git_run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -241,7 +242,7 @@ def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
 
 
 def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
-    """Count DRIFTED entries for the status drift line.
+    """Count drift and retain whether every effective entry is current.
 
     This is an approximation — status deliberately skips the full
     reconcile pass for cost; use ``setforge compare`` for the
@@ -264,7 +265,10 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
         if entry.status is not CompareStatus.DRIFTED:
             continue
         drifted += 1
-    return _DriftCounts(drifted=drifted)
+    deployed_current = bool(report.entries) and all(
+        entry.status is CompareStatus.UNCHANGED for entry in report.entries
+    )
+    return _DriftCounts(drifted=drifted, deployed_current=deployed_current)
 
 
 def _read_overlay_counts(local_yaml: Path) -> dict[str, int]:
@@ -296,6 +300,7 @@ def _render_config_repo(
     *,
     source_dir: Path,
     git_info: _GitInfo,
+    deployed_current: bool,
 ) -> None:
     """Print the ``config-repo`` section."""
     head = git_info.head_short or "(no HEAD)"
@@ -305,7 +310,12 @@ def _render_config_repo(
         typer.echo(f"                  ↳ commits-since-install: (— {reason})")
     else:
         count = git_info.commits_since_install
-        tail = "(up to date)" if count == 0 else "(install lag)"
+        if count == 0:
+            tail = "(up to date)"
+        elif deployed_current:
+            tail = "(deployed current)"
+        else:
+            tail = "(install lag)"
         typer.echo(
             f"                  ↳ {count} commit{'s' if count != 1 else ''} "
             f"ahead of last-installed state {tail}"
@@ -409,7 +419,11 @@ def status(
 
     def _human() -> None:
         typer.echo(f"=== setforge status — {profile} on {host} ===")
-        _render_config_repo(source_dir=source_dir, git_info=git_info)
+        _render_config_repo(
+            source_dir=source_dir,
+            git_info=git_info,
+            deployed_current=drift.deployed_current,
+        )
         _render_last_install(profile=profile, meta=meta, now=now)
         _render_drift(drift)
         _render_overlay(overlay_counts)

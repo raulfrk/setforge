@@ -62,6 +62,19 @@ def _write_codex_instruction_config(tmp_path: Path) -> Path:
     return config
 
 
+def _write_empty_config(tmp_path: Path) -> Path:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\n"
+        "minimum_version: '6.4'\n"
+        "tracked_files: {}\n"
+        "profiles:\n"
+        "  vm-headless: {}\n",
+        encoding="utf-8",
+    )
+    return config
+
+
 def _invoke_status(
     *,
     source_dir: Path,
@@ -365,8 +378,18 @@ def test_status_counts_drifted_selected_codex_instruction(
     codex_home.mkdir()
     (codex_home / "AGENTS.md").write_text("live drift\n", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    _patch_git_for_clean_repo(monkeypatch)
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
+    _stub_transition(
+        state_dir,
+        profile="vm-headless",
+        dirname="20260518T070015000000Z-install-vm-headless",
+        source_sha="deadbeef",
+    )
+    _patch_git_for_clean_repo(
+        monkeypatch,
+        extra_cases=((("deadbeef..HEAD",), 0, "1\n"),),
+    )
 
     result = _invoke_status(
         source_dir=tmp_path,
@@ -375,6 +398,72 @@ def test_status_counts_drifted_selected_codex_instruction(
 
     assert result.exit_code == 0, result.output
     assert "drift:          1 drifted" in result.output
+    assert "(install lag)" in result.output
+    assert "(deployed current)" not in result.output
+
+
+@pytest.mark.parametrize("live_state", ["drifted", "missing"])
+def test_status_newer_head_retains_install_lag_when_deployment_not_current(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live_state: str,
+) -> None:
+    """A newer HEAD is not deployed-current when any effective file is non-current."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    config_path = _write_minimal_config(tmp_path)
+    if live_state == "drifted":
+        live = home / ".local" / "share" / "setforge-test" / "doc.md"
+        live.parent.mkdir(parents=True)
+        live.write_text("locally changed\n", encoding="utf-8")
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
+    _stub_transition(
+        state_dir,
+        profile="vm-headless",
+        dirname="20260518T070015000000Z-install-vm-headless",
+        source_sha="deadbeef",
+    )
+    _patch_git_for_clean_repo(
+        monkeypatch,
+        extra_cases=((("deadbeef..HEAD",), 0, "1\n"),),
+    )
+
+    result = _invoke_status(source_dir=tmp_path, config_path=config_path)
+
+    assert result.exit_code == 0, result.output
+    assert "(install lag)" in result.output
+    assert "(deployed current)" not in result.output
+
+
+def test_status_newer_head_does_not_claim_current_for_empty_comparison(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No compared entries cannot substantiate a deployed-current claim."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
+    _stub_transition(
+        state_dir,
+        profile="vm-headless",
+        dirname="20260518T070015000000Z-install-vm-headless",
+        source_sha="deadbeef",
+    )
+    _patch_git_for_clean_repo(
+        monkeypatch,
+        extra_cases=((("deadbeef..HEAD",), 0, "1\n"),),
+    )
+
+    result = _invoke_status(
+        source_dir=tmp_path,
+        config_path=_write_empty_config(tmp_path),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "(install lag)" in result.output
+    assert "(deployed current)" not in result.output
 
 
 def test_status_exit_0_when_capabilities_missing(

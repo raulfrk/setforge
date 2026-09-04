@@ -10,6 +10,7 @@ per-case behavior + the base-store side effect.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 
@@ -95,6 +96,29 @@ def _transition_dirs() -> set[str]:
     return {p.name for p in root.iterdir() if p.is_dir()} if root.exists() else set()
 
 
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _status(repo: Path, config: Path) -> Result:
+    return CliRunner().invoke(
+        app,
+        [
+            "--source",
+            str(repo),
+            "status",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+        ],
+    )
+
+
 def test_first_install_creates_and_records_base(repo: Path) -> None:
     _write_tracked(repo, "v1\n")
     config = _write_config(repo)
@@ -176,6 +200,48 @@ def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
     transitions_before = _transition_dirs()
     assert _install(config).exit_code == 0
     assert _transition_dirs() == transitions_before
+
+
+def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) -> None:
+    """Transition provenance may be older even though deployed bytes match HEAD."""
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    _git(repo, "init", "-b", "main")
+    _git(repo, "add", ".")
+    _git(
+        repo,
+        "-c",
+        "user.name=SetForge Tests",
+        "-c",
+        "user.email=setforge@example.invalid",
+        "commit",
+        "-m",
+        "initial",
+    )
+
+    _write_tracked(repo, "v2\n")
+    assert _install(config).exit_code == 0
+    transitions_after_dirty_install = _transition_dirs()
+    _git(repo, "add", "tracked/note.md")
+    _git(
+        repo,
+        "-c",
+        "user.name=SetForge Tests",
+        "-c",
+        "user.email=setforge@example.invalid",
+        "commit",
+        "-m",
+        "track deployed bytes",
+    )
+
+    assert _install(config).exit_code == 0
+    assert _transition_dirs() == transitions_after_dirty_install
+    result = _status(repo, config)
+
+    assert result.exit_code == 0, result.output
+    assert "1 commit ahead of last-installed state" in result.output
+    assert "(deployed current)" in result.output
+    assert "(install lag)" not in result.output
 
 
 def _setup_conflict(repo: Path) -> Path:
