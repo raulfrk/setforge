@@ -743,6 +743,23 @@ def test_merge_rejects_duplicate_json5_keys_in_divergence_test() -> None:
         merge_structural(base, ours, theirs)
 
 
+@pytest.mark.parametrize("bare_root", [False, True])
+def test_merge_rejects_duplicate_json5_keys_before_mapping_recursion(
+    bare_root: bool,
+) -> None:
+    base = _jload('{"advance": 1, "outer": {"x": 1}}')
+    ours = _jload('{"advance": 1, "outer": {"x": 1}}')
+    theirs = _jload('{"advance": 2, "outer": {"x": 2, "x": 3}}')
+    if bare_root:
+        base, ours, theirs = map(_json5_inner, (base, ours, theirs))
+    before = _jdump(ours)
+
+    with pytest.raises(DuplicateKeyInMergeModel, match="x"):
+        merge_structural(base, ours, theirs)
+
+    assert _jdump(ours) == before
+
+
 # --------------------------------------------------------------------------
 # Injective dotted-key-path codec.
 # --------------------------------------------------------------------------

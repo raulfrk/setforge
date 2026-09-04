@@ -617,13 +617,17 @@ def merge_structural(
     # json-five hands back a ``JSONText`` wrapper; merge the inner objects in
     # place but return ours' wrapper so the result re-dumps with formatting.
     if isinstance(ours, JSONText):
-        _merge_mapping(
-            _json5_inner(base), ours.value, _json5_inner(theirs), None, conflicts
-        )
-        return StructuralMergeResult(
-            clean=not conflicts, merged_model=ours, conflicts=conflicts
-        )
-    _merge_mapping(base, ours, theirs, None, conflicts)
+        base_inner = _json5_inner(base)
+        ours_inner = ours.value
+        theirs_inner = _json5_inner(theirs)
+    else:
+        base_inner, ours_inner, theirs_inner = base, ours, theirs
+    if isinstance(ours_inner, JSONObject):
+        # Fail closed before the backend's first-occurrence lookup can discard
+        # a duplicate while recursing through otherwise compatible mappings.
+        for model in (base_inner, ours_inner, theirs_inner):
+            _to_plain(model)
+    _merge_mapping(base_inner, ours_inner, theirs_inner, None, conflicts)
     return StructuralMergeResult(
         clean=not conflicts, merged_model=ours, conflicts=conflicts
     )
