@@ -118,6 +118,41 @@ def test_plan_removes_only_unchanged_owned_orphans(tmp_path: Path) -> None:
     }
 
 
+def test_remove_owned_preserves_parent_of_unowned_descendant(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+    (live / "owned").mkdir()
+    unowned = live / "owned" / "external.txt"
+    unowned.write_text("host-only\n", encoding="utf-8")
+    (prior_root / "owned").mkdir()
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    desired = scan_tree(source, policy, capture_payloads=True)
+    prior = scan_tree(prior_root, policy).inventory
+    plan = plan_tree(desired, scan_tree(live, policy).inventory, prior, policy)
+    by_path = {action.path: action.kind for action in plan.actions}
+
+    assert by_path == {
+        "owned": TreeActionKind.KEEP,
+        "owned/external.txt": TreeActionKind.KEEP,
+    }
+
+    applied = apply_tree(plan, live, policy)
+    repeated = apply_tree(
+        plan_tree(desired, scan_tree(live, policy).inventory, applied, policy),
+        live,
+        policy,
+    )
+
+    assert unowned.read_bytes() == b"host-only\n"
+    assert {entry.path for entry in repeated.entries} == {
+        "owned",
+        "owned/external.txt",
+    }
+
+
 def test_apply_tree_preserves_unowned_and_removes_owned(tmp_path: Path) -> None:
     source = tmp_path / "source"
     live = tmp_path / "live"

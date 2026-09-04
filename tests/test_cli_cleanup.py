@@ -338,7 +338,7 @@ def test_marking_managed_package_orphan_releases_authority(
     released = OwnershipStore().read(decision.resource_id)
     assert released is not None
     assert released.authority.value == "none"
-    assert "ripgrep" in cleanup_mod.load_ignored_provisioned()
+    assert "cargo:ripgrep" in cleanup_mod.load_ignored_provisioned()
 
 
 def test_discovery_skips_corrupt_receipt_not_fatal(
@@ -613,9 +613,77 @@ def test_mark_orphan_drops_from_flagged_set(tmp_path: Path, confine_root: Path) 
 
     ignored = cleanup_mod.load_ignored_provisioned()
     items = cleanup_mod.discover_cleanup_items(
-        store, declared={_ident(k) for k in ignored}, console=Console()
+        store,
+        declared=set(),
+        console=Console(),
+        ignored=ignored,
     )
     assert {it.identity.key for it in items} == set()
+
+
+def test_marked_typed_receipt_stays_suppressed_on_later_cleanup(
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    receipts = tmp_path / "receipts"
+    store = ReceiptStore(receipts)
+    identity = _ident("tool")
+    cargo_path = _write_binary(confine_root, "cargo-tool")
+    go_path = _write_binary(confine_root, "go-tool")
+    store.record(
+        identity,
+        version="1",
+        checksum=None,
+        path=cargo_path,
+        provider="cargo",
+    )
+    store.record(identity, version="1", checksum=None, path=go_path, provider="go")
+    owner = uuid.uuid4()
+    observation = PackageObservation(
+        identity,
+        ObservationOrigin.CURRENT_RECEIPT,
+        version="1",
+        locator=str(cargo_path),
+    )
+    item = ProvisionItem(type="cargo", identity=identity)
+    decision = decide_package(item, observation, None, owner_id=owner)
+    with cleanup_mod.mutation_locks(resources=True):
+        publish_claim_locked(
+            OwnershipStore(),
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.ign",
+            acquisition="managed-install",
+        )
+
+    class _Provider:
+        def probe(self) -> set[Identity]:
+            return {identity}
+
+        def observations(
+            self, current: set[Identity]
+        ) -> tuple[PackageObservation, ...]:
+            return (observation,) if identity in current else ()
+
+    cleanup_mod.mark_orphan(identity, provider="cargo", console=Console())
+    monkeypatch.setattr(cleanup_mod, "build", lambda _item: _Provider())
+
+    items = cleanup_mod.discover_cleanup_items(
+        store,
+        declared=set(),
+        console=Console(),
+        ownership_store=OwnershipStore(),
+        owner_id=owner,
+        ignored=cleanup_mod.load_ignored_provisioned(),
+    )
+
+    assert [(item.provider, item.identity.key) for item in items] == [("go", "tool")]
+    assert cargo_path.read_bytes() == b"#!/bin/sh\n"
+    assert go_path.read_bytes() == b"#!/bin/sh\n"
+    assert {entry.provider for entry in store.iter_receipts()} == {"cargo", "go"}
+    assert cleanup_mod.load_ignored_provisioned() == frozenset({"cargo:tool"})
 
 
 def test_mark_orphan_is_idempotent(tmp_path: Path, confine_root: Path) -> None:

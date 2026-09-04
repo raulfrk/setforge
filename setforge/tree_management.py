@@ -446,6 +446,23 @@ def _plan_live_extras(
             actions.append(
                 TreeAction(path, TreeActionKind.HOLD, "owned orphan drifted")
             )
+    retained = tuple(
+        action.path
+        for action in actions
+        if action.kind in {TreeActionKind.KEEP, TreeActionKind.HOLD}
+    )
+    actions = [
+        TreeAction(
+            action.path,
+            TreeActionKind.KEEP,
+            "owned parent kept for retained descendant",
+        )
+        if action.kind is TreeActionKind.REMOVE
+        and live_by[action.path].kind is TreeEntryKind.DIRECTORY
+        and any(path.startswith(f"{action.path}/") for path in retained)
+        else action
+        for action in actions
+    ]
     return actions
 
 

@@ -45,7 +45,7 @@ from setforge.provision.protocol import (
     PackageObservation,
     ProvisionItem,
 )
-from setforge.provision.receipt import ReceiptStore, default_receipt_root
+from setforge.provision.receipt import ReceiptEntry, ReceiptStore, default_receipt_root
 from setforge.provision.registry import build
 
 __all__ = [
@@ -115,6 +115,27 @@ def load_ignored_provisioned() -> frozenset[str]:
     return frozenset(str(entry) for entry in raw)
 
 
+def _provision_ignore_id(identity: Identity, provider: str | None) -> str:
+    return identity.key if provider is None else f"{provider}:{identity.key}"
+
+
+def _ignore_receipt(
+    entry: ReceiptEntry,
+    ignored: frozenset[str],
+    represented: set[ResourceId],
+) -> bool:
+    assert entry.identity is not None
+    if _provision_ignore_id(entry.identity, entry.provider) not in ignored:
+        return False
+    if entry.provider is not None:
+        represented.add(
+            package_resource_id(
+                ProvisionItem(type=entry.provider, identity=entry.identity)
+            )
+        )
+    return True
+
+
 def discover_cleanup_items(
     store: ReceiptStore,
     *,
@@ -123,6 +144,7 @@ def discover_cleanup_items(
     ownership_store: OwnershipStore | None = None,
     owner_id: uuid.UUID | None = None,
     declared_resources: frozenset[ResourceId] = frozenset(),
+    ignored: frozenset[str] = frozenset(),
 ) -> list[CleanupItem]:
     # Receipt-scoped only (no $PATH/FS scan); a corrupt receipt is skipped, not fatal.
     items: list[CleanupItem] = []
@@ -135,7 +157,9 @@ def discover_cleanup_items(
             )
             continue
         assert entry.identity is not None
-        if entry.provider is None and entry.identity in declared:
+        if _ignore_receipt(entry, ignored, represented) or (
+            entry.provider is None and entry.identity in declared
+        ):
             continue
         managed = ownership_store is None
         refusal = ""
@@ -294,7 +318,9 @@ def delete_provisioned(
     store.remove(item.identity, provider=item.provider)
 
 
-def mark_orphan(identity: Identity, *, console: Console) -> None:
+def mark_orphan(
+    identity: Identity, *, provider: str | None = None, console: Console
+) -> None:
     path = binaries.LOCAL_CONFIG_PATH
     yaml = YAML(typ="rt")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,8 +330,9 @@ def mark_orphan(identity: Identity, *, console: Console) -> None:
     raw = data.get(_PROVISION_IGNORE_KEY)
     if not isinstance(raw, list):
         raw = []
-    if identity.key not in raw:
-        raw.append(identity.key)
+    ignore_id = _provision_ignore_id(identity, provider)
+    if ignore_id not in raw:
+        raw.append(ignore_id)
     data[_PROVISION_IGNORE_KEY] = raw
     with path.open("w", encoding="utf-8") as fh:
         yaml.dump(data, fh)
@@ -420,9 +447,9 @@ def _apply_cleanup(
                         expected_owner=item.owner_id,
                         expected_generation=item.claim_generation,
                     )
-                    mark_orphan(item.identity, console=console)
+                    mark_orphan(item.identity, provider=item.provider, console=console)
             else:
-                mark_orphan(item.identity, console=console)
+                mark_orphan(item.identity, provider=item.provider, console=console)
             continue
         # Serialize each delete (transition write + unlink) under
         # profile_lock, like every other mutating verb, so a concurrent
@@ -552,6 +579,7 @@ def cleanup(
         ownership_store=OwnershipStore(),
         owner_id=owner_id,
         declared_resources=declared_resources,
+        ignored=load_ignored_provisioned(),
     )
 
     if not apply:
