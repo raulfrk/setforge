@@ -10,19 +10,10 @@ from typing import TYPE_CHECKING
 from ruamel.yaml.comments import CommentedMap
 
 from setforge.errors import ConfigError
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations._yaml_ops import atomic_write_yaml, load_yaml_mapping
 
 if TYPE_CHECKING:
     from setforge.migrations import ManifestEntry, MigrationRoots
-
-
-def _load(path: Path) -> CommentedMap:
-    yaml = yaml_rt()
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.load(handle)
-    if not isinstance(data, CommentedMap):
-        raise ConfigError(f"setforge.yaml root must be a mapping: {path}")
-    return data
 
 
 def _uses_generated(data: CommentedMap) -> bool:
@@ -64,7 +55,7 @@ class GeneratedResourcesMigration:
         return (roots.cfg_path,)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        data = _load(roots.cfg_path)
+        data = load_yaml_mapping(roots.cfg_path)
         data["schema_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
 
@@ -95,7 +86,7 @@ class GeneratedResourcesReverse:
         return (roots.cfg_path,)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        data = _load(roots.cfg_path)
+        data = load_yaml_mapping(roots.cfg_path)
         if _uses_generated(data):
             raise ConfigError(
                 "cannot downgrade schema 6.1 while generated tracked-file "

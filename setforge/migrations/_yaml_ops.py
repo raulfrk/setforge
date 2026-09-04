@@ -27,8 +27,9 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
 from setforge import atomicio
+from setforge.errors import ConfigError
 
-__all__ = ["atomic_write_yaml", "rename_key", "yaml_rt"]
+__all__ = ["atomic_write_yaml", "load_yaml_mapping", "rename_key", "yaml_rt"]
 
 
 def yaml_rt() -> YAML:
@@ -44,6 +45,15 @@ def yaml_rt() -> YAML:
     yaml.preserve_quotes = True
     yaml.width = 4096
     return yaml
+
+
+def load_yaml_mapping(path: Path) -> CommentedMap:
+    yaml = yaml_rt()
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.load(handle)
+    if not isinstance(data, CommentedMap):
+        raise ConfigError(f"setforge.yaml root must be a mapping: {path}")
+    return data
 
 
 def rename_key(node: CommentedMap, old: str, new: str) -> None:

@@ -4,8 +4,12 @@ import pytest
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
+from setforge.migrations import Migration, MigrationRoots
+from setforge.migrations._codex_contract import CodexContractMigration
+from setforge.migrations._codex_mcp_scope import CodexMcpScopeMigration
+from setforge.migrations._directory_trees import DirectoryTreesMigration
 from setforge.migrations._generated_resources import GeneratedResourcesMigration
+from setforge.migrations._platform_release_assets import PlatformReleaseAssetsMigration
 
 
 def _roots(tmp_path: Path, body: str) -> MigrationRoots:
@@ -16,6 +20,29 @@ def _roots(tmp_path: Path, body: str) -> MigrationRoots:
 
 def _data(path: Path) -> dict[str, object]:
     return YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "migration",
+    [
+        GeneratedResourcesMigration(),
+        DirectoryTreesMigration(),
+        PlatformReleaseAssetsMigration(),
+        CodexContractMigration(),
+        CodexMcpScopeMigration(),
+    ],
+)
+def test_contract_stamp_migrations_preserve_mapping_root_diagnostic(
+    tmp_path: Path, migration: Migration
+) -> None:
+    roots = _roots(tmp_path, "[]\n")
+
+    with pytest.raises(ConfigError) as exc_info:
+        migration.apply(roots=roots)
+
+    assert str(exc_info.value) == (
+        f"setforge.yaml root must be a mapping: {roots.cfg_path}"
+    )
 
 
 def test_generated_resources_stamp_round_trip_without_generated_intent(
