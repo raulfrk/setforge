@@ -300,6 +300,17 @@ def test_shape_mismatch_list_vs_dict_raises() -> None:
         merge_structural(base, ours, theirs)
 
 
+@pytest.mark.parametrize(
+    ("base", "theirs"),
+    [("base", "upstream"), (["base"], ["upstream"])],
+)
+def test_root_mapping_ours_rejects_non_mapping_other_sides(
+    base: object, theirs: object
+) -> None:
+    with pytest.raises(MergeTypeMismatch):
+        merge_structural(base, {"local": "keep"}, theirs)
+
+
 # --------------------------------------------------------------------------
 # ruamel YAML: comment + key-order golden-file assertions.
 # --------------------------------------------------------------------------

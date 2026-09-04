@@ -319,6 +319,17 @@ def test_merge_project_content_falls_back_for_invalid_structured_bytes(
     )
 
 
+def test_merge_project_content_falls_back_for_incompatible_root_shapes() -> None:
+    result = merge_project_content(
+        Path("settings.yaml"),
+        b"base\n",
+        b"local: keep\n",
+        b"upstream\n",
+    )
+
+    assert result.segments == (Conflict(b"base\n", b"local: keep\n", b"upstream\n"),)
+
+
 def test_plan_sync_three_way_preserves_independent_local_edit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

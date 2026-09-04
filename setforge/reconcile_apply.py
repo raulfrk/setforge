@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from setforge.errors import MergeTypeMismatch
 from setforge.reconcile import (
     ABSENT,
     Clean,
@@ -363,18 +364,22 @@ def reconcile_structured_file(
 
     # Clean-fast-path: a key-aware 3-way over comment-preserving models.
     if base_raw is not None and isinstance(live, bytes):
-        result = merge_structural(
-            _load_model(base_raw, fmt),
-            _load_model(live, fmt),
-            _load_model(tracked, fmt),
-        )
-        if result.clean:
-            merged = _dump_model(result.merged_model, fmt)
-            if merged == live and base_raw == tracked:
-                return ReconcileOutcome(ReconcileKind.NOOP)
-            return ReconcileOutcome(
-                ReconcileKind.WRITE, content=merged, new_base=tracked
+        try:
+            result = merge_structural(
+                _load_model(base_raw, fmt),
+                _load_model(live, fmt),
+                _load_model(tracked, fmt),
             )
+        except MergeTypeMismatch:
+            pass
+        else:
+            if result.clean:
+                merged = _dump_model(result.merged_model, fmt)
+                if merged == live and base_raw == tracked:
+                    return ReconcileOutcome(ReconcileKind.NOOP)
+                return ReconcileOutcome(
+                    ReconcileKind.WRITE, content=merged, new_base=tracked
+                )
 
     # A genuine same-key collision (or an absent / edge live) falls back to the
     # proven line path — its wizard / --auto / DEFERRED resolves the conflict.

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from setforge import atomicio, operations
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
-from setforge.errors import SetforgeError, StructuredParseError
+from setforge.errors import MergeTypeMismatch, SetforgeError, StructuredParseError
 from setforge.git_overlay import (
     OverlayClaim,
     apply_overlay_git,
@@ -714,7 +714,7 @@ def merge_project_content(
             )
             if structured.clean:
                 return MergeResult((Clean(_dump_model(structured.merged_model, fmt)),))
-        except (StructuredParseError, TypeError, ValueError):
+        except (MergeTypeMismatch, StructuredParseError, TypeError, ValueError):
             pass
     return line_merge(base, ours, theirs)
 

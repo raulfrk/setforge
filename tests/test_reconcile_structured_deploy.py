@@ -14,10 +14,12 @@ unchanged upstream is a NOOP; a base-absent divergent live seeds keep-live.
 
 from __future__ import annotations
 
+import pytest
+
 from setforge.locking import profile_lock
 from setforge.reconcile import file_id, read_base, record
 from setforge.reconcile.structured_units import StructuredFormat
-from setforge.reconcile_apply import ReconcileKind, reconcile_structured_file
+from setforge.reconcile_apply import AutoSide, ReconcileKind, reconcile_structured_file
 
 _P = "default"
 _FMT = StructuredFormat.YAML
@@ -86,3 +88,88 @@ def test_base_absent_divergent_live_seeds_keep_live() -> None:
     assert out.content == host  # kept live
     assert out.new_base == tracked  # base recorded as upstream
     assert out.seeded is True
+
+
+def test_divergent_root_shapes_defer_through_plain_fallback() -> None:
+    fid = file_id("root-shape")
+    base = b"key: base\n"
+    host = b"- local\n"
+    upstream = b"key: upstream\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == base
+
+
+@pytest.mark.parametrize(
+    ("side", "expected"),
+    [(AutoSide.OURS, b"- local\n"), (AutoSide.THEIRS, b"key: upstream\n")],
+)
+def test_divergent_root_shapes_auto_select_exact_raw_bytes(
+    side: AutoSide, expected: bytes
+) -> None:
+    fid = file_id(f"root-shape-{side}")
+    base = b"key: base\n"
+    host = b"- local\n"
+    upstream = b"key: upstream\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(
+        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
+    )
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+def test_unchanged_yaml_binary_is_byte_identical_noop() -> None:
+    fid = file_id("binary")
+    doc = b"payload: !!binary |\n  AP8=\n"
+    _seed(fid, base=doc, local=doc)
+
+    out = reconcile_structured_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.NOOP
+    assert out.content is None
+    assert read_base(_P, fid) == doc
+
+
+@pytest.mark.parametrize(
+    ("base", "upstream"),
+    [(b"base\n", b"upstream\n"), (b"- base\n", b"- upstream\n")],
+)
+def test_mapping_live_with_non_mapping_other_roots_defers(
+    base: bytes, upstream: bytes
+) -> None:
+    fid = file_id(f"inverse-root-{len(base)}")
+    host = b"local: keep\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == base
+
+
+@pytest.mark.parametrize(
+    ("base", "upstream"),
+    [(b"base\n", b"upstream\n"), (b"- base\n", b"- upstream\n")],
+)
+@pytest.mark.parametrize("side", [AutoSide.OURS, AutoSide.THEIRS])
+def test_mapping_live_with_non_mapping_other_roots_auto_selects_raw_bytes(
+    base: bytes, upstream: bytes, side: AutoSide
+) -> None:
+    fid = file_id(f"inverse-root-{len(base)}-{side}")
+    host = b"local: keep\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(
+        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
+    )
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == (host if side is AutoSide.OURS else upstream)
+    assert out.new_base == upstream

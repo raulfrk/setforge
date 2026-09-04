@@ -373,10 +373,20 @@ class _MappingBackend(Protocol):
 
 
 def _make_backend(base: object, ours: object, theirs: object) -> _MappingBackend:
-    """Select the backend matching ours' mapping type."""
+    """Select a backend only when all root models are compatible mappings."""
     if isinstance(ours, JSONObject):
+        if not isinstance(base, JSONObject) or not isinstance(theirs, JSONObject):
+            raise MergeTypeMismatch(
+                "incompatible json5 root shapes: base, ours, and theirs "
+                "must all be mappings"
+            )
         return _Json5Backend(base, ours, theirs)
     if isinstance(ours, CommentedMap | Mapping):
+        if not isinstance(base, Mapping) or not isinstance(theirs, Mapping):
+            raise MergeTypeMismatch(
+                "incompatible mapping root shapes: base, ours, and theirs "
+                "must all be mappings"
+            )
         return _RuamelBackend(base, ours, theirs)
     raise MergeTypeMismatch(
         f"unsupported mapping backend for ours: {type(ours).__name__}"
