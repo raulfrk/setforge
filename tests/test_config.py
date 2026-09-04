@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from setforge import reconcile_adapter
 from setforge.config import (
+    BundleComponent,
+    BundleSpec,
     ClaudePluginRef,
     CodexProfile,
     CodexSpec,
@@ -14,6 +16,7 @@ from setforge.config import (
     ExtensionPackage,
     ExtensionReconcile,
     Extensions,
+    FileComponent,
     MarketplaceSource,
     MarketplaceSourceKind,
     PluginPackage,
@@ -26,6 +29,7 @@ from setforge.config import (
     apply_host_local_codex_overlay,
     guard_minimum_version,
     load_config,
+    resolve_and_expand,
     resolve_effective_profile,
     resolve_profile,
 )
@@ -961,6 +965,19 @@ def _cfg(profiles: dict[str, Profile]) -> Config:
     )
 
 
+def _selected_file_bundle() -> dict[str, BundleSpec]:
+    return {
+        "extras": BundleSpec(
+            components=[
+                BundleComponent(
+                    id="bundle-file",
+                    file=FileComponent(src=Path("bundle"), dst="~/.config/bundle"),
+                )
+            ]
+        )
+    }
+
+
 def test_resolve_single_profile() -> None:
     cfg = _cfg({"only": Profile(tracked_files=["x", "y"])})
     resolved = resolve_profile(cfg, "only")
@@ -1105,6 +1122,47 @@ def test_resolve_unknown_parent_raises() -> None:
     cfg = _cfg({"child": Profile(extends="missing")})
     with pytest.raises(ProfileNotFound):
         resolve_profile(cfg, "child")
+
+
+def test_resolve_rejects_duplicate_tracked_destinations_without_mutation(
+    tmp_path: Path,
+) -> None:
+    cfg = Config(
+        tracked_files={
+            "first": TrackedFile(src=Path("first"), dst="~/.config/shared"),
+            "second": TrackedFile(src=Path("second"), dst="~/.config/shared"),
+        },
+        bundles=_selected_file_bundle(),
+        profiles={
+            "base": Profile(tracked_files=["first", "second"], bundles=["extras"]),
+        },
+    )
+    before = cfg.model_dump()
+
+    with pytest.raises(ConfigError, match="duplicate deploy dst"):
+        resolve_and_expand(cfg, "base", tmp_path)
+
+    assert cfg.model_dump() == before
+
+
+def test_resolve_rejects_relative_tracked_destination_without_mutation(
+    tmp_path: Path,
+) -> None:
+    cfg = Config(
+        tracked_files={
+            "relative": TrackedFile(src=Path("source"), dst="relative/target"),
+        },
+        bundles=_selected_file_bundle(),
+        profiles={
+            "base": Profile(tracked_files=["relative"], bundles=["extras"]),
+        },
+    )
+    before = cfg.model_dump()
+
+    with pytest.raises(ConfigError, match="absolute"):
+        resolve_and_expand(cfg, "base", tmp_path)
+
+    assert cfg.model_dump() == before
 
 
 def test_tracked_file_rejects_unknown_field() -> None:

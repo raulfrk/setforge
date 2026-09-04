@@ -1683,7 +1683,12 @@ def _resolve_confined_dst(dst: str, *, template: bool) -> Path:
         from jinja2 import Template
 
         raw = Template(raw).render(**template_context())
-    return Path(raw).expanduser().resolve()
+    expanded = Path(raw).expanduser()
+    if not expanded.is_absolute():
+        raise ConfigError(
+            f"deployment destination {dst!r} must resolve to an absolute path"
+        )
+    return expanded.resolve()
 
 
 def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
@@ -1855,7 +1860,7 @@ def expand_bundle_file_components(
 def validate_tree_destination_boundaries(
     config: Config, resolved: ResolvedProfile
 ) -> None:
-    """Refuse nested deployment roots when either side is a managed tree."""
+    """Refuse ambiguous or relative tracked deployment destinations."""
     from jinja2 import TemplateError
 
     destinations: list[tuple[str, TrackedFile, Path]] = []
@@ -1868,11 +1873,12 @@ def validate_tree_destination_boundaries(
         destinations.append((name, tracked, destination))
     for index, (left_name, left, left_path) in enumerate(destinations):
         for right_name, right, right_path in destinations[index + 1 :]:
-            nested = (
-                left_path == right_path
-                or left_path in right_path.parents
-                or right_path in left_path.parents
-            )
+            if left_path == right_path:
+                raise ConfigError(
+                    f"tracked files {left_name!r} and {right_name!r} target "
+                    f"duplicate deploy dst {left_path}"
+                )
+            nested = left_path in right_path.parents or right_path in left_path.parents
             if nested and (left.tree is not None or right.tree is not None):
                 raise ConfigError(
                     f"managed tree destination overlap: {left_name!r} targets "
@@ -1882,6 +1888,7 @@ def validate_tree_destination_boundaries(
 
 def resolve_and_expand(config: Config, name: str, repo_root: Path) -> ResolvedProfile:
     resolved = resolve_profile(config, name)
+    validate_tree_destination_boundaries(config, resolved)
     expand_bundle_file_components(config, resolved, repo_root)
     validate_tree_destination_boundaries(config, resolved)
     return resolved
