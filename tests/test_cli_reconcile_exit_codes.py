@@ -55,7 +55,9 @@ def _stub_ext_config_layer(
     resolved = ResolvedProfile(
         reconcile=ReconcileSpec(extensions=ExtensionReconcile(policy=policy))
     )
-    monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        ext_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     monkeypatch.setattr(ext_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(
         ext_mod,
@@ -77,7 +79,9 @@ def _stub_plugin_config_layer(
     resolved = ResolvedProfile(
         reconcile=ReconcileSpec(plugins=PluginReconcile(policy=policy))
     )
-    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     monkeypatch.setattr(plugins_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(
         plugins_mod,

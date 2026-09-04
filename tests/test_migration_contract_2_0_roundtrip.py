@@ -81,7 +81,8 @@ def test_roundtrip_deep_key_untranslates(tmp_path: Path) -> None:
 
 def test_roundtrip_section_untranslates_with_mode(tmp_path: Path) -> None:
     """A section span with capture_mode untranslates to preserve_user_sections+mode."""
-    (tmp_path / "doc.md").write_text(
+    (tmp_path / "tracked").mkdir()
+    (tmp_path / "tracked" / "doc.md").write_text(
         "<!-- setforge:user-section start shared notes -->\n"
         "body\n"
         "<!-- setforge:user-section end shared notes -->\n",

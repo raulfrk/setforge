@@ -49,8 +49,9 @@ _SETFORGE_YAML = (
 def _seed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / "tracked").mkdir()
     (repo / "setforge.yaml").write_text(_SETFORGE_YAML, encoding="utf-8")
-    (repo / "doc.md").write_text(_DOC_WITH_SHARED_SECTION, encoding="utf-8")
+    (repo / "tracked" / "doc.md").write_text(_DOC_WITH_SHARED_SECTION, encoding="utf-8")
     return repo
 
 
@@ -59,8 +60,9 @@ def test_preview_read_dependencies_enumerates_shared_section_srcs(
 ) -> None:
     """``_preview_read_dependencies`` returns the repo-relative tracked srcs.
 
-    Resolution must match the migration's own ``roots.repo_root / src`` join
-    so the mirrored shadow copy lands exactly where apply reads it.
+    Resolution must match the migration's own
+    ``roots.repo_root / "tracked" / src`` join so the mirrored shadow copy
+    lands exactly where apply reads it.
     """
     repo = _seed_repo(tmp_path)
     roots = MigrationRoots(
@@ -69,7 +71,7 @@ def test_preview_read_dependencies_enumerates_shared_section_srcs(
         home=tmp_path / "home",
     )
     deps = migrate_cli._preview_read_dependencies(roots)
-    assert deps == (repo / "doc.md",)
+    assert deps == (repo / "tracked" / "doc.md",)
 
 
 def test_preview_read_dependencies_skips_non_preserve_entries(

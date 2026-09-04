@@ -21,15 +21,15 @@ def test_ext_list_resolves_config(monkeypatch: pytest.MonkeyPatch) -> None:
     configured source layer works outside the config-repo root."""
     import setforge.cli.ext as ext_mod
 
-    seen: list[Path] = []
+    seen: list[Path | None] = []
 
-    def fake_resolve(config: Path) -> Path:
+    def fake_resolve(config: Path | None) -> Path:
         seen.append(config)
         raise SystemExit(99)  # short-circuit before load_config
 
     monkeypatch.setattr(ext_mod, "_resolve_config_arg", fake_resolve)
     CliRunner().invoke(app, ["ext", "list", "--profile=x"])
-    assert seen == [Path("setforge.yaml")]
+    assert seen == [None]
 
 
 def test_ext_add_handles_install_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,7 +38,9 @@ def test_ext_add_handles_install_failure(monkeypatch: pytest.MonkeyPatch) -> Non
     import setforge.cli.ext as ext_mod
     from setforge.errors import ExtensionInstallFailed
 
-    monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        ext_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     monkeypatch.setattr(
         ext_mod.vscode_extensions, "add_to_include", lambda *a, **k: True
     )

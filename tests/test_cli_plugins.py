@@ -323,15 +323,15 @@ def test_plugin_marketplace_resolves_config(
     root."""
     import setforge.cli.plugins as plugins_mod
 
-    seen: list[Path] = []
+    seen: list[Path | None] = []
 
-    def fake_resolve(config: Path) -> Path:
+    def fake_resolve(config: Path | None) -> Path:
         seen.append(config)
         raise SystemExit(99)  # short-circuit before load_config
 
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", fake_resolve)
     CliRunner().invoke(app, argv)
-    assert seen == [Path("setforge.yaml")]
+    assert seen == [None]
 
 
 def test_marketplace_update_does_not_resolve_config(
@@ -377,7 +377,9 @@ def test_marketplace_subprocess_error_is_clean(
     not a raw traceback."""
     import setforge.cli.plugins as plugins_mod
 
-    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod,
         "yaml_add_marketplace",
@@ -408,7 +410,9 @@ def test_plugin_remove_disable_subprocess_error_is_clean(
     surface as a clean error + exit 1, not a traceback."""
     import setforge.cli.plugins as plugins_mod
 
-    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     # plugin_remove now loads the config to resolve a bare plugin name to its
     # marketplace for the disable id; stub it so this mock-only test never
     # touches a real setforge.yaml. The @-form id passes straight through.
@@ -439,7 +443,9 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
     traceback (the catch arm inside _register_plugin_in_yaml)."""
     import setforge.cli.plugins as plugins_mod
 
-    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
+    )
     monkeypatch.setattr(plugins_mod, "load_config", lambda c: object())
     # New marketplace → the register path invokes `claude marketplace add`.
     monkeypatch.setattr(

@@ -116,7 +116,7 @@ def test_show_effective_reaches_render_with_real_ctx(
         "tracked_files:\n"
         "  foo:\n"
         "    src: foo.md\n"
-        "    dst: foo.md\n"
+        f"    dst: {tmp_path / 'foo.md'}\n"
         "profiles:\n"
         "  base:\n"
         "    tracked_files:\n"
