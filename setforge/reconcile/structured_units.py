@@ -35,6 +35,7 @@ from setforge.reconcile.index_model import KIND_KEY
 from setforge.reconcile.types import HunkClass, UnitRef, content_sha
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
+    _plain_eq,
     append_key_segment,
     delete_node_at_path,
     get_at_path,
@@ -236,7 +237,7 @@ def _walk_leaves(
         # root call never descended through a key); its single leaf takes the
         # empty path, matching the pre-sentinel behavior. A leaf reached through
         # any key always carries a real dotted-string prefix.
-        yield (prefix if prefix is not None else "", node)
+        yield (prefix if prefix is not None else "", get_at_path(node, ""))
 
 
 def extract_structured_units(
@@ -255,7 +256,7 @@ def extract_structured_units(
     for path in sorted(set(base_leaves) | set(live_leaves)):
         base_value = base_leaves.get(path, _MISSING)
         live_value = live_leaves.get(path, _MISSING)
-        if base_value == live_value:
+        if _plain_eq(base_value, live_value):
             continue
         units.append(
             KeyUnit(

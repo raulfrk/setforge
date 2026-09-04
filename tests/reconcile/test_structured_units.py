@@ -60,6 +60,22 @@ def test_extract_nested_key_yields_dotted_path_unchanged_sibling_mints_nothing()
     assert [u.path for u in units] == ["editor.fontSize"]
 
 
+def test_extract_identical_jsonc_mints_no_unit() -> None:
+    document = b'{\n  // retained comment\n  "enabled": true\n}\n'
+
+    units = extract_structured_units(document, document, StructuredFormat.JSONC)
+
+    assert units == []
+
+
+def test_extract_yaml_scalar_type_change_mints_unit() -> None:
+    units = extract_structured_units(
+        b"enabled: 1\n", b"enabled: true\n", StructuredFormat.YAML
+    )
+
+    assert [unit.path for unit in units] == ["enabled"]
+
+
 def test_reconstruct_all_local_returns_base_byte_identical() -> None:
     """Promoting nothing → base verbatim: comments/quotes/inline survive (SP5/SP6)."""
     base = b'# top\ntheme: "dark"\nfontSize: 14  # inline note\n'
