@@ -1949,7 +1949,7 @@ def _package_owner_id(plan: InstallPlan):
 @app.command(epilog=INSTALL_EXAMPLES)
 def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     profile: str = _PROFILE_OPTION,
-    config: Path = _CONFIG_OPTION,
+    config: Path | None = _CONFIG_OPTION,
     no_transition: bool = typer.Option(
         False,
         "--no-transition",
@@ -2052,6 +2052,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     """Deploy tracked → live for every tracked_file in the profile."""
     # Canonicalize once so a symlink retarget cannot split source discovery,
     # locking, config loading, and input snapshots across two repositories.
+    config_is_explicit = config is not None
     config = _resolve_config_arg(config).resolve()
     # Mutual-exclusivity guard for the legacy unexpected-drift flags.
     if auto_accept_tracked and auto_accept_live:
@@ -2067,12 +2068,16 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
     repo_root = config.parent
+    install_source = (
+        source_mod.PathSource(path=repo_root)
+        if config_is_explicit
+        else resolve_source_for_git_check(repo_root)
+    )
     # Source acquisition precedes config loading so this invocation plans the
     # checkout it just fetched, rather than a stale in-memory model.
     # Dry-run builds the same plan as apply and renders it without entering the
     # mutation phase. The flag stays at this orchestration boundary.
     if dry_run:
-        install_source = resolve_source_for_git_check(repo_root)
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=True)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
         ctx, active_lock, _local_overlay, input_baseline = _load_install_context(
@@ -2096,7 +2101,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _render_install_plan(plan, scan_result)
         return
 
-    install_source = resolve_source_for_git_check(repo_root)
     with mutation_locks(resources=True):
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)

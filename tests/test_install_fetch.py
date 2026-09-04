@@ -82,16 +82,17 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return target
 
 
-def _install(config: Path, *extra: str) -> Result:
+def _install(config: Path | None, *extra: str) -> Result:
     args = [
         "install",
         f"--profile={_PROFILE}",
-        f"--config={config}",
         "--no-secrets-scan",
         "--no-git-check",
         "--yes",
         *extra,
     ]
+    if config is not None:
+        args.append(f"--config={config}")
     return CliRunner().invoke(app, args)
 
 
@@ -220,6 +221,35 @@ profiles:
 
 
 class TestFetchWiring:
+    def test_explicit_config_git_check_does_not_rediscover_source(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import setforge.cli.install as install_mod
+
+        selected_config = _write_config(repo)
+        other_repo = repo.parent / "other-repo"
+        other_repo.mkdir()
+        _write_config(other_repo)
+        discoveries: list[Path] = []
+
+        def rediscover() -> PathSource:
+            discoveries.append(other_repo)
+            return PathSource(path=other_repo)
+
+        checked_sources: list[object] = []
+        monkeypatch.setattr("setforge.cli._git_check.get_resolved_source", rediscover)
+        monkeypatch.setattr(
+            install_mod,
+            "run_git_check_or_raise",
+            lambda *, source, **_kwargs: checked_sources.append(source),
+        )
+
+        result = _install(selected_config, "--dry-run", "--no-fetch")
+
+        assert result.exit_code == 0, result.output
+        assert discoveries == []
+        assert checked_sources == [PathSource(path=repo)]
+
     def test_real_fetch_runs_inside_global_install_lock(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -586,6 +616,10 @@ class TestFetchWiring:
             "setforge.cli.install.resolve_source_for_git_check",
             lambda _repo_root: git_src,
         )
+        config = _write_config(repo)
+        monkeypatch.setattr(
+            "setforge.cli.install._resolve_config_arg", lambda _config: config
+        )
         monkeypatch.setattr(
             source_mod, "fetch_source", lambda _src: "fetched and checked out main"
         )
@@ -594,8 +628,7 @@ class TestFetchWiring:
             "setforge.cli.install.run_git_check_or_raise",
             lambda **_kw: None,
         )
-        config = _write_config(repo)
-        result = _install(config)
+        result = _install(None)
         assert result.exit_code == 0, result.output
         assert "fetched and checked out main" in result.output
 
@@ -607,6 +640,10 @@ class TestFetchWiring:
             "setforge.cli.install.resolve_source_for_git_check",
             lambda _repo_root: git_src,
         )
+        config = _write_config(repo)
+        monkeypatch.setattr(
+            "setforge.cli.install._resolve_config_arg", lambda _config: config
+        )
         calls: list[object] = []
 
         def _unexpected_fetch(source: object) -> str:
@@ -617,9 +654,7 @@ class TestFetchWiring:
         monkeypatch.setattr(
             "setforge.cli.install.run_git_check_or_raise", lambda **_kwargs: None
         )
-        config = _write_config(repo)
-
-        result = _install(config, "--dry-run")
+        result = _install(None, "--dry-run")
 
         assert result.exit_code == 0, result.output
         assert "WOULD fetch upstream config source" in result.output
@@ -656,18 +691,20 @@ class TestFetchWiring:
     def test_no_fetch_missing_git_clone_raises_source_not_cloned(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        import setforge.cli.install as install_mod
+
         git_src = GitSource(url="https://example.invalid/cfg.git", ref="main")
         monkeypatch.setattr(
             "setforge.cli.install.resolve_source_for_git_check",
             lambda _repo_root: git_src,
         )
         config = _write_config(repo)
+        monkeypatch.setattr(install_mod, "_resolve_config_arg", lambda _config: config)
         result = CliRunner().invoke(
             app,
             [
                 "install",
                 f"--profile={_PROFILE}",
-                f"--config={config}",
                 "--no-secrets-scan",
                 "--yes",
                 "--no-fetch",

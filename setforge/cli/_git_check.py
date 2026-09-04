@@ -64,8 +64,7 @@ def resolve_source_for_git_check(repo_root: Path) -> Source:
     / ``~/.config/setforge/local.yaml``) so a git-source's CACHE dir is
     inspected for staleness. Falls back to a synthetic
     :class:`PathSource` rooted at ``repo_root`` when no source layer is
-    configured — covers the legacy explicit-``--config`` invocation
-    shape that the existing test suite relies on.
+    configured.
     """
     try:
         return get_resolved_source()
