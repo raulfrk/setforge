@@ -107,10 +107,37 @@ def _run_json(args: list[str]) -> object:
 
 def _run_mutation(args: list[str]) -> None:
     raw = _run_json(args)
-    if not isinstance(raw, dict) or raw.get("success") is not True:
-        raise PluginToolMissing(
-            f"Codex CLI reported an unsuccessful mutation for {' '.join(args)!r}"
-        )
+    if isinstance(raw, dict):
+        plugin_add_fields = {
+            "pluginId",
+            "name",
+            "marketplaceName",
+            "version",
+            "installedPath",
+            "authPolicy",
+        }
+        if args[:2] == ["plugin", "add"]:
+            if (
+                len(args) == 3
+                and raw.get("pluginId") == args[2]
+                and raw.keys() == plugin_add_fields
+                and all(
+                    isinstance(raw.get(field), str) and bool(raw[field])
+                    for field in (
+                        "name",
+                        "marketplaceName",
+                        "version",
+                        "installedPath",
+                    )
+                )
+                and (raw["authPolicy"] is None or isinstance(raw["authPolicy"], dict))
+            ):
+                return
+        elif raw.get("success") is True:
+            return
+    raise PluginToolMissing(
+        f"Codex CLI reported an unsuccessful mutation for {' '.join(args)!r}"
+    )
 
 
 def _github_repo_from_remote(remote: str) -> str | None:

@@ -282,13 +282,71 @@ def test_successful_marketplace_replacement_records_both_sides(
     ]
 
 
-@pytest.mark.parametrize("payload", [{}, {"success": 0}, {"success": "false"}])
-def test_mutation_rejects_malformed_success_json(
+@pytest.mark.parametrize(
+    "payload", [{}, {"success": 0}, {"success": "false"}, {"success": True}]
+)
+def test_plugin_install_rejects_generic_or_malformed_success_json(
     monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
 ) -> None:
     monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: payload)
     with pytest.raises(PluginToolMissing, match="unsuccessful mutation"):
         codex_plugins.plugin_install("review@official")
+
+
+@pytest.mark.parametrize("auth_policy", [None, {"opaque": "ignored"}])
+def test_plugin_install_accepts_current_success_json(
+    monkeypatch: pytest.MonkeyPatch, auth_policy: object
+) -> None:
+    payload = {
+        "pluginId": "review@official",
+        "name": "review",
+        "marketplaceName": "official",
+        "version": "1.2.3",
+        "installedPath": "/tmp/codex/plugins/review",
+        "authPolicy": auth_policy,
+    }
+    monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: payload)
+
+    codex_plugins.plugin_install("review@official")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("success", False),
+        ("pluginId", "other@official"),
+        ("name", None),
+        ("marketplaceName", ""),
+        ("version", None),
+        ("installedPath", 0),
+        ("authPolicy", "prompt"),
+        ("authPolicy", []),
+    ],
+)
+def test_plugin_install_rejects_malformed_current_success_json(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    payload: dict[str, object] = {
+        "pluginId": "review@official",
+        "name": "review",
+        "marketplaceName": "official",
+        "version": "1.2.3",
+        "installedPath": "/tmp/codex/plugins/review",
+        "authPolicy": None,
+    }
+    payload[field] = value
+    monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: payload)
+
+    with pytest.raises(PluginToolMissing, match="unsuccessful mutation"):
+        codex_plugins.plugin_install("review@official")
+
+
+def test_other_mutation_accepts_generic_success_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: {"success": True})
+
+    codex_plugins.plugin_remove("review@official")
 
 
 def test_replacement_and_prune_reverse_restores_marketplace_before_plugin(

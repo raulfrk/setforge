@@ -155,6 +155,8 @@ class PythonProvisioner(Provisioner):
 
 
 def _parse_tools(stdout: str) -> dict[str, str | None]:
+    if stdout.strip() == "No tools installed":
+        return {}
     tools: dict[str, str | None] = {}
     for raw in stdout.splitlines():
         line = _ANSI.sub("", raw)

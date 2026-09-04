@@ -108,6 +108,10 @@ def test_probe_skips_entrypoint_lines(fake_uv) -> None:
     assert installed == {Identity(key="ruff", display="ruff")}
 
 
+def test_parse_tools_treats_no_tools_installed_as_empty() -> None:
+    assert prov_python._parse_tools("No tools installed\n") == {}
+
+
 def test_probe_fails_open_when_uv_missing(fake_uv) -> None:
     fake_uv(present=False)
     assert prov_python.PythonProvisioner().probe() == set()
