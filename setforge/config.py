@@ -1918,6 +1918,23 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     config = (
         _validate_tolerant(data) if tolerate_unknown else Config.model_validate(data)
     )
+    validate_config_semantics(config)
+    _guard_generated_resources(config, path)
+    _guard_directory_trees(config, path)
+    _guard_platform_release_assets(config, path)
+    _guard_codex_contract(config, path)
+    _warn_on_schema_mismatch(config)
+    return config
+
+
+def validate_config_semantics(config: Config) -> None:
+    """Validate cross-field invariants after schema parsing.
+
+    This stage is shared by config loading and in-memory tracked-config
+    mutations so both boundaries reject unresolved registry references before
+    the candidate can reach provisioning or disk.
+    """
+    _validate_tracked_file_references(config)
     _validate_plugin_references(config)
     _validate_mcp_references(config)
     _validate_codex_references(config)
@@ -1925,12 +1942,6 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _validate_package_references(config)
     _validate_section_slot_references(config)
     _validate_project_profile_references(config)
-    _guard_generated_resources(config, path)
-    _guard_directory_trees(config, path)
-    _guard_platform_release_assets(config, path)
-    _guard_codex_contract(config, path)
-    _warn_on_schema_mismatch(config)
-    return config
 
 
 def _guard_generated_resources(config: Config, path: Path) -> None:
@@ -2549,6 +2560,22 @@ def _validate_plugin_references(config: Config) -> None:
         )
 
 
+def _validate_tracked_file_references(config: Config) -> None:
+    registry = set(config.tracked_files)
+    offenders = [
+        f"{profile_name}.tracked_files[{reference or 'empty'}]"
+        for profile_name, profile in config.profiles.items()
+        for reference in profile.tracked_files
+        if reference not in registry
+    ]
+    if offenders:
+        raise ConfigError(
+            "profiles reference undeclared tracked_file(s): "
+            + ", ".join(offenders)
+            + " (add to top-level tracked_files:)"
+        )
+
+
 def _validate_mcp_references(config: Config) -> None:
     """Verify every ``profile.mcp_servers`` entry exists in the top-level
     ``Config.mcp_servers`` registry.
@@ -2681,8 +2708,17 @@ def _validate_package_references(config: Config) -> None:
             if ref.strip() and ref not in package_registry:
                 offenders.append(f"{profile_name}.packages[{ref}]")
         for ref in profile.bundles:
-            if ref.strip() and ref not in bundle_registry:
+            if not ref.strip():
+                offenders.append(f"{profile_name}.bundles[empty]")
+            elif ref not in bundle_registry:
                 offenders.append(f"{profile_name}.bundles[{ref}]")
+    offenders.extend(
+        f"bundles[{bundle_name}].components[{component.id}]."
+        f"package[{component.package}]"
+        for bundle_name, bundle in config.bundles.items()
+        for component in bundle.components
+        if component.package is not None and component.package not in package_registry
+    )
     if offenders:
         details = ", ".join(offenders)
         raise ConfigError(

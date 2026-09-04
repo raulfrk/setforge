@@ -64,3 +64,50 @@ def test_validate_reports_symlink_loop_without_traceback(tmp_path: Path) -> None
     assert result.exit_code == 1, result.output
     assert "source cannot be resolved" in result.output
     assert "Traceback" not in result.output
+
+
+def test_validate_rejects_bundle_component_with_unknown_package(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "tracked_files: {}\n"
+        "packages: {}\n"
+        "bundles:\n"
+        "  tools:\n"
+        "    components:\n"
+        "      - id: ripgrep\n"
+        "        package: missing-package\n"
+        "profiles:\n"
+        "  base:\n"
+        "    bundles: [tools]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={config}"])
+
+    assert result.exit_code == 1, result.output
+    assert "bundle" in result.output
+    assert "tools" in result.output
+    assert "ripgrep" in result.output
+    assert "missing-package" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_validate_rejects_missing_tracked_file_reference_without_traceback(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "tracked_files: {}\nprofiles:\n  base:\n    tracked_files: [missing-file]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={config}"])
+
+    assert result.exit_code == 1, result.output
+    assert "profile" in result.output
+    assert "base" in result.output
+    assert "tracked_files" in result.output
+    assert "missing-file" in result.output
+    assert "Traceback" not in result.output

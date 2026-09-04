@@ -70,7 +70,12 @@ from setforge.cli._config_helpers import (
 )
 from setforge.cli._git_check import run_git_check_or_raise
 from setforge.cli._output import OutputContext
-from setforge.config import Config, MarketplaceSource, MarketplaceSourceKind
+from setforge.config import (
+    Config,
+    MarketplaceSource,
+    MarketplaceSourceKind,
+    validate_config_semantics,
+)
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
 from setforge.locking import mutation_locks
@@ -263,11 +268,12 @@ def _validate_candidate(scope: ConfigScope, doc: CommentedMap) -> None:
             ) from exc
     elif scope is ConfigScope.TRACKED:
         try:
-            Config.model_validate(plain)
+            candidate = Config.model_validate(plain)
         except ValidationError as exc:
             raise SetforgeError(
                 f"setforge.yaml candidate failed validation:\n{exc}"
             ) from exc
+        validate_config_semantics(candidate)
     else:
         raise SetforgeError(f"_validate_candidate: unexpected scope {scope!r}")
 

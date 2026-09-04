@@ -65,3 +65,22 @@ def test_valid_candidate_writes(runner: CliRunner, seed_tracked: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "1.1" in seed_tracked.read_text(encoding="utf-8")
+
+
+def test_cross_reference_invalid_candidate_leaves_file_untouched(
+    runner: CliRunner, seed_tracked: Path
+) -> None:
+    """Removing a still-referenced tracked file refuses before the write."""
+    original = seed_tracked.read_bytes()
+
+    result = runner.invoke(
+        app,
+        ["config", "remove", "--tracked", "tracked_files.foo", "--yes"],
+    )
+
+    assert result.exit_code != 0
+    message = str(result.exception)
+    assert "profiles" in message
+    assert "tracked_files" in message
+    assert "foo" in message
+    assert seed_tracked.read_bytes() == original

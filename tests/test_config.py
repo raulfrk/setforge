@@ -288,6 +288,17 @@ profiles:
     assert "base" in msg
 
 
+def test_load_config_rejects_blank_profile_bundle_reference(tmp_path: Path) -> None:
+    config_path = tmp_path / "setforge.yaml"
+    config_path.write_text(
+        "tracked_files: {}\nbundles: {}\nprofiles:\n  base:\n    bundles: ['']\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=r"base\.bundles.*empty"):
+        load_config(config_path)
+
+
 def test_tracked_file_defaults() -> None:
     df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
