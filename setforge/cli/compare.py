@@ -137,7 +137,7 @@ def compare(
 
     if check:
         if strict:
-            if any(e.status == CompareStatus.DRIFTED for e in report.entries):
+            if any(e.status != CompareStatus.UNCHANGED for e in report.entries):
                 raise typer.Exit(code=1)
         elif report.has_unexpected_drift:
             raise typer.Exit(code=1)

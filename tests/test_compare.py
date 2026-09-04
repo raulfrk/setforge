@@ -3,6 +3,7 @@
 import io
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from setforge.compare import (
@@ -283,6 +284,33 @@ def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
     )
+    assert result.exit_code == 1
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_cli_compare_check_exits_1_missing_destination(
+    tmp_path: Path, strict: bool
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "tracked\n")
+    dst = tmp_path / "live" / "missing"
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
+        encoding="utf-8",
+    )
+    args = ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
+    if strict:
+        args.append("--strict")
+
+    result = CliRunner().invoke(app, args)
+
     assert result.exit_code == 1
 
 
