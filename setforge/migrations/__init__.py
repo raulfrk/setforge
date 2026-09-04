@@ -359,7 +359,7 @@ class MigrationRoots:
         cfg_path: the resolved ``setforge.yaml`` (typically
             ``<repo_root>/setforge.yaml``).
         repo_root: the user's setforge-config repo (parent of
-            ``cfg_path``). Tracked content lives under this root.
+            ``cfg_path``). Tracked content lives under ``repo_root/tracked``.
         home: ``Path.home()`` — for ``~/.config/setforge/``,
             ``~/.local/share/setforge/``, ``~/.claude/``, and any
             other host-local state a migration touches.

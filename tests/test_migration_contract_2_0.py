@@ -39,6 +39,12 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _tracked_source(tmp_path: Path) -> Path:
+    tracked = tmp_path / "tracked"
+    tracked.mkdir(exist_ok=True)
+    return tracked / "doc.md"
+
+
 _FLOOR = 'minimum_version: "2.0"\n'
 
 
@@ -90,7 +96,7 @@ def test_translate_deep_keys_to_pinned_deep_spans(tmp_path: Path) -> None:
 
 def test_translate_sections_enumerates_from_tracked_markers(tmp_path: Path) -> None:
     """preserve_user_sections:true -> one section span per marked section."""
-    src = tmp_path / "doc.md"
+    src = _tracked_source(tmp_path)
     _write(
         src,
         "<!-- setforge:user-section start shared notes -->\n"
@@ -136,7 +142,7 @@ def test_translate_shallow_keys_sets_forked_disposition(tmp_path: Path) -> None:
 def test_translate_shared_section_sets_shared_disposition(tmp_path: Path) -> None:
     """A shared preserve_user_sections section -> disposition: shared."""
     _write(
-        tmp_path / "doc.md",
+        _tracked_source(tmp_path),
         "<!-- setforge:user-section start shared notes -->\n"
         "body\n"
         "<!-- setforge:user-section end shared notes -->\n",
@@ -160,7 +166,7 @@ def test_translate_host_local_section_to_overlay_no_disposition(
 ) -> None:
     """A host-local section -> OVERLAY span from the marker body, no disposition."""
     _write(
-        tmp_path / "doc.md",
+        _tracked_source(tmp_path),
         "<!-- setforge:user-section start host-local tweaks -->\n"
         "my host tweaks\n"
         "<!-- setforge:user-section end host-local tweaks -->\n",
@@ -188,7 +194,7 @@ def test_translate_host_local_section_to_overlay_no_disposition(
 def test_keys_plus_shared_section_conflict_refuses(tmp_path: Path) -> None:
     """A file mixing preserve_user_keys + a SHARED section refuses (2 dispositions)."""
     _write(
-        tmp_path / "doc.md",
+        _tracked_source(tmp_path),
         "<!-- setforge:user-section start shared notes -->\n"
         "body\n"
         "<!-- setforge:user-section end shared notes -->\n",
@@ -210,7 +216,7 @@ def test_keys_plus_shared_section_conflict_refuses(tmp_path: Path) -> None:
 
 def test_sections_no_markers_drops_flag_emits_no_span(tmp_path: Path) -> None:
     """preserve_user_sections:true with no markers in src -> drop flag, no span."""
-    _write(tmp_path / "doc.md", "plain content, no markers\n")
+    _write(_tracked_source(tmp_path), "plain content, no markers\n")
     _write(
         tmp_path / "setforge.yaml",
         _FLOOR + "schema_version: '1.2'\n"

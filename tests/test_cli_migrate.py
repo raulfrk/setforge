@@ -183,6 +183,50 @@ def test_apply_with_yes_applies_with_backup(
     assert ".pre-1.1.bak" in result.output
 
 
+def test_contract_preview_and_apply_resolve_sources_from_tracked_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.migrations._contract_2_0 import Contract20Migration
+    from setforge.migrations._yaml_ops import yaml_rt
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    source = tmp_path / "tracked" / "docs" / "AGENTS.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "<!-- setforge:user-section start shared notes -->\n"
+        "preserved body\n"
+        "<!-- setforge:user-section end shared notes -->\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        'minimum_version: "2.0"\n'
+        "schema_version: '1.2'\n"
+        "tracked_files:\n"
+        "  instructions:\n"
+        "    src: docs/AGENTS.md\n"
+        "    dst: ~/.config/AGENTS.md\n"
+        "    preserve_user_sections: true\n"
+        "profiles: {}\n",
+        encoding="utf-8",
+    )
+    chain = (Contract20Migration(),)
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "2.0")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "2.0")
+    monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
+
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+
+    assert result.exit_code == 0, result.output
+    migrated = yaml_rt().load(cfg.read_text(encoding="utf-8"))
+    spans = migrated["tracked_files"]["instructions"].get("spans", [])
+    assert ("## notes" in result.output, [span["anchor"] for span in spans]) == (
+        True,
+        ["## notes"],
+    )
+
+
 def test_apply_button_bar_abort_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

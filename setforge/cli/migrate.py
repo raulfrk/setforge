@@ -733,7 +733,8 @@ def _preview_read_dependencies(roots: MigrationRoots) -> tuple[Path, ...]:
 
     Enumerated straight from the raw ``setforge.yaml`` via ruamel (NOT
     ``load_config``, which rejects a pre-contract schema). Resolved the same
-    way the migration resolves them: ``roots.repo_root / src``. Best-effort —
+    way the migration resolves them: ``roots.repo_root / "tracked" / src``.
+    Best-effort —
     a malformed/unreadable config returns ``()`` so the preview still renders
     (the migration's own apply surfaces the real error).
     """
@@ -759,7 +760,7 @@ def _preview_read_dependencies(roots: MigrationRoots) -> tuple[Path, ...]:
         src_raw = entry.get("src")
         if src_raw is None:
             continue
-        dep = roots.repo_root / str(src_raw)
+        dep = roots.repo_root / "tracked" / str(src_raw)
         if dep in seen:
             continue
         seen.add(dep)

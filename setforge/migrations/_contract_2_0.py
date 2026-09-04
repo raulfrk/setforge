@@ -206,7 +206,7 @@ def _translate_sections(tracked_file: CommentedMap, roots: MigrationRoots) -> bo
     if flag is True:
         src_raw = tracked_file.get("src")
         if src_raw is not None:
-            src = roots.repo_root / str(src_raw)
+            src = roots.repo_root / "tracked" / str(src_raw)
             if src.exists():
                 has_shared = _translate_section_markers(tracked_file, src, capture_mode)
     _del_if_present(tracked_file, "preserve_user_sections")
