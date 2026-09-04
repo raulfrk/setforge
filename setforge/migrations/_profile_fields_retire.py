@@ -171,7 +171,9 @@ def _translate_profile(
 
     extensions = profile.get("extensions")
     if isinstance(extensions, CommentedMap):
-        for name in _seq_of_str(extensions.get("include")):
+        for name in _legacy_extension_list(
+            extensions, "include", cfg_path, profile_name
+        ):
             _mint_package(
                 registry, name, _package_body(_EXTENSION_KIND, name), cfg_path
             )
@@ -192,9 +194,10 @@ def _thread_reconcile(profile: CommentedMap, extensions: object) -> None:
 
     ``plugins_reconcile`` -> ``reconcile.plugins.policy``;
     ``extensions.exclude`` / ``extensions.reconcile`` ->
-    ``reconcile.extensions.{exclude, policy}``. Only writes a sub-block when the
-    legacy source is present, so a profile with no plugin/extension reconcile
-    intent grows no empty ``reconcile`` scaffolding.
+    ``reconcile.extensions.{exclude, policy}``. Existing modern policies remain
+    authoritative, while legacy exclusions append uniquely to a modern list.
+    Only writes a sub-block when the legacy source is present, so a profile with
+    no plugin/extension reconcile intent grows no empty ``reconcile`` scaffolding.
     """
     plugins_policy = profile.get("plugins_reconcile")
     ext_exclude = (
@@ -215,17 +218,40 @@ def _thread_reconcile(profile: CommentedMap, extensions: object) -> None:
         profile["reconcile"] = reconcile
 
     if plugins_policy is not None:
-        plugins = CommentedMap()
-        plugins["policy"] = plugins_policy
-        reconcile["plugins"] = plugins
+        _merge_plugins_reconcile(reconcile, plugins_policy)
 
     if ext_exclude or ext_policy is not None:
+        _merge_extensions_reconcile(reconcile, ext_exclude, ext_policy)
+
+
+def _merge_plugins_reconcile(reconcile: CommentedMap, policy: object) -> None:
+    """Fill a missing modern plugin policy from its legacy equivalent."""
+    plugins = reconcile.get("plugins")
+    if not isinstance(plugins, CommentedMap):
+        plugins = CommentedMap()
+        reconcile["plugins"] = plugins
+    if "policy" not in plugins:
+        plugins["policy"] = policy
+
+
+def _merge_extensions_reconcile(
+    reconcile: CommentedMap, exclude: list[str], policy: object
+) -> None:
+    """Merge legacy extension intent without replacing modern fields."""
+    ext_block = reconcile.get("extensions")
+    if not isinstance(ext_block, CommentedMap):
         ext_block = CommentedMap()
-        if ext_exclude:
-            ext_block["exclude"] = _str_seq(ext_exclude)
-        if ext_policy is not None:
-            ext_block["policy"] = ext_policy
         reconcile["extensions"] = ext_block
+    if exclude:
+        existing_exclude = ext_block.get("exclude")
+        if isinstance(existing_exclude, list):
+            for excluded in exclude:
+                if excluded not in existing_exclude:
+                    existing_exclude.append(excluded)
+        elif "exclude" not in ext_block:
+            ext_block["exclude"] = _str_seq(exclude)
+    if policy is not None and "policy" not in ext_block:
+        ext_block["policy"] = policy
 
 
 def _extend_packages_ref(profile: CommentedMap, refs: list[str]) -> None:
@@ -255,6 +281,22 @@ def _legacy_list(profile: CommentedMap, field: str, profile_name: str) -> list[s
             f"{profile_name!r} must be a list, got {type(raw).__name__} "
             f"({raw!r}). Fix the {field!r} value to a list and re-run "
             f"(nothing was changed)."
+        )
+    return _seq_of_str(raw)
+
+
+def _legacy_extension_list(
+    extensions: CommentedMap, field: str, cfg_path: Path, profile_name: str
+) -> list[str]:
+    """Return a legacy extension list or refuse a destructive scalar fold."""
+    raw = extensions.get(field)
+    qualified_field = f"extensions.{field}"
+    if raw is not None and not isinstance(raw, list):
+        raise ConfigError(
+            f"{cfg_path}: cannot fold legacy profile fields: {qualified_field!r} "
+            f"in profile {profile_name!r} must be a list, got "
+            f"{type(raw).__name__} ({raw!r}). Fix the {qualified_field!r} value "
+            "to a list and re-run (nothing was changed)."
         )
     return _seq_of_str(raw)
 

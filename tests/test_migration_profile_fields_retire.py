@@ -98,6 +98,39 @@ def test_forward_translates_four_fields(tmp_path: Path) -> None:
     assert "some-market" in data["marketplaces"]
 
 
+_CFG_MODERN_RECONCILE = """\
+schema_version: "5.0"
+minimum_version: "6.0"
+tracked_files: {}
+profiles:
+  default:
+    plugins_reconcile: additive
+    extensions:
+      exclude: [modern.extension, legacy.extension]
+      reconcile: additive
+    reconcile:
+      plugins:
+        policy: prune
+      extensions:
+        exclude: [modern.extension]
+        policy: prune
+"""
+
+
+def test_forward_merges_legacy_reconcile_into_modern_policy(tmp_path: Path) -> None:
+    roots = _write_cfg(tmp_path, _CFG_MODERN_RECONCILE)
+
+    ProfileFieldsRetireMigration().apply(roots=roots)
+
+    reconcile = _load(roots)["profiles"]["default"]["reconcile"]
+    assert reconcile["plugins"]["policy"] == "prune"
+    assert reconcile["extensions"]["policy"] == "prune"
+    assert list(reconcile["extensions"]["exclude"]) == [
+        "modern.extension",
+        "legacy.extension",
+    ]
+
+
 def test_round_trip_restores_legacy_config(tmp_path: Path) -> None:
     roots = _write_cfg(tmp_path)
     original = _load(roots)
@@ -310,6 +343,16 @@ profiles:
     claude_plugins: my-plugin
 """
 
+_CFG_SCALAR_EXTENSION_INCLUDE = """\
+schema_version: "5.0"
+minimum_version: "6.0"
+tracked_files: {}
+profiles:
+  default:
+    extensions:
+      include: ms-python.python
+"""
+
 
 @pytest.mark.parametrize(
     ("body", "field"),
@@ -331,6 +374,20 @@ def test_scalar_legacy_field_refuses_without_dropping(
     msg = str(exc.value)
     assert field in msg
     assert "default" in msg
+    assert roots.cfg_path.read_bytes() == before
+
+
+def test_scalar_extension_include_refuses_without_dropping(tmp_path: Path) -> None:
+    roots = _write_cfg(tmp_path, _CFG_SCALAR_EXTENSION_INCLUDE)
+    before = roots.cfg_path.read_bytes()
+
+    with pytest.raises(ConfigError) as excinfo:
+        ProfileFieldsRetireMigration().apply(roots=roots)
+
+    message = str(excinfo.value)
+    assert str(roots.cfg_path) in message
+    assert "default" in message
+    assert "extensions.include" in message
     assert roots.cfg_path.read_bytes() == before
 
 
