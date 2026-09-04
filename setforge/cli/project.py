@@ -318,7 +318,7 @@ def project_remove(
 ) -> None:
     """Restore the exact state that preceded one injection."""
     config = _resolve_config_arg(config)
-    plan = plan_removal(profile=profile, target=path, config_root=config.parent)
+    plan = plan_removal(profile=profile, target=path, config_path=config)
     _render_removal(plan)
     if dry_run:
         typer.echo("dry run: no changes applied")
@@ -326,5 +326,5 @@ def project_remove(
     if not _confirm("remove", yes=yes):
         typer.echo("aborted: no changes applied")
         return
-    apply_removal(plan, config_root=config.parent.resolve(strict=True))
+    apply_removal(plan)
     typer.echo("removal complete")

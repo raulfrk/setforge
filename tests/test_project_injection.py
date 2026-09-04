@@ -110,6 +110,92 @@ def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> No
     assert not (target / "AGENTS.md").exists()
 
 
+def test_reinjection_preserves_recorded_per_file_visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    command = [
+        "project",
+        "inject",
+        "demo",
+        str(target),
+        "--config",
+        str(config),
+        "--yes",
+    ]
+    assert CliRunner().invoke(app, command).exit_code == 0
+    exposed = CliRunner().invoke(
+        app,
+        ["project", "visibility", str(target), "AGENTS.md", "--tracked", "--yes"],
+    )
+    assert exposed.exit_code == 0, exposed.exception
+    assert read_claims(target)[3] == ()
+
+    reinjected = CliRunner().invoke(app, command)
+
+    assert reinjected.exit_code == 0, reinjected.exception
+    assert read_claims(target)[3] == ()
+    record = json.loads(manifest_path(target, "demo").read_text())
+    assert record["files"][0]["visibility"] == "tracked"
+
+
+def test_apply_freshness_reuses_selected_config_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    default_config = _config(tmp_path)
+    config = default_config.with_name("custom.yaml")
+    default_config.rename(config)
+    target = _git_repo(tmp_path / "target")
+
+    result = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.exception
+    record = json.loads(manifest_path(target, "demo").read_text())
+    assert record["config_path"] == str(config.resolve())
+
+
+def test_remove_rejects_different_config_manifest_in_same_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    alternate = config.with_name("alternate.yaml")
+    alternate.write_bytes(config.read_bytes())
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    state = manifest_path(target, "demo")
+    before = (target / "AGENTS.md").read_bytes(), state.read_bytes()
+    before_claims = OwnershipStore().list_claims()
+
+    removed = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "remove",
+            "demo",
+            str(target),
+            "--config",
+            str(alternate),
+            "--yes",
+        ],
+    )
+
+    assert removed.exit_code != 0
+    assert "different config manifest" in str(removed.exception)
+    assert ((target / "AGENTS.md").read_bytes(), state.read_bytes()) == before
+    assert OwnershipStore().list_claims() == before_claims
+
+
 def test_project_inject_and_remove_in_plain_directory(
     tmp_path: Path, monkeypatch
 ) -> None:
