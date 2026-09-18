@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-18
+
+### Fixed
+
+- GitHub release packages whose installed binary is removed outside setforge
+  are re-provisioned on the next run instead of being reported as already
+  present.
+
 ## [1.3.1] - 2026-09-07
 
 ### Fixed
