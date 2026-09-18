@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from ruamel.yaml import YAML
 
-from setforge import binaries, operations, transitions
+from setforge import binaries, local_config, operations, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -100,15 +100,9 @@ def _confinement_root() -> Path:
 
 
 def load_ignored_provisioned() -> frozenset[str]:
-    path = binaries.LOCAL_CONFIG_PATH
-    if not path.exists():
-        return frozenset()
-    try:
-        data = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
-    except Exception:
-        return frozenset()
-    if not isinstance(data, dict):
-        return frozenset()
+    # Strict read: a corrupt local.yaml must not silently empty the list of
+    # packages the user marked never-touch.
+    data = local_config.load_local_yaml(binaries.LOCAL_CONFIG_PATH)
     raw = data.get(_PROVISION_IGNORE_KEY)
     if not isinstance(raw, list):
         return frozenset()

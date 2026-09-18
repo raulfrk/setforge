@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from setforge import binaries as binaries_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
+from setforge.errors import ConfigError
 from setforge.local_config import LocalConfig
 from setforge.ownership import OwnershipStore
 from setforge.provision.ownership import (
@@ -811,6 +812,56 @@ def test_no_resolve_on_unlink_target_in_cleanup_delete_helpers() -> None:
                     f".resolve() on the unlink target forbidden in {node.name} "
                     f"at line {inner.lineno}"
                 )
+
+
+def test_load_ignored_provisioned_parses_a_valid_list() -> None:
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: ['go:foo']\n", encoding="utf-8"
+    )
+
+    assert cleanup_mod.load_ignored_provisioned() == frozenset({"go:foo"})
+
+
+def test_load_ignored_provisioned_is_empty_without_local_yaml() -> None:
+    assert not binaries_mod.LOCAL_CONFIG_PATH.exists()
+    assert cleanup_mod.load_ignored_provisioned() == frozenset()
+
+
+def test_load_ignored_provisioned_fails_closed_on_corrupt_local_yaml() -> None:
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: ['go:foo'\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError, match="malformed YAML"):
+        cleanup_mod.load_ignored_provisioned()
+
+
+def test_cli_cleanup_refuses_when_local_yaml_is_corrupt(
+    runner: CliRunner,
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipts = tmp_path / "receipts"
+    store = ReceiptStore(receipts)
+    binpath = _write_binary(confine_root, "gone")
+    store.record(_ident("gone"), version="1", checksum=None, path=binpath)
+    monkeypatch.setattr(cleanup_mod, "_receipt_store", lambda: ReceiptStore(receipts))
+    monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: ['go:foo'\n", encoding="utf-8"
+    )
+    cfg = _write_cleanup_yaml(tmp_path)
+
+    result = runner.invoke(app, ["cleanup", "--profile", "p", "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    message = str(result.exception) if result.exception else result.output
+    assert "malformed YAML" in message
+    assert binpath.exists()
 
 
 def test_local_yaml_shape_for_provision_ignore(

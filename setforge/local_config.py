@@ -17,11 +17,40 @@ import path.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
+
+from setforge.errors import ConfigError
 from setforge.source import CodexLocalOverlay, Source
 
-__all__ = ["LocalConfig"]
+__all__ = ["LocalConfig", "load_local_yaml"]
+
+
+def load_local_yaml(path: Path) -> dict[str, object]:
+    """Parse local.yaml strictly and return its top-level mapping.
+
+    A missing file is the documented empty default. YAML that will not parse,
+    or a top level that is not a mapping, raises ConfigError naming the file: a
+    caller reading a protection list must never mistake an unreadable file for
+    "nothing is protected". Unknown keys stay tolerated here; the schema-checked
+    shape lives in LocalConfig.
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    except YAMLError as exc:
+        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must contain a mapping at the top level")
+    return data
 
 
 class LocalConfig(BaseModel):
