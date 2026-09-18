@@ -481,12 +481,14 @@ def load_ignored_orphans() -> frozenset[str]:
 
     A corrupt local.yaml warns once on stderr and still yields an empty set:
     orphan detection is advisory, so a broken host-local file must not turn
-    every compare into a hard failure. The destructive paths, cleanup-orphans
-    --apply and --scan --apply, read the file strictly and refuse instead.
+    every compare into a hard failure. A CLI run may refuse earlier, in the
+    profile loader that reads the same file. The destructive paths,
+    cleanup-orphans --apply and --scan --apply, read the file strictly and
+    refuse instead.
     """
     try:
         data = local_config.load_local_yaml(LOCAL_CONFIG_PATH)
-    except ConfigError as exc:
+    except (ConfigError, OSError, ValueError, RecursionError) as exc:
         sys.stderr.write(
             f"warning: could not read orphan_ignore from {LOCAL_CONFIG_PATH} "
             f"({exc}); continuing with an empty ignore list\n"

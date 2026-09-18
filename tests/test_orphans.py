@@ -618,6 +618,12 @@ def test_apply_refuses_to_delete_when_local_yaml_is_corrupt(
     cfg_path = compare_mod.LOCAL_CONFIG_PATH
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("orphan_ignore: ['x'\n", encoding="utf-8")
+    # Point the other local.yaml readers at a clean file so this test exercises
+    # the ignore-list guard rather than the profile loader that reads first.
+    clean = tmp_path / "clean-local.yaml"
+    clean.write_text("orphan_ignore: []\n", encoding="utf-8")
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", clean)
+    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", clean)
 
     result = runner.invoke(
         app,
@@ -635,6 +641,49 @@ def test_apply_refuses_to_delete_when_local_yaml_is_corrupt(
     assert result.exit_code != 0
     assert isinstance(result.exception, ConfigError)
     assert "could not be read" in str(result.exception)
+    assert live_orphan.exists()
+
+
+def test_apply_refuses_when_orphan_ignore_is_not_a_list(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parseable but wrongly shaped ignore list must not delete anything."""
+    cfg = _write_minimal_yaml(tmp_path)
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan body\n", encoding="utf-8")
+    _write_meta_record(
+        isolated_state_dir / "transitions",
+        "20260518T120000000000Z-install-p",
+        [str(live_orphan)],
+    )
+    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("orphan_ignore: not-a-list\n", encoding="utf-8")
+    clean = tmp_path / "clean-local.yaml"
+    clean.write_text("orphan_ignore: []\n", encoding="utf-8")
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", clean)
+    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", clean)
+
+    result = runner.invoke(
+        app,
+        [
+            "cleanup-orphans",
+            "--profile",
+            "p",
+            "--config",
+            str(cfg),
+            "--apply",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ConfigError)
+    assert "must be a list" in str(result.exception)
     assert live_orphan.exists()
 
 

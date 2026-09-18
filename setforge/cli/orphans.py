@@ -538,11 +538,19 @@ def _require_readable_ignore_list() -> None:
     deleting with an empty list would re-arm every path the user protected.
     """
     try:
-        local_config.load_local_yaml(LOCAL_CONFIG_PATH)
+        data = local_config.load_local_yaml(LOCAL_CONFIG_PATH)
     except ConfigError as exc:
         raise ConfigError(
             f"refusing to delete orphans: {LOCAL_CONFIG_PATH} could not be read ({exc})"
         ) from exc
+    raw = data.get("orphan_ignore")
+    if raw is not None and not isinstance(raw, list):
+        # Parseable but the wrong shape is the same hazard as unparseable: the
+        # protection list would silently come back empty.
+        raise ConfigError(
+            f"refusing to delete orphans: orphan_ignore in {LOCAL_CONFIG_PATH} "
+            "must be a list"
+        )
 
 
 def _apply_orphan_cleanup(
