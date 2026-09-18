@@ -856,6 +856,31 @@ def test_load_ignored_provisioned_rejects_non_utf8_bytes() -> None:
         cleanup_mod.load_ignored_provisioned()
 
 
+def test_cli_cleanup_refuses_when_local_yaml_is_not_utf8(
+    runner: CliRunner,
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-UTF-8 bytes must reach the user as a typed error, not a traceback."""
+    receipts = tmp_path / "receipts"
+    store = ReceiptStore(receipts)
+    binpath = _write_binary(confine_root, "gone")
+    store.record(_ident("gone"), version="1", checksum=None, path=binpath)
+    monkeypatch.setattr(cleanup_mod, "_receipt_store", lambda: ReceiptStore(receipts))
+    monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_bytes(b"provision_ignore: [\xff]\n")
+    cfg = _write_cleanup_yaml(tmp_path)
+
+    result = runner.invoke(app, ["cleanup", "--profile", "p", "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    message = str(result.exception) if result.exception else result.output
+    assert "malformed YAML" in message
+    assert binpath.exists()
+
+
 def test_cli_cleanup_refuses_when_local_yaml_is_corrupt(
     runner: CliRunner,
     tmp_path: Path,

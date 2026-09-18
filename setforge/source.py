@@ -566,7 +566,7 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     yaml = YAML(typ="safe")
     try:
         data = yaml.load(path.read_text(encoding="utf-8"))
-    except YAMLError as exc:
+    except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
     if data is None:
         return _LocalSourceConfig()

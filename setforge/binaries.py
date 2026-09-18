@@ -158,7 +158,7 @@ def load_host_local_config() -> HostLocalConfig:
     yaml = YAML(typ="safe")
     try:
         data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
-    except YAMLError as exc:
+    except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}") from exc
     if data is None:
         return HostLocalConfig()
