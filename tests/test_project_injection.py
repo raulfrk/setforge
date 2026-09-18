@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.errors import SetforgeError
 from setforge.file_ownership import (
     decide_file,
     observe_file,
@@ -35,7 +36,46 @@ from setforge.ownership import (
     ownership_claim_to_json,
     resolve_owner_common_dir,
 )
-from setforge.project_injection import ProjectInjectionPlan, manifest_path
+from setforge.project_injection import (
+    ProjectInjectionPlan,
+    _is_tracked,
+    _verified_project_target,
+    manifest_path,
+)
+
+
+def _raise_missing_git(*_args: object, **_kwargs: object) -> None:
+    raise FileNotFoundError(2, "No such file or directory", "git")
+
+
+def _raise_git_timeout(*_args: object, **kwargs: object) -> None:
+    raise subprocess.TimeoutExpired(cmd="git", timeout=float(kwargs.get("timeout", 30)))  # type: ignore[arg-type]
+
+
+def test_verified_project_target_wraps_git_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing git binary and a hung git both surface as SetforgeError."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    monkeypatch.setattr("setforge.project_injection.subprocess.run", _raise_missing_git)
+    with pytest.raises(SetforgeError, match="project target"):
+        _verified_project_target(target)
+
+    monkeypatch.setattr("setforge.project_injection.subprocess.run", _raise_git_timeout)
+    with pytest.raises(SetforgeError, match="project target"):
+        _verified_project_target(target)
+
+
+def test_is_tracked_wraps_git_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "repo"
+    target.mkdir()
+    monkeypatch.setattr("setforge.project_injection.subprocess.run", _raise_missing_git)
+
+    with pytest.raises(SetforgeError, match="cannot classify Git destination"):
+        _is_tracked(target, Path("a/b.txt"))
 
 
 @pytest.fixture(autouse=True)

@@ -229,7 +229,13 @@ def _verified_project_target(
         )
     if not resolved.is_dir():
         raise SetforgeError(f"project target is not a directory: {resolved}")
-    result = _run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
+    try:
+        result = _run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # A missing git binary or a hung git must not escape as a raw traceback.
+        raise SetforgeError(
+            f"project target Git probe failed for {resolved}: {exc}"
+        ) from exc
     if result.returncode != 0:
         if (resolved / ".git").exists():
             detail = result.stderr.strip() or "unknown Git error"
@@ -239,11 +245,16 @@ def _verified_project_target(
 
 
 def _is_tracked(target: Path, relative: Path) -> bool:
-    result = _run_git(
-        target,
-        ["ls-files", "--error-unmatch", "--", relative.as_posix()],
-        check=False,
-    )
+    try:
+        result = _run_git(
+            target,
+            ["ls-files", "--error-unmatch", "--", relative.as_posix()],
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SetforgeError(
+            f"cannot classify Git destination {relative}: {exc}"
+        ) from exc
     if result.returncode == 0:
         return True
     if result.returncode == 1:
