@@ -89,7 +89,6 @@ _MANIFEST_LINE_RE: re.Pattern[str] = re.compile(
     r"^\s*[-*]\s*(?:renames?|adds?|removes?|breaking):.*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_VERSION_RE: re.Pattern[str] = re.compile(r"^\d+\.\d+\.\d+(?:[+\-.][\w.]+)?$")
 
 
 class UpgradeChoice(StrEnum):
@@ -279,10 +278,27 @@ def _is_major_bump(current: str, target: str) -> bool:
         return False
 
 
+def _canonical_version(to: str) -> str:
+    """Return the canonical PEP 440 spelling of a --to pin, or raise.
+
+    The previous hand-rolled X.Y.Z pattern rejected canonical prerelease
+    spellings such as 2.0.0rc1 while accidentally accepting 2.0.0-rc1.
+    Version is the same authority the rest of the resolution already uses, and
+    canonicalising means the post-upgrade verification compares against the
+    spelling uv itself reports.
+    """
+    try:
+        return str(Version(to))
+    except InvalidVersion as exc:
+        raise UpgradeError(
+            f"--to value {to!r} is not a valid version string: {exc}"
+        ) from exc
+
+
 def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
     """Resolve target version + load notes + assess schema → UpgradePlan."""
-    if to is not None and not _VERSION_RE.match(to):
-        raise UpgradeError(f"--to value {to!r} is not a valid X.Y.Z version string")
+    if to is not None:
+        to = _canonical_version(to)
     info: PyPIVersionInfo = fetch_latest_version(
         package=_PACKAGE_NAME,
         current_version=_CURRENT_VERSION,

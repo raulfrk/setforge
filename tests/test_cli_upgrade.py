@@ -293,8 +293,32 @@ def test_build_upgrade_plan_rejects_invalid_to(
     _patch_notes(monkeypatch, notes=None)
     from setforge.errors import UpgradeError
 
-    with pytest.raises(UpgradeError, match=r"not a valid X\.Y\.Z"):
+    with pytest.raises(UpgradeError, match="not a valid version"):
         _build_upgrade_plan(to="not-a-version", prerelease=False)
+
+
+def test_build_upgrade_plan_accepts_canonical_prerelease_spelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2.0.0rc1 is how pip and PyPI write a release candidate."""
+    _patch_pypi(monkeypatch, version="2.0.0rc1")
+    _patch_notes(monkeypatch, notes=None)
+
+    plan = _build_upgrade_plan(to="2.0.0rc1", prerelease=False)
+
+    assert plan.target_version == "2.0.0rc1"
+
+
+def test_build_upgrade_plan_canonicalises_a_non_canonical_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-canonical spelling resolves to what uv will install and report."""
+    _patch_pypi(monkeypatch, version="1.3.2")
+    _patch_notes(monkeypatch, notes=None)
+
+    plan = _build_upgrade_plan(to="1.3.2-1", prerelease=False)
+
+    assert plan.target_version == "1.3.2.post1"
 
 
 # ---------------------------------------------------------------------------
