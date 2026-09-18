@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-09-18
+
+### Fixed
+
+- `setforge upgrade` reports a successful upgrade as success again: the
+  post-upgrade check now understands the version format `uv tool list` actually
+  prints.
+
 ## [1.3.2] - 2026-09-18
 
 ### Fixed
