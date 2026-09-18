@@ -22,6 +22,7 @@ import difflib
 import json
 import os
 import stat
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -30,11 +31,11 @@ from typing import TYPE_CHECKING
 
 from jinja2 import Template
 from rich.table import Table
-from ruamel.yaml import YAML
 
 from setforge import (
     base_store,
     deploy,
+    local_config,
 )
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import (
@@ -474,25 +475,22 @@ def detect_orphans(
 def load_ignored_orphans() -> frozenset[str]:
     """Return the set of tracked_file IDs flagged "keep orphan".
 
-    Reads ``orphan_ignore: [<id>, ...]`` from
-    :data:`setforge.binaries.LOCAL_CONFIG_PATH`. Returns an empty
-    frozenset when the file is absent, the key is missing, or the
-    payload is malformed (best-effort posture — a corrupt local.yaml
-    must not turn orphan-detection into a hard failure on every
-    ``compare``).
+    Reads orphan_ignore from setforge.binaries.LOCAL_CONFIG_PATH. Returns an
+    empty frozenset when the file is absent, the key is missing, or the payload
+    is not a list.
+
+    A corrupt local.yaml warns once on stderr and still yields an empty set:
+    orphan detection is advisory, so a broken host-local file must not turn
+    every compare into a hard failure. The destructive paths, cleanup-orphans
+    --apply and --scan --apply, read the file strictly and refuse instead.
     """
-    if not LOCAL_CONFIG_PATH.exists():
-        return frozenset()
-    yaml = YAML(typ="safe")
     try:
-        data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        # Best-effort: a corrupt local.yaml must not turn orphan-detection
-        # into a hard failure on every ``compare``. The host-local config
-        # has its own validation path via :func:`load_host_local_config`
-        # for cases where strictness matters; orphan-ignore is advisory.
-        return frozenset()
-    if not isinstance(data, dict):
+        data = local_config.load_local_yaml(LOCAL_CONFIG_PATH)
+    except ConfigError as exc:
+        sys.stderr.write(
+            f"warning: could not read orphan_ignore from {LOCAL_CONFIG_PATH} "
+            f"({exc}); continuing with an empty ignore list\n"
+        )
         return frozenset()
     raw = data.get("orphan_ignore")
     if not isinstance(raw, list):

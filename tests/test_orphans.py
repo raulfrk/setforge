@@ -584,12 +584,58 @@ def test_load_ignored_orphans_parses_list(tmp_path: Path) -> None:
     assert load_ignored_orphans() == frozenset({"foo", "bar"})
 
 
-def test_load_ignored_orphans_corrupt_yaml_returns_empty(tmp_path: Path) -> None:
-    """Best-effort: malformed YAML must NOT crash compare."""
+def test_load_ignored_orphans_corrupt_yaml_warns_and_returns_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Advisory posture: malformed YAML warns, and must NOT crash compare."""
     cfg_path = compare_mod.LOCAL_CONFIG_PATH
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("not: [valid: yaml\n", encoding="utf-8")
+
     assert load_ignored_orphans() == frozenset()
+
+    captured = capsys.readouterr()
+    assert "could not read orphan_ignore" in captured.err
+    assert str(cfg_path) in captured.err
+
+
+def test_apply_refuses_to_delete_when_local_yaml_is_corrupt(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The destructive path must not run with an unreadable ignore list."""
+    cfg = _write_minimal_yaml(tmp_path)
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan body\n", encoding="utf-8")
+    _write_meta_record(
+        isolated_state_dir / "transitions",
+        "20260518T120000000000Z-install-p",
+        [str(live_orphan)],
+    )
+    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("orphan_ignore: ['x'\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "cleanup-orphans",
+            "--profile",
+            "p",
+            "--config",
+            str(cfg),
+            "--apply",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ConfigError)
+    assert "could not be read" in str(result.exception)
+    assert live_orphan.exists()
 
 
 # ---------------------------------------------------------------------------

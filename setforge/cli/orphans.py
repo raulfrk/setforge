@@ -35,7 +35,7 @@ from rich.console import Console
 from ruamel.yaml import YAML
 
 from setforge import compare as compare_mod
-from setforge import operations, orphan_scan, transitions
+from setforge import local_config, operations, orphan_scan, transitions
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -46,7 +46,11 @@ from setforge.cli import (
 from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
 from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config, resolve_effective_profile
-from setforge.errors import OrphanCleanupRequiresInteractive, SetforgeError
+from setforge.errors import (
+    ConfigError,
+    OrphanCleanupRequiresInteractive,
+    SetforgeError,
+)
 from setforge.locking import mutation_locks
 
 __all__ = [
@@ -527,6 +531,20 @@ def _orphan_path_identity(path: Path) -> str:
     return os.path.normcase(os.fspath(path.expanduser().absolute()))
 
 
+def _require_readable_ignore_list() -> None:
+    """Refuse destructive cleanup when local.yaml cannot be parsed.
+
+    Detection tolerates an unreadable ignore list so reporting still works, but
+    deleting with an empty list would re-arm every path the user protected.
+    """
+    try:
+        local_config.load_local_yaml(LOCAL_CONFIG_PATH)
+    except ConfigError as exc:
+        raise ConfigError(
+            f"refusing to delete orphans: {LOCAL_CONFIG_PATH} could not be read ({exc})"
+        ) from exc
+
+
 def _apply_orphan_cleanup(
     profile: str,
     config_path: Path,
@@ -543,6 +561,7 @@ def _apply_orphan_cleanup(
     Conversely, a newly discovered orphan is excluded because the user did not
     confirm it in the pre-prompt list.
     """
+    _require_readable_ignore_list()
     _, detection = _detect_orphans_live(profile, config_path)
     orphans = detection.orphans
     if not orphans:
@@ -669,6 +688,7 @@ def cleanup_orphans(
 
     if scan:
         if apply:
+            _require_readable_ignore_list()
             _execute_scan_cleanup(profile, resolved_config, console=console)
         else:
             _, result = _detect_scan_live(profile, resolved_config)
