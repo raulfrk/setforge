@@ -62,7 +62,19 @@ class GitHubReleaseProvisioner(Provisioner):
         self._receipts = receipts or ReceiptStore(default_receipt_root())
 
     def probe(self) -> set[Identity]:
-        return self._receipts.installed_for(self.type)
+        # A receipt records provenance, not presence: an install whose recorded
+        # destination was deleted out of band must be re-provisioned rather than
+        # reported as present. Mirrors LocalProvisioner.probe().
+        present: set[Identity] = set()
+        for identity in self._receipts.installed_for(self.type):
+            recorded = self._receipts.path_for(identity, provider=self.type)
+            try:
+                exists = recorded is not None and recorded.is_file()
+            except OSError:
+                exists = False
+            if exists:
+                present.add(identity)
+        return present
 
     def plan_fingerprint(
         self, items: Sequence[ProvisionItem], installed: set[Identity]

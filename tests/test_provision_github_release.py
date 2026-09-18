@@ -13,6 +13,7 @@ import pytest
 
 from setforge.config import GitHubReleasePackage
 from setforge.provision import github_release as gh
+from setforge.provision.driver import reconcile
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.receipt import ReceiptStore
 
@@ -122,6 +123,27 @@ def test_rerun_is_skip_and_writes_no_new_receipt(tmp_path: Path, monkeypatch) ->
     assert first.outcome is Outcome.OK
     second = prov.apply_one(_item(pkg))
     assert second.outcome is Outcome.SKIP
+
+
+def test_reconcile_reinstalls_when_receipted_destination_is_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    install_dir = tmp_path / "bin"
+    payload = b"#!/bin/sh\necho hi\n"
+    data = _tar_gz({"tool": payload})
+    pkg = _pkg(install_dir, checksum=_sha256(data))
+    prov = _provisioner(tmp_path, data, monkeypatch)
+    item = _item(pkg)
+
+    assert reconcile(prov, [item]).outcomes[0].outcome is Outcome.OK
+    destination = install_dir / "tool"
+    destination.unlink()
+
+    result = reconcile(prov, [item])
+
+    assert result.delta.installed == (item.identity,)
+    assert result.outcomes[0].outcome is Outcome.OK
+    assert destination.read_bytes() == payload
 
 
 def test_version_change_reinstalls_and_updates_receipt(
@@ -332,11 +354,14 @@ def test_probe_before_download_short_circuits(tmp_path: Path, monkeypatch) -> No
     data = _tar_gz({"tool": b"payload"})
     pkg = _pkg(install_dir, checksum=_sha256(data))
     receipts = ReceiptStore(tmp_path / "receipts")
+    destination = install_dir / "tool"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(b"already installed")
     receipts.record(
         Identity(key=pkg.repo, display=pkg.repo),
         version=pkg.tag,
         checksum=pkg.checksum,
-        path=install_dir / "tool",
+        path=destination,
     )
     prov = gh.GitHubReleaseProvisioner(receipts=receipts)
 
