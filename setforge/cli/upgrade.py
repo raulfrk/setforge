@@ -46,9 +46,14 @@ from rich.panel import Panel
 from setforge import __version__ as _CURRENT_VERSION
 from setforge._changelog_parser import parse_changelog
 from setforge._pypi_client import PyPIVersionInfo, fetch_latest_version
-from setforge.cli import app
+from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
-from setforge.errors import ConfirmRequiresInteractive, PyPIFetchError, UpgradeError
+from setforge.errors import (
+    ConfirmRequiresInteractive,
+    PyPIFetchError,
+    SetforgeError,
+    UpgradeError,
+)
 from setforge.locking import mutation_locks
 
 
@@ -512,19 +517,25 @@ def _verify_post_upgrade(*, expected: str) -> None:
         )
 
 
-def _run_migrate_check_subprocess() -> None:
-    """Best-effort ``uv run setforge migrate --check``; soft-fail when missing.
+def _run_migrate_check_subprocess(*, config: Path) -> None:
+    """Best-effort ``uv run setforge migrate --check --config <path>``.
 
     ``migrate`` is registered by a sibling component; when
     it has not landed yet the subprocess exits non-zero with a "no such
     command" message. Soft-fail in that case — print a hint and return.
+
+    The manifest is passed explicitly because the subprocess would otherwise
+    inherit the caller's working directory and validate whichever project the
+    user happened to be standing in, which proves nothing about the install
+    that was just upgraded.
     """
     uv = shutil.which("uv")
     if uv is None:
         typer.echo("uv missing — skipping migrate --check.")
         return
+    typer.echo(f"checking schema migrations against {config}")
     result = subprocess.run(
-        [uv, "run", _PACKAGE_NAME, "migrate", "--check"],
+        [uv, "run", _PACKAGE_NAME, "migrate", "--check", "--config", str(config)],
         capture_output=True,
         text=True,
         check=False,
@@ -608,6 +619,7 @@ def upgrade(
         "--prerelease",
         help="Include pre-release versions when picking the latest.",
     ),
+    config: Path = _CONFIG_OPTION,
 ) -> None:
     """Upgrade setforge: PyPI check + release notes + uv wrapper (mockup U)."""
     try:
@@ -645,6 +657,13 @@ def upgrade(
         _verify_post_upgrade(expected=plan.target_version)
 
     if choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK:
-        _run_migrate_check_subprocess()
+        try:
+            manifest = _resolve_config_arg(config)
+        except SetforgeError as exc:
+            # Best-effort: migrate --check is advisory, so an unresolvable
+            # manifest skips it instead of failing an upgrade that succeeded.
+            typer.echo(f"note: skipping migrate --check: {exc}")
+        else:
+            _run_migrate_check_subprocess(config=manifest)
 
     _print_completion_report(plan)

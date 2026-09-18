@@ -22,6 +22,7 @@ from setforge.cli.upgrade import (
     _build_upgrade_plan,
     _confirm_upgrade,
 )
+from setforge.errors import NoSourceConfigured
 
 # Captured from ``uv tool list`` on a real host (uv 0.9.x): each package prints as
 # ``<name> v<version>`` with its executables on ``- <name>`` lines beneath. The
@@ -401,7 +402,7 @@ def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_cli_upgrade_full_flow_with_migrate_check(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """When schema is DETECTED, --no-prompt auto-runs migrate --check."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
@@ -409,6 +410,8 @@ def test_cli_upgrade_full_flow_with_migrate_check(
         monkeypatch,
         notes="### Changed\n- schema_version bumped 1.0 → 1.1 (additive)\n",
     )
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -426,7 +429,15 @@ def test_cli_upgrade_full_flow_with_migrate_check(
             stderr="",
         ),
         subprocess.CompletedProcess(
-            args=["uv", "run", "setforge", "migrate", "--check"],
+            args=[
+                "uv",
+                "run",
+                "setforge",
+                "migrate",
+                "--check",
+                "--config",
+                str(cfg),
+            ],
             returncode=0,
             stdout="no migrations pending\n",
             stderr="",
@@ -434,21 +445,30 @@ def test_cli_upgrade_full_flow_with_migrate_check(
     ]
     calls = _patch_subprocess_run(monkeypatch, responses=responses)
     runner = CliRunner()
-    result = runner.invoke(app, ["upgrade", "--no-prompt"])
+    result = runner.invoke(app, ["upgrade", "--no-prompt", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
     assert len(calls) == 3
-    assert calls[2][1:] == ["run", "setforge", "migrate", "--check"]
+    assert calls[2][1:] == [
+        "run",
+        "setforge",
+        "migrate",
+        "--check",
+        "--config",
+        str(cfg),
+    ]
     assert "no migrations pending" in result.output
 
 
 def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(
         monkeypatch,
         notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
     )
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -471,9 +491,46 @@ def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
     ]
     _patch_subprocess_run(monkeypatch, responses=responses)
     runner = CliRunner()
-    result = runner.invoke(app, ["upgrade", "--no-prompt"])
+    result = runner.invoke(app, ["upgrade", "--no-prompt", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
     assert "is not available" in result.output
+
+
+def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unresolvable manifest must not fail an upgrade that succeeded."""
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    _patch_notes(
+        monkeypatch,
+        notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
+    )
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    def _raise(_config: object) -> Path:
+        raise NoSourceConfigured("no config source configured")
+
+    monkeypatch.setattr("setforge.cli.upgrade._resolve_config_arg", _raise)
+    responses = [
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
+            stderr="",
+        ),
+        subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"setforge v{_NEXT_VERSION}\n", stderr=""
+        ),
+    ]
+    calls = _patch_subprocess_run(monkeypatch, responses=responses)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["upgrade", "--no-prompt"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2  # no migrate subprocess was attempted
+    assert "skipping migrate --check" in result.output
 
 
 def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
