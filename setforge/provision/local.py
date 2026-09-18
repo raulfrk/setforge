@@ -67,6 +67,11 @@ class LocalProvisioner(Provisioner):
         self._tracked_root = tracked_root
 
     def probe(self) -> set[Identity]:
+        # A receipt proves provenance, not presence: a recorded destination that
+        # was deleted out of band must be re-provisioned. The legacy+typed pair
+        # installed_for() tolerates by design is deliberately not fatal here;
+        # entry_for() keeps that raise for callers that must read exactly one
+        # unambiguous receipt (migration and typed removal).
         present: set[Identity] = set()
         for identity in self._receipts.installed_for(self.type):
             recorded = self._receipts.path_for(identity, provider=self.type)
@@ -76,8 +81,6 @@ class LocalProvisioner(Provisioner):
                 exists = False
             if exists:
                 present.add(identity)
-            else:
-                self._receipts.entry_for(identity, self.type)
         return present
 
     def plan(
@@ -96,7 +99,8 @@ class LocalProvisioner(Provisioner):
             PackageObservation(
                 identity,
                 ObservationOrigin.CURRENT_RECEIPT
-                if (entry := self._receipts.entry_for(identity, self.type)) is not None
+                if (entry := self._receipts.preferred_entry(identity, self.type))
+                is not None
                 and entry.provider is not None
                 else ObservationOrigin.LEGACY_RECEIPT,
                 locator=str(entry.path) if entry is not None and entry.path else None,

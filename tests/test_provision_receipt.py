@@ -7,6 +7,7 @@ under the state dir.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -265,6 +266,84 @@ def test_typed_and_legacy_coexistence_fails_closed_for_every_provider(
         store.entry_for(identity, "cargo")
     with pytest.raises(CorruptReceiptError):
         store.entry_for(identity, "python")
+
+
+def test_preferred_entry_resolves_the_pair_in_favour_of_the_typed_receipt(
+    tmp_path: Path,
+) -> None:
+    """marker provisioners read the typed receipt instead of raising."""
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    installed = tmp_path / "bin" / "tool"
+    store.record(identity, version="legacy", checksum=None, path=installed)
+    store.record(
+        identity, version="typed", checksum="abc", path=installed, provider="local"
+    )
+
+    entry = store.preferred_entry(identity, "local")
+
+    assert entry is not None
+    assert entry.provider == "local"
+    assert entry.version == "typed"
+    assert entry.checksum == "abc"
+    assert entry.path == installed
+
+
+def test_preferred_entry_returns_legacy_when_no_typed_receipt_exists(
+    tmp_path: Path,
+) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="legacy", checksum=None)
+
+    entry = store.preferred_entry(identity, "local")
+
+    assert entry is not None
+    assert entry.provider is None
+    assert entry.version == "legacy"
+
+
+def test_preferred_entry_absent_returns_none(tmp_path: Path) -> None:
+    assert ReceiptStore(tmp_path).preferred_entry(_ident(), "local") is None
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", "{}", '{"key": "k"}', "{not json"])
+def test_preferred_entry_rejects_malformed_payloads(
+    tmp_path: Path, payload: str
+) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="typed", checksum=None, provider="local")
+    store.receipt_path(identity, provider="local").write_text(payload)
+
+    with pytest.raises(CorruptReceiptError):
+        store.preferred_entry(identity, "local")
+
+
+def test_preferred_entry_treats_a_directory_receipt_as_corrupt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.receipt_path(identity, provider=None).mkdir(parents=True)
+
+    with pytest.raises(CorruptReceiptError):
+        store.preferred_entry(identity, "local")
+
+
+def test_preferred_entry_treats_an_unreadable_receipt_as_corrupt(
+    tmp_path: Path,
+) -> None:
+    if os.geteuid() == 0:  # root reads anything, so the case cannot be provoked
+        pytest.skip("running as root: chmod cannot make a file unreadable")
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    store.record(identity, version="typed", checksum=None, provider="local")
+    receipt = store.receipt_path(identity, provider="local")
+    receipt.chmod(0o000)
+    try:
+        with pytest.raises(CorruptReceiptError):
+            store.preferred_entry(identity, "local")
+    finally:
+        receipt.chmod(0o600)
 
 
 def test_receipt_root_distinct_from_lockfile(tmp_path: Path, monkeypatch) -> None:

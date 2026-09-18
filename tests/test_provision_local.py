@@ -10,10 +10,14 @@ import pytest
 from pydantic import ValidationError
 
 from setforge.config import LocalPackage
-from setforge.errors import CorruptReceiptError
 from setforge.provision import local as loc
 from setforge.provision.driver import reconcile
-from setforge.provision.protocol import Identity, Outcome, ProvisionItem
+from setforge.provision.protocol import (
+    Identity,
+    ObservationOrigin,
+    Outcome,
+    ProvisionItem,
+)
 from setforge.provision.receipt import ReceiptStore
 
 
@@ -289,11 +293,13 @@ def test_receipted_directory_is_not_an_installed_local_binary(tmp_path: Path) ->
     assert item.identity not in prov.probe()
 
 
-def test_missing_typed_and_legacy_destinations_still_fail_closed(
-    tmp_path: Path,
-) -> None:
+def test_missing_typed_and_legacy_destinations_reprovision(tmp_path: Path) -> None:
+    """A tolerated legacy+typed pair self-heals instead of failing closed."""
     receipts = ReceiptStore(tmp_path / "receipts")
-    item = _item(_pkg(tmp_path / "out", path="bin/tool", extract=False))
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"content")
+    install_dir = tmp_path / "out"
+    item = _item(_pkg(install_dir, path="bin/tool", binary="tool", extract=False))
     receipts.record(
         item.identity,
         version=None,
@@ -307,10 +313,48 @@ def test_missing_typed_and_legacy_destinations_still_fail_closed(
         path=tmp_path / "missing-typed",
         provider="local",
     )
-    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tmp_path / "tracked")
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tracked)
 
-    with pytest.raises(CorruptReceiptError):
-        prov.probe()
+    assert item.identity not in prov.probe()
+
+    result = reconcile(prov, [item])
+
+    assert result.delta.installed == (item.identity,)
+    assert result.outcomes[0].outcome is Outcome.OK
+    assert (install_dir / "tool").read_bytes() == b"content"
+
+
+def test_present_destination_with_legacy_and_typed_receipts_reads_the_typed_one(
+    tmp_path: Path,
+) -> None:
+    """observations() must not raise for the pair probe() already tolerates."""
+    receipts = ReceiptStore(tmp_path / "receipts")
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"content")
+    install_dir = tmp_path / "out"
+    install_dir.mkdir()
+    destination = install_dir / "tool"
+    destination.write_bytes(b"existing")
+    item = _item(_pkg(install_dir, path="bin/tool", binary="tool", extract=False))
+    receipts.record(item.identity, version=None, checksum=None, path=destination)
+    receipts.record(
+        item.identity,
+        version=None,
+        checksum=None,
+        path=destination,
+        provider="local",
+    )
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tracked)
+
+    observations = prov.observations(prov.probe())
+
+    assert [(o.identity.key, o.origin) for o in observations] == [
+        (item.identity.key, ObservationOrigin.CURRENT_RECEIPT)
+    ]
+
+    result = reconcile(prov, [item])
+
+    assert result.outcomes[0].outcome is Outcome.OK
 
 
 def test_reproducible_from_committed_file(tmp_path: Path) -> None:

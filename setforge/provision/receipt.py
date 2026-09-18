@@ -15,9 +15,10 @@ any ``.lock`` filename.
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from setforge.atomicio import atomic_write_text, fsync_dir
 from setforge.errors import CorruptReceiptError
@@ -60,6 +61,34 @@ def _receipt_name(identity: Identity, provider: str | None = None) -> str:
     coordinate = identity.key if provider is None else f"{provider}\0{identity.key}"
     digest = hashlib.sha256(coordinate.encode("utf-8")).hexdigest()
     return f"{digest}{_RECEIPT_SUFFIX}"
+
+
+def _entry_from_payload(path: Path, data: Mapping[str, Any]) -> ReceiptEntry:
+    """Map one parsed receipt payload onto a ReceiptEntry."""
+    recorded = data.get("path")
+    return ReceiptEntry(
+        identity=Identity(key=data["key"], display=data["display"]),
+        path=Path(recorded) if recorded is not None else None,
+        corrupt_path=None,
+        provider=(
+            data.get("provider") if isinstance(data.get("provider"), str) else None
+        ),
+        version=(data.get("version") if isinstance(data.get("version"), str) else None),
+        checksum=(
+            data.get("checksum") if isinstance(data.get("checksum"), str) else None
+        ),
+        source_digest=(
+            data.get("source_digest")
+            if isinstance(data.get("source_digest"), str)
+            else None
+        ),
+        artifact=(
+            data.get("artifact") if isinstance(data.get("artifact"), str) else None
+        ),
+        platform=(
+            data.get("platform") if isinstance(data.get("platform"), str) else None
+        ),
+    )
 
 
 class ReceiptStore:
@@ -272,10 +301,37 @@ class ReceiptStore:
         recorded = data.get("source_digest")
         return recorded if isinstance(recorded, str) else None
 
+    def preferred_entry(self, identity: Identity, provider: str) -> ReceiptEntry | None:
+        """Return the receipt a marker-based provisioner should read.
+
+        Unlike entry_for(), an identity holding both a legacy and a typed
+        receipt is not an error here: the typed receipt wins, exactly as
+        path_for() resolves the same pair. Only that one file is read, so a
+        caller looping over identities stays linear instead of re-scanning the
+        store for each one. A malformed receipt still raises.
+        """
+        path = self._lookup_path(identity, provider)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            # Includes JSONDecodeError, IsADirectoryError and unreadable files:
+            # every one of them means "this receipt cannot be trusted".
+            raise CorruptReceiptError(path) from exc
+        if not isinstance(data, Mapping):
+            raise CorruptReceiptError(path)
+        try:
+            return _entry_from_payload(path, data)
+        except (KeyError, TypeError) as exc:
+            raise CorruptReceiptError(path) from exc
+
     def path_for(
         self, identity: Identity, *, provider: str | None = None
     ) -> Path | None:
         # Only source of an UNDECLARED item's install path (needed to unlink it).
+        # The pair tolerance matches preferred_entry(); neither raises for an
+        # identity holding both a legacy and a typed receipt.
         receipt = self._lookup_path(identity, provider)
         if not receipt.is_file():
             return None
