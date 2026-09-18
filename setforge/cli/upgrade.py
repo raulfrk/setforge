@@ -480,7 +480,13 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
 
 
 def _verify_post_upgrade(*, expected: str) -> None:
-    """Run ``uv tool list`` and assert ``setforge\\s+<expected>`` is present."""
+    """Run ``uv tool list`` and assert setforge reports the expected version.
+
+    Real ``uv tool list`` output prints the version with a leading ``v``
+    (``setforge v1.3.2``) and lists the package's executables on ``- `` lines
+    beneath, so that prefix is optional here. This matches
+    ``provision.python._parse_tools``, which strips the same prefix.
+    """
     uv = shutil.which("uv")
     if uv is None:
         raise UpgradeError("uv vanished from PATH between upgrade and verify")
@@ -496,7 +502,7 @@ def _verify_post_upgrade(*, expected: str) -> None:
             f"uv tool list failed: {result.stderr.strip() or result.stdout.strip()}"
         )
     pattern = re.compile(
-        rf"^{re.escape(_PACKAGE_NAME)}\s+{re.escape(expected)}\b",
+        rf"^{re.escape(_PACKAGE_NAME)}\s+v?{re.escape(expected)}(?=\s|$)",
         re.MULTILINE,
     )
     if pattern.search(result.stdout) is None:

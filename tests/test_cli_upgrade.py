@@ -23,6 +23,20 @@ from setforge.cli.upgrade import (
     _confirm_upgrade,
 )
 
+# Captured from ``uv tool list`` on a real host (uv 0.9.x): each package prints as
+# ``<name> v<version>`` with its executables on ``- <name>`` lines beneath. The
+# hand-written ``setforge <version>`` shape used by earlier mocks never occurs in
+# practice, which is how the post-upgrade check stayed green.
+_REAL_UV_TOOL_LIST = """\
+ansible-core v2.20.3
+- ansible
+- ansible-playbook
+molecule v26.4.0
+- molecule
+setforge v1.3.2
+- setforge
+"""
+
 # ---------------------------------------------------------------------------
 # Schema-change assessment
 # ---------------------------------------------------------------------------
@@ -371,7 +385,7 @@ def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout=f"setforge {_NEXT_VERSION}\n",
+            stdout=f"setforge v{_NEXT_VERSION}\n",
             stderr="",
         ),
     ]
@@ -408,7 +422,7 @@ def test_cli_upgrade_full_flow_with_migrate_check(
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout=f"setforge {_NEXT_VERSION}\n",
+            stdout=f"setforge v{_NEXT_VERSION}\n",
             stderr="",
         ),
         subprocess.CompletedProcess(
@@ -530,7 +544,7 @@ def test_cli_upgrade_post_verify_failure(
             stderr="",
         ),
         subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="setforge 0.2.0\n", stderr=""
+            args=[], returncode=0, stdout="setforge v0.2.0\n", stderr=""
         ),
     ]
     _patch_subprocess_run(monkeypatch, responses=responses)
@@ -539,6 +553,70 @@ def test_cli_upgrade_post_verify_failure(
     assert result.exit_code != 0
     excmsg = str(result.exception) if result.exception else result.output
     assert "post-upgrade verification" in excmsg
+
+
+def test_post_verify_accepts_real_uv_tool_list_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real ``uv tool list`` prints ``setforge vX.Y.Z``; a good upgrade passes."""
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(
+                args=["uv", "tool", "list"],
+                returncode=0,
+                stdout=_REAL_UV_TOOL_LIST,
+                stderr="",
+            )
+        ],
+    )
+
+    upgrade_mod._verify_post_upgrade(expected="1.3.2")
+
+
+def test_post_verify_rejects_mismatch_in_real_uv_tool_list_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(
+                args=["uv", "tool", "list"],
+                returncode=0,
+                stdout=_REAL_UV_TOOL_LIST,
+                stderr="",
+            )
+        ],
+    )
+
+    with pytest.raises(upgrade_mod.UpgradeError, match="post-upgrade verification"):
+        upgrade_mod._verify_post_upgrade(expected="0.2.0")
+
+
+@pytest.mark.parametrize(
+    "reported", ["1.3.2.dev1", "1.3.2.post1", "1.3.2+local", "0.2.0"]
+)
+def test_post_verify_rejects_non_identical_reported_version(
+    monkeypatch: pytest.MonkeyPatch, reported: str
+) -> None:
+    """Anything other than the exact target version fails, suffix variants included."""
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(
+                args=["uv", "tool", "list"],
+                returncode=0,
+                stdout=f"setforge v{reported}\n- setforge\n",
+                stderr="",
+            )
+        ],
+    )
+
+    with pytest.raises(upgrade_mod.UpgradeError, match="post-upgrade verification"):
+        upgrade_mod._verify_post_upgrade(expected="1.3.2")
 
 
 def test_cli_upgrade_pypi_fetch_error_exits_one(
@@ -607,7 +685,7 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout=f"setforge {_NEXT_VERSION}\n",
+            stdout=f"setforge v{_NEXT_VERSION}\n",
             stderr="",
         ),
     ]
