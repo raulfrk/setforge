@@ -42,7 +42,7 @@ def load_local_yaml(path: Path) -> dict[str, object]:
         return {}
     try:
         data = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
-    except YAMLError as exc:
+    except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
     except OSError as exc:
         raise ConfigError(f"cannot read {path}: {exc}") from exc

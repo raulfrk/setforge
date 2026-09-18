@@ -26,7 +26,7 @@ from setforge.config import (
     load_config,
     resolve_effective_profile,
 )
-from setforge.errors import SetforgeError
+from setforge.errors import ConfigError, SetforgeError
 from setforge.locking import mutation_locks
 from setforge.ownership import (
     Authority,
@@ -104,8 +104,14 @@ def load_ignored_provisioned() -> frozenset[str]:
     # packages the user marked never-touch.
     data = local_config.load_local_yaml(binaries.LOCAL_CONFIG_PATH)
     raw = data.get(_PROVISION_IGNORE_KEY)
-    if not isinstance(raw, list):
+    if raw is None:
         return frozenset()
+    if not isinstance(raw, list):
+        # A present-but-wrong shape is the same hazard as an unparseable file:
+        # silently ignoring it re-arms packages the user marked never-touch.
+        raise ConfigError(
+            f"{binaries.LOCAL_CONFIG_PATH}: {_PROVISION_IGNORE_KEY} must be a list"
+        )
     return frozenset(str(entry) for entry in raw)
 
 

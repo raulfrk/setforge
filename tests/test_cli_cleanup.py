@@ -838,6 +838,24 @@ def test_load_ignored_provisioned_fails_closed_on_corrupt_local_yaml() -> None:
         cleanup_mod.load_ignored_provisioned()
 
 
+def test_load_ignored_provisioned_rejects_a_non_list_value() -> None:
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: go:foo\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError, match="must be a list"):
+        cleanup_mod.load_ignored_provisioned()
+
+
+def test_load_ignored_provisioned_rejects_non_utf8_bytes() -> None:
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_bytes(b"provision_ignore: [\xff]\n")
+
+    with pytest.raises(ConfigError, match="malformed YAML"):
+        cleanup_mod.load_ignored_provisioned()
+
+
 def test_cli_cleanup_refuses_when_local_yaml_is_corrupt(
     runner: CliRunner,
     tmp_path: Path,
@@ -850,6 +868,12 @@ def test_cli_cleanup_refuses_when_local_yaml_is_corrupt(
     store.record(_ident("gone"), version="1", checksum=None, path=binpath)
     monkeypatch.setattr(cleanup_mod, "_receipt_store", lambda: ReceiptStore(receipts))
     monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
+    # Point the other readers of local.yaml at a clean file so this test
+    # exercises the ignore-list reader, not source.py's loader, which already
+    # rejected malformed YAML before this change.
+    monkeypatch.setattr(
+        "setforge.source.LOCAL_CONFIG_PATH", tmp_path / "clean-local.yaml"
+    )
     binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     binaries_mod.LOCAL_CONFIG_PATH.write_text(
         "provision_ignore: ['go:foo'\n", encoding="utf-8"
