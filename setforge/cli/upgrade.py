@@ -522,15 +522,24 @@ def _verify_post_upgrade(*, expected: str) -> None:
         raise UpgradeError(
             f"uv tool list failed: {result.stderr.strip() or result.stdout.strip()}"
         )
-    pattern = re.compile(
-        rf"^{re.escape(_PACKAGE_NAME)}\s+v?{re.escape(expected)}(?=\s|$)",
-        re.MULTILINE,
-    )
-    if pattern.search(result.stdout) is None:
+    pattern = re.compile(rf"^{re.escape(_PACKAGE_NAME)}\s+v?(\S+)\s*$", re.MULTILINE)
+    try:
+        wanted = Version(expected)
+    except InvalidVersion as exc:  # pragma: no cover - --to validation runs first
         raise UpgradeError(
-            f"post-upgrade verification: did not see "
-            f"`{_PACKAGE_NAME} {expected}` in `uv tool list` output"
-        )
+            f"post-upgrade verification: {expected!r} is not a version"
+        ) from exc
+    for match in pattern.finditer(result.stdout):
+        try:
+            installed = Version(match.group(1))
+        except InvalidVersion:
+            continue
+        if installed == wanted:
+            return
+    raise UpgradeError(
+        f"post-upgrade verification: did not see "
+        f"`{_PACKAGE_NAME} {expected}` in `uv tool list` output"
+    )
 
 
 def _run_migrate_check_subprocess(*, config: Path) -> None:
@@ -675,9 +684,11 @@ def upgrade(
     if choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK:
         try:
             manifest = _resolve_config_arg(config)
-        except SetforgeError as exc:
+        except (SetforgeError, ValueError, OSError) as exc:
             # Best-effort: migrate --check is advisory, so an unresolvable
             # manifest skips it instead of failing an upgrade that succeeded.
+            # ValidationError and UnicodeDecodeError from a broken host config
+            # are ValueErrors, and an unreadable file is an OSError.
             typer.echo(f"note: skipping migrate --check: {exc}")
         else:
             _run_migrate_check_subprocess(config=manifest)

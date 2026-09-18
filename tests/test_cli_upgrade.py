@@ -22,7 +22,6 @@ from setforge.cli.upgrade import (
     _build_upgrade_plan,
     _confirm_upgrade,
 )
-from setforge.errors import NoSourceConfigured
 
 # Captured from ``uv tool list`` on a real host (uv 0.9.x): each package prints as
 # ``<name> v<version>`` with its executables on ``- <name>`` lines beneath. The
@@ -521,7 +520,7 @@ def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
 
 
 def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An unresolvable manifest must not fail an upgrade that succeeded."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
@@ -531,11 +530,7 @@ def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
     )
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-
-    def _raise(_config: object) -> Path:
-        raise NoSourceConfigured("no config source configured")
-
-    monkeypatch.setattr("setforge.cli.upgrade._resolve_config_arg", _raise)
+    monkeypatch.chdir(tmp_path)  # no setforge.yaml in any source layer
     responses = [
         subprocess.CompletedProcess(
             args=[],
@@ -554,6 +549,41 @@ def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
 
     assert result.exit_code == 0, result.output
     assert len(calls) == 2  # no migrate subprocess was attempted
+    assert "skipping migrate --check" in result.output
+
+
+def test_cli_upgrade_skips_migrate_check_when_host_config_is_broken(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pydantic ValidationError must not fail an upgrade that succeeded."""
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    _patch_notes(
+        monkeypatch,
+        notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
+    )
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    broken = tmp_path / "local.yaml"
+    broken.write_text("source: {kind: bogus}\n", encoding="utf-8")
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", broken)
+    monkeypatch.chdir(tmp_path)
+    responses = [
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
+            stderr="",
+        ),
+        subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"setforge v{_NEXT_VERSION}\n", stderr=""
+        ),
+    ]
+    calls = _patch_subprocess_run(monkeypatch, responses=responses)
+
+    result = CliRunner().invoke(app, ["upgrade", "--no-prompt"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2
     assert "skipping migrate --check" in result.output
 
 
