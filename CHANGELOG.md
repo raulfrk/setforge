@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-09-19
+
+### Fixed
+
+- Cleanup refuses destructive orphan and provisioned-package actions when
+  `local.yaml` is unreadable, non-UTF-8, or carries wrongly shaped ignore
+  lists, instead of silently dropping the user's protections.
+- Local package reconciliation tolerates coexisting legacy and typed receipts,
+  prefers the typed record, and re-provisions missing destinations.
+- `setforge upgrade` validates PEP 440 targets, checks the explicitly selected
+  manifest after upgrading, and compares canonical versions without turning
+  host-configuration diagnostics into a failed upgrade.
+- Project target verification converts missing or timed-out Git invocations
+  into actionable SetForge errors instead of Python tracebacks.
+
 ## [1.3.3] - 2026-09-18
 
 ### Fixed
@@ -403,7 +418,10 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.4...HEAD
+[1.3.4]: https://github.com/raulfrk/setforge/compare/v1.3.3...v1.3.4
+[1.3.3]: https://github.com/raulfrk/setforge/compare/v1.3.2...v1.3.3
+[1.3.2]: https://github.com/raulfrk/setforge/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/raulfrk/setforge/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/raulfrk/setforge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/raulfrk/setforge/compare/v1.1.0...v1.2.0
