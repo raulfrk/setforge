@@ -4,7 +4,7 @@ Local config editing calls :func:`ensure_local_config_stub`; ``init`` owns its
 separate full bootstrap write directly. The helper uses ``open("x")`` plus
 ``FileExistsError`` suppression for an atomic create-or-skip.
 
-Three test surfaces here:
+Four test surfaces here:
 
 1. :func:`test_ensure_local_config_stub_is_toctou_safe` — 10 threads
    race on the same target path; assert only ONE process writes the
@@ -14,6 +14,8 @@ Three test surfaces here:
 3. :func:`test_isolate_home_fixture_redirects_path_home` — the
    ``_isolate_home`` autouse fixture monkeypatches ``Path.home``
    correctly, so ``Path.home()`` returns the per-test tmp dir.
+4. :func:`test_isolated_local_config_redirects_validate_binding` — the
+   local-config fixture redirects validate's import-time path binding.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from setforge import binaries
+from setforge.cli import validate as validate_cli
 
 
 def test_ensure_local_config_stub_is_toctou_safe(
@@ -87,3 +90,12 @@ def test_isolate_home_fixture_redirects_path_home() -> None:
     # home is NOT the real dev-host home.
     assert Path.home() != Path("/home/raul")
     assert "_autoisolated_home" in str(Path.home())
+
+
+def test_isolated_local_config_redirects_validate_binding(tmp_path: Path) -> None:
+    """Validation reads the per-test local.yaml, never the developer host file."""
+    assert tmp_path / "local.yaml" == validate_cli._LOCAL_CONFIG_PATH
+    assert (
+        Path.home() / ".config" / "setforge" / "local.yaml"
+        != validate_cli._LOCAL_CONFIG_PATH
+    )

@@ -5,8 +5,8 @@ Two autouse fixtures here form a defense-in-depth around the
 when CliRunner tests share ``$HOME``:
 
 - :func:`_isolated_local_config` redirects the ``LOCAL_CONFIG_PATH``
-  module constants in ``setforge.binaries`` and ``setforge.source`` to
-  a per-test ``tmp_path`` directory.
+  module constants and their import-site bindings to a per-test
+  ``tmp_path`` directory.
 - :func:`_isolate_home` monkeypatches ``$HOME`` and ``pathlib.Path.home``
   to a per-test tmp directory. Catches any production code path that
   resolves ``Path.home()`` lazily (completion, snapshots, transitions,
@@ -61,12 +61,13 @@ def _isolated_local_config(
 ) -> None:
     """Redirect ``LOCAL_CONFIG_PATH`` constants to a tmp path for every test.
 
-    Two modules carry the constant — ``binaries`` for the ``binaries:``
-    block and ``source`` for the ``source:`` block — and both must be
-    redirected so neither leaks to ``~/.config/setforge/local.yaml`` on
-    the dev host. Also resets ``source._cli_source`` to None so a test
-    that sets it directly via ``set_cli_source`` (without going through
-    a ``CliRunner`` callback) doesn't leak the value to later tests.
+    ``binaries`` and ``source`` carry the source constants, while modules
+    that imported those constants keep their own bindings. All reachable
+    bindings must be redirected so none leaks to
+    ``~/.config/setforge/local.yaml`` on the dev host. Also resets
+    ``source._cli_source`` to None so a test that sets it directly via
+    ``set_cli_source`` (without going through a ``CliRunner`` callback)
+    doesn't leak the value to later tests.
     """
     monkeypatch.setattr(
         "setforge.binaries.LOCAL_CONFIG_PATH",
@@ -87,6 +88,12 @@ def _isolated_local_config(
     # writes; redirect that re-export too.
     monkeypatch.setattr(
         "setforge.cli.orphans.LOCAL_CONFIG_PATH",
+        tmp_path / "local.yaml",
+    )
+    # validate imports LOCAL_CONFIG_PATH under a private module binding;
+    # redirect it so validate tests never read the dev host's local.yaml.
+    monkeypatch.setattr(
+        "setforge.cli.validate._LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )
     monkeypatch.setattr("setforge.source._cli_source", None)
