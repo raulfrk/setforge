@@ -9,7 +9,7 @@ Invocation:
 
     uv run python scripts/release_preflight.py
 
-Idempotent: each invocation starts from a clean dist/ + tmp UV_TOOL_DIR.
+Idempotent: each invocation starts from a clean dist/ + isolated tmp uv tool root.
 """
 
 from __future__ import annotations
@@ -65,6 +65,14 @@ def _read_version() -> str:
     return data["project"]["version"]
 
 
+def _isolated_tool_env(root: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "UV_TOOL_DIR": str(root / "tools"),
+        "UV_TOOL_BIN_DIR": str(root / "bin"),
+    }
+
+
 def step_1_uv_build(version: str) -> None:
     """Build sdist + wheel; verify both land in dist/."""
     shutil.rmtree("dist", ignore_errors=True)
@@ -83,28 +91,39 @@ def step_2_twine_check() -> None:
 
 
 def step_3_install_in_tmp(version: str) -> Path:
-    """Install the wheel in a tmp UV_TOOL_DIR; return the dir."""
-    tmp_tool_dir = Path(tempfile.mkdtemp(prefix="setforge-preflight-"))
-    atexit.register(shutil.rmtree, tmp_tool_dir, ignore_errors=True)
+    """Install the wheel under an isolated temporary uv tool root."""
+    tmp_root = Path(tempfile.mkdtemp(prefix="setforge-preflight-"))
+    atexit.register(shutil.rmtree, tmp_root, ignore_errors=True)
     wheel = f"./dist/setforge-{version}-py3-none-any.whl"
-    env = {**os.environ, "UV_TOOL_DIR": str(tmp_tool_dir)}
-    _run("uv", "tool", "install", wheel, env=env)
-    return tmp_tool_dir
+    _run("uv", "tool", "install", wheel, env=_isolated_tool_env(tmp_root))
+    return tmp_root
 
 
-def step_4_installed_version(tmp_tool_dir: Path, expected: str) -> None:
+def step_4_installed_version(tmp_root: Path, expected: str) -> None:
     """Verify `setforge --version` from the tmp install matches expected."""
-    env = {**os.environ, "UV_TOOL_DIR": str(tmp_tool_dir)}
-    result = _run("uv", "tool", "run", "setforge", "--version", env=env)
+    result = _run(
+        "uv",
+        "tool",
+        "run",
+        "setforge",
+        "--version",
+        env=_isolated_tool_env(tmp_root),
+    )
     actual = result.stdout.strip()
     if actual != expected:
         raise AssertionError(f"version mismatch: {actual!r} != {expected!r}")
 
 
-def step_5_installed_help(tmp_tool_dir: Path) -> None:
+def step_5_installed_help(tmp_root: Path) -> None:
     """Verify all 8 commands appear in `setforge --help` from the tmp install."""
-    env = {**os.environ, "UV_TOOL_DIR": str(tmp_tool_dir)}
-    result = _run("uv", "tool", "run", "setforge", "--help", env=env)
+    result = _run(
+        "uv",
+        "tool",
+        "run",
+        "setforge",
+        "--help",
+        env=_isolated_tool_env(tmp_root),
+    )
     missing = [c for c in _REQUIRED_COMMANDS if c not in result.stdout]
     if missing:
         raise AssertionError(f"--help missing commands: {missing}")
@@ -174,11 +193,11 @@ def main() -> int:
     if not _run_step("2: twine check", step_2_twine_check):
         return 1
 
-    # Step 3 yields tmp_tool_dir for steps 4-5 to share; run inline so the
+    # Step 3 yields tmp_root for steps 4-5 to share; run inline so the
     # closures below can capture it.
     print("  • 3: install in tmp UV_TOOL_DIR", end=" ", flush=True)
     try:
-        tmp_tool_dir = step_3_install_in_tmp(version)
+        tmp_root = step_3_install_in_tmp(version)
     except subprocess.CalledProcessError as exc:
         print(f"FAILED: {exc}")
         if exc.stderr:
@@ -194,11 +213,11 @@ def main() -> int:
     remaining: list[tuple[str, Callable[[], None]]] = [
         (
             "4: installed --version",
-            lambda: step_4_installed_version(tmp_tool_dir, version),
+            lambda: step_4_installed_version(tmp_root, version),
         ),
         (
             "5: installed --help (8 commands present)",
-            lambda: step_5_installed_help(tmp_tool_dir),
+            lambda: step_5_installed_help(tmp_root),
         ),
         (
             "6: import setforge; assert __version__",
