@@ -519,6 +519,27 @@ def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
     assert "is not available" in result.output
 
 
+def test_migrate_check_timeout_raises_upgrade_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+
+    def time_out(*_args: Any, **_kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(
+            cmd=["uv", "run", "setforge", "migrate", "--check"], timeout=60
+        )
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", time_out)
+
+    with pytest.raises(
+        upgrade_mod.UpgradeError,
+        match=r"setforge migrate --check.*timed out after 60 seconds",
+    ) as excinfo:
+        upgrade_mod._run_migrate_check_subprocess(config=tmp_path / "setforge.yaml")
+
+    assert isinstance(excinfo.value.__cause__, subprocess.TimeoutExpired)
+
+
 def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -706,6 +727,25 @@ def test_post_verify_rejects_mismatch_in_real_uv_tool_list_output(
         upgrade_mod._verify_post_upgrade(expected="0.2.0")
 
 
+def test_post_verify_timeout_raises_upgrade_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+
+    def time_out(*_args: Any, **_kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd=["uv", "tool", "list"], timeout=30)
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", time_out)
+
+    with pytest.raises(
+        upgrade_mod.UpgradeError,
+        match=r"post-upgrade verification .* timed out after 30 seconds",
+    ) as excinfo:
+        upgrade_mod._verify_post_upgrade(expected="1.3.2")
+
+    assert isinstance(excinfo.value.__cause__, subprocess.TimeoutExpired)
+
+
 @pytest.mark.parametrize(
     "reported", ["1.3.2.dev1", "1.3.2.post1", "1.3.2+local", "0.2.0"]
 )
@@ -878,6 +918,27 @@ def test_unpinned_upgrade_keeps_tool_upgrade(
     )
     upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=False)
     assert calls[0][1:] == ["tool", "upgrade", "setforge"]
+
+
+def test_uv_tool_upgrade_timeout_raises_upgrade_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+
+    def time_out(*_args: Any, **_kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(
+            cmd=["uv", "tool", "upgrade", "setforge"], timeout=120
+        )
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", time_out)
+
+    with pytest.raises(
+        upgrade_mod.UpgradeError,
+        match=r"uv tool upgrade timed out after 120 seconds",
+    ) as excinfo:
+        upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=False)
+
+    assert isinstance(excinfo.value.__cause__, subprocess.TimeoutExpired)
 
 
 def test_pinned_failure_message_names_install_not_upgrade(

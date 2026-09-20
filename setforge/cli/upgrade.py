@@ -484,13 +484,16 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
         ]
     else:
         cmd = [uv, "tool", "upgrade", _PACKAGE_NAME]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpgradeError(f"uv tool {cmd[2]} timed out after 120 seconds") from exc
     if result.returncode != 0:
         raise UpgradeError(
             f"uv tool {cmd[2]} failed: {result.stderr.strip() or result.stdout.strip()}"
@@ -511,13 +514,18 @@ def _verify_post_upgrade(*, expected: str) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise UpgradeError("uv vanished from PATH between upgrade and verify")
-    result = subprocess.run(
-        [uv, "tool", "list"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            [uv, "tool", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpgradeError(
+            "post-upgrade verification (`uv tool list`) timed out after 30 seconds"
+        ) from exc
     if result.returncode != 0:
         raise UpgradeError(
             f"uv tool list failed: {result.stderr.strip() or result.stdout.strip()}"
@@ -559,13 +567,26 @@ def _run_migrate_check_subprocess(*, config: Path) -> None:
         typer.echo("uv missing — skipping migrate --check.")
         return
     typer.echo(f"checking schema migrations against {config}")
-    result = subprocess.run(
-        [uv, "run", _PACKAGE_NAME, "migrate", "--check", "--config", str(config)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            [
+                uv,
+                "run",
+                _PACKAGE_NAME,
+                "migrate",
+                "--check",
+                "--config",
+                str(config),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpgradeError(
+            "`setforge migrate --check` timed out after 60 seconds"
+        ) from exc
     if result.returncode == 0:
         typer.echo(result.stdout)
         return
