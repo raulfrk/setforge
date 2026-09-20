@@ -34,6 +34,7 @@ class FakeMcpCli:
 
     ``registry`` maps name -> (command_tokens, scope) and models the live
     server state. ``add``/``remove`` mutate it; ``get --json`` reads it.
+    ``get_payloads`` overrides the generated JSON response for a server.
     ``add_errors`` / ``remove_errors`` map a name -> stderr string to raise
     a :class:`subprocess.CalledProcessError` for that op.
     """
@@ -42,10 +43,12 @@ class FakeMcpCli:
         self,
         *,
         registry: dict[str, tuple[list[str], str]] | None = None,
+        get_payloads: dict[str, object] | None = None,
         add_errors: dict[str, str] | None = None,
         remove_errors: dict[str, str] | None = None,
     ) -> None:
         self.registry = registry or {}
+        self.get_payloads = get_payloads or {}
         self.add_errors = add_errors or {}
         self.remove_errors = remove_errors or {}
         self.calls: list[list[str]] = []
@@ -60,12 +63,15 @@ class FakeMcpCli:
                 raise subprocess.CalledProcessError(
                     1, argv, stderr="No MCP server found"
                 )
-            command, scope = self.registry[name]
-            payload = {
-                "command": command[0],
-                "args": command[1:],
-                "scope": scope,
-            }
+            if name in self.get_payloads:
+                payload = self.get_payloads[name]
+            else:
+                command, scope = self.registry[name]
+                payload = {
+                    "command": command[0],
+                    "args": command[1:],
+                    "scope": scope,
+                }
             return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload))
         if verb == "add":
             # [claude, mcp, add, --scope, <scope>, <name>, --, *tokens]
@@ -167,6 +173,49 @@ profiles:
     cfg = load_config(path)
     assert cfg.mcp_servers["serena"].command == ["serena", "start-mcp-server"]
     assert cfg.mcp_servers["serena"].scope == "user"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"command": "serena", "args": ["start", 9], "scope": "user"},
+        {"command": "serena", "args": ["start"], "scope": "workspace"},
+    ],
+    ids=["non-string-arg", "unsupported-scope"],
+)
+def test_mcp_get_command_rejects_malformed_inventory(fake_mcp, payload: object) -> None:
+    fake_mcp(
+        registry={"serena": (["serena", "start"], "user")},
+        get_payloads={"serena": payload},
+    )
+
+    assert mcp.mcp_get_command("serena") is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"command": "old", "args": [9], "scope": "user"},
+        {"command": "old", "args": [], "scope": "workspace"},
+    ],
+    ids=["non-string-arg", "unsupported-scope"],
+)
+def test_converge_does_not_remove_for_malformed_inventory(
+    fake_mcp, payload: object
+) -> None:
+    cli = fake_mcp(
+        registry={"serena": (["old"], "user")},
+        get_payloads={"serena": payload},
+        add_errors={"serena": "already exists"},
+    )
+    cfg = _cfg({"serena": McpServerRef(command=["new"])})
+
+    report = mcp.reconcile(cfg, _resolved(["serena"]))
+
+    assert report.updated == []
+    assert report.failed == []
+    assert [call[2] for call in cli.calls].count("remove") == 0
+    assert cli.registry["serena"] == (["old"], "user")
 
 
 # ---------------------------------------------------------------------------

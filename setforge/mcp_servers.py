@@ -248,10 +248,18 @@ def mcp_get_command(name: str) -> tuple[list[str], str] | None:
     command = payload.get("command")
     args = payload.get("args", [])
     scope = payload.get("scope", "user")
-    if not isinstance(command, str) or not isinstance(args, list):
+    if (
+        not isinstance(command, str)
+        or not isinstance(args, list)
+        or not all(isinstance(arg, str) for arg in args)
+        or not isinstance(scope, str)
+    ):
         return None
-    tokens = [command, *(str(a) for a in args)]
-    return tokens, str(scope)
+    try:
+        McpScope(scope)
+    except ValueError:
+        return None
+    return [command, *args], scope
 
 
 def mcp_add(name: str, ref: McpServerRef) -> None:
