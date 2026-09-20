@@ -190,6 +190,39 @@ def test_bundle_declared_package_is_not_offered_for_cleanup(
     assert items == []
 
 
+def test_typed_ignore_is_not_a_synthetic_declared_identity(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "version: 1\ntracked_files: {}\nprofiles:\n  p: {}\n",
+        encoding="utf-8",
+    )
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: ['go:foo']\n", encoding="utf-8"
+    )
+    store = ReceiptStore(tmp_path / "receipts")
+    store.record(
+        _ident("foo"),
+        version="1",
+        checksum=None,
+        path=_write_binary(confine_root, "foo"),
+        provider="go",
+    )
+
+    declared = cleanup_mod._resolve_declared(config, "p")
+    items = cleanup_mod.discover_cleanup_items(
+        store,
+        declared=declared,
+        console=Console(),
+        ignored=cleanup_mod.load_ignored_provisioned(),
+    )
+
+    assert declared == set()
+    assert items == []
+
+
 def test_discovery_includes_owned_ambient_package_without_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

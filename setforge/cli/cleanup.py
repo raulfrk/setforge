@@ -343,9 +343,7 @@ def _resolve_declared(config_path: Path, profile: str) -> set[Identity]:
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    declared = {item.identity for item in _declared_package_items(cfg, resolved)}
-    declared |= {Identity(key=key, display=key) for key in load_ignored_provisioned()}
-    return declared
+    return {item.identity for item in _declared_package_items(cfg, resolved)}
 
 
 def _resolve_declared_resources(
