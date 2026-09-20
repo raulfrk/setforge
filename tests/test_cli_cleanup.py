@@ -434,6 +434,22 @@ def test_discovery_skips_corrupt_receipt_not_fatal(
     assert "corrupt" in err.lower()
 
 
+def test_discovery_skips_directory_receipt_not_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = ReceiptStore(tmp_path / "receipts")
+    identity = _ident("corrupt")
+    receipt = store.receipt_path(identity, provider="cargo")
+    receipt.mkdir(parents=True)
+
+    items = cleanup_mod.discover_cleanup_items(
+        store, declared=set(), console=Console(stderr=True)
+    )
+
+    assert items == []
+    assert "corrupt" in capsys.readouterr().err.lower()
+
+
 def test_delete_removes_binary_and_receipt_under_confinement(
     tmp_path: Path, confine_root: Path
 ) -> None:

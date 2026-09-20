@@ -76,6 +76,21 @@ def test_installed_raises_on_missing_key(tmp_path: Path) -> None:
     assert str(bad) in str(excinfo.value)
 
 
+def test_iter_receipts_treats_a_directory_receipt_as_corrupt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    receipt = store.receipt_path(identity, provider="cargo")
+    receipt.mkdir(parents=True)
+
+    entries = list(store.iter_receipts())
+
+    assert len(entries) == 1
+    assert entries[0].identity is None
+    assert entries[0].path is None
+    assert entries[0].corrupt_path == receipt
+    assert store.installed_for("cargo") == set()
+
+
 def test_installed_ignores_stray_tmp_file(tmp_path: Path) -> None:
     store = ReceiptStore(tmp_path)
     store.record(_ident(), version="1", checksum=None)

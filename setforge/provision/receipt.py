@@ -218,7 +218,7 @@ class ReceiptStore:
             except FileNotFoundError:
                 # Unlinked between glob enumeration and read: not corrupt, just gone.
                 continue
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except (OSError, json.JSONDecodeError, KeyError, TypeError):
                 yield ReceiptEntry(identity=None, path=None, corrupt_path=path)
                 continue
             bin_path = Path(recorded) if recorded is not None else None
