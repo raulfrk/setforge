@@ -1,14 +1,12 @@
 """Stdlib PyPI JSON-API client for ``setforge upgrade``.
 
-Single public entry point: :func:`fetch_latest_version`. Talks to
-``https://pypi.org/pypi/<package>/json`` via ``urllib.request`` (stdlib
-— no new runtime dep) and returns a :class:`PyPIVersionInfo` for the
-highest non-prerelease, non-yanked version (or includes prereleases
-when the caller opts in).
+The client can select the latest installable release or fetch metadata for an
+exact release. It talks to PyPI via ``urllib.request`` (stdlib — no new runtime
+dependency) and returns :class:`PyPIVersionInfo` values for both operations.
 
-Sends a ``User-Agent`` header identifying setforge + version + repo
-(PyPI rejects default ``Python-urllib/...`` UA in some contexts), and
-caches the response body keyed by ``ETag`` at
+The latest-release request sends a ``User-Agent`` header identifying setforge +
+version + repo (PyPI rejects default ``Python-urllib/...`` UA in some contexts),
+and caches the response body keyed by ``ETag`` at
 ``<cache_dir>/pypi-etag-<package>.json``. A 304 reply reuses the
 cached body verbatim — keeps the call cheap on the common-case "user
 ran ``setforge upgrade --check`` an hour ago" path.
@@ -50,7 +48,7 @@ class PyPIVersionInfo:
     * ``is_prerelease`` — ``True`` when the version is a pre-release
       (``a``/``b``/``rc``/``dev``); the caller surfaces this in the
       release-notes panel.
-    * ``yanked`` — ``True`` when PyPI's ``info.yanked`` flag is set.
+    * ``yanked`` — ``True`` when the exact-release response marks it yanked.
     * ``yanked_reason`` — PyPI's ``info.yanked_reason`` (``None`` when
       the release was not yanked or PyPI returned no reason).
     """
@@ -242,7 +240,6 @@ def fetch_latest_version(
         raise PyPIFetchError(f"no non-yanked release found for {package} on PyPI")
     if not used_304 and new_etag is not None:
         _write_etag_cache(cache_path, etag=new_etag, body=body)
-    yanked, yanked_reason = _yanked_state(body=body, selected=selected)
     try:
         is_prerelease = Version(selected).is_prerelease
     except InvalidVersion:
@@ -250,28 +247,50 @@ def fetch_latest_version(
     return PyPIVersionInfo(
         version=selected,
         is_prerelease=is_prerelease,
+        yanked=False,
+        yanked_reason=None,
+    )
+
+
+def fetch_version_info(
+    *,
+    package: str,
+    version: str,
+    current_version: str,
+    timeout: tuple[float, float] = (5.0, 10.0),
+) -> PyPIVersionInfo:
+    """Fetch authoritative metadata for one exact PyPI release."""
+    base = os.environ.get(_PYPI_BASE_ENV, _DEFAULT_PYPI_BASE).rstrip("/")
+    url = f"{base}/{package}/{version}/json"
+    body, _, _ = _fetch_json(
+        url=url,
+        user_agent=_build_user_agent(current_version=current_version),
+        timeout=timeout,
+        cached_etag=None,
+    )
+    info = body.get("info")
+    if not isinstance(info, dict):
+        raise PyPIFetchError(f"PyPI body for {package} {version} missing 'info' map")
+    reported = info.get("version")
+    if not isinstance(reported, str):
+        raise PyPIFetchError(f"PyPI body for {package} {version} missing info.version")
+    try:
+        requested_version = Version(version)
+        reported_version = Version(reported)
+    except InvalidVersion as exc:
+        raise PyPIFetchError(
+            f"PyPI returned invalid version metadata for {package} {version}: {exc}"
+        ) from exc
+    if reported_version != requested_version:
+        raise PyPIFetchError(
+            f"PyPI returned version {reported!r} for requested {package} {version}"
+        )
+    yanked = info.get("yanked", False) is True
+    raw_reason = info.get("yanked_reason")
+    yanked_reason = raw_reason if yanked and isinstance(raw_reason, str) else None
+    return PyPIVersionInfo(
+        version=str(reported_version),
+        is_prerelease=reported_version.is_prerelease,
         yanked=yanked,
         yanked_reason=yanked_reason,
     )
-
-
-def _yanked_state(*, body: dict[str, Any], selected: str) -> tuple[bool, str | None]:
-    """Compute ``(yanked, yanked_reason)`` for ``selected`` from PyPI body."""
-    releases_raw = body.get("releases", {})
-    files_for_selected = (
-        releases_raw.get(selected, []) if isinstance(releases_raw, dict) else []
-    )
-    yanked = bool(files_for_selected) and all(
-        bool(f.get("yanked")) for f in files_for_selected
-    )
-    if not yanked:
-        return False, None
-    for f in files_for_selected:
-        reason = f.get("yanked_reason")
-        if isinstance(reason, str) and reason:
-            return True, reason
-    info = body.get("info") if isinstance(body.get("info"), dict) else {}
-    info_reason = info.get("yanked_reason") if isinstance(info, dict) else None
-    if isinstance(info_reason, str) and info_reason:
-        return True, info_reason
-    return True, None

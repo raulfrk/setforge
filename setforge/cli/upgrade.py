@@ -45,7 +45,11 @@ from rich.panel import Panel
 
 from setforge import __version__ as _CURRENT_VERSION
 from setforge._changelog_parser import parse_changelog
-from setforge._pypi_client import PyPIVersionInfo, fetch_latest_version
+from setforge._pypi_client import (
+    PyPIVersionInfo,
+    fetch_latest_version,
+    fetch_version_info,
+)
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
 from setforge.errors import (
@@ -304,7 +308,16 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
         current_version=_CURRENT_VERSION,
         include_prereleases=prerelease or (to is not None and _looks_prerelease(to)),
     )
-    target = to if to is not None else info.version
+    target_info = (
+        fetch_version_info(
+            package=_PACKAGE_NAME,
+            version=to,
+            current_version=_CURRENT_VERSION,
+        )
+        if to is not None
+        else info
+    )
+    target = target_info.version
     notes = _load_release_notes(target)
     is_major = _is_major_bump(_CURRENT_VERSION, target)
     breaking_flag = notes is not None and "BREAKING" in notes
@@ -325,8 +338,8 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
         is_major_bump=is_major,
         breaking_changes_flagged=breaking_flag,
         schema_change=schema,
-        yanked=info.yanked,
-        yanked_reason=info.yanked_reason,
+        yanked=target_info.yanked,
+        yanked_reason=target_info.yanked_reason,
         is_prerelease=info.is_prerelease,
         extra_warnings=tuple(warnings),
     )

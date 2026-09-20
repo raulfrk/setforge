@@ -15,6 +15,7 @@ from setforge import _pypi_client
 from setforge._pypi_client import (
     PyPIVersionInfo,
     fetch_latest_version,
+    fetch_version_info,
 )
 from setforge.errors import PyPIFetchError
 
@@ -47,6 +48,7 @@ def _pypi_body(
     *,
     info_version: str = "0.3.0",
     releases: dict[str, list[dict]] | None = None,
+    yanked: bool = False,
     yanked_reason: str | None = None,
 ) -> dict[str, Any]:
     releases = releases or {
@@ -54,7 +56,7 @@ def _pypi_body(
         "0.2.0": [{"yanked": False}],
         "0.3.0": [{"yanked": False}],
     }
-    info: dict[str, Any] = {"version": info_version}
+    info: dict[str, Any] = {"version": info_version, "yanked": yanked}
     if yanked_reason is not None:
         info["yanked_reason"] = yanked_reason
     return {"info": info, "releases": releases}
@@ -172,6 +174,46 @@ def test_fetch_latest_version_skips_yanked_releases(
         package="setforge", current_version="0.1.0", cache_dir=tmp_path
     )
     assert info.version == "0.2.0"
+    assert info.yanked is False
+
+
+def test_fetch_version_info_uses_release_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _pypi_body(
+        info_version="2.0.0rc1",
+        yanked=True,
+        yanked_reason="broken release",
+    )
+
+    def factory(_request: Any) -> _FakeResponse:
+        return _FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
+
+    calls = _patch_urlopen(monkeypatch, response_factory=factory)
+    info = fetch_version_info(
+        package="setforge", version="2.0.0rc1", current_version="1.3.4"
+    )
+
+    assert calls[0][0].endswith("/pypi/setforge/2.0.0rc1/json")
+    assert info == PyPIVersionInfo(
+        version="2.0.0rc1",
+        is_prerelease=True,
+        yanked=True,
+        yanked_reason="broken release",
+    )
+
+
+def test_fetch_version_info_rejects_mismatched_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _pypi_body(info_version="2.0.1")
+
+    def factory(_request: Any) -> _FakeResponse:
+        return _FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
+
+    _patch_urlopen(monkeypatch, response_factory=factory)
+    with pytest.raises(PyPIFetchError, match="returned version"):
+        fetch_version_info(package="setforge", version="2.0.0", current_version="1.3.4")
 
 
 def test_fetch_latest_version_sends_user_agent_and_etag(

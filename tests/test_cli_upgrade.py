@@ -234,6 +234,16 @@ def _patch_pypi(
 
     monkeypatch.setattr("setforge.cli.upgrade.fetch_latest_version", fake_fetch)
 
+    def fake_fetch_version(*, version: str, **_kwargs: Any) -> PyPIVersionInfo:
+        return PyPIVersionInfo(
+            version=version,
+            is_prerelease=is_prerelease,
+            yanked=yanked,
+            yanked_reason=None,
+        )
+
+    monkeypatch.setattr("setforge.cli.upgrade.fetch_version_info", fake_fetch_version)
+
 
 def _newer_version() -> str:
     """Return a version string strictly greater than the installed one.
@@ -283,6 +293,28 @@ def test_build_upgrade_plan_to_pins_target(
     plan = _build_upgrade_plan(to="0.4.2", prerelease=False)
     assert plan.target_version == "0.4.2"
     assert any("--to=0.4.2 pins" in w for w in plan.extra_warnings)
+
+
+def test_build_upgrade_plan_surfaces_pinned_yanked_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pypi(monkeypatch, version="0.5.0")
+    _patch_notes(monkeypatch, notes=None)
+    monkeypatch.setattr(
+        "setforge.cli.upgrade.fetch_version_info",
+        lambda **_kwargs: PyPIVersionInfo(
+            version="0.4.2",
+            is_prerelease=False,
+            yanked=True,
+            yanked_reason="broken release",
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["upgrade", "--check", "--to", "0.4.2"])
+
+    assert result.exit_code == 0
+    assert "YANKED" in result.output
+    assert "broken release" in result.output
 
 
 def test_build_upgrade_plan_rejects_invalid_to(
