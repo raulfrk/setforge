@@ -129,6 +129,17 @@ class GitSource(BaseModel):
     name: str | None = None
     clone_dest: Path | None = None
 
+    @field_validator("ref")
+    @classmethod
+    def _reject_git_option_ref(cls, value: str) -> str:
+        """Reject refs that Git would parse as command-line options."""
+        if value.startswith("-"):
+            raise ValueError(
+                "GitSource ref must not start with '-' because git interprets "
+                "it as an option"
+            )
+        return value
+
     @property
     def display_name(self) -> str:
         """Return ``name`` if set, otherwise the URL basename minus ``.git``."""

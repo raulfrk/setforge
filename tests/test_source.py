@@ -400,6 +400,23 @@ def test_fetch_source_refuses_existing_clone_with_different_origin(
     assert (cache / "tracked" / "value").read_text(encoding="utf-8") == "A\n"
 
 
+def test_git_source_rejects_option_shaped_ref_before_cache_checkout(
+    tmp_path: Path,
+) -> None:
+    remote = _create_bare_source(tmp_path, "option-ref", "base")
+    cache = tmp_path / "cache"
+
+    with pytest.raises(ValidationError, match="must not start with '-'"):
+        GitSource(
+            kind=SourceKind.GIT,
+            url=str(remote),
+            ref="--orphan=synthetic-orphan",
+            clone_dest=cache,
+        )
+
+    assert not cache.exists()
+
+
 class TestValidateSourceDir:
     """``validate_source_dir`` checks for ``setforge.yaml`` in the source."""
 
