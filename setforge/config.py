@@ -1305,6 +1305,15 @@ class Config(BaseModel):
     profiles: dict[str, Profile]
     project_profiles: dict[str, ProjectProfile] = {}
 
+    @field_validator("mcp_servers")
+    @classmethod
+    def _reject_option_shaped_mcp_server_names(
+        cls, servers: dict[str, McpServerRef]
+    ) -> dict[str, McpServerRef]:
+        if any(name.startswith("-") for name in servers):
+            raise ValueError("MCP server names must not begin with '-'")
+        return servers
+
 
 def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:
     """Concatenate parent + child, preserving first-occurrence order."""

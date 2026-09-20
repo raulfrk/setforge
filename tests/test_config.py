@@ -150,6 +150,20 @@ def test_load_config_accepts_supported_file_format_version(
     assert load_config(config_path).version == 1
 
 
+def test_load_config_rejects_option_shaped_mcp_server_name(tmp_path: Path) -> None:
+    config_path = tmp_path / "setforge.yaml"
+    config_path.write_text(
+        "tracked_files: {}\n"
+        "mcp_servers:\n"
+        "  --scope: {command: [serena]}\n"
+        "profiles: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="MCP server names must not begin"):
+        load_config(config_path)
+
+
 def test_load_config_malformed_yaml(tmp_path: Path) -> None:
     # A YAML syntax error must surface as a clean ConfigError (naming the
     # file), not a raw ruamel ParserError/ScannerError traceback — the
