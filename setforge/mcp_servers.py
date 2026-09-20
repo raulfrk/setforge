@@ -221,8 +221,9 @@ def mcp_get_command(name: str) -> tuple[list[str], str] | None:
 
     Calls ``claude mcp get <name> --json`` and parses the command token
     list and scope out of the JSON. Returns ``None`` when the server is
-    absent, when the CLI does not support ``--json`` / ``get``, or when
-    the output cannot be parsed — every one of those is a "cannot
+    absent, when the CLI does not support ``--json`` / ``get``, cannot
+    be executed after resolution, or when the output cannot be parsed —
+    every one of those is a "cannot
     determine current command" signal that the converge path treats as
     "fall back to a plain add (idempotent)". NEVER raises on a missing
     server; only the binary-missing case propagates as
@@ -237,7 +238,7 @@ def mcp_get_command(name: str) -> tuple[list[str], str] | None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return None
     try:
         payload = json.loads(result.stdout)
@@ -364,7 +365,7 @@ def _converge_add(
     try:
         mcp_add(name, ref)
         added.append((name, list(ref.command), ref.scope))
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         msg = stderr_of(exc)
         if _is_already_exists(msg):
             LOGGER.info("mcp server already registered (no-op): %s", name)
@@ -392,7 +393,7 @@ def _converge_update(
     LOGGER.info("updating mcp server: %s", name)
     try:
         mcp_remove(name, scope=prior_scope)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         msg = stderr_of(exc)
         LOGGER.warning("mcp update failed for %s: %s", name, msg)
         failed.append((name, msg))
@@ -403,7 +404,7 @@ def _converge_update(
     updated.append((name, list(prior_command), prior_scope))
     try:
         mcp_add(name, ref)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         msg = stderr_of(exc)
         LOGGER.warning("mcp update failed for %s: %s", name, msg)
         failed.append((name, msg))

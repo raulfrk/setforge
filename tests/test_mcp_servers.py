@@ -192,6 +192,21 @@ def test_mcp_get_command_rejects_malformed_inventory(fake_mcp, payload: object) 
     assert mcp.mcp_get_command("serena") is None
 
 
+def test_mcp_get_command_treats_os_error_as_unreadable(
+    fake_mcp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli = fake_mcp(registry={"serena": (["serena", "start"], "user")})
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[2] == "get":
+            raise FileNotFoundError(2, "No such file or directory", "/fake/claude")
+        return cli.run(argv, **kwargs)
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+
+    assert mcp.mcp_get_command("serena") is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -399,6 +414,67 @@ def test_per_item_failure_does_not_abort_loop(fake_mcp) -> None:
     report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
     assert ("bad", "boom: spawn ENOENT") in report.failed
     assert report.added == [("good", ["good"], "user")]
+    assert cli.registry["good"] == (["good"], "user")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError(2, "No such file or directory", "/fake/claude"),
+        PermissionError(13, "Permission denied", "/fake/claude"),
+    ],
+    ids=["file-not-found", "permission-denied"],
+)
+def test_os_error_during_add_is_reported_and_does_not_abort_loop(
+    fake_mcp, monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    cli = fake_mcp(registry={})
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[2] == "add" and argv[5] == "bad":
+            raise error
+        return cli.run(argv, **kwargs)
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+    cfg = _cfg(
+        {
+            "bad": McpServerRef(command=["bad"]),
+            "good": McpServerRef(command=["good"]),
+        }
+    )
+
+    report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
+
+    assert report.failed == [("bad", str(error))]
+    assert report.added == [("good", ["good"], "user")]
+    assert cli.registry["good"] == (["good"], "user")
+
+
+def test_os_error_during_remove_is_reported_and_does_not_abort_loop(
+    fake_mcp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli = fake_mcp(registry={"bad": (["old"], "user")})
+    error = PermissionError(13, "Permission denied", "/fake/claude")
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[2] == "remove" and argv[5] == "bad":
+            raise error
+        return cli.run(argv, **kwargs)
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+    cfg = _cfg(
+        {
+            "bad": McpServerRef(command=["new"]),
+            "good": McpServerRef(command=["good"]),
+        }
+    )
+
+    report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
+
+    assert report.updated == []
+    assert report.failed == [("bad", str(error))]
+    assert report.added == [("good", ["good"], "user")]
+    assert cli.registry["bad"] == (["old"], "user")
     assert cli.registry["good"] == (["good"], "user")
 
 
