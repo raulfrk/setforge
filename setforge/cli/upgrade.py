@@ -340,7 +340,7 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
         schema_change=schema,
         yanked=target_info.yanked,
         yanked_reason=target_info.yanked_reason,
-        is_prerelease=info.is_prerelease,
+        is_prerelease=target_info.is_prerelease,
         extra_warnings=tuple(warnings),
     )
 

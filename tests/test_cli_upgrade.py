@@ -317,6 +317,28 @@ def test_build_upgrade_plan_surfaces_pinned_yanked_release(
     assert "broken release" in result.output
 
 
+def test_build_upgrade_plan_surfaces_pinned_prerelease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pypi(monkeypatch, version="9.9.9", is_prerelease=False)
+    _patch_notes(monkeypatch, notes=None)
+    monkeypatch.setattr(
+        "setforge.cli.upgrade.fetch_version_info",
+        lambda **_kwargs: PyPIVersionInfo(
+            version="8.0.0rc1",
+            is_prerelease=True,
+            yanked=False,
+            yanked_reason=None,
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["upgrade", "--check", "--to", "8.0.0rc1"])
+
+    assert result.exit_code == 0
+    assert "PRE-RELEASE" in result.output
+    assert "8.0.0rc1 is a pre-release" in result.output
+
+
 def test_build_upgrade_plan_rejects_invalid_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
