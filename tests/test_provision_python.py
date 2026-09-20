@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
+from setforge.config import PythonPackage
 from setforge.provision import python as prov_python
 from setforge.provision.driver import reconcile
+from setforge.provision.identity import package_identity
 from setforge.provision.protocol import (
     Identity,
     Outcome,
@@ -100,6 +102,42 @@ def test_probe_no_prefix_false_match(fake_uv) -> None:
     installed = prov_python.PythonProvisioner().probe()
     assert installed == {Identity(key="foobar", display="foobar")}
     assert Identity(key="foo", display="foo") not in installed
+
+
+@pytest.mark.parametrize(
+    ("configured", "reported"),
+    [
+        ("Foo_Bar", "foo-bar"),
+        ("foo...bar", "FOO___BAR"),
+    ],
+)
+def test_reconcile_recognizes_pep_503_equivalent_uv_tool(
+    fake_uv, configured: str, reported: str
+) -> None:
+    cli = fake_uv(installed={reported})
+    identity = package_identity(PythonPackage(package=configured))
+    item = ProvisionItem(type="python", identity=identity)
+
+    result = reconcile(prov_python.PythonProvisioner(), [item])
+
+    assert identity.display == configured
+    assert result.delta.is_empty()
+    assert result.outcomes == ()
+    assert _install_calls(cli) == []
+
+
+def test_apply_retains_configured_python_package_spelling(fake_uv) -> None:
+    cli = fake_uv(installed=set())
+    configured = "Foo_Bar"
+    item = ProvisionItem(
+        type="python",
+        identity=package_identity(PythonPackage(package=configured)),
+    )
+
+    outcome = prov_python.PythonProvisioner().apply_one(item)
+
+    assert outcome.outcome is Outcome.OK
+    assert _install_calls(cli) == [["/fake/uv", "tool", "install", "--", configured]]
 
 
 def test_probe_skips_entrypoint_lines(fake_uv) -> None:

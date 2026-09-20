@@ -7,6 +7,7 @@ import re
 import subprocess
 
 from setforge.binaries import resolve_binary, stderr_of
+from setforge.provision.identity import normalize_python_package_name
 from setforge.provision.protocol import (
     Identity,
     ObservationOrigin,
@@ -61,8 +62,15 @@ class PythonProvisioner(Provisioner):
         ) as exc:
             LOGGER.warning("`uv tool list` failed: %s", stderr_of(exc))
             return set()
-        self._versions = _parse_tools(result.stdout)
-        return {Identity(key=name, display=name) for name in self._versions}
+        tools = _parse_tools(result.stdout)
+        self._versions = {
+            normalize_python_package_name(name): version
+            for name, version in tools.items()
+        }
+        return {
+            Identity(key=normalize_python_package_name(name), display=name)
+            for name in tools
+        }
 
     def observations(self, installed: set[Identity]) -> tuple[PackageObservation, ...]:
         return tuple(

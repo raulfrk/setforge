@@ -9,6 +9,8 @@ at type-check time.
 
 from __future__ import annotations
 
+import re
+
 from setforge.config import (
     CargoPackage,
     GitHubReleasePackage,
@@ -24,13 +26,22 @@ from setforge.platform_assets import (
 )
 from setforge.provision.protocol import Identity
 
+_PYTHON_PROJECT_SEPARATORS = re.compile(r"[-_.]+")
+
+
+def normalize_python_package_name(name: str) -> str:
+    """Return the PEP 503 comparison key while retaining the source spelling."""
+    return _PYTHON_PROJECT_SEPARATORS.sub("-", name.casefold())
+
 
 def package_identity(pkg: Package) -> Identity:
     match pkg:
         case CargoPackage():
             name = pkg.crate
         case PythonPackage():
-            name = pkg.package
+            return Identity(
+                key=normalize_python_package_name(pkg.package), display=pkg.package
+            )
         case GoPackage():
             name = pkg.module
         case GitHubReleasePackage():
