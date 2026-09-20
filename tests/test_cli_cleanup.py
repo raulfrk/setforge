@@ -375,6 +375,47 @@ def test_marking_managed_package_orphan_releases_authority(
     assert "cargo:ripgrep" in cleanup_mod.load_ignored_provisioned()
 
 
+def test_marking_legacy_package_orphan_holds_mutation_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import contextlib
+
+    lock_held = False
+
+    @contextlib.contextmanager
+    def _recording_locks(**_kwargs: object):
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    def _mark_orphan(
+        identity: Identity, *, provider: str | None, console: Console
+    ) -> None:
+        assert lock_held
+        assert identity == _ident("legacy")
+        assert provider is None
+
+    monkeypatch.setattr(
+        cleanup_mod,
+        "_pick_action",
+        lambda _item: cleanup_mod.CleanupAction.MARK_ORPHAN,
+    )
+    monkeypatch.setattr(cleanup_mod, "mutation_locks", _recording_locks)
+    monkeypatch.setattr(cleanup_mod, "mark_orphan", _mark_orphan)
+
+    cleanup_mod._apply_cleanup(
+        "p",
+        [cleanup_mod.CleanupItem(identity=_ident("legacy"), path=None)],
+        ReceiptStore(tmp_path / "receipts"),
+        Console(),
+    )
+
+    assert lock_held is False
+
+
 def test_discovery_skips_corrupt_receipt_not_fatal(
     tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

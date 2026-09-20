@@ -430,13 +430,11 @@ def _apply_cleanup(
             console.print(f"  skipped: {item.identity.display}")
             continue
         if action is CleanupAction.MARK_ORPHAN:
-            if (
-                item.provider is not None
-                and item.owner_id is not None
-                and item.claim_generation is not None
-            ):
-                with mutation_locks(
-                    resources=True, config_dir=config_dir, profile=profile
+            with mutation_locks(resources=True, config_dir=config_dir, profile=profile):
+                if (
+                    item.provider is not None
+                    and item.owner_id is not None
+                    and item.claim_generation is not None
                 ):
                     OwnershipStore().release_locked(
                         package_resource_id(
@@ -445,8 +443,6 @@ def _apply_cleanup(
                         expected_owner=item.owner_id,
                         expected_generation=item.claim_generation,
                     )
-                    mark_orphan(item.identity, provider=item.provider, console=console)
-            else:
                 mark_orphan(item.identity, provider=item.provider, console=console)
             continue
         # Serialize each delete (transition write + unlink) under
