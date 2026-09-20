@@ -41,7 +41,9 @@ def _item(key: str) -> ProvisionItem:
 
 def test_force_reconcile_applies_a_managed_upgrade_omitted_by_provider_plan() -> None:
     item = _item("tool")
-    provider = _FakeProvisioner(installed={item.identity})
+    provider = _FakeProvisioner(
+        installed={item.identity}, outcomes={"tool": Outcome.OK}
+    )
     plan = force_reconcile(plan_reconcile(provider, [item]), frozenset({item.identity}))
     result = apply_reconcile(plan)
     assert provider.apply_calls == ["tool"]
@@ -58,11 +60,13 @@ class _FakeProvisioner(Provisioner):
         *,
         installed: set[Identity] | None = None,
         to_install: tuple[Identity, ...] = (),
+        to_activate: tuple[Identity, ...] = (),
         outcomes: dict[str, Outcome] | None = None,
         raises: dict[str, Outcome] | None = None,
     ) -> None:
         self._installed = installed or set()
         self._to_install = to_install
+        self._to_activate = to_activate
         self._outcomes = outcomes or {}
         self._raises = raises or {}
         self.apply_calls: list[str] = []
@@ -77,7 +81,10 @@ class _FakeProvisioner(Provisioner):
         self, items: Sequence[ProvisionItem], installed: set[Identity]
     ) -> ProvisionDelta:
         self.plan_calls += 1
-        return ProvisionDelta(installed=self._to_install)
+        return ProvisionDelta(
+            installed=self._to_install,
+            activated=self._to_activate,
+        )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         self.apply_calls.append(item.identity.key)
@@ -122,6 +129,45 @@ def test_apply_consumes_plan_without_reprobe_or_replan() -> None:
     assert result.delta.installed == identities
 
 
+def test_apply_delta_contains_only_ok_package_effects() -> None:
+    installed_ok, activated_ok, hard, soft, skipped = (
+        Identity(key=key, display=key)
+        for key in ("installed-ok", "activated-ok", "hard", "soft", "skipped")
+    )
+    provisioner = _FakeProvisioner(
+        to_install=(installed_ok, hard, soft),
+        to_activate=(activated_ok, skipped),
+        outcomes={
+            "installed-ok": Outcome.OK,
+            "activated-ok": Outcome.OK,
+            "soft": Outcome.SOFT,
+            "skipped": Outcome.SKIP,
+        },
+        raises={"hard": Outcome.HARD},
+    )
+
+    result = reconcile(
+        provisioner,
+        [
+            _item(identity.key)
+            for identity in (installed_ok, activated_ok, hard, soft, skipped)
+        ],
+    )
+
+    assert {
+        outcome.item.identity.key: outcome.outcome for outcome in result.outcomes
+    } == {
+        "installed-ok": Outcome.OK,
+        "activated-ok": Outcome.OK,
+        "hard": Outcome.HARD,
+        "soft": Outcome.SOFT,
+        "skipped": Outcome.SKIP,
+    }
+    assert result.delta == ProvisionDelta(
+        installed=(installed_ok,), activated=(activated_ok,)
+    )
+
+
 def test_validate_reconcile_refuses_inventory_drift() -> None:
     provisioner = _FakeProvisioner(to_install=(Identity(key="a", display="a"),))
     plan = plan_reconcile(provisioner, [_item("a")])
@@ -164,7 +210,7 @@ def test_hard_failure_contained_others_applied() -> None:
     ids = tuple(Identity(key=k, display=k) for k in ("a", "b", "c"))
     prov = _FakeProvisioner(
         to_install=ids,
-        outcomes={"a": Outcome.SKIP, "c": Outcome.SKIP},
+        outcomes={"a": Outcome.SOFT, "c": Outcome.SKIP},
         raises={"b": Outcome.HARD},
     )
     items = [_item("a"), _item("b"), _item("c")]
@@ -172,8 +218,9 @@ def test_hard_failure_contained_others_applied() -> None:
     assert prov.apply_calls == ["a", "b", "c"]
     by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_key["b"] is Outcome.HARD
-    assert by_key["a"] is Outcome.SKIP
+    assert by_key["a"] is Outcome.SOFT
     assert by_key["c"] is Outcome.SKIP
+    assert result.delta.is_empty()
     assert exit_code(result) == 1
 
 

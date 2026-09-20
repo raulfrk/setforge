@@ -309,17 +309,8 @@ def reconcile(
         for key, display in effective.items()
     ]
     report_only = dry_run or ext.reconcile is ReconcilePolicy.REPORT
-    result = driver.reconcile(
-        ExtensionProvisioner(pins=pins),
-        items,
-        report_only=report_only,
-    )
-    to_install = sorted(i.display for i in result.delta.installed)
-    failed: list[tuple[str, str]] = [
-        (o.item.identity.display, o.detail)
-        for o in result.outcomes
-        if o.outcome is Outcome.HARD
-    ]
+    reconcile_plan = driver.plan_reconcile(ExtensionProvisioner(pins=pins), items)
+    to_install = sorted(i.display for i in reconcile_plan.delta.installed)
 
     if ext.reconcile is ReconcilePolicy.ADDITIVE:
         to_uninstall: list[str] = []
@@ -333,7 +324,7 @@ def reconcile(
             if key not in effective_keys
         )
 
-    if ext.reconcile is ReconcilePolicy.REPORT or dry_run:
+    if report_only:
         if dry_run:
             LOGGER.info(
                 "reconcile (dry-run): to_install=%s to_uninstall=%s",
@@ -346,6 +337,13 @@ def reconcile(
             to_uninstall=to_uninstall,
             dry_run=dry_run,
         )
+
+    result = driver.apply_reconcile(reconcile_plan)
+    failed: list[tuple[str, str]] = [
+        (o.item.identity.display, o.detail)
+        for o in result.outcomes
+        if o.outcome is Outcome.HARD
+    ]
 
     if ext.reconcile is ReconcilePolicy.PRUNE:
         for name in to_uninstall:

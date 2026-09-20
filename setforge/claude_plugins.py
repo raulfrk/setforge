@@ -798,8 +798,8 @@ def reconcile(
     ``to_disable`` (PRUNE only) is computed by :func:`_plugin_state_diff`
     over the caller-supplied ``declared_plugin_ids`` (already in
     ``"<name>@<marketplace>"`` form); ``to_install`` / ``to_enable`` come
-    from the ``driver.reconcile`` delta. ``policy`` is the resolved
-    reconcile policy for plugins.
+    from the frozen driver plan delta. ``policy`` is the resolved reconcile
+    policy for plugins.
 
     Marketplaces (always-on, regardless of policy): each declared
     marketplace whose SOURCE is not already registered (matched by
@@ -864,13 +864,9 @@ def reconcile(
     to_disable = _plugin_state_diff(declared, policy)
 
     if report_only:
-        result = driver.reconcile(
-            PluginProvisioner(),
-            items,
-            report_only=True,
-        )
-        to_install = [i.display for i in result.delta.installed]
-        to_enable = [i.display for i in result.delta.activated]
+        reconcile_plan = driver.plan_reconcile(PluginProvisioner(), items)
+        to_install = [i.display for i in reconcile_plan.delta.installed]
+        to_enable = [i.display for i in reconcile_plan.delta.activated]
         return _read_only_report(to_install, to_enable, to_disable, mps_to_add)
 
     failed: list[tuple[str, str]] = []
@@ -889,13 +885,12 @@ def reconcile(
         cfg, declared, pins or {}, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
     )
 
-    result = driver.reconcile(
-        PluginProvisioner(checkouts=checkouts),
-        items,
-        report_only=False,
+    reconcile_plan = driver.plan_reconcile(
+        PluginProvisioner(checkouts=checkouts), items
     )
-    to_install = [i.display for i in result.delta.installed]
-    to_enable = [i.display for i in result.delta.activated]
+    result = driver.apply_reconcile(reconcile_plan)
+    to_install = [i.display for i in reconcile_plan.delta.installed]
+    to_enable = [i.display for i in reconcile_plan.delta.activated]
     failed += [
         (o.item.identity.display, o.detail)
         for o in result.outcomes

@@ -214,7 +214,21 @@ def apply_reconcile(plan: ReconcilePlan) -> ReconcileResult:
             outcomes.append(
                 ProvisionOutcome(item=item, outcome=exc.kind, detail=exc.error_summary)
             )
-    return ReconcileResult(delta=plan.delta, outcomes=tuple(outcomes), reported=False)
+    successful = frozenset(
+        outcome.item.identity for outcome in outcomes if outcome.outcome is Outcome.OK
+    )
+    return ReconcileResult(
+        delta=ProvisionDelta(
+            installed=tuple(
+                identity for identity in plan.delta.installed if identity in successful
+            ),
+            activated=tuple(
+                identity for identity in plan.delta.activated if identity in successful
+            ),
+        ),
+        outcomes=tuple(outcomes),
+        reported=False,
+    )
 
 
 def _items_to_apply(
