@@ -164,6 +164,79 @@ def test_load_config_rejects_option_shaped_mcp_server_name(tmp_path: Path) -> No
         load_config(config_path)
 
 
+@pytest.mark.parametrize(
+    ("field", "entry", "message"),
+    [
+        (
+            "marketplaces",
+            {"source": "github", "repo": "owner/repo"},
+            "Marketplace names must not begin",
+        ),
+        (
+            "claude_plugins",
+            {"marketplace": "official"},
+            "Plugin names must not begin",
+        ),
+    ],
+)
+def test_config_rejects_option_shaped_plugin_registry_name(
+    field: str, entry: dict[str, str], message: str
+) -> None:
+    payload = {
+        "tracked_files": {},
+        "profiles": {},
+        field: {"--help": entry},
+    }
+
+    with pytest.raises(ValidationError, match=message):
+        Config.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "entry", "message"),
+    [
+        (
+            "marketplaces",
+            {"source": "github", "repo": "owner/repo"},
+            "Marketplace names must not begin",
+        ),
+        (
+            "plugins",
+            {"marketplace": "official"},
+            "Plugin names must not begin",
+        ),
+    ],
+)
+def test_codex_spec_rejects_option_shaped_plugin_registry_name(
+    field: str, entry: dict[str, str], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        CodexSpec.model_validate({field: {"--help": entry}})
+
+
+def test_plugin_registries_accept_ordinary_names() -> None:
+    marketplace = {"source": "github", "repo": "owner/repo"}
+    plugin = {"marketplace": "official"}
+    cfg = Config.model_validate(
+        {
+            "tracked_files": {},
+            "profiles": {},
+            "marketplaces": {"official": marketplace},
+            "claude_plugins": {"example": plugin},
+            "codex": {
+                "marketplaces": {"official": marketplace},
+                "plugins": {"example": plugin},
+            },
+        }
+    )
+
+    assert set(cfg.marketplaces) == {"official"}
+    assert set(cfg.claude_plugins) == {"example"}
+    assert cfg.codex is not None
+    assert set(cfg.codex.marketplaces) == {"official"}
+    assert set(cfg.codex.plugins) == {"example"}
+
+
 def test_load_config_malformed_yaml(tmp_path: Path) -> None:
     # A YAML syntax error must surface as a clean ConfigError (naming the
     # file), not a raw ruamel ParserError/ScannerError traceback — the

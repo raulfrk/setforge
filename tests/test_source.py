@@ -72,6 +72,22 @@ def test_local_codex_overlay_rejects_unsafe_host_values(
         load_local_codex_overlay(path)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "plugins:\n  add: [--version@official]\n",
+        ("marketplaces:\n  add:\n    --help: {source: github, repo: owner/repo}\n"),
+    ],
+)
+def test_local_overlay_rejects_option_shaped_plugin_names(
+    tmp_path: Path, body: str
+) -> None:
+    path = _write_local_yaml(tmp_path / "local.yaml", body)
+
+    with pytest.raises(ValidationError, match="names must not begin"):
+        _load_local_source_config(path)
+
+
 def _write_local_yaml(path: Path, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")

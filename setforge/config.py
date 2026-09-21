@@ -733,6 +733,21 @@ CodexMcpServerRef = Annotated[
 ]
 
 
+def validate_registry_name(name: str, *, label: str) -> str:
+    """Reject resource names that a downstream CLI could parse as options."""
+    if name.startswith("-"):
+        raise ValueError(f"{label} names must not begin with '-'")
+    return name
+
+
+def _reject_option_shaped_registry_keys[T](
+    entries: dict[str, T], *, label: str
+) -> dict[str, T]:
+    for name in entries:
+        validate_registry_name(name, label=label)
+    return entries
+
+
 class CodexSpec(BaseModel):
     model_config = _STRICT
 
@@ -742,6 +757,20 @@ class CodexSpec(BaseModel):
     marketplaces: dict[str, MarketplaceSource] = {}
     plugins: dict[str, CodexPluginRef] = {}
     mcp_servers: dict[str, CodexMcpServerRef] = {}
+
+    @field_validator("marketplaces")
+    @classmethod
+    def _reject_option_shaped_marketplace_names(
+        cls, marketplaces: dict[str, MarketplaceSource]
+    ) -> dict[str, MarketplaceSource]:
+        return _reject_option_shaped_registry_keys(marketplaces, label="Marketplace")
+
+    @field_validator("plugins")
+    @classmethod
+    def _reject_option_shaped_plugin_names(
+        cls, plugins: dict[str, CodexPluginRef]
+    ) -> dict[str, CodexPluginRef]:
+        return _reject_option_shaped_registry_keys(plugins, label="Plugin")
 
 
 class SectionTemplateRef(BaseModel):
@@ -1310,9 +1339,21 @@ class Config(BaseModel):
     def _reject_option_shaped_mcp_server_names(
         cls, servers: dict[str, McpServerRef]
     ) -> dict[str, McpServerRef]:
-        if any(name.startswith("-") for name in servers):
-            raise ValueError("MCP server names must not begin with '-'")
-        return servers
+        return _reject_option_shaped_registry_keys(servers, label="MCP server")
+
+    @field_validator("marketplaces")
+    @classmethod
+    def _reject_option_shaped_marketplace_names(
+        cls, marketplaces: dict[str, MarketplaceSource]
+    ) -> dict[str, MarketplaceSource]:
+        return _reject_option_shaped_registry_keys(marketplaces, label="Marketplace")
+
+    @field_validator("claude_plugins")
+    @classmethod
+    def _reject_option_shaped_plugin_names(
+        cls, plugins: dict[str, ClaudePluginRef]
+    ) -> dict[str, ClaudePluginRef]:
+        return _reject_option_shaped_registry_keys(plugins, label="Plugin")
 
 
 def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:

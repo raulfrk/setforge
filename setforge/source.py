@@ -414,6 +414,13 @@ class PluginOverlay(BaseModel):
     add: list[str] = []
     remove: list[str] = []
 
+    @field_validator("add")
+    @classmethod
+    def _reject_option_shaped_plugin_names(cls, values: list[str]) -> list[str]:
+        if any(value.strip().split("@", 1)[0].startswith("-") for value in values):
+            raise ValueError("Plugin names must not begin with '-'")
+        return values
+
 
 class ExtensionOverlay(BaseModel):
     """Per-host VSCode-extension add/remove overlay block.
@@ -466,6 +473,15 @@ class MarketplaceOverlay(BaseModel):
 
     add: dict[str, _MarketplaceLocalDecl] = {}
     remove: list[str] = []
+
+    @field_validator("add")
+    @classmethod
+    def _reject_option_shaped_marketplace_names(
+        cls, values: dict[str, _MarketplaceLocalDecl]
+    ) -> dict[str, _MarketplaceLocalDecl]:
+        if any(name.startswith("-") for name in values):
+            raise ValueError("Marketplace names must not begin with '-'")
+        return values
 
 
 class CodexSelectionOverlay(BaseModel):

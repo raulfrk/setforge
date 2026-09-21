@@ -30,6 +30,7 @@ from setforge.config import (
     MarketplaceSourceKind,
     PluginPackage,
     load_config,
+    validate_registry_name,
 )
 from setforge.errors import ConfigError, ProfileNotFound
 
@@ -67,9 +68,17 @@ def _require_codex_contract(cfg: Config, config_path: Path) -> None:
         )
 
 
+def _validate_new_registry_name(name: str, *, label: str) -> None:
+    try:
+        validate_registry_name(name, label=label)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def yaml_add_codex_marketplace(
     config_path: Path, name: str, source: MarketplaceSource
 ) -> bool:
+    _validate_new_registry_name(name, label="Marketplace")
     cfg = load_config(config_path)
     _require_codex_contract(cfg, config_path)
     if cfg.codex is not None and name in cfg.codex.marketplaces:
@@ -95,6 +104,7 @@ def yaml_remove_codex_marketplace(config_path: Path, name: str) -> bool:
 
 
 def yaml_add_codex_plugin(config_path: Path, name: str, marketplace: str) -> bool:
+    _validate_new_registry_name(name, label="Plugin")
     cfg = load_config(config_path)
     _require_codex_contract(cfg, config_path)
     if cfg.codex is not None and name in cfg.codex.plugins:
@@ -228,6 +238,7 @@ def yaml_add_marketplace(
     Comments and key order in the YAML document are preserved via
     ruamel.yaml round-trip mode.
     """
+    _validate_new_registry_name(name, label="Marketplace")
     cfg = load_config(config_path)
     if name in cfg.marketplaces:
         return False
@@ -279,6 +290,7 @@ def yaml_add_plugin(
     Does NOT add it to any profile's ``claude_plugins:`` list — the CLI
     caller is responsible for that via :func:`yaml_add_plugin_to_profile`.
     """
+    _validate_new_registry_name(plugin_name, label="Plugin")
     cfg = load_config(config_path)
     if plugin_name in cfg.claude_plugins:
         return False

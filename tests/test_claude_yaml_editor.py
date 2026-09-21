@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from setforge.config import MarketplaceSource, MarketplaceSourceKind
+from setforge.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # Fixture
@@ -79,6 +80,27 @@ def test_yaml_add_marketplace_appends(tmp_path: Path) -> None:
     assert "Top-level comment." in text
     assert "Marketplaces comment." in text
     assert "Plugins comment." in text
+
+
+def test_yaml_add_helpers_reject_option_shaped_names_before_write(
+    tmp_path: Path,
+) -> None:
+    from setforge import claude_yaml_editor as editor
+
+    path = _write_yaml_fixture(tmp_path)
+    before = path.read_bytes()
+    source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="owner/repo")
+    calls = [
+        lambda: editor.yaml_add_marketplace(path, "--help", source),
+        lambda: editor.yaml_add_plugin(path, "--help", "existing-mp"),
+        lambda: editor.yaml_add_codex_marketplace(path, "--help", source),
+        lambda: editor.yaml_add_codex_plugin(path, "--help", "existing-mp"),
+    ]
+
+    for call in calls:
+        with pytest.raises(ConfigError, match="names must not begin"):
+            call()
+        assert path.read_bytes() == before
 
 
 def test_yaml_add_marketplace_idempotent(tmp_path: Path) -> None:

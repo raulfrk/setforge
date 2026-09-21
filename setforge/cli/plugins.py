@@ -36,6 +36,7 @@ from setforge.config import (
     ResolvedProfile,
     load_config,
     resolve_effective_profile,
+    validate_registry_name,
 )
 from setforge.errors import MarketplaceCacheMiss, PluginToolMissing, SetforgeError
 from setforge.locking import mutation_locks
@@ -276,15 +277,29 @@ def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, 
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)
-        return plugin_name, mp_name
+        return (
+            _validate_add_registry_name(plugin_name, label="Plugin"),
+            _validate_add_registry_name(mp_name, label="Marketplace"),
+        )
     if marketplace:
-        return name, marketplace
+        return (
+            _validate_add_registry_name(name, label="Plugin"),
+            _validate_add_registry_name(marketplace, label="Marketplace"),
+        )
     typer.secho(
         "error: provide plugin as <name>@<marketplace> or use --marketplace",
         err=True,
         fg=typer.colors.RED,
     )
     raise typer.Exit(code=1)
+
+
+def _validate_add_registry_name(name: str, *, label: str) -> str:
+    try:
+        return validate_registry_name(name, label=label)
+    except ValueError as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
 
 
 def _resolve_add_source(source: MarketplaceSource, mp_name: str) -> MarketplaceSource:
@@ -781,6 +796,7 @@ def marketplace_add_cmd(
     ),
 ) -> None:
     """Register a marketplace in YAML and run claude plugin marketplace add."""
+    name = _validate_add_registry_name(name, label="Marketplace")
     config = _resolve_config_arg(config)
     source = _parse_marketplace_from(from_)
 

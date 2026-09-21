@@ -514,6 +514,91 @@ def _write_marketplace_config(tmp_path: Path) -> Path:
     return cfg
 
 
+@pytest.mark.parametrize("product", ["claude", "codex"])
+def test_marketplace_add_rejects_option_shaped_name_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product: str
+) -> None:
+    cfg = _write_marketplace_config(tmp_path)
+    before = cfg.read_bytes()
+    native_calls: list[str] = []
+    monkeypatch.setattr(
+        claude_plugins_mod,
+        "marketplace_add",
+        lambda *_args: native_calls.append("claude"),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        lambda *_args: native_calls.append("codex"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "marketplace",
+            "add",
+            "--from=github:o/r",
+            f"--product={product}",
+            f"--config={cfg}",
+            "--",
+            "--help",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "names must not begin" in result.output
+    assert cfg.read_bytes() == before
+    assert native_calls == []
+
+
+@pytest.mark.parametrize("product", ["claude", "codex"])
+def test_plugin_add_rejects_option_shaped_name_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product: str
+) -> None:
+    cfg = _write_marketplace_config(tmp_path)
+    before = cfg.read_bytes()
+    native_calls: list[str] = []
+    monkeypatch.setattr(
+        claude_plugins_mod,
+        "marketplace_add",
+        lambda *_args: native_calls.append("claude-marketplace"),
+    )
+    monkeypatch.setattr(
+        claude_plugins_mod,
+        "plugin_install",
+        lambda *_args: native_calls.append("claude-plugin"),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        lambda *_args: native_calls.append("codex-marketplace"),
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "plugin_install",
+        lambda *_args: native_calls.append("codex-plugin"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "--from=github:o/r",
+            "--profile=p",
+            f"--product={product}",
+            f"--config={cfg}",
+            "--",
+            "--version@existing",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "names must not begin" in result.output
+    assert cfg.read_bytes() == before
+    assert native_calls == []
+
+
 def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
