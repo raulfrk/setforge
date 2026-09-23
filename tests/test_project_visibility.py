@@ -31,7 +31,15 @@ def _candidate_filter_entrypoint(
     binary_dir.mkdir()
     entrypoint = binary_dir / "setforge"
     entrypoint.write_text(
-        f"#!{sys.executable}\nfrom setforge.cli import main\nmain()\n"
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "_original_cwd = os.getcwd()\n"
+        "try:\n"
+        f"    os.chdir({str(Path(__file__).parents[1])!r})\n"
+        "    from setforge.cli import main\n"
+        "finally:\n"
+        "    os.chdir(_original_cwd)\n"
+        "main()\n"
     )
     entrypoint.chmod(0o755)
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")

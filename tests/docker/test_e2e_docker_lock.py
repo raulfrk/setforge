@@ -184,14 +184,19 @@ def _pin_table(lock_text: str, *, pkg_type: str, key: str) -> dict[str, str]:
 
 
 def _tamper_checksum(lock_text: str, *, key: str) -> str:
-    """Flip one hex nibble of the ``checksum`` on the pin whose ``key`` matches."""
+    """Flip the Linux asset checksum on the pin whose ``key`` matches."""
     import tomllib
 
     doc = tomllib.loads(lock_text)
     for entry in doc.get("package", []):
         if entry.get("key") == key:
-            old = entry["checksum"]
+            linux_assets = [
+                asset
+                for asset in entry.get("artifact", [])
+                if asset.get("os") == "linux"
+            ]
+            old = linux_assets[0]["checksum"] if linux_assets else entry["checksum"]
             digest = old.split(":", 1)[1]
             flipped = ("f" if digest[0] != "f" else "0") + digest[1:]
-            return lock_text.replace(old, f"sha256:{flipped}")
+            return lock_text.replace(old, f"sha256:{flipped}", 1)
     raise AssertionError(f"no pin with key {key!r} to tamper")
