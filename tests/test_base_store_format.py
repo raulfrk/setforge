@@ -57,6 +57,8 @@ def test_present_mismatch_refuses(tmp_path: Path) -> None:
     assert str(tmp_path) in message
     assert "2.0" in message
     assert base_store_format.BASE_STORE_FORMAT_VERSION in message
+    assert "incompatible base-store format" in message
+    assert f"delete {tmp_path} to re-grandfather it (next merge is noisier)" in message
 
 
 def test_present_garbage_refuses_from_config_error(tmp_path: Path) -> None:
@@ -68,6 +70,9 @@ def test_present_garbage_refuses_from_config_error(tmp_path: Path) -> None:
     # ConfigError from parse_schema_version is the documented cause.
     assert excinfo.value.__cause__ is not None
     assert type(excinfo.value.__cause__).__name__ == "ConfigError"
+    message = str(excinfo.value)
+    assert "unparseable base-store format version" in message
+    assert f"delete {tmp_path} to re-grandfather it (next merge is noisier)" in message
 
 
 def test_present_unreadable_oserror_refuses(tmp_path: Path) -> None:
@@ -75,8 +80,11 @@ def test_present_unreadable_oserror_refuses(tmp_path: Path) -> None:
     # path -> IsADirectoryError, an OSError that is NOT FileNotFoundError)
     # must refuse, never grandfather.
     (tmp_path / base_store_format.SIDECAR_NAME).mkdir()
-    with pytest.raises(BaseStoreSchemaError):
+    with pytest.raises(BaseStoreSchemaError) as excinfo:
         base_store_format.check_format_version(tmp_path)
+    message = str(excinfo.value)
+    assert "cannot read base-store format sidecar" in message
+    assert f"delete {tmp_path} to re-grandfather it (next merge is noisier)" in message
 
 
 # --- stamp_format_version ------------------------------------------------
