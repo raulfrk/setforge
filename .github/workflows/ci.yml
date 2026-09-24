@@ -10,162 +10,22 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    name: setforge unit tests
+  workbox-unit:
+    name: Workbox trigger / unit
+    # GitHub records a job for the coordinator to poll without allocating a runner.
+    if: github.event_name == 'workbox_poll_only'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --extra dev
-      # The engine repo no longer carries setforge.yaml at root after the
-      # split; CI validates against the e2e test fixture only.
-      - run: uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all
-      - run: uv run ruff check
-      - run: uv run ruff format --check
-      - run: uv run mypy setforge/ tests/ scripts/
-      # Non-bypassable schema gates (migration-coverage / field-removal /
-      # reverse-required). Its own step, no continue-on-error: a violation
-      # is a hard CI failure. Standalone — NOT a pytest test, because
-      # pytest is skippable via markers / addopts.
-      - run: uv run python scripts/check_schema_gates.py
-      # Deterministic policy/AST lint gates (SAFE-1/2, UX-1/3 — see docs/RULES.md).
-      # Its own step, no continue-on-error: a violation is a hard CI failure.
-      # Standalone — NOT a pytest test, so markers / addopts cannot disarm it.
-      # CI is the hard backstop for the policy lints (the PreToolUse hook is
-      # fast local feedback but can fail open on unparseable commit commands).
-      - run: uv run python scripts/check_policy_lints.py
-      # E2E verdict-manifest gate: keeps tests/docker/e2e_verdicts.toml in
-      # lock-step with the REAL collected e2e_docker set (set-equality both
-      # directions / uniqueness / superseded-by-liveness / verb-smoke-coverage
-      # / fail-closed). Its own step, no continue-on-error: a violation is a
-      # hard CI failure. Standalone — NOT a pytest test, so markers / addopts
-      # cannot disarm it.
-      - run: uv run python scripts/check_e2e_manifest.py
-      - name: Select bounded pytest workers
-        id: pytest-workers
-        run: |
-          cpus=$(nproc)
-          workers=$(( cpus < 6 ? cpus : 6 ))
-          echo "count=$workers" >> "$GITHUB_OUTPUT"
-      - name: Run unit and integration coverage in parallel
-        env:
-          HYPOTHESIS_PROFILE: parallel
-        run: >-
-          uv run pytest -n "${{ steps.pytest-workers.outputs.count }}" --dist=worksteal
-          -m "not e2e_docker and not test_infra and not slow"
-          --cov-fail-under=85
-      - name: Test pytest/xdist infrastructure with branch coverage
-        run: |
-          uv run coverage erase
-          uv run coverage run --rcfile=/dev/null --branch -m pytest \
-            tests/docker/test_conftest_hash.py \
-            tests/docker/test_container_runtime.py \
-            tests/docker/test_image.py \
-            tests/docker/test_network.py \
-            tests/docker/test_offline_extension.py \
-            tests/test_e2e_xdist_prebuild.py \
-            tests/test_network_canary_contract.py \
-            tests/integration/test_cli_lazy_ui_import.py \
-            tests/integration/test_e2e_prebuild.py \
-            tests/integration/test_operation_restart.py \
-            tests/integration/test_orphan_scan_restart.py \
-            -m 'not e2e_docker' --no-cov -q
-          uv run coverage report --rcfile=/dev/null --fail-under=100 \
-            --include='tests/e2e_xdist.py,tests/docker/container_runtime.py,tests/docker/image.py,tests/docker/network.py,tests/docker/offline_extension.py'
+      - run: echo "The home CI coordinator verifies this run and dispatches the exact SetForge commit."
 
-  slow-properties:
-    name: Slow property and state-machine tests
+  workbox-integration:
+    name: Workbox trigger / integration
+    if: github.event_name == 'workbox_poll_only'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --extra dev
-      - name: Select bounded pytest workers
-        id: pytest-workers
-        run: |
-          cpus=$(nproc)
-          workers=$(( cpus < 6 ? cpus : 6 ))
-          echo "count=$workers" >> "$GITHUB_OUTPUT"
-      - name: Run exhaustive properties without coverage overhead
-        env:
-          HYPOTHESIS_PROFILE: parallel
-        run: >-
-          uv run pytest -n "${{ steps.pytest-workers.outputs.count }}" --dist=worksteal
-          -m "slow and not e2e_docker and not test_infra" --no-cov
-
-  pr-e2e-smoke:
-    name: E2E Docker smoke (PR)
-    # A fast golden-path subset of the full e2e_docker suite (the full suite
-    # runs nightly — see nightly.yml). Gives every PR a real install/validate
-    # smoke without paying the ~40-min full-suite cost.
-    if: github.event_name == 'pull_request'
-    concurrency:
-      group: e2e-smoke-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    runs-on: ubuntu-latest
-    needs: tests
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --extra dev
-      - name: Compute E2E image tag
-        id: tag
-        run: |
-          uv run python -c 'from tests.docker.image import _image_tag; print("image_tag=" + _image_tag("smoke"))' >> "$GITHUB_OUTPUT"
-      - name: Build E2E image (with GHA cache)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: tests/docker/Dockerfile
-          target: smoke
-          tags: ${{ steps.tag.outputs.image_tag }}
-          load: true
-          cache-from: |
-            type=gha,scope=e2e-smoke
-            type=gha,scope=e2e-full
-          cache-to: type=gha,scope=e2e-smoke,mode=max
-      - name: Run E2E smoke subset
-        # The thin `smoke`-marked golden-path subset only. --no-cov for the
-        # same xdist/pytest-cov reason as the full job in nightly.yml.
-        run: uv run pytest -m "e2e_docker and smoke and not network_canary" -v --no-cov
-
-  pr-mutmut-diff:
-    name: Mutation testing (PR diff)
-    # Function-granular diff-scoped mutation gate. mutmut is scoped to only the
-    # core files this PR changed (the full-engine run is the nightly job in
-    # nightly.yml), and a survivor is blocking only when its function overlaps a
-    # changed line. The gate decision is the SCRIPT's own exit code, never
-    # mutmut's raw exit (mutmut exits nonzero on survivors by design). NO
-    # continue-on-error: a surviving mutant on changed lines fails the PR.
-    if: github.event_name == 'pull_request'
-    concurrency:
-      group: mutmut-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    runs-on: ubuntu-latest
-    needs: tests
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Full history: the gate's `git merge-base origin/main HEAD` needs the
-          # fork point, which a shallow clone does not have.
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --extra dev
-      - run: uv run python scripts/mutmut_diff_gate.py
-
-  build-verify:
-    name: Build + twine check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - name: Build sdist + wheel
-        run: uv build
-      - name: Twine-check the built artifacts
-        run: uv tool run --from twine twine check --strict dist/*
+      - run: echo "The home CI coordinator verifies this pull request and dispatches its Docker and mutation checks."
 
   secrets-scan:
     name: Secrets scan (gitleaks)
