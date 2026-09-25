@@ -230,6 +230,8 @@ def test_preview_uses_planned_keep_live_action(
     live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
     live.parent.mkdir(parents=True)
     live.write_text("host-owned first-install content\n", encoding="utf-8")
+    tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
+    shutil.copymode(tracked, live)
 
     result = CliRunner().invoke(
         app,
