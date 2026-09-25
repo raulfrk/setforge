@@ -26,6 +26,7 @@ repomix-output.*
 
 # Python / uv
 .venv/
+.ci-toolchain/
 __pycache__/
 *.py[cod]
 .pytest_cache/
