@@ -348,7 +348,11 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                             or entry.local_hash != content_sha(live)
                             or entry.hunks
                             != (
-                                reconcile_hunks.serialize(line_units)
+                                reconcile_hunks.serialize(
+                                    line_units,
+                                    allow_relocation=sub_src.suffix.lower()
+                                    in {".md", ".markdown"},
+                                )
                                 if fmt is None
                                 else su_mod.serialize_structured(key_units)
                             )
@@ -510,7 +514,9 @@ def _capture_staged_plain(
         base=base,
         local=live,
         staged=True,
-        hunks=reconcile_hunks.serialize(hunks),
+        hunks=reconcile_hunks.serialize(
+            hunks, allow_relocation=src.suffix.lower() in {".md", ".markdown"}
+        ),
         drafts=drafts,
     )
     warnings: list[str] = []

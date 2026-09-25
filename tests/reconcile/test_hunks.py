@@ -576,6 +576,13 @@ def test_serialize_mints_reloc_anchor_for_local_section() -> None:
     assert row["reloc_anchor"] == "## My Tweaks"
 
 
+def test_serialize_without_relocation_drops_existing_anchor() -> None:
+    stale = replace(_local_section(), reloc_anchor="## My Tweaks")
+    (row,) = serialize([stale], allow_relocation=False)
+    assert row["cls"] == HunkClass.LOCAL.value
+    assert "reloc_anchor" not in row
+
+
 def test_serialize_no_reloc_anchor_for_headingless_local_hunk() -> None:
     (plain,) = extract_hunks(b"alpha\nbeta\ngamma\n", b"alpha\nBETA-EDITED\ngamma\n")
     assert plain.label == "BETA-EDITED"

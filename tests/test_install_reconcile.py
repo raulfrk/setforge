@@ -21,8 +21,13 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import base_store, reconcile
+from setforge import base_store, locking, reconcile
+from setforge.capture import capture_profile, preview_capture_profile
 from setforge.cli import app
+from setforge.cli.stage import Decision, _apply, collect_stages, walk
+from setforge.config import load_config, resolve_profile
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import HunkClass
 from setforge.transitions import transitions_root
 
 _PROFILE = "test-recon"
@@ -366,6 +371,88 @@ def test_converged_dry_run_previews_no_transition_and_mutates_nothing(
     assert _transition_dirs() == transitions_before
     assert _base_mtime_ns() == base_mtime_before
     assert _live().stat().st_mtime_ns == live_mtime_before
+
+
+def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) -> None:
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  note:\n"
+        "    src: note.toml\n"
+        "    dst: ~/.setforge_recon/note.toml\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - note\n",
+        encoding="utf-8",
+    )
+    tracked = repo / "tracked" / "note.toml"
+    tracked.parent.mkdir(parents=True)
+    base = b'model = "default"\n'
+    tracked.write_bytes(base)
+    assert _install(config).exit_code == 0
+
+    live = Path.home() / ".setforge_recon" / "note.toml"
+    local = base + b"# Auto-injected by opencodex (undo: ocx restore)\n"
+    live.write_bytes(local)
+    cfg = load_config(config)
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, _PROFILE), repo, _PROFILE)
+    _apply(
+        _PROFILE,
+        stage,
+        walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
+    )
+
+    (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
+    assert row["cls"] == HunkClass.LOCAL.value
+    assert "reloc_anchor" not in row
+
+    compare = CliRunner().invoke(
+        app, ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"]
+    )
+    assert compare.exit_code == 0, compare.output
+    assert "expected" in compare.output
+
+    dry_run = _install(config, "--dry-run")
+    assert dry_run.exit_code == 0, dry_run.output
+    assert f"WOULD noop      {live}" in dry_run.output
+    assert live.read_bytes() == local
+    assert tracked.read_bytes() == base
+
+    (preview,) = preview_capture_profile(
+        cfg, _PROFILE, repo, resolved=resolve_profile(cfg, _PROFILE)
+    )
+    assert preview.store_update is False
+    capture_profile(cfg, _PROFILE, repo, setforge_yaml_path=config)
+    (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
+    assert "reloc_anchor" not in row
+    assert tracked.read_bytes() == base
+
+    # Hosts affected before this fix already have the mistaken marker in state.
+    with locking.profile_lock(_PROFILE):
+        index = reconcile_store.read_index(_PROFILE)
+        index.files["note"].hunks[0]["reloc_anchor"] = (
+            "# Auto-injected by opencodex (undo: ocx restore)"
+        )
+        reconcile_store.write_index(_PROFILE, index)
+    compare = CliRunner().invoke(
+        app, ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"]
+    )
+    assert compare.exit_code == 0, compare.output
+    assert "expected" in compare.output
+    dry_run = _install(config, "--dry-run")
+    assert dry_run.exit_code == 0, dry_run.output
+    assert f"WOULD noop      {live}" in dry_run.output
+
+    (stage,) = collect_stages(cfg, resolve_profile(cfg, _PROFILE), repo, _PROFILE)
+    _apply(
+        _PROFILE,
+        stage,
+        walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
+    )
+    (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
+    assert "reloc_anchor" not in row
 
 
 def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) -> None:

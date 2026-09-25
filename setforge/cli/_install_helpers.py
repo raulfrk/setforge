@@ -95,7 +95,6 @@ from setforge.secrets import SecretsScanResult
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
-    validate_host_local_sections_file_type,
 )
 from setforge.ui.diffview import to_fragments, two_way_lines
 
@@ -113,9 +112,8 @@ def _load_validated_host_local_sections(
     every tracked_file in the resolved profile that carries at least one
     host-local section. tracked_files NOT in the resolved profile are
     dropped silently (no error — the user may target a different profile on
-    a different host). Non-markdown ``src`` still routes through
-    :func:`validate_host_local_sections_file_type` as a defensive gate,
-    though the store only ever projects markdown reloc sections.
+    a different host). Ignore stale relocation markers on non-Markdown files:
+    older staging could mint one from a ``#`` comment in a TOML file.
 
     STAGE B retires the local.yaml ``host_local_sections`` declaration: the
     sections now live as LOCAL units in the reconcile store, read back by
@@ -131,7 +129,8 @@ def _load_validated_host_local_sections(
             continue
         tracked_file = cfg.tracked_files[tf_id]
         src = resolve_src(tracked_file, repo_root)
-        validate_host_local_sections_file_type(tf_id, len(sections_map), src)
+        if src.suffix.lower() not in {".md", ".markdown"}:
+            continue
         result[tf_id] = sections_map
     return result
 

@@ -545,7 +545,9 @@ def assert_stage_fidelity(
         )
 
 
-def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
+def serialize(
+    hunks: list[Hunk], *, allow_relocation: bool = True
+) -> list[dict[str, object]]:
     """Project hunks to their persisted index rows (class + identity, no spans).
 
     A matched hunk preserves its transient ``confirmed_hash`` as the persisted
@@ -554,6 +556,10 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
     identity of its shareable draft (the draft *bytes* live in the ``drafts/``
     store, never the index). Other classes omit the key so existing rows stay
     byte-stable.
+
+    ``allow_relocation`` is false for non-Markdown files, where a ``#`` comment
+    must not become a host-local Markdown section. It also drops an anchor
+    previously mis-minted for such a file when it is staged again.
 
     MINT: a LOCAL hunk that carries no ``reloc_anchor`` yet gets one minted from
     its own markdown heading identity (:func:`_section_heading`), pinning a
@@ -580,8 +586,8 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
         }
         if hunk.cls is HunkClass.SHARED_DRAFTED and hunk.draft_hash is not None:
             row["draft_hash"] = hunk.draft_hash
-        reloc = hunk.reloc_anchor
-        if reloc is None and hunk.cls is HunkClass.LOCAL:
+        reloc = hunk.reloc_anchor if allow_relocation else None
+        if allow_relocation and reloc is None and hunk.cls is HunkClass.LOCAL:
             reloc = _section_heading(hunk)
         if reloc is not None:
             row["reloc_anchor"] = reloc

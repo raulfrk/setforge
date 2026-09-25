@@ -1227,7 +1227,9 @@ def _prepare_persist(
         local=final_live,
         staged=(entry.staged if entry is not None else False)
         or bool(result.decided_refs),
-        hunks=hunks_mod.serialize(merged),
+        hunks=hunks_mod.serialize(
+            merged, allow_relocation=stage.src.suffix.lower() in {".md", ".markdown"}
+        ),
         drafts=drafts,
     )
 
