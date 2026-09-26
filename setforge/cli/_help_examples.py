@@ -474,7 +474,7 @@ Examples:
 
 \b
   # Machine-readable: stable JSON envelope (ANSI-free in a pipe)
-  setforge inspect CLAUDE.md --profile=<profile> --format=json
+  setforge --format=json inspect CLAUDE.md --profile=<profile>
 """
 
 

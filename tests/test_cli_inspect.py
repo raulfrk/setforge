@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,24 @@ def test_inspect_human_renders_three_panes(
     assert result.exit_code == 0, result.output
     assert "live edit" in result.output
     assert "upstream edit" in result.output
+
+
+def test_rendered_inspect_json_help_example_executes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg_path, _ = _setup(tmp_path, monkeypatch)
+    runner = CliRunner()
+    help_result = runner.invoke(app, ["inspect", "--help"], terminal_width=140)
+    assert help_result.exit_code == 0
+    example = next(
+        line.strip()
+        for line in help_result.stdout.splitlines()
+        if "setforge " in line and "--format=json" in line
+    )
+    args = shlex.split(example.replace("<profile>", "p"))
+    result = runner.invoke(app, [*args[1:], f"--config={cfg_path}"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["command"] == "inspect"
 
 
 def test_inspect_json_envelope_is_ansi_free(
