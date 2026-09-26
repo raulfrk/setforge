@@ -275,7 +275,7 @@ def _validate(name: str, raw_path: str, layer: str) -> Path:
         raise BinaryOverrideInvalid(
             layer=layer, binary=name, path=raw_path, reason="empty path"
         )
-    p = Path(raw_path)
+    p = Path(raw_path).absolute()
     if not p.exists():
         raise BinaryOverrideInvalid(
             layer=layer, binary=name, path=raw_path, reason="not found"
@@ -321,7 +321,7 @@ def resolve_binary(name: str) -> Path | None:
     if (raw := _load_local_config().get(name)) is not None:
         return _validate(name, raw, layer="config")
     which = shutil.which(name)
-    return Path(which) if which else None
+    return Path(which).absolute() if which else None
 
 
 def ensure_local_config_stub() -> None:

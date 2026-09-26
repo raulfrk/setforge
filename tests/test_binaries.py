@@ -146,6 +146,32 @@ def test_validate_returns_path_for_valid_executable(tmp_path) -> None:
     assert result == bin_path
 
 
+@pytest.mark.parametrize("layer", ["cli", "env", "config", "path"])
+def test_relative_binary_path_survives_child_cwd_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layer: str
+) -> None:
+    import subprocess
+
+    executable = _make_executable(tmp_path / "code")
+    monkeypatch.chdir(tmp_path)
+    if layer == "cli":
+        binaries.set_cli_overrides(code="./code")
+    elif layer == "env":
+        monkeypatch.setenv("SETFORGE_CODE_BIN", "./code")
+    elif layer == "config":
+        binaries.LOCAL_CONFIG_PATH.write_text("binaries:\n  code: ./code\n")
+    else:
+        monkeypatch.setattr(binaries.shutil, "which", lambda _name: "./code")
+    resolved = binaries.resolve_binary("code")
+    assert resolved == executable
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    result = subprocess.run(
+        [str(resolved)], cwd=elsewhere, check=True, capture_output=True
+    )
+    assert result.returncode == 0
+
+
 def test_resolve_falls_back_to_which(monkeypatch, tmp_path) -> None:
     fake = _make_executable(tmp_path / "code")
     monkeypatch.setattr(
