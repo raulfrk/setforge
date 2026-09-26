@@ -195,8 +195,9 @@ def test_participating_plain_binary_fails_closed_before_wholesale_capture(
     assert src.read_bytes() == b"tracked before\n"
 
 
+@pytest.mark.parametrize("filename", ["missing.md", "missing.json"])
 def test_participating_plain_missing_live_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
@@ -204,9 +205,10 @@ def test_participating_plain_missing_live_fails_closed(
     from setforge.reconcile import store
     from setforge.reconcile.types import file_id
 
-    src = tmp_path / "tracked" / "missing"
-    dst = tmp_path / "live" / "missing"
+    src = tmp_path / "tracked" / filename
+    dst = tmp_path / "live" / filename
     _write(src, "tracked before\n")
+    _write(dst, "prior live\n")
     with locking.profile_lock("p"):
         store.record(
             "p",
@@ -217,6 +219,15 @@ def test_participating_plain_missing_live_fails_closed(
             hunks=[],
         )
 
+    dst.unlink()
+    config = Config(
+        tracked_files={"missing": TrackedFile(src=src, dst=str(dst))},
+        profiles={"p": Profile(tracked_files=["missing"])},
+    )
+    with pytest.raises(InvariantViolation, match="has no live file"):
+        preview_capture_profile(
+            config, "p", tmp_path, resolved=resolve_profile(config, "p")
+        )
     with pytest.raises(InvariantViolation, match="has no live file"):
         _capture_staged_plain("p", "missing", src, dst, auto=None)
     assert src.read_bytes() == b"tracked before\n"

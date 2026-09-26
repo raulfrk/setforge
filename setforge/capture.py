@@ -258,6 +258,7 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             fmt = su_mod.structured_format(sub_dst)
             if not sub_dst.exists():
+                _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
                 previews.append(
                     _preview_result(
                         sub_name,
