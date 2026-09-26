@@ -16,6 +16,7 @@ import pytest
 from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
 from setforge.errors import (
+    ConfigError,
     ExtensionInstallFailed,
     ExtensionToolMissing,
     ProfileNotFound,
@@ -431,15 +432,21 @@ def test_reconcile_continues_after_install_failure(
 # ---- ext add / ext remove guards ----------------------------------------
 
 
-def test_add_to_include_rejects_when_in_exclude(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extension_id", ["drop.me", "DROP.ME"])
+def test_add_to_include_rejects_when_in_exclude(
+    tmp_path: Path, extension_id: str
+) -> None:
     cfg = _write_fixture(tmp_path)
     from setforge.errors import ConfigError as _ConfigError
 
     with pytest.raises(_ConfigError, match="exclude"):
-        add_to_include(cfg, "base", "drop.me")
+        add_to_include(cfg, "base", extension_id)
 
 
-def test_remove_from_include_errors_when_only_in_parent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extension_id", ["inherited.one", "INHERITED.ONE"])
+def test_remove_from_include_errors_when_only_in_parent(
+    tmp_path: Path, extension_id: str
+) -> None:
     """If ext is declared in an extends: ancestor, the user can't remove
     it from the child without going to the ancestor (or using --exclude).
     """
@@ -465,7 +472,7 @@ profiles:
     p = tmp_path / "setforge.yaml"
     p.write_text(fixture, encoding="utf-8")
     with pytest.raises(_ConfigError, match="inherited profile 'parent'"):
-        remove_from_include(p, "child", "inherited.one")
+        remove_from_include(p, "child", extension_id)
 
 
 def test_remove_from_include_with_exclude_flag_overrides_parent(
@@ -647,11 +654,28 @@ def test_add_to_include_unknown_profile_raises(tmp_path: Path) -> None:
         add_to_include(cfg, "ghost", "x")
 
 
-def test_remove_from_include_drops_entry(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extension_id", ["keep.me", "Keep.Me", "KEEP.ME"])
+def test_remove_from_include_drops_entry(tmp_path: Path, extension_id: str) -> None:
     cfg = _write_fixture(tmp_path)
-    changed = remove_from_include(cfg, "base", "keep.me")
+    changed = remove_from_include(cfg, "base", extension_id)
     assert changed is True
     assert "keep.me" not in _profile_ext_includes(cfg, "base")
+    before = cfg.read_bytes()
+    assert remove_from_include(cfg, "base", extension_id) is False
+    assert cfg.read_bytes() == before
+
+
+def test_extension_mutations_share_case_insensitive_identity(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    before = cfg.read_bytes()
+    assert add_to_include(cfg, "base", "KEEP.ME") is False
+    assert cfg.read_bytes() == before
+    assert remove_from_include(cfg, "base", "KEEP.ME", add_to_exclude_list=True)
+    before = cfg.read_bytes()
+    assert not remove_from_include(cfg, "base", "keep.me", add_to_exclude_list=True)
+    assert cfg.read_bytes() == before
+    with pytest.raises(ConfigError, match="exclude"):
+        add_to_include(cfg, "base", "Keep.Me")
 
 
 def test_remove_from_include_with_exclude_flag_appends_to_exclude(

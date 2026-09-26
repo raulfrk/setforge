@@ -552,7 +552,10 @@ def _extension_ref_for(cfg: Config, profile: str, ext_id: str) -> str | None:
     """Return the profile ``packages`` ref that declares extension ``ext_id``."""
     for ref in cfg.profiles[profile].packages:
         pkg = cfg.packages.get(ref)
-        if isinstance(pkg, ExtensionPackage) and pkg.extension == ext_id:
+        if (
+            isinstance(pkg, ExtensionPackage)
+            and pkg.extension.casefold() == ext_id.casefold()
+        ):
             return ref
     return None
 
@@ -570,7 +573,10 @@ def _mint_extension_package(doc: CommentedMap, key: str, ext_id: str) -> None:
     packages = doc.setdefault("packages", CommentedMap())
     existing = packages.get(key)
     if existing is not None:
-        if existing.get("type") == "extension" and existing.get("extension") == ext_id:
+        if (
+            existing.get("type") == "extension"
+            and str(existing.get("extension")).casefold() == ext_id.casefold()
+        ):
             return
         raise ConfigError(
             f"ext add {key!r} collides with an existing top-level packages "
@@ -611,7 +617,9 @@ def add_to_include(
     cfg = load_config(config_path)
     if profile not in cfg.profiles:
         raise ProfileNotFound(f"profile not found: {profile}")
-    if ext_id in _profile_exclude_ids(cfg, profile):
+    if ext_id.casefold() in {
+        item.casefold() for item in _profile_exclude_ids(cfg, profile)
+    }:
         raise ConfigError(
             f"{ext_id!r} is in {profile}.reconcile.extensions.exclude — remove it "
             "from exclude first (e.g. by editing setforge.yaml) before adding it"
@@ -625,10 +633,12 @@ def add_to_include(
             "'exclude wins' would silently drop the addition on reconcile"
         )
     existing_pkg = cfg.packages.get(key)
+    if key == ext_id and _extension_ref_for(cfg, profile, ext_id) is not None:
+        return False
     if (
         key in cfg.profiles[profile].packages
         and isinstance(existing_pkg, ExtensionPackage)
-        and existing_pkg.extension == ext_id
+        and existing_pkg.extension.casefold() == ext_id.casefold()
     ):
         return False
 
@@ -653,7 +663,9 @@ def _ancestor_declaring(cfg: Config, profile: str, ext_id: str) -> str | None:
         if current not in cfg.profiles or current in visited:
             return None
         visited.add(current)
-        if ext_id in _profile_include_ids(cfg, current):
+        if ext_id.casefold() in {
+            item.casefold() for item in _profile_include_ids(cfg, current)
+        }:
             return current
         current = cfg.profiles[current].extends
     return None
@@ -671,7 +683,9 @@ def _ancestor_excluding(cfg: Config, profile: str, ext_id: str) -> str | None:
         if current not in cfg.profiles or current in visited:
             return None
         visited.add(current)
-        if ext_id in _profile_exclude_ids(cfg, current):
+        if ext_id.casefold() in {
+            item.casefold() for item in _profile_exclude_ids(cfg, current)
+        }:
             return current
         current = cfg.profiles[current].extends
     return None
@@ -807,7 +821,7 @@ def remove_from_include(
             changed = True
     if add_to_exclude_list:
         exclude = _profile_reconcile_exclude(doc, profile)
-        if ext_id not in exclude:
+        if ext_id.casefold() not in {item.casefold() for item in exclude}:
             exclude.append(ext_id)
             changed = True
     if not changed:
