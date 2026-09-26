@@ -237,13 +237,23 @@ def test_cleanup_on_fchmod_failure(
     assert not target.with_name(target.name + ".bak").exists()
 
 
+@pytest.mark.parametrize("backup_is_symlink", [False, True])
 def test_cleanup_on_backup_copy_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backup_is_symlink: bool
 ) -> None:
     target = tmp_path / "file.txt"
     target.write_text("old\n")
+    backup = target.with_name("file.txt.bak")
+    previous = tmp_path / "previous"
+    previous.write_text("recovery copy\n")
+    if backup_is_symlink:
+        backup.symlink_to(previous)
+    else:
+        backup.write_text("recovery copy\n")
 
     def boom(src: object, dst: object) -> None:
+        assert isinstance(dst, Path)
+        dst.write_bytes(b"partial backup")
         raise OSError("simulated copy2 failure")
 
     monkeypatch.setattr(atomicio.shutil, "copy2", boom)
@@ -251,6 +261,9 @@ def test_cleanup_on_backup_copy_failure(
         atomicio.atomic_write_text(target, "new\n", backup=True)
 
     assert target.read_text() == "old\n"
+    assert backup.read_text() == "recovery copy\n"
+    assert backup.is_symlink() is backup_is_symlink
+    assert previous.read_text() == "recovery copy\n"
     assert list(tmp_path.glob(".*.tmp")) == []
 
 

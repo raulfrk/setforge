@@ -59,10 +59,10 @@ def atomic_write_bytes(
     its own. An ``os.fchmod`` failure propagates by contract.
 
     ``backup`` (keyword-only): when true, snapshot the CURRENT
-    destination to a sibling ``<name>.bak`` before the rename. A
-    pre-existing ``.bak`` is unlinked first — ``shutil.copy2`` follows a
-    symlink at its destination, so without the unlink a ``.bak`` symlink
-    would be written THROUGH instead of replaced. The destination stays
+    destination to a sibling ``<name>.bak`` before the rename. The copy is
+    staged in a temporary sibling before atomically replacing ``.bak``;
+    a failed copy preserves the previous backup, and an existing backup
+    symlink is replaced without writing through it. The destination stays
     in place until ``os.replace`` swaps the new content in, so there is
     no window where it is absent. Callers must pass ``backup=True`` only
     when the destination exists.
@@ -80,6 +80,7 @@ def atomic_write_bytes(
     )
     tmp_path = Path(tmp_name)
     backup_path: Path | None = None
+    backup_temp: Path | None = None
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
@@ -90,12 +91,20 @@ def atomic_write_bytes(
                 os.fsync(fh.fileno())
         if backup:
             backup_path = path.with_name(path.name + ".bak")
-            with contextlib.suppress(FileNotFoundError):
-                backup_path.unlink()
-            shutil.copy2(path, backup_path)
+            backup_fd, backup_name = tempfile.mkstemp(
+                dir=str(path.parent), prefix=f".{path.name}.bak.", suffix=".tmp"
+            )
+            backup_temp = Path(backup_name)
+            with os.fdopen(backup_fd, "wb") as backup_file:
+                shutil.copy2(path, backup_temp)
+                if fsync:
+                    os.fsync(backup_file.fileno())
+            backup_temp.replace(backup_path)
         tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
+        if backup_temp is not None:
+            backup_temp.unlink(missing_ok=True)
         raise
     if fsync:
         fsync_dir(path.parent)
