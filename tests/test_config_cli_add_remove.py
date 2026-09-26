@@ -17,6 +17,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.errors import SetforgeError
 
 
 @pytest.fixture
@@ -63,17 +64,68 @@ def seed_tracked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tracked
 
 
-def test_add_local_scalar_with_yes(runner: CliRunner, seed_local: Path) -> None:
+@pytest.mark.parametrize("value", ["/usr/local/bin/code", "true", "0o755"])
+def test_add_local_scalar_with_yes(
+    runner: CliRunner, seed_local: Path, value: str
+) -> None:
     """``add --local binaries.code /usr/local/bin/code --yes`` rewrites scalar."""
     result = runner.invoke(
         app,
-        ["config", "add", "--local", "binaries.code", "/usr/local/bin/code", "--yes"],
+        ["config", "add", "--local", "binaries.code", value, "--yes"],
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     text = seed_local.read_text(encoding="utf-8")
-    assert "/usr/local/bin/code" in text
+    from setforge.migrations._yaml_ops import load_yaml_mapping
+
+    assert load_yaml_mapping(seed_local)["binaries"]["code"] == value
     # Round-trip preserved the leading comment.
     assert "# comment-A" in text
+
+
+@pytest.mark.parametrize("value", ["0o755", "0o640", "0o1755", "0o000"])
+def test_add_tracked_octal_mode_round_trips(
+    runner: CliRunner, seed_tracked: Path, value: str
+) -> None:
+    from ruamel.yaml.scalarint import OctalInt
+
+    from setforge.config import load_config
+    from setforge.migrations._yaml_ops import load_yaml_mapping
+
+    result = runner.invoke(
+        app, ["config", "add", "--tracked", "tracked_files.foo.mode", value, "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    mode = load_yaml_mapping(seed_tracked)["tracked_files"]["foo"]["mode"]
+    assert isinstance(mode, OctalInt)
+    assert load_config(seed_tracked).tracked_files["foo"].mode == int(value, 8)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "755",
+        "0755",
+        "0o4755",
+        "0o2755",
+        "0o10000",
+        "0o888",
+        "true",
+        "null",
+        '"0o755"',
+        "[invalid",
+    ],
+)
+def test_add_invalid_mode_leaves_config_unchanged(
+    runner: CliRunner, seed_tracked: Path, value: str
+) -> None:
+    before = seed_tracked.read_bytes()
+    result = runner.invoke(
+        app, ["config", "add", "--tracked", "tracked_files.foo.mode", value, "--yes"]
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SetforgeError)
+    assert "mode" in str(result.exception)
+    assert seed_tracked.read_bytes() == before
 
 
 def test_add_local_unknown_path_errors(runner: CliRunner, seed_local: Path) -> None:

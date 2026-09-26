@@ -33,6 +33,8 @@ from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.scalarint import OctalInt
 
 from setforge.errors import SetforgeError
 from setforge.migrations._yaml_ops import yaml_rt
@@ -334,6 +336,22 @@ def apply_add(
         if value in existing:
             raise SetforgeError(f"{dotted!r} already contains {value!r}")
         existing.append(value)
+    elif (
+        dotted.startswith("tracked_files.")
+        and dotted.endswith(".mode")
+        and len(dotted.split(".")) == 3
+    ):
+        try:
+            mode = yaml_rt().load(value)
+        except YAMLError as exc:
+            raise SetforgeError(
+                f"{dotted}: mode must be a YAML octal integer, e.g. 0o755"
+            ) from exc
+        if not isinstance(mode, OctalInt):
+            raise SetforgeError(
+                f"{dotted}: mode must be a YAML octal integer, e.g. 0o755"
+            )
+        parent[leaf] = mode
     else:
         parent[leaf] = value
     return doc
