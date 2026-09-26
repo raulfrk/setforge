@@ -492,8 +492,26 @@ def publish_installed_package_claims_locked(
 def report_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
     """Return report-only results from the same frozen package plan."""
     cfg = Config.model_validate_json(plan.cfg_json)
+    # Direct batches already carry the effective action, including present packages.
+    reported_keys = set(plan.direct_keys)
+    package_actions = {
+        (decision.item.type, decision.item.identity.key): (
+            decision.action.value,
+            decision.observation is not None,
+        )
+        for decision in plan.ownership
+    }
     results = [
-        execute_bundle(cfg.bundles[name], cfg, report_only=True, graph=graph)
+        execute_bundle(
+            cfg.bundles[name],
+            cfg,
+            report_only=True,
+            graph=graph,
+            reported_keys=reported_keys,
+            package_actions=package_actions,
+            platform_os=plan.platform_os,
+            platform_arch=plan.platform_arch,
+        )
         for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
     ]
     results.extend(

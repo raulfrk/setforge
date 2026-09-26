@@ -59,6 +59,9 @@ def dry_run_packages(
     plan: ProvisioningPlan | None = None,
 ) -> None:
     typer.echo("=== would-be package provision ===")
+    bundles = plan.bundles if plan is not None else resolved.bundles
+    if bundles:
+        typer.echo(f"  bundles: {', '.join(bundles)}")
     if plan is not None:
         for decision in plan.ownership:
             if decision.action is PackageAction.ADOPT:

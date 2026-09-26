@@ -179,6 +179,7 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
     *,
     provisioner: Provisioner | None = None,
     report_only: bool = False,
+    reported_keys: set[tuple[str, str]] | None = None,
     graph: CapabilityGraph | None = None,
     package_actions: dict[tuple[str, str], tuple[str, bool]] | None = None,
     planned_apply: Callable[[ProvisionItem], ProvisionOutcome | None] | None = None,
@@ -191,7 +192,15 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
         raise ConfigError("bundle capability graph changed after planning; retry")
     graph = validated if graph is None else graph
     if report_only:
-        return _report_bundle(bundle, cfg, graph=graph)
+        return _report_bundle(
+            bundle,
+            cfg,
+            graph=graph,
+            seen=reported_keys if reported_keys is not None else set(),
+            package_actions=package_actions or {},
+            platform_os=platform_os,
+            platform_arch=platform_arch,
+        )
     outcomes: list[ProvisionOutcome] = []
     installed: list[Identity] = []
     # satisfied=OK or dedup no-op; skip of an unsatisfied dep propagates transitively.
@@ -259,22 +268,32 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
 
 
 def _report_bundle(
-    bundle: BundleSpec, cfg: Config, *, graph: CapabilityGraph
+    bundle: BundleSpec,
+    cfg: Config,
+    *,
+    graph: CapabilityGraph,
+    seen: set[tuple[str, str]],
+    package_actions: dict[tuple[str, str], tuple[str, bool]],
+    platform_os: str | None,
+    platform_arch: str | None,
 ) -> ReconcileResult:
     installed: list[Identity] = []
-    seen: set[tuple[str, str]] = set()
     components = {component.id: component for component in bundle.components}
     for node in graph.ordered():
         component = components[node.id]
         if node.target_kind is not CapabilityTargetKind.PACKAGE:
             continue
-        identity = _resolve_item(component, cfg).identity
-        item = _resolve_item(component, cfg)
+        item = _resolve_item(
+            component, cfg, platform_os=platform_os, platform_arch=platform_arch
+        )
         identity = item.identity
         item_key = (item.type, identity.key)
         if item_key in seen:
             continue
         seen.add(item_key)
+        action = package_actions.get(item_key)
+        if action is not None and action[0] in {"none", "adopt", "hold"}:
+            continue
         installed.append(identity)
     return ReconcileResult(
         delta=ProvisionDelta(installed=tuple(installed)), outcomes=(), reported=True

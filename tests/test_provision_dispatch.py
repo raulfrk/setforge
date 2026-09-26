@@ -52,6 +52,7 @@ from setforge.provision.dispatch import (
     has_hard_failure,
     plan_provisioning,
     publish_installed_package_claims_locked,
+    report_provisioning,
     resolve_provision_items,
     run_provisioning,
     validate_provisioning,
@@ -568,6 +569,7 @@ def test_bundle_existing_package_is_adopted_without_apply(
     )
 
     assert [decision.action for decision in plan.ownership] == [PackageAction.ADOPT]
+    assert all(result.delta.is_empty() for result in report_provisioning(plan))
     results = apply_provisioning(plan)
     assert applied == []
     assert results[0].outcomes[0].outcome is Outcome.SKIP
@@ -1079,6 +1081,64 @@ def test_report_only_applies_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert results[0].outcomes == ()
     # The delta still names the planned crate.
     assert Identity(key="ast-grep", display="ast-grep") in results[0].delta.installed
+
+
+@pytest.mark.parametrize(
+    ("present", "direct"), [(False, True), (True, True), (False, False)]
+)
+def test_dry_run_shared_direct_and_bundled_package_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    present: bool,
+    direct: bool,
+) -> None:
+    from setforge.cli._provision_helpers import dry_run_packages
+    from setforge.provision.cargo import CargoProvisioner
+
+    identity = Identity(key="shared", display="shared")
+    monkeypatch.setattr(
+        CargoProvisioner, "probe", lambda self: {identity} if present else set()
+    )
+    cfg = _cfg(
+        packages={"shared": CargoPackage(crate="shared")},
+        bundles={
+            name: BundleSpec(components=[BundleComponent(id="tool", package="shared")])
+            for name in ("first", "second")
+        },
+    )
+    resolved = ResolvedProfile(
+        packages=["shared"] if direct else [], bundles=["first", "second"]
+    )
+    dry_run_packages(cfg, resolved, plan=plan_provisioning(cfg, resolved))
+    output = capsys.readouterr().out
+    assert output.count("WOULD provision shared") == (0 if present else 1)
+    assert "first" in output
+    assert "second" in output
+
+
+def test_dry_run_same_name_across_providers_is_not_deduplicated(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from setforge.cli._provision_helpers import dry_run_packages
+    from setforge.provision.cargo import CargoProvisioner
+    from setforge.provision.python import PythonProvisioner
+
+    for provider in (CargoProvisioner, PythonProvisioner):
+        monkeypatch.setattr(provider, "probe", lambda self: set())
+    cfg = _cfg(
+        packages={"cargo": CargoPackage(crate="ruff")},
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="cargo", package="cargo"),
+                    BundleComponent(id="python", python=PythonPackage(package="ruff")),
+                ]
+            )
+        },
+    )
+    resolved = ResolvedProfile(packages=["cargo"], bundles=["tools"])
+    dry_run_packages(cfg, resolved, plan=plan_provisioning(cfg, resolved))
+    assert capsys.readouterr().out.count("WOULD provision ruff") == 2
 
 
 def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
