@@ -7,11 +7,12 @@ import hashlib
 import io
 import stat
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from setforge.config import GitHubReleasePackage
+from setforge.config import GitHubReleasePackage, PlatformAssetVariant
 from setforge.provision import github_release as gh
 from setforge.provision.driver import reconcile
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
@@ -88,6 +89,59 @@ def test_happy_path_installs_and_records_receipt(tmp_path: Path, monkeypatch) ->
     assert dest.stat().st_mode & stat.S_IXUSR
     store = prov._receipts
     assert store.path_for(Identity(key=pkg.repo, display=pkg.repo)) == dest
+
+
+@pytest.mark.parametrize("checksum_state", ["valid", "missing", "mismatch"])
+def test_unlocked_platform_install_uses_selected_checksum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checksum_state: str
+) -> None:
+    payload = b"#!/bin/sh\necho platform\n"
+    checksum = (
+        None
+        if checksum_state == "missing"
+        else "sha256:" + "0" * 64
+        if checksum_state == "mismatch"
+        else _sha256(payload)
+    )
+    pkg = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v1.0.0",
+        binary="tool",
+        install=str(tmp_path / "bin"),
+        extract=False,
+        assets=(
+            PlatformAssetVariant(
+                asset="tool-linux", os="linux", arch="x86_64", checksum=checksum
+            ),
+        ),
+    )
+    item = replace(
+        _item(pkg), artifact="tool-linux", platform="linux-x86_64", checksum=checksum
+    )
+    assert pkg.checksum is None
+    prov = _provisioner(tmp_path, payload, monkeypatch)
+    downloads: list[str] = []
+
+    def download(url: str) -> bytes:
+        downloads.append(url)
+        return payload
+
+    monkeypatch.setattr(prov, "_download", download)
+
+    result = prov.apply_one(item)
+
+    assert len(downloads) == (0 if checksum_state == "missing" else 1)
+    if checksum_state == "valid":
+        assert result.outcome is Outcome.OK
+        assert (tmp_path / "bin/tool").read_bytes() == payload
+        receipt = prov._receipts.entry_for(item.identity, "github_release")
+        assert receipt is not None
+        assert receipt.checksum == checksum
+        assert receipt.artifact == "tool-linux"
+    else:
+        assert result.outcome is Outcome.HARD
+        assert not (tmp_path / "bin/tool").exists()
+        assert prov._receipts.entry_for(item.identity, "github_release") is None
 
 
 def test_nested_binary_installs_to_bare_renamed_destination(

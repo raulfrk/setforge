@@ -130,7 +130,7 @@ class GitHubReleaseProvisioner(Provisioner):
             )
 
         # Fail closed on a missing checksum BEFORE spending a download.
-        if pkg.checksum is None:
+        if item.checksum is None:
             return ProvisionOutcome(
                 item=item,
                 outcome=Outcome.HARD,
@@ -151,7 +151,7 @@ class GitHubReleaseProvisioner(Provisioner):
             rename=pkg.rename,
             extract=pkg.extract,
             chmod=pkg.chmod,
-            checksum=pkg.checksum,
+            checksum=item.checksum,
         )
         try:
             dest = install_from_bytes(data, spec, checksum_required=True)
@@ -162,7 +162,7 @@ class GitHubReleaseProvisioner(Provisioner):
         self._receipts.record(
             item.identity,
             version=pkg.tag,
-            checksum=pkg.checksum,
+            checksum=item.checksum,
             path=dest,
             provider=self.type,
             artifact=item.artifact or pkg.asset,
