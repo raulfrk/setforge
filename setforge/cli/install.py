@@ -218,7 +218,7 @@ class _CapabilityApplyResult:
 
     journal: operations.OperationJournal
     provision_results: tuple[ReconcileResult, ...]
-    deploy_outcome: install_helpers_mod.DeployOutcome
+    deploy_outcome: install_helpers_mod.DeployOutcome | None
     seeded: tuple[str, ...]
     ext_delta: transitions.ExtensionDelta | None
     ext_outcomes: tuple[transitions.ReconcileOutcome, ...]
@@ -1125,17 +1125,23 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 )
         if has_work:
             journal = operations.finish_checkpoint(journal)
+        status = CapabilityStatus.ACTIVE
+        detail = ""
+        if plan.provisioning.bundle_graphs:
+            if has_hard_failure(provision_results):
+                status = CapabilityStatus.FAILED
+                detail = "package provisioning reported a hard failure"
+            elif any(
+                outcome.outcome is Outcome.SOFT
+                for result in provision_results
+                for outcome in result.outcomes
+            ):
+                status = CapabilityStatus.SKIPPED
+                detail = "package prerequisite was skipped"
         return CapabilityActivation(
-            status=(
-                CapabilityStatus.FAILED
-                if has_hard_failure(provision_results)
-                and bool(plan.provisioning.bundle_graphs)
-                else CapabilityStatus.ACTIVE
-            ),
+            status=status,
             changed=any(not result.delta.is_empty() for result in provision_results),
-            detail="package provisioning reported a hard failure"
-            if has_hard_failure(provision_results)
-            else "",
+            detail=detail,
         )
 
     def apply_files() -> CapabilityActivation:
@@ -1326,7 +1332,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         if outcome.status
         in {
             CapabilityStatus.FAILED,
-            CapabilityStatus.BLOCKED,
             CapabilityStatus.RECOVERY_REQUIRED,
         }
     )
@@ -1335,8 +1340,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             f"{outcome.target_kind.value}={outcome.status.value}" for outcome in failed
         )
         raise SetforgeError(f"capability graph activation failed: {summary}")
-    if deploy_outcome is None:  # pragma: no cover - profile file phase is synthetic
-        raise AssertionError("capability graph omitted the tracked-file target")
     return _CapabilityApplyResult(
         journal=journal,
         provision_results=tuple(provision_results),
@@ -2569,7 +2572,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         plugin_outcomes = capability_result.plugin_outcomes
         codex_plugin_delta = capability_result.codex_plugin_delta
         codex_plugin_failed = capability_result.codex_plugin_failed
-        journal = _refresh_file_claims_checkpoint(plan, journal)
+        if deploy_outcome is not None:
+            journal = _refresh_file_claims_checkpoint(plan, journal)
+        else:
+            deploy_outcome = install_helpers_mod.DeployOutcome(
+                state_snapshots=(), prior_modes={}
+            )
         journal = operations.begin_checkpoint(
             journal,
             name="mcp-servers",

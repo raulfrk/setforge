@@ -394,8 +394,56 @@ def test_direct_node_rejects_string_target_kind() -> None:
 
 
 def test_activation_rejects_string_status() -> None:
-    with pytest.raises(ValueError, match="active or failed"):
+    with pytest.raises(ValueError, match="active, skipped, or failed"):
         CapabilityActivation("active", changed=False)  # type: ignore[arg-type]
+
+
+def test_skipped_prerequisite_blocks_transitively_without_compensation() -> None:
+    graph = CapabilityGraph(
+        (
+            CapabilityNode("tool", CapabilityTargetKind.PACKAGE, ()),
+            CapabilityNode("editor", CapabilityTargetKind.EXTENSION, ("tool",)),
+            CapabilityNode("plugin", CapabilityTargetKind.PLUGIN, ("editor",)),
+            CapabilityNode("file", CapabilityTargetKind.FILE, ()),
+        )
+    )
+    compensated: list[str] = []
+    outcomes = graph.execute(
+        (
+            CapabilityTargetAction(
+                CapabilityTargetKind.PACKAGE,
+                preflight=lambda: None,
+                activate=lambda: CapabilityActivation(CapabilityStatus.SKIPPED, True),
+                compensate=lambda: compensated.append("package"),
+            ),
+            CapabilityTargetAction(
+                CapabilityTargetKind.EXTENSION,
+                preflight=lambda: None,
+                activate=lambda: pytest.fail("blocked extension activated"),
+            ),
+            CapabilityTargetAction(
+                CapabilityTargetKind.PLUGIN,
+                preflight=lambda: None,
+                activate=lambda: pytest.fail("blocked plugin activated"),
+            ),
+            CapabilityTargetAction(
+                CapabilityTargetKind.FILE,
+                preflight=lambda: None,
+                activate=lambda: CapabilityActivation(CapabilityStatus.ACTIVE, True),
+                compensate=lambda: compensated.append("file"),
+            ),
+        )
+    )
+
+    assert [outcome.status for outcome in outcomes] == [
+        CapabilityStatus.SKIPPED,
+        CapabilityStatus.BLOCKED,
+        CapabilityStatus.BLOCKED,
+        CapabilityStatus.ACTIVE,
+    ]
+    assert outcomes[1].blocked_by == (CapabilityTargetKind.PACKAGE,)
+    assert outcomes[2].blocked_by == (CapabilityTargetKind.EXTENSION,)
+    assert compensated == []
 
 
 def test_graph_rejects_mutable_or_non_node_inventory() -> None:

@@ -30,6 +30,7 @@ class CapabilityStatus(StrEnum):
     """Durable meaning of one target-group activation attempt."""
 
     ACTIVE = "active"
+    SKIPPED = "skipped"
     FAILED = "failed"
     BLOCKED = "blocked"
     COMPENSATED = "compensated"
@@ -84,9 +85,10 @@ class CapabilityActivation:
     def __post_init__(self) -> None:
         if not isinstance(self.status, CapabilityStatus) or self.status not in {
             CapabilityStatus.ACTIVE,
+            CapabilityStatus.SKIPPED,
             CapabilityStatus.FAILED,
         }:
-            raise ValueError("activation status must be active or failed")
+            raise ValueError("activation status must be active, skipped, or failed")
         if not isinstance(self.changed, bool):
             raise ValueError("activation changed must be a bool")
 
@@ -192,7 +194,7 @@ class CapabilityGraph:
                     target_kind=group.target_kind,
                     node_ids=group.node_ids,
                     status=CapabilityStatus.BLOCKED,
-                    detail="prerequisite target failed",
+                    detail="prerequisite target is inactive",
                     blocked_by=blocked_by,
                 )
                 outcomes.append(outcome)
@@ -210,7 +212,7 @@ class CapabilityGraph:
             if activation.changed:
                 changed.append(group.target_kind)
 
-        if all(outcome.status is CapabilityStatus.ACTIVE for outcome in outcomes):
+        if not any(outcome.status is CapabilityStatus.FAILED for outcome in outcomes):
             return tuple(outcomes)
         return _compensate(outcomes, changed, action_by_kind)
 

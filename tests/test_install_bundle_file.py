@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -316,3 +317,66 @@ def test_install_refuses_name_collision(repo: Path) -> None:
     assert result.exit_code != 0, result.output
     live_real = Path.home() / ".local" / "share" / "rd" / "real.md"
     assert not live_real.exists()
+
+
+@pytest.mark.parametrize("dependent_file", [False, True])
+@pytest.mark.parametrize("failure", ["soft", "hard"])
+def test_package_failure_blocks_dependent_capabilities(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, dependent_file: bool, failure: str
+) -> None:
+    from setforge.file_ownership import file_resource_id
+    from setforge.ownership import OwnershipStore
+    from setforge.provision.protocol import Outcome, ProvisionItem, ProvisionOutcome
+
+    _write_launcher(repo)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    config = repo / "setforge.yaml"
+    dependency = "        depends_on: [tool]\n" if dependent_file else ""
+    config.write_text(
+        "tracked_files: {}\n"
+        "packages:\n  editor:\n    type: extension\n    extension: pub.editor\n"
+        "bundles:\n  app:\n    components:\n"
+        "      - id: tool\n        cargo: {crate: prerequisite}\n"
+        "      - id: editor\n        package: editor\n        depends_on: [tool]\n"
+        "      - id: launcher\n"
+        + dependency
+        + "        file:\n          src: launch.sh\n"
+        "          dst: ~/.local/share/rd/launch.sh\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n    bundles: [app]\n"
+    )
+    monkeypatch.setattr(
+        "setforge.provision.cargo.CargoProvisioner.probe", lambda _: set()
+    )
+
+    def skip(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        return ProvisionOutcome(
+            item=item, outcome=Outcome(failure), detail="no toolchain"
+        )
+
+    monkeypatch.setattr("setforge.provision.cargo.CargoProvisioner.apply_one", skip)
+    monkeypatch.setattr(
+        "setforge.vscode_extensions._ensure_code", lambda: Path("/fixture/code")
+    )
+    monkeypatch.setattr("setforge.vscode_extensions.list_installed", set)
+    activated: list[str] = []
+
+    def extensions(*args: object, **kwargs: object):
+        activated.append("extension")
+        return None, ()
+
+    monkeypatch.setattr("setforge.cli.install._apply_extension_plan", extensions)
+
+    result = _install(config, "--no-fetch")
+
+    assert (result.exit_code == 0) is (failure == "soft"), result.output
+    assert activated == []
+    status = "skipped" if failure == "soft" else "failed"
+    assert f"package={status}" in result.output
+    assert "extension=blocked" in result.output
+    if failure == "soft":
+        assert _launcher_live().exists() is not dependent_file
+        claim = OwnershipStore().read(file_resource_id(_launcher_live()))
+        assert (claim is None) is dependent_file
+    if failure == "soft" and not dependent_file:
+        assert _launcher_live().read_text() == "#!/bin/sh\necho hi\n"
