@@ -992,6 +992,11 @@ def _classify_entry(
         probe_stale=probe_stale,
         ownership_authorized=ownership_authorized,
     )
+    if entry.mode_drift:
+        drift_class = DriftClass.UNEXPECTED
+        reason = (
+            f"{reason}; declared mode differs" if reason else "declared mode differs"
+        )
     entry = replace(entry, drift_class=drift_class, reason=reason)
     is_unexpected = drift_class is DriftClass.UNEXPECTED
     return entry, is_unexpected

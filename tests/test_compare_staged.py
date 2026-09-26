@@ -87,6 +87,40 @@ def test_staged_shared_local_drift_is_expected(tmp_path: Path) -> None:
     assert report.has_unexpected_drift is False
 
 
+@pytest.mark.parametrize("mode", [0o600, 0o644])
+def test_staged_content_does_not_hide_declared_mode_drift(
+    tmp_path: Path, mode: int
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    hunks = _stage({"## Shell": HunkClass.SHARED, "## Paths": HunkClass.LOCAL})
+    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {})
+    config, repo = _config(tmp_path, tracked)
+    config.tracked_files["x"].mode = 0o600
+    destination = Path(config.tracked_files["x"].dst)
+    destination.chmod(mode)
+    entry = compare_profile(config, "p", repo).entries[0]
+    assert entry.mode_drift is (mode != 0o600)
+    assert entry.drift_class is (
+        DriftClass.EXPECTED if mode == 0o600 else DriftClass.UNEXPECTED
+    )
+    assert "staged" in (entry.reason or "")
+    if mode != 0o600:
+        assert "mode" in (entry.reason or "")
+    path = repo / "setforge.yaml"
+    path.write_text(
+        "version: 1\ntracked_files:\n"
+        f"  x: {{src: x, dst: {destination}, mode: 0o600}}\n"
+        "profiles:\n  p: {tracked_files: [x]}\n"
+    )
+    result = CliRunner().invoke(
+        app, ["compare", "--check", "--profile=p", f"--config={path}"]
+    )
+    assert result.exit_code == (0 if mode == 0o600 else 1), result.output
+
+
 def test_git_backed_staged_drift_without_container_claim_is_unexpected(
     tmp_path: Path,
 ) -> None:
