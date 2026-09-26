@@ -457,6 +457,10 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
             out[p] = p.read_text(encoding="utf-8")
         except FileNotFoundError:
             out[p] = None
+        except UnicodeDecodeError as exc:
+            raise SetforgeError(
+                f"cannot snapshot {p}: file is not valid UTF-8"
+            ) from exc
     return out
 
 

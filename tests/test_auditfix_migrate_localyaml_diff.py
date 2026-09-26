@@ -93,6 +93,37 @@ def _write_minimal_setforge_yaml(path: Path) -> None:
     )
 
 
+def test_invalid_utf8_local_input_fails_before_migration_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from setforge.cli import main
+
+    cfg = tmp_path / "setforge.yaml"
+    _write_minimal_setforge_yaml(cfg)
+    home = tmp_path / "home"
+    local = home.joinpath(*_LOCAL_YAML_RELPARTS)
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"broken: \xff\n")
+    before = cfg.read_bytes()
+    monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_TwoFileMigration(),))
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
+    monkeypatch.setattr(
+        "sys.argv", ["setforge", "migrate", "--apply", "--yes", f"--config={cfg}"]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().err
+    assert str(local) in output
+    assert "UTF-8" in output
+    assert "Traceback" not in output
+    assert cfg.read_bytes() == before
+    assert local.read_bytes() == b"broken: \xff\n"
+
+
 def test_apply_preview_shows_diff_for_home_derived_local_yaml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
