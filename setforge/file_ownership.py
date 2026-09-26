@@ -6,9 +6,10 @@ import hashlib
 import json
 import stat
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from setforge.ownership import (
     Authority,
@@ -76,6 +77,33 @@ def file_resource_id(destination: Path) -> ResourceId:
         coordinate=coordinate,
         scope=ResourceScope.target_root(target_root),
     )
+
+
+def refuse_active_file_claims(destinations: Iterable[Path]) -> None:
+    """Refuse mutation of a claimed file or anything inside a claimed tree.
+
+    Apply callers must hold the resources lock through their file effects.
+    A cleanup request does not implicitly release existing ownership.
+    """
+    claims = tuple(
+        claim
+        for claim in OwnershipStore().list_claims()
+        if claim.resource_id.kind == "file"
+        and claim.resource_id.provider == "tracked"
+        and claim.authority is Authority.MANAGE
+        and claim.lifecycle is ClaimLifecycle.CLAIMED
+    )
+    for destination in destinations:
+        resource = file_resource_id(destination)
+        for claim in claims:
+            owned = claim.resource_id
+            if resource.scope == owned.scope and PurePosixPath(
+                resource.coordinate
+            ).is_relative_to(owned.coordinate):
+                raise OwnershipError(
+                    f"{destination} has an active tracked-file ownership claim "
+                    f"from {claim.owner_id}; release the claim before mutation"
+                )
 
 
 def _file_fingerprint(

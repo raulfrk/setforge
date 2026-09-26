@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -712,6 +713,88 @@ def _write_minimal_yaml(tmp_path: Path) -> Path:
     )
     _write_config_file(cfg, body)
     return cfg
+
+
+@pytest.mark.parametrize("scan", [False, True])
+@pytest.mark.parametrize("phase", ["preview", "apply", "after-confirmation"])
+def test_cleanup_refuses_foreign_active_claim(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scan: bool,
+    phase: str,
+) -> None:
+    from setforge.file_ownership import file_resource_id, observe_file
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+
+    repo = tmp_path / "caller-checkout"
+    config = _write_minimal_yaml(repo)
+    (repo / "tracked").mkdir()
+    (repo / "tracked/kept.txt").write_text("kept\n")
+    candidate = Path.home() / ".config/example/foreign.txt"
+    candidate.parent.mkdir(parents=True)
+    config.write_text(
+        config.read_text().replace(str(repo / "live"), str(candidate.parent))
+    )
+    candidate.write_bytes(b"owned by another checkout\n")
+    if not scan:
+        _write_meta_record(
+            isolated_state_dir / "transitions", "prior-install", [str(candidate)]
+        )
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    for checkout in (repo, other):
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    caller = load_or_create_owner_id(repo)
+    owner = load_or_create_owner_id(other)
+    assert caller != owner
+    store = OwnershipStore()
+    claims = []
+
+    def claim() -> None:
+        observation = observe_file(candidate)
+        with mutation_locks(resources=True):
+            claims.append(
+                store.claim_locked(
+                    resource_id=observation.resource_id,
+                    owner_id=owner,
+                    declaration_refs=("tracked_files.foreign",),
+                    provenance=(),
+                    locator=str(candidate),
+                    fingerprint=observation.fingerprint,
+                    expected_generation=None,
+                )
+            )
+
+    def confirm_scan(entries, console):
+        assert [entry.path for entry in entries] == [candidate]
+        if phase == "after-confirmation":
+            claim()
+        return entries
+
+    def confirm_history(*, yes):
+        if phase == "after-confirmation":
+            claim()
+        return orphans_mod.ApplyChoice.DELETE_AND_TRANSITION
+
+    if phase != "after-confirmation":
+        claim()
+    monkeypatch.setattr(orphans_mod, "_confirm_scan_entries", confirm_scan)
+    monkeypatch.setattr(orphans_mod, "_pick_cleanup_branch", confirm_history)
+    args = ["cleanup-orphans", "--profile=p", f"--config={config}"]
+    if scan:
+        args.append("--scan")
+    if phase != "preview":
+        args.append("--apply")
+
+    result = CliRunner().invoke(app, args)
+
+    assert result.exit_code != 0, result.output
+    assert "active tracked-file ownership claim" in str(result.exception)
+    assert candidate.read_bytes() == b"owned by another checkout\n"
+    assert store.read(file_resource_id(candidate)) == claims[0]
+    assert not list((isolated_state_dir / "transitions").glob("*cleanup-orphans*"))
 
 
 def _write_retargeted_active_path(

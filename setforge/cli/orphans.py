@@ -51,6 +51,7 @@ from setforge.errors import (
     OrphanCleanupRequiresInteractive,
     SetforgeError,
 )
+from setforge.file_ownership import refuse_active_file_claims
 from setforge.locking import mutation_locks
 
 __all__ = [
@@ -228,6 +229,7 @@ def _detect_orphans_live(
         skipped_unmanaged=report.orphan_skipped_unmanaged,
         skipped_host_local=report.orphan_skipped_host_local,
     )
+    refuse_active_file_claims(orphan.path for orphan in detection.orphans)
     return cfg, detection
 
 
@@ -244,6 +246,7 @@ def _detect_scan_live(
         config_path=config_path.resolve(),
         transitions_dir=transitions.transitions_root(),
     )
+    refuse_active_file_claims(entry.path for entry in result.entries)
     return cfg, result
 
 
@@ -298,7 +301,9 @@ def _execute_scan_cleanup(
         return
     approved_by_path = {entry.path: entry for entry in approved}
     with (
-        mutation_locks(config_dir=config_path.resolve().parent, profile=profile),
+        mutation_locks(
+            resources=True, config_dir=config_path.resolve().parent, profile=profile
+        ),
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
@@ -316,7 +321,7 @@ def _execute_scan_cleanup(
             command="cleanup-orphans",
             profile=profile,
             config_dir=config_path.resolve().parent,
-            resources_lock=False,
+            resources_lock=True,
             command_line=("cleanup-orphans", "--scan", "--apply"),
             paths=tuple(entry.path for entry in selected),
             path_guards=_scan_path_guards(selected),
@@ -583,7 +588,9 @@ def _apply_orphan_cleanup(
 
     confirmed = {_orphan_path_identity(orphan.path) for orphan in orphans}
     with (
-        mutation_locks(config_dir=config_path.resolve().parent, profile=profile),
+        mutation_locks(
+            resources=True, config_dir=config_path.resolve().parent, profile=profile
+        ),
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
@@ -605,7 +612,7 @@ def _apply_orphan_cleanup(
             command="cleanup-orphans",
             profile=profile,
             config_dir=config_path.resolve().parent,
-            resources_lock=False,
+            resources_lock=True,
             command_line=("cleanup-orphans", "--apply"),
             paths=paths,
             path_guards=orphan_scan.capture_parent_path_guards(paths),
