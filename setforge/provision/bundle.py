@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from setforge.config import (
     BundleComponent,
     BundleSpec,
@@ -171,7 +173,7 @@ def _ownership_skip(
     )
 
 
-def execute_bundle(
+def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-package effects
     bundle: BundleSpec,
     cfg: Config,
     *,
@@ -179,6 +181,7 @@ def execute_bundle(
     report_only: bool = False,
     graph: CapabilityGraph | None = None,
     package_actions: dict[tuple[str, str], tuple[str, bool]] | None = None,
+    planned_apply: Callable[[ProvisionItem], ProvisionOutcome | None] | None = None,
     lock: LockFile | None = None,
     platform_os: str | None = None,
     platform_arch: str | None = None,
@@ -237,8 +240,10 @@ def execute_bundle(
         if ownership_skip is not None:
             outcomes.append(ownership_skip)
             continue
-        target = provisioner if provisioner is not None else build(item)
-        outcome = _apply(target, item)
+        outcome = planned_apply(item) if planned_apply is not None else None
+        if outcome is None:
+            target = provisioner if provisioner is not None else build(item)
+            outcome = _apply(target, item)
         outcomes.append(outcome)
         if outcome.outcome in (Outcome.OK, Outcome.SKIP):
             satisfied.add(component.id)

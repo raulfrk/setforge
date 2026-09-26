@@ -662,6 +662,78 @@ def test_bundle_same_key_across_providers_applies_both(
     assert applied == ["cargo", "python"]
 
 
+@pytest.mark.parametrize(
+    ("failed_key", "outcome", "present", "expected"),
+    [
+        (None, Outcome.OK, False, ["before", "shared", "after"]),
+        (None, Outcome.OK, True, ["before", "after"]),
+        ("shared", Outcome.SOFT, False, ["before", "shared"]),
+        ("shared", Outcome.HARD, False, ["before", "shared"]),
+        ("before", Outcome.SOFT, False, ["before"]),
+        ("before", Outcome.HARD, False, ["before"]),
+    ],
+)
+def test_direct_package_obeys_bundle_dependencies_once(
+    monkeypatch: pytest.MonkeyPatch,
+    failed_key: str | None,
+    outcome: Outcome,
+    present: bool,
+    expected: list[str],
+) -> None:
+    from setforge.provision.cargo import CargoProvisioner
+
+    applied: list[str] = []
+    monkeypatch.setattr(
+        CargoProvisioner,
+        "probe",
+        lambda _self: {Identity("shared", "shared")} if present else set(),
+    )
+
+    def apply(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        applied.append(item.identity.key)
+        return ProvisionOutcome(
+            item=item,
+            outcome=outcome if item.identity.key == failed_key else Outcome.OK,
+        )
+
+    monkeypatch.setattr(CargoProvisioner, "apply_one", apply)
+    cfg = _cfg(
+        packages={"shared": CargoPackage(crate="shared")},
+        bundles={
+            "tools": BundleSpec(
+                components=[
+                    BundleComponent(id="before", cargo=CargoPackage(crate="before")),
+                    BundleComponent(
+                        id="shared", package="shared", depends_on=["before"]
+                    ),
+                    BundleComponent(
+                        id="after",
+                        cargo=CargoPackage(crate="after"),
+                        depends_on=["shared"],
+                    ),
+                ]
+            )
+        },
+    )
+    plan = plan_provisioning(
+        cfg, ResolvedProfile(packages=["shared"], bundles=["tools"])
+    )
+
+    results = apply_provisioning(plan)
+
+    assert applied == expected
+    assert has_hard_failure(results) is (outcome is Outcome.HARD)
+    if failed_key is not None:
+        after = next(
+            entry
+            for result in results
+            for entry in result.outcomes
+            if entry.item.identity.key == "after"
+        )
+        assert after.outcome is Outcome.SKIP
+        assert after.detail == "prerequisite not satisfied"
+
+
 @pytest.mark.parametrize("placement", ["direct", "bundle"])
 @pytest.mark.parametrize("locked", [False, True], ids=["unlocked", "locked"])
 def test_platform_host_drift_is_refused_before_apply(
@@ -766,6 +838,11 @@ def test_unlocked_bundle_apply_uses_frozen_platform(
     )
     plan = plan_provisioning(cfg, ResolvedProfile(bundles=["tools"]))
     applied: list[ProvisionItem] = []
+
+    monkeypatch.setattr(
+        "setforge.provision.identity.current_host_platform",
+        lambda: pytest.fail("apply must use the frozen platform without probing"),
+    )
 
     def apply_item(_self: object, item: ProvisionItem) -> ProvisionOutcome:
         applied.append(item)

@@ -58,6 +58,7 @@ from setforge.provision.protocol import (
     ObservationOrigin,
     Outcome,
     ProvisionItem,
+    ProvisionOutcome,
     ReconcileResult,
 )
 from setforge.provision.registry import build
@@ -299,21 +300,79 @@ def apply_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
         )
         for decision in plan.ownership
     }
-    for direct_key in plan.direct_keys:
-        package_actions[direct_key] = ("hold", True)
+    direct_batches = {batch.provider_type: batch for batch in plan.batches}
+    direct_outcomes: dict[tuple[str, str], ProvisionOutcome] = {}
+
+    def apply_direct(item: ProvisionItem) -> ProvisionOutcome | None:
+        key = (item.type, item.identity.key)
+        if key not in plan.direct_keys:
+            return None
+        prior = direct_outcomes.get(key)
+        if prior is not None:
+            return (
+                ProvisionOutcome(
+                    item=prior.item, outcome=Outcome.SKIP, detail="already applied"
+                )
+                if prior.outcome is Outcome.OK
+                else prior
+            )
+        batch = direct_batches[item.type]
+        selected = suppress_reconcile(
+            batch,
+            frozenset(
+                identity
+                for identity in (*batch.delta.installed, *batch.delta.activated)
+                if identity != item.identity
+            ),
+        )
+        result = apply_reconcile(selected)
+        outcome = (
+            result.outcomes[0]
+            if result.outcomes
+            else ProvisionOutcome(
+                item=item,
+                outcome=Outcome.SKIP
+                if item.identity in batch.installed
+                else Outcome.SOFT,
+                detail="present"
+                if item.identity in batch.installed
+                else "no planned install",
+            )
+        )
+        direct_outcomes[key] = outcome
+        return outcome
+
     results = [
         execute_bundle(
             cfg.bundles[name],
             cfg,
             graph=graph,
             package_actions=package_actions,
+            planned_apply=apply_direct,
             lock=plan.lock,
             platform_os=plan.platform_os,
             platform_arch=plan.platform_arch,
         )
         for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
     ]
-    results.extend(apply_reconcile(batch) for batch in plan.batches)
+    bundled_keys = {
+        (outcome.item.type, outcome.item.identity.key)
+        for result in results
+        for outcome in result.outcomes
+    }
+    results.extend(
+        apply_reconcile(
+            suppress_reconcile(
+                batch,
+                frozenset(
+                    identity
+                    for identity in (*batch.delta.installed, *batch.delta.activated)
+                    if (batch.provider_type, identity.key) in bundled_keys
+                ),
+            )
+        )
+        for batch in plan.batches
+    )
     return results
 
 
