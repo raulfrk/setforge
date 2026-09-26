@@ -154,6 +154,37 @@ def test_add_tracked_profile_required_for_profile_paths(
     assert result.exit_code != 0
 
 
+@pytest.mark.parametrize("operation", ["add", "remove"])
+@pytest.mark.parametrize("profile", ["base", "other"])
+def test_profile_argument_must_match_mutated_path(
+    runner: CliRunner, seed_tracked: Path, operation: str, profile: str
+) -> None:
+    if operation == "add":
+        seed_tracked.write_text(
+            seed_tracked.read_text().replace("      - foo\n", "      []\n")
+        )
+    before = seed_tracked.read_bytes()
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            operation,
+            "--tracked",
+            "profiles.base.tracked_files",
+            "foo",
+            f"--profile={profile}",
+            "--yes",
+        ],
+    )
+    if profile == "other":
+        assert result.exit_code != 0
+        assert "does not match" in result.output
+        assert seed_tracked.read_bytes() == before
+    else:
+        assert result.exit_code == 0, result.output
+        assert seed_tracked.read_bytes() != before
+
+
 def test_add_tracked_profile_rejected_for_top_level_paths(
     runner: CliRunner, seed_tracked: Path
 ) -> None:

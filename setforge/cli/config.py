@@ -443,6 +443,10 @@ def _check_profile_arg(dotted: str, profile: str | None) -> None:
         raise typer.BadParameter(
             f"path {dotted!r} is profile-scoped; pass --profile=NAME"
         )
+    if needs_profile and profile != dotted.split(".", 2)[1]:
+        raise typer.BadParameter(
+            f"--profile={profile} does not match the profile in path {dotted!r}"
+        )
     if not needs_profile and profile is not None:
         raise typer.BadParameter(
             f"path {dotted!r} is top-level; --profile=NAME is not applicable"
