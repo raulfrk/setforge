@@ -531,6 +531,27 @@ def test_local_codex_overlay_merges_add_then_remove(tmp_path: Path) -> None:
     assert resolved.codex == CodexProfile(skills=["local"])
 
 
+@pytest.mark.parametrize(
+    "field", ["config", "instructions", "skills", "plugins", "mcp_servers"]
+)
+@pytest.mark.parametrize("has_codex", [False, True])
+def test_local_codex_overlay_rejects_unselected_removals(
+    tmp_path: Path, field: str, has_codex: bool
+) -> None:
+    cfg = Config(
+        tracked_files={},
+        profiles={"default": Profile(codex=CodexProfile() if has_codex else None)},
+    )
+    path = tmp_path / "local.yaml"
+    path.write_text(f"codex:\n  {field}:\n    remove: [ghost]\n")
+    with pytest.raises(
+        ConfigError, match=rf"codex\.{field}\.remove.*ghost.*not selected"
+    ):
+        apply_host_local_codex_overlay(
+            cfg, resolve_profile(cfg, "default"), local_config_path=path
+        )
+
+
 def test_local_codex_overlay_resolves_portable_project_locator(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()

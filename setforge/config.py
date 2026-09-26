@@ -1513,6 +1513,14 @@ def apply_host_local_codex_overlay(
     path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
     overlay = load_local_codex_overlay(path)
     fields = ("config", "instructions", "skills", "plugins", "mcp_servers")
+    for field in fields:
+        unknown = set(getattr(overlay, field).remove) - set(getattr(base, field))
+        if unknown:
+            raise ConfigError(
+                f"local codex.{field}.remove names {', '.join(sorted(unknown))} "
+                "are not selected by this profile; remove the unknown entries "
+                f"from {path}"
+            )
     if resolved.codex is None and not any(
         getattr(overlay, field).add for field in fields
     ):
