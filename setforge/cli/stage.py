@@ -618,6 +618,7 @@ def _prepare_structured_persist(
                 f"draft bytes for {unit.ref} do not match the recorded draft_hash"
             )
         drafts[unit.ref] = draft
+    su_mod.reconstruct_structured(stage.base, final_live, merged, drafts, stage.fmt)
     return _PersistPlan(
         local=final_live,
         staged=(entry.staged if entry is not None else False)

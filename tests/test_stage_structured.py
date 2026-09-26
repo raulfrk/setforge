@@ -18,7 +18,7 @@ from setforge.cli.stage import (
     walk_structured,
 )
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
-from setforge.errors import InvariantViolation
+from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.reconcile import share_draft
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
@@ -147,6 +147,55 @@ def test_walk_structured_shared_records_shared(
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
+
+
+@pytest.mark.parametrize("parent", [HunkClass.SHARED, HunkClass.LOCAL])
+@pytest.mark.parametrize("child", [HunkClass.SHARED, HunkClass.LOCAL])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_structured_stage_validates_parent_child_intent_before_persist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent: HunkClass,
+    child: HunkClass,
+    reverse: bool,
+) -> None:
+    from setforge import locking
+    from setforge.reconcile import store
+    from setforge.reconcile.structured_units import reconstruct_structured
+
+    cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
+    base, live = b"a:\n  b: 1\n", b"a: 2\n"
+    if reverse:
+        base, live = live, base
+    dst = Path(cfg.tracked_files["settings.yaml"].dst)
+    dst.write_bytes(live)
+    with locking.profile_lock(profile):
+        store.record(profile, file_id("settings.yaml"), base=base, local=live)
+    (stage,) = collect_structured_stages(
+        cfg, resolve_profile(cfg, profile), repo, profile
+    )
+    result = walk_structured(
+        stage.units, lambda unit, i, t: Decision(parent if unit.path == "a" else child)
+    )
+    before = store.read_index(profile)
+    if parent != child:
+        with pytest.raises(
+            StructuredParseError, match="incompatible parent/descendant"
+        ):
+            _apply_structured(profile, stage, result)
+        assert store.read_index(profile) == before
+        assert store.read_base(profile, stage.fid) == base
+        assert store.read_local(profile, stage.fid) == live
+        assert store.read_drafts(profile, stage.fid) == {}
+    else:
+        _apply_structured(profile, stage, result)
+        (saved,) = collect_structured_stages(
+            cfg, resolve_profile(cfg, profile), repo, profile
+        )
+        assert reconstruct_structured(base, live, saved.units, {}, saved.fmt) == (
+            live if parent is HunkClass.SHARED else base
+        )
+    assert dst.read_bytes() == live
 
 
 def test_render_list_json_reports_structured_drafted_and_pending(
