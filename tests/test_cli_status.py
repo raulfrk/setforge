@@ -12,6 +12,7 @@ import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner, Result
@@ -183,6 +184,71 @@ def test_read_overlay_counts_handles_malformed_yaml(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(("ahead", "behind"), [(0, 0), (1, 0), (0, 1), (1, 1)])
+def test_status_reports_native_git_ahead_and_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ahead: int, behind: int
+) -> None:
+    config = _write_empty_config(tmp_path)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=SetForge test",
+                "-c",
+                "user.email=test@example.invalid",
+                *args,
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    git("init")
+    git("add", "setforge.yaml")
+    git("commit", "-m", "common")
+    common = git("rev-parse", "HEAD")
+    for index in range(behind):
+        git("commit", "--allow-empty", "-m", f"remote {index}")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("reset", "--hard", common)
+    for index in range(ahead):
+        git("commit", "--allow-empty", "-m", f"local {index}")
+    assert git("rev-list", "--left-right", "--count", "origin/main...HEAD").split() == [
+        str(behind),
+        str(ahead),
+    ]
+    monkeypatch.setattr(
+        status_mod,
+        "probe_environment",
+        lambda **kwargs: SimpleNamespace(capabilities=()),
+    )
+    args = [
+        "--source",
+        str(tmp_path),
+        "status",
+        "--profile=vm-headless",
+        f"--config={config}",
+    ]
+    human = CliRunner().invoke(app, args)
+    assert human.exit_code == 0, human.output
+    assert ("in sync" in human.output) is (ahead == 0 and behind == 0)
+    if behind:
+        assert "behind" in human.output
+    encoded = CliRunner().invoke(app, ["--format=json", *args])
+    assert encoded.exit_code == 0, encoded.output
+    info = json.loads(encoded.output)["data"]["config_repo"]
+    assert info["commits_vs_origin"] == ahead
+    assert info["commits_behind_origin"] == behind
+
+
 class _FakeGitRunner:
     """Stand-in for :func:`subprocess.run` that maps args to canned results.
 
@@ -259,7 +325,7 @@ def test_resolve_git_info_prev_sha_none_surfaces_schema_bump_message(
     runner.add(("--is-inside-work-tree",), returncode=0, stdout="true\n")
     runner.add(("HEAD",), returncode=0, stdout="1f37cb1\n")
     runner.add(("origin/main",), returncode=0, stdout="abc\n")
-    runner.add(("origin/main..HEAD",), returncode=0, stdout="4\n")
+    runner.add(("origin/main...HEAD",), returncode=0, stdout="0\t4\n")
     monkeypatch.setattr(status_mod.subprocess, "run", runner)
     monkeypatch.setattr(status_mod.shutil, "which", lambda name: "/usr/bin/git")
 
@@ -281,7 +347,7 @@ def test_resolve_git_info_records_counts_when_prev_sha_present(
     runner.add(("HEAD",), returncode=0, stdout="1f37cb1\n")
     runner.add(("deadbeef..HEAD",), returncode=0, stdout="2\n")
     runner.add(("origin/main",), returncode=0, stdout="abc\n")
-    runner.add(("origin/main..HEAD",), returncode=0, stdout="0\n")
+    runner.add(("origin/main...HEAD",), returncode=0, stdout="0\t0\n")
     monkeypatch.setattr(status_mod.subprocess, "run", runner)
     monkeypatch.setattr(status_mod.shutil, "which", lambda name: "/usr/bin/git")
 
@@ -326,7 +392,7 @@ def _patch_git_for_clean_repo(
     runner.add(("--is-inside-work-tree",), returncode=0, stdout="true\n")
     runner.add(("HEAD",), returncode=0, stdout="1f37cb1\n")
     runner.add(("origin/main",), returncode=0, stdout="abc\n")
-    runner.add(("origin/main..HEAD",), returncode=0, stdout="0\n")
+    runner.add(("origin/main...HEAD",), returncode=0, stdout="0\t0\n")
     for suffix, returncode, stdout in extra_cases:
         runner.add(suffix, returncode=returncode, stdout=stdout)
     monkeypatch.setattr(status_mod.subprocess, "run", runner)

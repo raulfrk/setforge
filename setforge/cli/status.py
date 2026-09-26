@@ -78,6 +78,7 @@ class _GitInfo:
     commits_since_install_reason: str | None
     commits_vs_origin: int | None
     commits_vs_origin_reason: str | None
+    commits_behind_origin: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -137,26 +138,31 @@ def _commits_since_sha(source_dir: Path, prev_sha: str) -> int | None:
     return int(raw)
 
 
-def _commits_vs_origin_main(source_dir: Path) -> tuple[int | None, str | None]:
-    """Return (count_ahead, placeholder_reason). Exactly one is non-None.
+def _commits_vs_origin_main(
+    source_dir: Path,
+) -> tuple[int | None, int | None, str | None]:
+    """Return (count_ahead, count_behind, placeholder_reason).
 
-    Counts commits on HEAD that are not on ``origin/main``. When the
+    Counts commits unique to HEAD and unique to ``origin/main``. When the
     remote ref is missing (or the repo is not a git repo), returns
-    ``(None, "<reason>")`` so the renderer can show a friendly
+    ``(None, None, "<reason>")`` so the renderer can show a friendly
     placeholder.
     """
     # First confirm origin/main exists; rev-list count "origin/main..HEAD"
     # against a missing ref would fall through with a misleading 0.
     probe = _git_run(["rev-parse", "--verify", "origin/main"], cwd=source_dir)
     if probe.returncode != 0:
-        return None, "no origin/main remote"
-    result = _git_run(["rev-list", "--count", "origin/main..HEAD"], cwd=source_dir)
+        return None, None, "no origin/main remote"
+    result = _git_run(
+        ["rev-list", "--left-right", "--count", "origin/main...HEAD"], cwd=source_dir
+    )
     if result.returncode != 0:
-        return None, "git error"
-    raw = result.stdout.strip()
-    if not raw.isdigit():
-        return None, "git error"
-    return int(raw), None
+        return None, None, "git error"
+    counts = result.stdout.split()
+    if len(counts) != 2 or not all(count.isdigit() for count in counts):
+        return None, None, "git error"
+    behind, ahead = map(int, counts)
+    return ahead, behind, None
 
 
 def _is_git_repo(source_dir: Path) -> bool:
@@ -194,13 +200,16 @@ def _resolve_git_info(source_dir: Path, prev_sha: str | None) -> _GitInfo:
         else:
             commits_since_install = count
             commits_since_reason = None
-    commits_vs_origin, commits_vs_origin_reason = _commits_vs_origin_main(source_dir)
+    commits_vs_origin, commits_behind_origin, commits_vs_origin_reason = (
+        _commits_vs_origin_main(source_dir)
+    )
     return _GitInfo(
         head_short=head_short,
         commits_since_install=commits_since_install,
         commits_since_install_reason=commits_since_reason,
         commits_vs_origin=commits_vs_origin,
         commits_vs_origin_reason=commits_vs_origin_reason,
+        commits_behind_origin=commits_behind_origin,
     )
 
 
@@ -325,6 +334,14 @@ def _render_config_repo(
         typer.echo(f"                  ↳ vs origin/main: (— {reason})")
     else:
         count = git_info.commits_vs_origin
+        behind = git_info.commits_behind_origin or 0
+        if behind:
+            ahead = f"{count} ahead, " if count else ""
+            typer.echo(
+                f"                  ↳ {ahead}{behind} behind origin/main "
+                f"({'diverged' if count else 'not pulled'})"
+            )
+            return
         tail = "(in sync)" if count == 0 else "(not pushed)"
         typer.echo(
             f"                  ↳ {count} commit{'s' if count != 1 else ''} "
@@ -479,6 +496,7 @@ def _status_json_data(
             "commits_since_install_reason": git_info.commits_since_install_reason,
             "commits_vs_origin": git_info.commits_vs_origin,
             "commits_vs_origin_reason": git_info.commits_vs_origin_reason,
+            "commits_behind_origin": git_info.commits_behind_origin,
         },
         "last_install": last_install,
         "drift": {
