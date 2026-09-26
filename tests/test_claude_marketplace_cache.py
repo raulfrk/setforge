@@ -27,6 +27,65 @@ from tests.conftest import _make_config, _make_resolved
 # ---------------------------------------------------------------------------
 
 
+def test_readd_after_failed_registration_uses_both_collision_alias(
+    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import claude_marketplace_cache as cache
+    from setforge import claude_plugins
+    from setforge.marketplace_cache_wizard import CollisionAction, CollisionResolution
+
+    fake = fake_git(known_repos={"alice/tools", "bob/tools"})
+    root = tmp_path / "marketplaces"
+    original = root / "tools"
+    original.mkdir(parents=True)
+    (original / "keep").write_text("unrelated cache")
+    fake.cloned[original] = "alice/tools"
+    alias = root / "tools-bob"
+    monkeypatch.setattr(
+        "setforge.marketplace_cache_wizard.resolve_collision",
+        lambda **kwargs: CollisionResolution(CollisionAction.BOTH, alias),
+    )
+    source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
+    first = cache.plan_marketplace_source(
+        source, ClaudeInstallMode.LOCAL_CLONE, cache_root=root
+    )
+    effective = cache.apply_marketplace_source_plan(first)
+    monkeypatch.setattr(claude_plugins, "_get_claude_bin", lambda: Path("claude"))
+
+    def fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, argv, stderr="registration failed")
+
+    monkeypatch.setattr(claude_plugins, "_run_claude", fail)
+    with pytest.raises(subprocess.CalledProcessError, match="non-zero"):
+        claude_plugins.marketplace_add("tools", effective)
+    assert cache.read_cache_aliases(root)["bob/tools"] == "tools-bob"
+    monkeypatch.setattr(
+        "setforge.marketplace_cache_wizard.resolve_collision",
+        lambda **kwargs: pytest.fail(
+            "recorded alias must prevent another collision prompt"
+        ),
+    )
+    retry = cache.plan_marketplace_source(
+        source, ClaudeInstallMode.LOCAL_CLONE, cache_root=root
+    )
+    assert retry.cache_dir == alias
+    assert retry.action is cache.MarketplaceSourceAction.NONE
+    retried = cache.apply_marketplace_source_plan(retry)
+    assert retried.path == alias
+    registrations: list[list[str]] = []
+
+    def register(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        registrations.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(claude_plugins, "_run_claude", register)
+    claude_plugins.marketplace_add("tools", retried)
+    assert registrations[0][-1] == str(alias)
+    assert fake.clone_count() == 1
+    assert (original / "keep").read_text() == "unrelated cache"
+    assert fake.cloned[original] == "alice/tools"
+
+
 def testresolve_marketplace_source_regular_returns_input(tmp_path: Path) -> None:
     """REGULAR mode never touches the source — pure passthrough."""
     from setforge.claude_marketplace_cache import resolve_marketplace_source

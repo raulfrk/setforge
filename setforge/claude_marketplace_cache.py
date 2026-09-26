@@ -608,7 +608,8 @@ def plan_marketplace_source(
             "GITHUB marketplace source missing 'repo' field; cannot resolve "
             "local-clone path"
         )
-    cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
+    subdir = read_cache_aliases(root).get(source.repo, source.repo.rsplit("/", 1)[-1])
+    cache_dir = _safe_cache_dir(root, subdir)
     effective = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=cache_dir)
     if not cache_dir.exists():
         return MarketplaceSourcePlan(
