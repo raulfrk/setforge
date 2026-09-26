@@ -155,7 +155,7 @@ def _managed_inventory(
                 if target_root is not None:
                     roots.add(target_root)
 
-    attributed.update(_ignored_destinations(config, repo_root))
+    attributed.update(_ignored_destinations(config, repo_root, transitions_dir))
 
     attributed.update(compare_mod._host_local_files(config))
     attributed.update(compare_mod._tracked_source_paths(config, repo_root))
@@ -197,23 +197,12 @@ def _managed_inventory(
     )
 
 
-def _ignored_destinations(config: Config, repo_root: Path) -> set[Path]:
-    destinations: set[Path] = set()
-    for tracked_id in compare_mod.load_ignored_orphans():
-        ignored_file = config.tracked_files.get(tracked_id)
-        if ignored_file is None:
-            continue
-        src = compare_mod.resolve_src(ignored_file, repo_root)
-        dst = _norm(compare_mod.resolve_dst(ignored_file))
-        destinations.update(
-            _norm(expanded_dst)
-            for _, _, expanded_dst in compare_mod.expand_tracked_file(
-                tracked_id, src, dst
-            )
-        )
-        if ignored_file.symlink is not None:
-            destinations.add(_norm(Path(ignored_file.symlink)))
-    return destinations
+def _ignored_destinations(
+    config: Config, repo_root: Path, transitions_dir: Path
+) -> set[Path]:
+    return compare_mod.resolve_ignored_orphan_paths(
+        compare_mod.load_ignored_orphans(), config, repo_root, transitions_dir
+    )
 
 
 def _individual_file_root(path: Path) -> Path | None:

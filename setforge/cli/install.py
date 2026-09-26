@@ -2642,6 +2642,24 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 restore_transitions=True,
                 adapters=(),
             )
+            tracked_file_destinations = {}
+            if capability_result.deploy_outcome is not None:
+                tracked_file_destinations = {
+                    name: _ownership_destinations(tracked, destination)
+                    for tracked, name, _source, destination in plan.tracked_entries
+                }
+                tracked_file_destinations.update(
+                    {
+                        tree.name: (
+                            tree.destination,
+                            *(
+                                tree.destination / entry.path
+                                for entry in tree.plan.desired.inventory.entries
+                            ),
+                        )
+                        for tree in plan.trees
+                    }
+                )
             target = _write_install_transition(
                 profile,
                 file_pre,
@@ -2656,6 +2674,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 file_modes=deploy_outcome.prior_modes,
                 filesystem_deltas=tree_filesystem_deltas,
                 ownership_transfers=ownership_transfers,
+                tracked_file_destinations=tracked_file_destinations,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")

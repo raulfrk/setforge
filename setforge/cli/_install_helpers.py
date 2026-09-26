@@ -981,6 +981,7 @@ def _write_install_transition(
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
     codex_plugin_delta: transitions.CodexPluginDelta | None = None,
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
+    tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -1028,6 +1029,7 @@ def _write_install_transition(
         filesystem_deltas=filesystem_deltas,
         codex_plugin_delta=codex_plugin_delta,
         ownership_transfers=ownership_transfers,
+        tracked_file_destinations=tracked_file_destinations,
     )
 
 

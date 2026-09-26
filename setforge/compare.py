@@ -23,9 +23,10 @@ import json
 import os
 import stat
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,6 +44,7 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
     resolve_and_expand,
+    resolve_symlink_target,
 )
 from setforge.errors import BaseStoreError, ConfigError
 from setforge.file_ownership import FileAction, decide_file, observe_file, observe_tree
@@ -342,6 +344,82 @@ def _resolved_tracked_dsts(
     return tracked_paths
 
 
+def _recorded_file_destinations(
+    transitions_dir: Path,
+) -> Iterable[tuple[str, tuple[Path, ...]]]:
+    """Read optional destination identities without requiring newer history."""
+    for meta_path in transitions_dir.glob("*/meta.json"):
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        mapping = (
+            payload.get("tracked_file_destinations")
+            if isinstance(payload, dict)
+            else None
+        )
+        if not isinstance(mapping, dict):
+            continue
+        for name, paths in mapping.items():
+            if (
+                isinstance(name, str)
+                and isinstance(paths, list)
+                and paths
+                and all(
+                    isinstance(path, str) and Path(path).is_absolute() for path in paths
+                )
+            ):
+                yield name, tuple(map(Path, paths))
+
+
+def _claimed_file_destinations() -> Iterable[tuple[str, tuple[Path, ...]]]:
+    """Retained claims preserve declaration identities even after release."""
+    for claim in OwnershipStore().list_claims():
+        if claim.resource_id.kind != "file" or claim.resource_id.provider != "tracked":
+            continue
+        destination = Path(claim.locator)
+        # A root claim alone cannot identify the deployed children of a tree.
+        if not destination.is_absolute() or destination.is_dir():
+            continue
+        for reference in claim.declaration_refs:
+            if reference.startswith("tracked_files."):
+                yield reference.removeprefix("tracked_files."), (destination,)
+
+
+def resolve_ignored_orphan_paths(
+    ignored: frozenset[str], config: Config, repo_root: Path, transitions_dir: Path
+) -> set[Path]:
+    """Resolve keep decisions from declarations and retained deployment identity."""
+    if not ignored:
+        return set()
+    paths_by_id: dict[str, set[Path]] = {name: set() for name in ignored}
+    known = set(ignored).intersection(config.tracked_files)
+    for name in known:
+        tracked = config.tracked_files[name]
+        src, dst = resolve_src(tracked, repo_root), resolve_dst(tracked)
+        for _sub_name, _source, destination in expand_tracked_file(name, src, dst):
+            paths_by_id[name].add(_norm(destination))
+            if tracked.symlink is not None:
+                paths_by_id[name].add(
+                    _norm(resolve_symlink_target(destination, tracked.symlink))
+                )
+    for name, paths in chain(
+        _recorded_file_destinations(transitions_dir), _claimed_file_destinations()
+    ):
+        for ignored_id in ignored:
+            if name == ignored_id or name.startswith(ignored_id + "/"):
+                paths_by_id[ignored_id].update(_norm(path) for path in paths)
+                known.add(ignored_id)
+    unresolved = sorted(ignored - known)
+    if unresolved:
+        raise ConfigError(
+            "cannot resolve orphan-ignore ID(s) from current or historical state: "
+            + ", ".join(unresolved)
+            + "; restore their declarations or deployment records before cleanup"
+        )
+    return set().union(*paths_by_id.values())
+
+
 def _tracked_source_paths(config: Config, repo_root: Path) -> set[Path]:
     """Resolved SRC path of every configured tracked_file, normalized.
 
@@ -432,6 +510,9 @@ def detect_orphans(
     """
     tracked_paths = _resolved_tracked_dsts(
         resolved, config, repo_root, extra_ids=ignored
+    )
+    tracked_paths.update(
+        resolve_ignored_orphan_paths(ignored, config, repo_root, transitions_dir)
     )
     touched_paths = _touched_paths_from_meta(transitions_dir)
     src_root = _norm(repo_root / "tracked")

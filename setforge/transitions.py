@@ -415,6 +415,7 @@ def write_meta(
     transition_dir: TransitionDir,
     meta: TransitionMeta,
     paths: list[Path] | None = None,
+    tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
 ) -> None:
     """Serialize ``meta`` to ``<transition_dir>/meta.json``.
 
@@ -425,11 +426,20 @@ def write_meta(
     ``transition_dir`` (with parents) if needed. The meta.json fd is
     fsynced (via :func:`_write_text_durable`) so the commit marker's data
     is power-loss durable.
+
+    ``tracked_file_destinations`` optionally retains declaration identities
+    for orphan-ignore decisions after a definition is removed. Older records
+    omit it and remain readable.
     """
     transition_dir.mkdir(parents=True, exist_ok=True)
     body: dict[str, object] = dict(meta.to_dict())
     if paths is not None:
         body["paths"] = [str(p) for p in paths]
+    if tracked_file_destinations:
+        body["tracked_file_destinations"] = {
+            name: [str(path.absolute()) for path in destinations]
+            for name, destinations in sorted(tracked_file_destinations.items())
+        }
     payload = json.dumps(body, indent=2) + "\n"
     _write_text_durable(transition_dir / "meta.json", payload)
 
@@ -1902,6 +1912,7 @@ def write_transition(
     filesystem_deltas: tuple[FilesystemDelta, ...] = (),
     codex_plugin_delta: CodexPluginDelta | None = None,
     ownership_transfers: tuple[OwnershipTransferDelta, ...] = (),
+    tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -2023,7 +2034,9 @@ def write_transition(
         },
         key=str,
     )
-    write_meta(target, meta, paths=touched)
+    write_meta(
+        target, meta, paths=touched, tracked_file_destinations=tracked_file_destinations
+    )
     atomicio.fsync_dir(target)
 
     return target

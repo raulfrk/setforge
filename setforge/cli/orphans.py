@@ -695,6 +695,14 @@ def cleanup_orphans(
     console = Console(stderr=True)
 
     if ignore is not None:
+        cfg = load_config(resolved_config)
+        resolve_effective_profile(cfg, profile, resolved_config.resolve().parent)
+        compare_mod.resolve_ignored_orphan_paths(
+            frozenset({ignore}),
+            cfg,
+            resolved_config.resolve().parent,
+            transitions.transitions_root(),
+        )
         _append_ignored_orphan(ignore)
         console.print(
             f"added [cyan]{ignore}[/cyan] to orphan_ignore in {LOCAL_CONFIG_PATH}"

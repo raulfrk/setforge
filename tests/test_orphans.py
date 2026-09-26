@@ -1236,6 +1236,161 @@ def test_apply_tty_button_bar_cancel_is_abort(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("legacy_claim", [False, True])
+def test_ignore_retired_id_preserves_only_its_historical_destination(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_claim: bool,
+) -> None:
+    from setforge.file_ownership import file_resource_id
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore
+
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    live = Path.home() / ".config/orphan-test"
+    monkeypatch.setattr(
+        compare_mod,
+        "GENERIC_DST_ROOTS",
+        compare_mod.GENERIC_DST_ROOTS | {Path.home(), Path.home() / ".config"},
+    )
+    names = ["kept", "ignored", "removed"]
+    for name in names:
+        (repo / "tracked" / f"{name}.txt").write_text(f"{name}\n")
+    document: dict[str, Any] = {
+        "tracked_files": {
+            name: {"src": f"{name}.txt", "dst": str(live / f"{name}.txt")}
+            for name in names
+        },
+        "profiles": {"p": {"tracked_files": names}},
+    }
+    yaml = YAML()
+    config = repo / "setforge.yaml"
+    yaml.dump(document, config)
+    if legacy_claim:
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    local = compare_mod.LOCAL_CONFIG_PATH
+    local.write_text("# retain this comment\nbinaries:\n  code: /bin/true\n")
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={config}",
+            "--yes",
+            "--no-fetch",
+            "--no-git-check",
+            "--no-secrets-scan",
+        ],
+    )
+    assert installed.exit_code == 0, installed.output
+    if legacy_claim:
+        store = OwnershipStore()
+        with mutation_locks(resources=True):
+            for name in ("ignored", "removed"):
+                resource = file_resource_id(live / f"{name}.txt")
+                claim = store.read(resource)
+                assert claim is not None
+                store.release_locked(
+                    resource,
+                    expected_owner=claim.owner_id,
+                    expected_generation=claim.generation,
+                )
+        for meta in (isolated_state_dir / "transitions").glob("*/meta.json"):
+            data = json.loads(meta.read_text())
+            data.pop("tracked_file_destinations", None)
+            meta.write_text(json.dumps(data))
+    del document["tracked_files"]["ignored"]
+    document["profiles"]["p"]["tracked_files"] = ["kept"]
+    yaml.dump(document, config)
+    args = ["cleanup-orphans", "--profile=p", f"--config={config}"]
+
+    ignored = runner.invoke(app, [*args, "--ignore=ignored"])
+    assert ignored.exit_code == 0, ignored.output
+    preview = runner.invoke(app, args)
+    assert preview.exit_code == 0, preview.output
+    output = _strip_ansi_and_newlines(preview.output)
+    assert str(live / "ignored.txt") not in output
+    assert str(live / "removed.txt") in output
+    applied = runner.invoke(app, [*args, "--apply", "--yes"])
+
+    assert applied.exit_code == 0, applied.output
+    assert (live / "ignored.txt").read_text() == "ignored\n"
+    assert not (live / "removed.txt").exists()
+    assert (live / "kept.txt").read_text() == "kept\n"
+    assert yaml.load(local)["binaries"] == {"code": "/bin/true"}
+    assert "# retain this comment" in local.read_text()
+
+
+def test_ignore_unknown_id_refuses_without_changing_local_yaml(tmp_path: Path) -> None:
+    config = _write_minimal_yaml(tmp_path)
+    local = compare_mod.LOCAL_CONFIG_PATH
+    before = b"# retained\nbinaries:\n  code: /bin/true\n"
+    local.write_bytes(before)
+
+    result = CliRunner().invoke(
+        app, ["cleanup-orphans", "--profile=p", f"--config={config}", "--ignore=ghost"]
+    )
+
+    assert result.exit_code != 0
+    assert "cannot resolve" in str(result.exception)
+    assert "ghost" in str(result.exception)
+    assert local.read_bytes() == before
+
+
+def test_ignore_legacy_tree_claim_requires_recorded_child_destinations(
+    tmp_path: Path, isolated_state_dir: Path
+) -> None:
+    from setforge.file_ownership import observe_tree
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+
+    config = _write_minimal_yaml(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    owner = load_or_create_owner_id(tmp_path)
+    root = Path.home() / ".config/retired-tree"
+    root.mkdir(parents=True)
+    child = root / "child.txt"
+    child.write_text("preserve me\n")
+    observation = observe_tree(root, "inventory-fingerprint")
+    store = OwnershipStore()
+    with mutation_locks(resources=True):
+        claim = store.claim_locked(
+            resource_id=observation.resource_id,
+            owner_id=owner,
+            declaration_refs=("tracked_files.retired",),
+            provenance=(),
+            locator=str(root),
+            fingerprint=observation.fingerprint,
+            expected_generation=None,
+        )
+        store.release_locked(
+            claim.resource_id,
+            expected_owner=owner,
+            expected_generation=claim.generation,
+        )
+    retained = store.read(claim.resource_id)
+    _write_meta_record(
+        isolated_state_dir / "transitions", "legacy-install", [str(child)]
+    )
+    local = compare_mod.LOCAL_CONFIG_PATH
+    local.write_text("# retained\n")
+    before = local.read_bytes()
+
+    result = CliRunner().invoke(
+        app,
+        ["cleanup-orphans", "--profile=p", f"--config={config}", "--ignore=retired"],
+    )
+
+    assert result.exit_code != 0, result.output
+    assert "cannot resolve" in str(result.exception)
+    assert local.read_bytes() == before
+    assert child.read_text() == "preserve me\n"
+    assert store.read(claim.resource_id) == retained
+
+
 def test_ignore_writes_local_yaml_not_tracked(
     runner: CliRunner, tmp_path: Path
 ) -> None:
@@ -1253,7 +1408,7 @@ def test_ignore_writes_local_yaml_not_tracked(
             "--config",
             str(cfg),
             "--ignore",
-            "some_old_id",
+            "kept",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -1263,7 +1418,7 @@ def test_ignore_writes_local_yaml_not_tracked(
     # to tmp_path/local.yaml) now contains the ignore entry.
     yaml = YAML(typ="safe")
     payload = yaml.load(compare_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
-    assert payload == {"orphan_ignore": ["some_old_id"]}
+    assert payload == {"orphan_ignore": ["kept"]}
 
 
 def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
@@ -1279,14 +1434,14 @@ def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
                 "--config",
                 str(cfg),
                 "--ignore",
-                "id_a",
+                "kept",
             ],
         )
         assert result.exit_code == 0, result.output
     yaml = YAML(typ="safe")
     payload = yaml.load(compare_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
     # ruamel rt-loaded list is a CommentedSeq under the hood; compare contents.
-    assert payload == {"orphan_ignore": ["id_a"]}
+    assert payload == {"orphan_ignore": ["kept"]}
 
 
 # ---------------------------------------------------------------------------

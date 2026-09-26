@@ -17,6 +17,7 @@ Covers:
 
 import json
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -109,11 +110,12 @@ def test_snapshots_staged_before_meta_commit_marker(
         transition_dir: TransitionDir,
         meta: TransitionMeta,
         paths: list[Path] | None = None,
+        tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
     ) -> None:
         snap_dir = transition_dir / "state_snapshots"
         seen["manifest"] = (snap_dir / "manifest.json").exists()
         seen["payload"] = (snap_dir / "0.payload").exists()
-        real_write_meta(transition_dir, meta, paths)
+        real_write_meta(transition_dir, meta, paths, tracked_file_destinations)
 
     monkeypatch.setattr(transitions_mod, "write_meta", checking_write_meta)
 

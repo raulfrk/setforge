@@ -1175,6 +1175,7 @@ def test_write_transition_crash_after_rename_before_meta_not_visible(
         transition_dir: Path,
         m: TransitionMeta,
         paths: list[Path] | None = None,
+        tracked_file_destinations: object = None,
     ) -> None:
         raise SystemExit("simulated crash before meta.json")
 

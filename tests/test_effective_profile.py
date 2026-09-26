@@ -35,6 +35,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("cleanup.py", "_resolve_declared_resources"),
     ("orphans.py", "_detect_orphans_live"),
     ("orphans.py", "_detect_scan_live"),
+    ("orphans.py", "cleanup_orphans"),
     ("ext.py", "ext_list"),
     ("ext.py", "ext_reconcile"),
     ("ext.py", "_run_ext_reconcile"),

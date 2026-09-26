@@ -292,8 +292,27 @@ def test_orphan_e2e_ignore_writes_local_yaml_not_tracked(
 ) -> None:
     c = docker_container()
     _install_minimal(c)
+    c.write_text("/workspace/tests/fixtures/e2e/setforge.test.yaml", _orphan_yaml())
     # Snapshot tracked setforge.yaml before --ignore.
     tracked_before = c.read_text("/workspace/tests/fixtures/e2e/setforge.test.yaml")
+    local_before = c.exec(["cat", _HOST_LOCAL_YAML], check=False)
+    unknown = _setforge(
+        c,
+        [
+            "cleanup-orphans",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+            "--ignore",
+            "some_old_id",
+        ],
+    )
+    assert unknown.returncode != 0
+    assert "cannot resolve orphan-ignore" in unknown.stderr
+    local_after = c.exec(["cat", _HOST_LOCAL_YAML], check=False)
+    assert (local_after.returncode, local_after.stdout) == (
+        local_before.returncode,
+        local_before.stdout,
+    )
 
     result = _setforge(
         c,
@@ -302,7 +321,7 @@ def test_orphan_e2e_ignore_writes_local_yaml_not_tracked(
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
             "--ignore",
-            "some_old_id",
+            "minimal_text",
         ],
     )
     assert result.returncode == 0, result.stderr
@@ -316,7 +335,8 @@ def test_orphan_e2e_ignore_writes_local_yaml_not_tracked(
     # Host-local local.yaml mentions orphan_ignore.
     local_yaml = c.read_text(_HOST_LOCAL_YAML)
     assert "orphan_ignore" in local_yaml
-    assert "some_old_id" in local_yaml
+    assert "minimal_text" in local_yaml
+    assert "some_old_id" not in local_yaml
 
 
 # ---------------------------------------------------------------------------
