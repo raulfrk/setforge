@@ -28,12 +28,18 @@ from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
 
+
 _SSH_BATCHMODE_FRAGMENT: Final[str] = "-oBatchMode=yes"
 _SSH_BATCHMODE_DEFAULT: Final[str] = f"ssh {_SSH_BATCHMODE_FRAGMENT}"
 
 _SSH_BATCHMODE_RE: Final[re.Pattern[str]] = re.compile(
     r"-o\s*BatchMode\b", re.IGNORECASE
 )
+
+
+def is_git_object_id(value: str) -> bool:
+    """Accept only complete lowercase SHA-1 or SHA-256 Git object IDs."""
+    return re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value) is not None
 
 
 def _harden_git_ssh_command(value: str | None) -> str:

@@ -4,7 +4,6 @@ ls-remote``, never a moving ref, WITHOUT cloning."""
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -15,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from setforge.claude_marketplace_cache import _github_clone_url
 from setforge.config import MarketplaceSource, MarketplaceSourceKind
 from setforge.errors import ResolveError
+from setforge.git_ops import is_git_object_id
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
@@ -31,9 +31,6 @@ _DEFAULT_REF = "HEAD"
 # command; `--` stops flag parsing but git still honors them in the URL. Only the
 # real network/filesystem schemes are allowed for the ls-remote subprocess.
 _ALLOWED_GIT_PROTOCOLS = "https:ssh:file"
-# Exactly 40 (SHA-1) or 64 (SHA-256) lowercase hex chars — git's two object-id
-# formats. Nothing in between is a valid object id.
-_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -132,7 +129,7 @@ def _parse_ls_remote_sha(stdout: str, git_url: str, ref: str) -> str:
         if not stripped:
             continue
         sha = stripped.split()[0]
-        if not _SHA_RE.match(sha):
+        if not is_git_object_id(sha):
             raise ResolveError(
                 f"`git ls-remote {git_url} {ref}` returned a non-SHA line: {stripped!r}"
             )

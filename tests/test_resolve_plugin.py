@@ -1,4 +1,4 @@
-"""Tests for the plugin resolver (runner injected; never spawns ``git``)."""
+"""Plugin resolver tests with injected runners and local Git repository parity."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from setforge.claude_marketplace_cache import checkout_marketplace_at
 from setforge.config import MarketplaceSource, MarketplaceSourceKind
-from setforge.errors import ResolveError
+from setforge.errors import MarketplaceCacheMiss, ResolveError
 from setforge.provision.resolve.plugin import (
     PluginResolveItem,
     PluginResolver,
@@ -20,6 +21,72 @@ from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 _SHA = "4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f"
 
 _LS_REMOTE_HEAD = f"{_SHA}\tHEAD\n"
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_resolved_pin_checks_out_native_git_object_format(
+    tmp_path: Path, object_format: str
+) -> None:
+    origin, cache = tmp_path / "origin", tmp_path / "cache"
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=SetForge test",
+                "-c",
+                "user.email=test@example.invalid",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", f"--object-format={object_format}", str(origin))
+    (origin / "content").write_text("first\n")
+    git("-C", str(origin), "add", "content")
+    git("-C", str(origin), "commit", "-m", "first")
+    pin = PluginResolver().resolve(
+        PluginResolveItem(key="tool@market", git_url=str(origin))
+    )
+    assert len(pin.version) == (40 if object_format == "sha1" else 64)
+    (origin / "content").write_text("second\n")
+    git("-C", str(origin), "commit", "-am", "second")
+    git("clone", str(origin), str(cache))
+    checkout_marketplace_at(cache, pin.version)
+    assert git("-C", str(cache), "rev-parse", "HEAD") == pin.version
+    assert (cache / "content").read_text() == "first\n"
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "origin/HEAD",
+        "a" * 39,
+        "a" * 41,
+        "a" * 63,
+        "a" * 65,
+        "A" * 40,
+        "A" * 64,
+        "a" * 40 + "\n",
+        "g" * 64,
+    ],
+)
+def test_cache_rejects_invalid_object_ids_before_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    monkeypatch.setattr(
+        "setforge.claude_marketplace_cache._run_git",
+        lambda *args, **kwargs: pytest.fail("invalid pin must not invoke Git"),
+    )
+    with pytest.raises(MarketplaceCacheMiss, match="non-SHA"):
+        checkout_marketplace_at(tmp_path, invalid)
 
 
 def _runner_ok(

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shutil
 import subprocess
 import tempfile
@@ -34,15 +33,13 @@ from setforge.config import (
     ResolvedProfile,
 )
 from setforge.errors import ConfigError, MarketplaceCacheMiss
+from setforge.git_ops import is_git_object_id
 from setforge.marketplace_cache_wizard import CollisionAction
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 30
 _CLONE_TIMEOUT_S = 120
-
-#: A plugin pin is a 40-hex git commit, never a moving ref; validated fail-closed.
-_SHA_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 
 #: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
 #: clones into ``MARKETPLACE_CACHE_ROOT / <repo-basename>`` (the segment
@@ -501,15 +498,15 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 def checkout_marketplace_at(cache_dir: Path, sha: str) -> None:
     """Hard-reset the marketplace cache at ``cache_dir`` to the pinned ``sha``.
 
-    Raises :class:`MarketplaceCacheMiss` if ``sha`` is not a 40-hex commit
+    Raises :class:`MarketplaceCacheMiss` if ``sha`` is not a 40- or 64-hex commit
     (a plugin pin must never be a moving ref), and propagates it from
     :func:`_run_git` on ``git fetch``/``git reset`` failure.
     """
     # Hard-resets to the PINNED sha, NOT origin/HEAD (otherwise the pin is defeated).
-    if not _SHA_RE.match(sha):
+    if not is_git_object_id(sha):
         raise MarketplaceCacheMiss(
             f"refusing to pin marketplace cache {cache_dir} to non-SHA ref "
-            f"{sha!r}; a plugin pin must be a 40-hex git commit"
+            f"{sha!r}; a plugin pin must be a lowercase 40- or 64-hex git commit"
         )
     _run_git("fetch", "origin", cwd=cache_dir, timeout=_CLONE_TIMEOUT_S)
     _run_git("reset", "--hard", sha, "--", cwd=cache_dir, timeout=_TIMEOUT_S)
