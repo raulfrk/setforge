@@ -164,7 +164,13 @@ def extract_hunks(base: bytes, live: bytes) -> list[Hunk]:
             Hunk(
                 cls=HunkClass.PENDING,
                 label=_label(base_lines, live_lines, i1, i2, j1, j2),
-                live_hash=content_sha(_norm(live_lines[j1:j2])),
+                # Confirmation preserves meaningful trailing spaces (Markdown
+                # hard breaks), independently of normalized unit identity. The
+                # domain separates legacy hashes that discarded those spaces.
+                live_hash=content_sha(
+                    b"line-confirmation-v2\x00"
+                    + b"\n".join(line.rstrip(b"\r\n") for line in live_lines[j1:j2])
+                ),
                 unit_id=_line_unit_id(base_lines, i1, i2, before, after),
                 base_span=(i1, i2),
                 live_span=(j1, j2),

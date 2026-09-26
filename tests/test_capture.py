@@ -557,8 +557,9 @@ def test_profile_preflight_prevents_earlier_write_when_later_participant_invalid
     assert x_src.read_bytes() == b"tracked-before\n"
 
 
+@pytest.mark.parametrize("replacement", [b"Prefer fish.", b"Prefer zsh.  "])
 def test_staged_capture_changed_shared_held_local_with_hint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: bytes
 ) -> None:
     # Editing a previously-SHARED hunk's content must NOT auto-promote the drift
     # into tracked/ (the security fix), AND must warn so the now-un-shared hunk
@@ -570,7 +571,7 @@ def test_staged_capture_changed_shared_held_local_with_hint(
     repo = tmp_path / "repo"
     src = repo / "tracked" / "CLAUDE.md"
     dst = tmp_path / "live" / "CLAUDE.md"
-    drifted = _A5_LIVE.replace(b"Prefer zsh.", b"Prefer fish.")
+    drifted = _A5_LIVE.replace(b"Prefer zsh.", replacement)
     _write(src, _A5_BASE.decode())  # tracked currently == base
     _write(dst, drifted.decode())  # live's Shell content has drifted since staging
 
@@ -592,7 +593,7 @@ def test_staged_capture_changed_shared_held_local_with_hint(
 
     out = src.read_bytes()
     assert b"## Shell" not in out  # changed-SHARED held at base, not promoted
-    assert b"Prefer fish." not in out  # the drifted bytes never reached tracked
+    assert replacement not in out  # the drifted bytes never reached tracked
     (result,) = [r for r in results if r.name == "CLAUDE.md"]
     assert any("re-confirm" in w for w in result.warnings)
 

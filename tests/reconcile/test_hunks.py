@@ -22,7 +22,7 @@ from setforge.reconcile.hunks import (
     identity,
     serialize,
 )
-from setforge.reconcile.types import HunkClass, UnitRef
+from setforge.reconcile.types import HunkClass, UnitRef, content_sha
 
 # A base/live pair with two independent changes:
 #   - an inserted "## Shell" block (generally useful → SHARE candidate)
@@ -94,6 +94,10 @@ def test_trailing_whitespace_change_keeps_identity_stable() -> None:
     (a,) = extract_hunks(base, live_a)
     (b,) = extract_hunks(base, live_b)
     assert identity(a) == identity(b)
+    assert a.live_hash != b.live_hash
+    stored = serialize([replace(a, cls=HunkClass.SHARED)])
+    (changed,) = classify([b], stored)
+    assert changed.changed is True
 
 
 def test_edit_above_does_not_remint_lower_hunk() -> None:
@@ -104,6 +108,18 @@ def test_edit_above_does_not_remint_lower_hunk() -> None:
     lower1 = _by_label(extract_hunks(base, live1))["## Section"]
     lower2 = _by_label(extract_hunks(base, live2))["## Section"]
     assert identity(lower1) == identity(lower2)
+
+
+@pytest.mark.parametrize("current", [b"alpha\nBETA\n", b"alpha\nBETA  \n"])
+def test_legacy_whitespace_confirmation_requires_reconfirmation(current: bytes) -> None:
+    base = b"alpha\nbeta\n"
+    (previous,) = extract_hunks(base, b"alpha\nBETA  \n")
+    legacy = serialize(
+        [replace(previous, cls=HunkClass.SHARED, live_hash=content_sha(b"BETA"))]
+    )
+    (fresh,) = classify(extract_hunks(base, current), legacy)
+    assert fresh.cls is HunkClass.SHARED
+    assert fresh.changed is True
 
 
 def test_live_payload_edit_keeps_unit_id_but_changes_live_hash() -> None:
