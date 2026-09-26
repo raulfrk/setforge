@@ -34,11 +34,19 @@ def resolve_pins(items: list[_LockItem], profile: str) -> list[ResolvedPin]:
     return pins
 
 
-def merge_lock(existing: LockFile | None, new_pins: list[ResolvedPin]) -> LockFile:
+def merge_lock(
+    existing: LockFile | None, new_pins: list[ResolvedPin], *, profile: str
+) -> LockFile:
     # A shared key at a different version/integrity is a hard LockConflict.
     merged: dict[tuple[str, str], ResolvedPin] = {}
+    selected = {pin.sort_key() for pin in new_pins}
     if existing is not None:
         for pin in existing.packages:
+            if profile in pin.profiles and pin.sort_key() not in selected:
+                remaining = tuple(name for name in pin.profiles if name != profile)
+                if not remaining:
+                    continue
+                pin = pin.model_copy(update={"profiles": remaining})
             merged[pin.sort_key()] = pin
 
     for pin in new_pins:
@@ -138,7 +146,7 @@ def lock(
 
         typer.echo(f"resolving {len(items)} package(s) for profile {profile!r}…")
         new_pins = resolve_pins(items, profile)
-        lockfile = merge_lock(existing, new_pins)
+        lockfile = merge_lock(existing, new_pins, profile=profile)
         write_lock(lockfile, path)
         typer.echo(f"wrote {path.name} ({len(lockfile.packages)} pin(s))")
 

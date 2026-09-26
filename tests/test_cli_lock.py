@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.errors import ResolveError
-from setforge.lockfile import parse_lock
+from setforge.lockfile import LockFile, dump_lock, parse_lock
 from setforge.provision.resolve import registry
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
@@ -197,6 +197,52 @@ profiles:
     assert by_key[("python", "black")].profiles == ("b",)
 
 
+@pytest.mark.parametrize("keep_python", [False, True])
+def test_relock_prunes_only_obsolete_target_profile_memberships(
+    tmp_path: Path, keep_python: bool
+) -> None:
+    text = (
+        "tracked_files: {}\npackages:\n"
+        "  native: {type: cargo, crate: tool}\n"
+        "  py: {type: python, package: pytool}\n"
+        "profiles:\n  a: {packages: [native, py]}\n  b: {packages: [native]}\n"
+    )
+    config = _write_config(tmp_path, text)
+    _register_stub(PackageType.CARGO, "tool", "1.0")
+    _register_stub(PackageType.PYTHON, "pytool", "1.0")
+    runner = CliRunner()
+    for profile in ("a", "b"):
+        result = runner.invoke(
+            app, ["lock", f"--profile={profile}", f"--config={config}"]
+        )
+        assert result.exit_code == 0, result.output
+    path = tmp_path / "setforge.lock"
+    previous = parse_lock(path.read_text())
+    path.write_text(
+        dump_lock(
+            LockFile(
+                packages=(
+                    *previous.packages,
+                    _pin(PackageType.CARGO, "legacy-unscoped", "1.0"),
+                )
+            )
+        )
+    )
+    selection = "[py]" if keep_python else "[]"
+    config.write_text(text.replace("[native, py]", selection))
+
+    result = runner.invoke(app, ["lock", "--profile=a", f"--config={config}"])
+
+    assert result.exit_code == 0, result.output
+    memberships = {
+        pin.key: pin.profiles for pin in parse_lock(path.read_text()).packages
+    }
+    expected = {"tool": ("b",), "legacy-unscoped": ()}
+    if keep_python:
+        expected["pytool"] = ("a",)
+    assert memberships == expected
+
+
 def test_lock_version_conflict_across_profiles_errors(tmp_path: Path) -> None:
     yaml = """\
 version: 1
@@ -375,7 +421,7 @@ def test_merge_lock_same_version_different_integrity_conflicts() -> None:
 
     existing = LockFile(packages=(_cargo_pin("sha256:aaaa", "a"),))
     with pytest.raises(LockConflict) as exc:
-        merge_lock(existing, [_cargo_pin("sha256:bbbb", "b")])
+        merge_lock(existing, [_cargo_pin("sha256:bbbb", "b")], profile="b")
     assert "sha256:aaaa" in str(exc.value)
     assert "sha256:bbbb" in str(exc.value)
 
