@@ -105,39 +105,73 @@ def _run_json(args: list[str]) -> object:
         ) from exc
 
 
-def _run_mutation(args: list[str]) -> None:
-    raw = _run_json(args)
-    if isinstance(raw, dict):
-        plugin_add_fields = {
-            "pluginId",
-            "name",
-            "marketplaceName",
-            "version",
-            "installedPath",
-            "authPolicy",
-        }
-        if args[:2] == ["plugin", "add"]:
-            if (
-                len(args) == 3
-                and raw.get("pluginId") == args[2]
-                and raw.keys() == plugin_add_fields
-                and all(
-                    isinstance(raw.get(field), str) and bool(raw[field])
-                    for field in (
-                        "name",
-                        "marketplaceName",
-                        "version",
-                        "installedPath",
-                    )
-                )
-                and (raw["authPolicy"] is None or isinstance(raw["authPolicy"], dict))
-            ):
-                return
-        elif raw.get("success") is True:
-            return
-    raise PluginToolMissing(
-        f"Codex CLI reported an unsuccessful mutation for {' '.join(args)!r}"
+def _nonempty_fields(payload: dict[str, object], *fields: str) -> bool:
+    return all(
+        isinstance(payload.get(field), str) and bool(payload[field]) for field in fields
     )
+
+
+def _mutation_succeeded(args: list[str], raw: object) -> bool:
+    """Validate required native receipt fields while tolerating additive metadata."""
+    if not isinstance(raw, dict) or ("success" in raw and raw["success"] is not True):
+        return False
+    if args[:2] != ["plugin", "add"] and raw.get("success") is True:
+        return True
+    match args:
+        case ["plugin", "add", plugin_id]:
+            policy = raw.get("authPolicy")
+            return (
+                raw.get("pluginId") == plugin_id
+                and _nonempty_fields(
+                    raw,
+                    "pluginId",
+                    "name",
+                    "marketplaceName",
+                    "version",
+                    "installedPath",
+                )
+                and "authPolicy" in raw
+                and (
+                    policy is None
+                    or isinstance(policy, dict)
+                    or (isinstance(policy, str) and policy in {"ON_INSTALL", "ON_USE"})
+                )
+            )
+        case ["plugin", "remove", plugin_id]:
+            return raw.get("pluginId") == plugin_id and _nonempty_fields(
+                raw, "pluginId", "name", "marketplaceName"
+            )
+        case ["plugin", "marketplace", "add", _]:
+            return _nonempty_fields(
+                raw, "marketplaceName", "installedRoot"
+            ) and isinstance(raw.get("alreadyAdded"), bool)
+        case ["plugin", "marketplace", "remove", name]:
+            return (
+                raw.get("marketplaceName") == name
+                and _nonempty_fields(raw, "marketplaceName")
+                and "installedRoot" in raw
+                and (
+                    raw["installedRoot"] is None
+                    or _nonempty_fields(raw, "installedRoot")
+                )
+            )
+        case ["plugin", "marketplace", "upgrade", name]:
+            roots = raw.get("upgradedRoots")
+            return (
+                raw.get("selectedMarketplaces") == [name]
+                and isinstance(roots, list)
+                and all(isinstance(root, str) and bool(root) for root in roots)
+                and raw.get("errors") == []
+            )
+        case _:
+            return False
+
+
+def _run_mutation(args: list[str]) -> None:
+    if not _mutation_succeeded(args, _run_json(args)):
+        raise PluginToolMissing(
+            f"Codex CLI reported an unsuccessful mutation for {' '.join(args)!r}"
+        )
 
 
 def _github_repo_from_remote(remote: str) -> str | None:

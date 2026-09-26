@@ -208,9 +208,9 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
         profile_added = False
         native_marketplace_added = False
         try:
-            if mp_added and not no_install:
+            if not no_install and (mp_added or marketplace not in pre_marketplaces):
                 codex_plugins_mod.marketplace_add(source)
-                native_marketplace_added = True
+                native_marketplace_added = marketplace not in pre_marketplaces
             plugin_added = claude_yaml_editor_mod.yaml_add_codex_plugin(
                 config, plugin_name, marketplace
             )

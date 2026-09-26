@@ -293,9 +293,12 @@ def test_plugin_install_rejects_generic_or_malformed_success_json(
         codex_plugins.plugin_install("review@official")
 
 
-@pytest.mark.parametrize("auth_policy", [None, {"opaque": "ignored"}])
+@pytest.mark.parametrize(
+    "auth_policy", [None, {"opaque": "ignored"}, "ON_INSTALL", "ON_USE"]
+)
+@pytest.mark.parametrize("extra_fields", [False, True])
 def test_plugin_install_accepts_current_success_json(
-    monkeypatch: pytest.MonkeyPatch, auth_policy: object
+    monkeypatch: pytest.MonkeyPatch, auth_policy: object, extra_fields: bool
 ) -> None:
     payload = {
         "pluginId": "review@official",
@@ -305,9 +308,100 @@ def test_plugin_install_accepts_current_success_json(
         "installedPath": "/tmp/codex/plugins/review",
         "authPolicy": auth_policy,
     }
+    if extra_fields:
+        payload["additionalMetadata"] = {"ignored": True}
     monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: payload)
 
     codex_plugins.plugin_install("review@official")
+
+
+@pytest.mark.parametrize(
+    ("args", "receipt", "required"),
+    [
+        (
+            ["plugin", "marketplace", "add", "/fixture/market"],
+            {
+                "marketplaceName": "team",
+                "installedRoot": "/fixture/market",
+                "alreadyAdded": False,
+            },
+            "alreadyAdded",
+        ),
+        (
+            ["plugin", "marketplace", "remove", "team"],
+            {"marketplaceName": "team", "installedRoot": None},
+            "installedRoot",
+        ),
+        (
+            ["plugin", "remove", "review@team"],
+            {"pluginId": "review@team", "name": "review", "marketplaceName": "team"},
+            "name",
+        ),
+        (
+            ["plugin", "marketplace", "upgrade", "team"],
+            {
+                "selectedMarketplaces": ["team"],
+                "upgradedRoots": ["/fixture/root"],
+                "errors": [],
+            },
+            "errors",
+        ),
+    ],
+)
+@pytest.mark.parametrize("missing_field", [False, True])
+def test_native_mutation_receipts_require_their_contract_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    receipt: dict[str, object],
+    required: str,
+    missing_field: bool,
+) -> None:
+    payload = {**receipt, "additionalMetadata": {"ignored": True}}
+    if missing_field:
+        payload.pop(required)
+    monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: payload)
+    if missing_field:
+        with pytest.raises(PluginToolMissing, match="unsuccessful mutation"):
+            codex_plugins._run_mutation(args)
+    else:
+        codex_plugins._run_mutation(args)
+
+
+@pytest.mark.parametrize(
+    ("args", "receipt"),
+    [
+        (
+            ["plugin", "marketplace", "add", "/fixture/market"],
+            {
+                "marketplaceName": "team",
+                "installedRoot": "/fixture/market",
+                "alreadyAdded": "false",
+            },
+        ),
+        (
+            ["plugin", "marketplace", "remove", "team"],
+            {"marketplaceName": "other", "installedRoot": None},
+        ),
+        (
+            ["plugin", "remove", "review@team"],
+            {"pluginId": "other@team", "name": "other", "marketplaceName": "team"},
+        ),
+        (
+            ["plugin", "marketplace", "upgrade", "team"],
+            {
+                "selectedMarketplaces": ["team"],
+                "upgradedRoots": [],
+                "errors": [{"message": "failed"}],
+            },
+        ),
+    ],
+)
+def test_native_mutation_receipts_reject_failures_and_wrong_identity(
+    monkeypatch: pytest.MonkeyPatch, args: list[str], receipt: dict[str, object]
+) -> None:
+    monkeypatch.setattr(codex_plugins, "_run_json", lambda _args: receipt)
+    with pytest.raises(PluginToolMissing, match="unsuccessful mutation"):
+        codex_plugins._run_mutation(args)
 
 
 @pytest.mark.parametrize(

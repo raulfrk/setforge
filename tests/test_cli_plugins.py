@@ -97,6 +97,98 @@ profiles:
     assert "nothing to reconcile" in second.output
 
 
+@pytest.mark.parametrize("native_present", [False, True])
+@pytest.mark.parametrize("fail_install", [False, True])
+@pytest.mark.parametrize("yaml_present", [False, True])
+def test_codex_add_repairs_native_registration_for_existing_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native_present: bool,
+    fail_install: bool,
+    yaml_present: bool,
+) -> None:
+    from setforge.errors import PluginToolMissing
+
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.4'\nminimum_version: '6.4'\ntracked_files: {}\n"
+        + (
+            "codex:\n  marketplaces:\n    team: {source: github, repo: owner/repo}\n"
+            if yaml_present
+            else ""
+        )
+        + "profiles:\n  default: {}\n"
+    )
+    before = config.read_bytes()
+    marketplace = codex_plugins_mod.InstalledMarketplace("team", tmp_path / "market")
+    marketplaces = {"team": marketplace} if native_present else {}
+    plugins: dict[str, codex_plugins_mod.InstalledPlugin] = {}
+    events: list[str] = []
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+
+    def add(_source: object) -> None:
+        events.append("marketplace-add")
+        marketplaces["team"] = marketplace
+
+    def install(plugin_id: str) -> None:
+        events.append("plugin-add")
+        if "team" not in marketplaces:
+            raise PluginToolMissing("marketplace not registered")
+        plugins[plugin_id] = codex_plugins_mod.InstalledPlugin(
+            plugin_id, "review", "team"
+        )
+        if fail_install:
+            raise PluginToolMissing("failure after native install")
+
+    def remove(plugin_id: str) -> None:
+        events.append("plugin-remove")
+        plugins.pop(plugin_id, None)
+
+    def remove_marketplace(name: str) -> None:
+        events.append("marketplace-remove")
+        marketplaces.pop(name, None)
+
+    monkeypatch.setattr(codex_plugins_mod, "marketplace_add", add)
+    monkeypatch.setattr(codex_plugins_mod, "plugin_install", install)
+    monkeypatch.setattr(codex_plugins_mod, "plugin_remove", remove)
+    monkeypatch.setattr(codex_plugins_mod, "marketplace_remove", remove_marketplace)
+    args = [
+        "plugin",
+        "add",
+        "review@team",
+        "--product=codex",
+        "--from=github:owner/repo",
+        "--profile=default",
+        f"--config={config}",
+    ]
+    runner = CliRunner()
+
+    result = runner.invoke(app, args)
+
+    expected = [] if native_present and yaml_present else ["marketplace-add"]
+    expected.append("plugin-add")
+    if fail_install:
+        assert result.exit_code == 1, result.output
+        expected.append("plugin-remove")
+        if not native_present:
+            expected.append("marketplace-remove")
+        assert plugins == {}
+        assert marketplaces == ({"team": marketplace} if native_present else {})
+        assert config.read_bytes() == before
+    else:
+        assert result.exit_code == 0, result.output
+        after = config.read_bytes()
+        second = runner.invoke(app, args)
+        assert second.exit_code == 0, second.output
+        expected.append("plugin-add")
+        assert config.read_bytes() == after
+        assert set(plugins) == {"review@team"}
+    assert events == expected
+
+
 def test_codex_add_compensates_native_marketplace_when_plugin_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
