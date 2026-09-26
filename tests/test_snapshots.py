@@ -234,6 +234,43 @@ def test_create_snapshot_preserves_symlinks_as_symlinks(
     assert str(mirror.readlink()) == str(target)
 
 
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+def test_snapshot_restores_payload_only_for_declared_symlinks(
+    fake_home: Path, declared: bool, relative: bool
+) -> None:
+    from setforge.deploy import deploy_symlinked_file
+
+    ctx, src, dst = _build_ctx(fake_home)
+    src.write_text("captured\n")
+    dst.parent.mkdir(parents=True)
+    target = fake_home / "payload/real.txt"
+    target.parent.mkdir()
+    target.write_text("captured\n")
+    raw_target = "../payload/real.txt" if relative else str(target)
+    if declared:
+        tracked = ctx.cfg.tracked_files["minimal_text"].model_copy(
+            update={"symlink": raw_target}
+        )
+        ctx.cfg.tracked_files["minimal_text"] = tracked
+        deploy_symlinked_file(src, dst, tracked, backup=False)
+    else:
+        dst.symlink_to(raw_target)
+    meta = _create(ctx, "payload")
+    assert (target in meta.files) is declared
+    target.write_text("changed\n")
+    dst.unlink()
+    dst.symlink_to("different-target")
+
+    snap_mod.restore_snapshot(
+        meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
+    )
+
+    assert dst.is_symlink()
+    assert str(dst.readlink()) == raw_target
+    assert target.read_text() == ("captured\n" if declared else "changed\n")
+
+
 def test_create_snapshot_skips_missing_live_files(fake_home: Path) -> None:
     """Snapshot fidelity is files-that-exist-now; missing dsts skip silently."""
     ctx, _, dst = _build_ctx(fake_home)

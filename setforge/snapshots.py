@@ -50,7 +50,7 @@ from typing import Final
 from setforge import atomicio, operations, transitions
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, ResolvedProfile
+from setforge.config import Config, ResolvedProfile, resolve_symlink_target
 from setforge.errors import SetforgeError
 from setforge.transitions import now_utc
 
@@ -234,7 +234,7 @@ def _snapshot_id(label: str, *, timestamp: datetime | None = None) -> str:
 def _resolve_dst_paths(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, profile: str
 ) -> list[Path]:
-    """Resolve every ``tracked_files.dst`` for the resolved profile, plus local.yaml.
+    """Resolve tracked destinations and declared symlink payloads, plus local.yaml.
 
     Mirrors the existing ``expand_tracked_file`` walk so directory-shaped
     tracked entries contribute one path per contained file. ``local.yaml``
@@ -248,9 +248,15 @@ def _resolve_dst_paths(
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for _, _, sub_dst in expand_tracked_file(name, src, dst):
-            if sub_dst not in seen:
-                seen.add(sub_dst)
-                dst_paths.append(sub_dst)
+            destinations = [sub_dst]
+            if tracked_file.symlink is not None:
+                destinations.append(
+                    resolve_symlink_target(sub_dst, tracked_file.symlink)
+                )
+            for destination in destinations:
+                if destination not in seen:
+                    seen.add(destination)
+                    dst_paths.append(destination)
     from setforge import codex_lifecycle
 
     for destination in codex_lifecycle.config_destinations(
