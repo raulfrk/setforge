@@ -74,11 +74,12 @@ def test_plugin_add_only_appends_local_add_after_profile() -> None:
     ]
 
 
-def test_plugin_remove_tags_profile_entry_as_local_remove() -> None:
+@pytest.mark.parametrize("removal", ["a", "a@old"])
+def test_plugin_remove_tags_profile_entry_as_local_remove(removal: str) -> None:
     resolved = resolve_plugin_overlay(
         profile_plugins=["a", "b"],
         profile_name="vm-headless",
-        overlay=PluginOverlay(remove=["a"]),
+        overlay=PluginOverlay(remove=[removal]),
     )
     assert resolved == [
         ResolvedPlugin("a", OverlayOrigin.LOCAL_REMOVE),
@@ -98,12 +99,16 @@ def test_plugin_redundant_add_silently_dedup() -> None:
     assert resolved == [ResolvedPlugin("a", OverlayOrigin.PROFILE)]
 
 
-def test_plugin_collision_add_and_remove_same_value_raises() -> None:
+@pytest.mark.parametrize("addition", ["x", "x@new", "x@1.2.3"])
+@pytest.mark.parametrize("removal", ["x", "x@old"])
+def test_plugin_collision_add_and_remove_same_value_raises(
+    addition: str, removal: str
+) -> None:
     with pytest.raises(LocalOverlayError) as exc_info:
         resolve_plugin_overlay(
-            profile_plugins=["a"],
+            profile_plugins=["x"],
             profile_name="p",
-            overlay=PluginOverlay(add=["x"], remove=["x"]),
+            overlay=PluginOverlay(add=[addition], remove=[removal]),
         )
     assert "in both add and remove" in str(exc_info.value)
     assert "'x'" in str(exc_info.value)

@@ -186,14 +186,14 @@ def resolve_plugin_overlay(
     - ``add ∩ remove`` non-empty.
     - ``remove`` references a plugin not in ``profile_plugins``.
     """
+    removed = {value.split("@", 1)[0] for value in overlay.remove}
     _check_overlay_lists(
         overlay_kind="plugin",
         profile_name=profile_name,
         profile_values=profile_plugins,
-        overlay_add=list(overlay.add),
-        overlay_remove=list(overlay.remove),
+        overlay_add=[value.split("@", 1)[0] for value in overlay.add],
+        overlay_remove=list(removed),
     )
-    removed = set(overlay.remove)
     profile_set = set(profile_plugins)
     resolved: list[ResolvedPlugin] = []
     for value in profile_plugins:
