@@ -325,11 +325,12 @@ def _resolved_tracked_dsts(
     ignore entry without cleaning the corresponding file; treating the
     id as still-tracked is the safer default.
 
-    Directory-type tracked_files are expanded via
+    Directory-type tracked_files retain their root destination and are expanded via
     :func:`expand_tracked_file` so every deployed CHILD dst joins the
     set — without this a directory tracked_file's children surface as
-    orphans (touched-but-absent from the parent-only dst set). All paths
-    are lexically normalized to match the candidate side.
+    orphans (touched-but-absent from the parent-only dst set). Managed-tree
+    inventories also retain selected empty directories and preserved symlinks.
+    All paths are lexically normalized to match the candidate side.
     """
     names = list(resolved.tracked_files) + [
         name for name in extra_ids if name in config.tracked_files
@@ -339,8 +340,12 @@ def _resolved_tracked_dsts(
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
+        tracked_paths.add(_norm(dst))
         for _, _, sub_dst in expand_tracked_file(name, src, dst):
             tracked_paths.add(_norm(sub_dst))
+        if tracked_file.tree is not None:
+            inventory = scan_tree(src, tracked_file.tree).inventory
+            tracked_paths.update(_norm(dst / entry.path) for entry in inventory.entries)
     return tracked_paths
 
 
@@ -466,6 +471,7 @@ def detect_orphans(
     repo_root: Path,
     *,
     ignored: frozenset[str] = frozenset(),
+    protected_paths: Iterable[Path] = (),
 ) -> OrphanDetection:
     """Find live files setforge previously deployed that no longer appear
     in ``resolved.tracked_files``.
@@ -505,7 +511,11 @@ def detect_orphans(
     how setforge records paths. ``ignored`` is a set of tracked_file IDs
     the user marked "keep orphan" via ``cleanup-orphans --ignore <id>``;
     their resolved destinations join the tracked set so they never
-    surface. Returns an :class:`OrphanDetection` carrying the kept
+    surface. ``protected_paths`` adds native resource destinations managed
+    outside ``tracked_files``. Ancestors of retained destinations are also
+    protected: deleting a container would invalidate its active children.
+    This excludes the container path itself, not unrelated paths below it.
+    Returns an :class:`OrphanDetection` carrying the kept
     orphans and the per-guard skip tallies.
     """
     tracked_paths = _resolved_tracked_dsts(
@@ -514,6 +524,8 @@ def detect_orphans(
     tracked_paths.update(
         resolve_ignored_orphan_paths(ignored, config, repo_root, transitions_dir)
     )
+    tracked_paths.update(_norm(path) for path in protected_paths)
+    containing_paths = {parent for path in tracked_paths for parent in path.parents}
     touched_paths = _touched_paths_from_meta(transitions_dir)
     src_root = _norm(repo_root / "tracked")
     src_paths = _tracked_source_paths(config, repo_root)
@@ -525,7 +537,7 @@ def detect_orphans(
     skipped_source = 0
     skipped_unmanaged = 0
     skipped_host_local = 0
-    for path in sorted(touched_paths - tracked_paths, key=str):
+    for path in sorted(touched_paths - tracked_paths - containing_paths, key=str):
         if _norm(path) in host_local:
             # setforge-written host-local state (the local.yaml/additional-content
             # stubs + every profile's bootstrap dst) — never a tracked
@@ -794,8 +806,20 @@ def compare_profile(
     skipped_unmanaged = 0
     skipped_host_local = 0
     if transitions_dir is not None:
+        # Resolve native containers at the lifecycle boundary, where the profile
+        # and its stored resource identities are available. The local import
+        # avoids a cycle with the native report projection's compare types.
+        from setforge import codex_lifecycle
+
         detection = detect_orphans(
-            resolved, config, transitions_dir, repo_root, ignored=ignored
+            resolved,
+            config,
+            transitions_dir,
+            repo_root,
+            ignored=ignored,
+            protected_paths=codex_lifecycle.config_destinations(
+                config, resolved, repo_root, profile=profile_name
+            ),
         )
         orphans = detection.orphans
         skipped_absent = detection.skipped_absent

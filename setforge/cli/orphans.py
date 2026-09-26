@@ -221,6 +221,7 @@ def _detect_orphans_live(
         transitions_dir=transitions.transitions_root(),
         ignored=load_ignored_orphans(),
         ownership_authorized=ownership_authorized,
+        resolved=resolved,
     )
     detection = OrphanDetection(
         orphans=report.orphans,
