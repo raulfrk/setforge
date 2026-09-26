@@ -71,6 +71,33 @@ def test_projection_reports_native_config_plugin_and_marketplace_drift(
     assert report.has_unexpected_drift
 
 
+def test_legacy_retirement_destination_recovers_from_transition_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hashlib import sha256
+
+    from setforge import locking, transitions
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "new-home"))
+    old = tmp_path / "old-home" / "config.toml"
+    old.parent.mkdir()
+    old.write_bytes(b'model = "managed"\npersonal = true\n')
+    resource = "codex/config/" + sha256(str(old).encode()).hexdigest()[:16]
+    with locking.profile_lock("default"):
+        store.write_base("default", file_id(resource), b'model = "managed"\n')
+    record = transitions.transitions_root() / "old-install"
+    record.mkdir(parents=True)
+    (record / "meta.json").write_text(json.dumps({"paths": [str(old)]}))
+    config = Config(tracked_files={}, profiles={"default": Profile()})
+    resolved = resolve_profile(config, "default")
+    assert codex_lifecycle.config_destinations(
+        config, resolved, tmp_path, profile="default"
+    ) == (old,)
+
+
 def test_projection_gives_nonfatal_actionable_missing_plugin_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

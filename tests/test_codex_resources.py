@@ -10,6 +10,7 @@ from setforge.codex_resources import (
     capture_toml,
     codex_home,
     compose_fragments,
+    config_target_roots,
     expand_filesystem_resources,
     mcp_target_marker,
     plan_config_resources,
@@ -33,6 +34,153 @@ def test_compose_fragments_preserves_distinct_keys() -> None:
     )
     assert b'model = "gpt-5"' in merged
     assert owned == {("model",), ("features", "web")}
+
+
+@pytest.mark.parametrize("move", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_retire_deselected_or_moved_config_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, move: bool, legacy: bool
+) -> None:
+    home = tmp_path / "old-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "model.toml").write_bytes(b'model = "managed"\n')
+    config = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate({"config": {"model": {"source": "model.toml"}}}),
+        profiles={"default": Profile(codex=CodexProfile(config=["model"]))},
+    )
+    bases: dict[str, bytes] = {}
+    (original,) = plan_config_resources(
+        config, resolve_profile(config, "default"), tmp_path, read_base=bases.get
+    )
+    apply_config_plan(
+        original,
+        write=lambda path, data: path.write_bytes(data),
+        record_base=bases.__setitem__,
+        record_marker=None if legacy else bases.__setitem__,
+    )
+    old = home / "config.toml"
+    old.write_bytes(old.read_bytes() + b'personal = "keep"\n')
+    if move:
+        new_home = tmp_path / "new-home"
+        new_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(new_home))
+    else:
+        config.profiles["default"].codex = CodexProfile()
+    resolved = resolve_profile(config, "default")
+    historical_paths = (old,) if legacy else ()
+    plans = plan_config_resources(
+        config,
+        resolved,
+        tmp_path,
+        read_base=bases.get,
+        stored_ids=tuple(bases),
+        historical_paths=historical_paths,
+    )
+    retired = next(plan for plan in plans if plan.destination == old)
+    assert retired.sources == ()
+    assert retired.desired == b""
+    assert retired.result == b'personal = "keep"\n'
+    assert old.parent in config_target_roots(
+        config,
+        resolved,
+        tmp_path,
+        stored_ids=tuple(bases),
+        historical_paths=historical_paths,
+    )
+    if move:
+        assert any(plan.destination == new_home / "config.toml" for plan in plans)
+    apply_config_plan(
+        retired,
+        write=lambda path, data: path.write_bytes(data),
+        record_base=bases.__setitem__,
+        record_marker=bases.__setitem__,
+    )
+    assert old.read_bytes() == b'personal = "keep"\n'
+    repeated = plan_config_resources(
+        config, resolved, tmp_path, read_base=bases.get, stored_ids=tuple(bases)
+    )
+    assert next(plan for plan in repeated if plan.destination == old).changed is False
+
+
+@pytest.mark.parametrize(
+    "failure", ["unknown", "scope", "symlink", "untrusted", "edited"]
+)
+def test_historical_config_retirement_refuses_unsafe_or_unknown_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    current = tmp_path / "current"
+    current.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(current))
+    old_root = (
+        tmp_path / "old" / ".codex"
+        if failure in {"scope", "untrusted"}
+        else tmp_path / "old"
+    )
+    old_root.mkdir(parents=True)
+    old = old_root / "config.toml"
+    base = b'model = "managed"\n'
+    old.write_bytes(b'model = "edited"\n' if failure == "edited" else base)
+    resource = f"codex/config/{sha256(str(old).encode()).hexdigest()[:16]}"
+    stored: tuple[str, ...] = (resource,)
+    if failure not in {"unknown", "scope"}:
+        stored += (
+            mcp_target_marker(old, old_root.parent if failure == "untrusted" else None),
+        )
+    if failure == "symlink":
+        moved = tmp_path / "moved"
+        old_root.rename(moved)
+        old_root.symlink_to(moved, target_is_directory=True)
+    cfg = Config(tracked_files={}, profiles={"default": Profile()})
+    with pytest.raises(CodexResourceError):
+        plan_config_resources(
+            cfg,
+            resolve_profile(cfg, "default"),
+            tmp_path,
+            read_base=lambda _key: base,
+            stored_ids=stored,
+            historical_paths=(old,) if failure == "scope" else (),
+        )
+    assert old.read_bytes() == (b'model = "edited"\n' if failure == "edited" else base)
+
+
+@pytest.mark.parametrize("active_project", [False, True])
+def test_config_scope_change_at_same_destination_refuses_before_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, active_project: bool
+) -> None:
+    project = tmp_path / "project"
+    home = project / ".codex"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    (tmp_path / "tracked").mkdir()
+    (tmp_path / "tracked/model.toml").write_text('model = "new"\n')
+    destination = home / "config.toml"
+    content = (
+        f'model = "old"\n[projects."{project}"]\ntrust_level = "trusted"\n'.encode()
+    )
+    destination.write_bytes(content)
+    ref = {"source": "model.toml"}
+    if active_project:
+        ref.update(scope="project", project="app")
+    cfg = Config(
+        tracked_files={},
+        codex=CodexSpec.model_validate({"config": {"model": ref}}),
+        profiles={"default": Profile(codex=CodexProfile(config=["model"]))},
+    )
+    marker = mcp_target_marker(destination, None if active_project else project)
+    cfg._codex_project_paths = {"app": project}
+    with pytest.raises(CodexResourceError, match=r"active and stored.*scopes conflict"):
+        plan_config_resources(
+            cfg,
+            resolve_profile(cfg, "default"),
+            tmp_path,
+            read_base=lambda _key: b'model = "old"\n',
+            stored_ids=(marker,),
+        )
+    assert destination.read_bytes() == content
 
 
 def test_compose_fragments_refuses_duplicate_leaf() -> None:
@@ -442,7 +590,7 @@ def test_mcp_registry_deletion_retires_marked_prior_destination(
     )[0]
 
     assert plan.generated_bytes == ()
-    assert plan.mcp_marker_id is None
+    assert plan.mcp_marker_id == marker
     assert b"mcp_servers.api" not in plan.result
     assert b"mcp_servers.personal" in plan.result
 

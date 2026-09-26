@@ -18,6 +18,7 @@ from click import ClickException
 
 from setforge import (
     atomicio,
+    codex_lifecycle,
     operations,
     transitions,
     vscode_extensions,
@@ -205,9 +206,12 @@ def _load_capture_preview(
             profile, file_id(resource_id)
         ),
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+        historical_paths=codex_lifecycle.historical_config_paths(),
         reconcile=False,
     )
     for plan in codex_plans:
+        if not plan.sources and not plan.generated_bytes:
+            continue
         writes: dict[Path, bytes] = {}
         codex_resources_mod.capture_config_plan(plan, write=writes.__setitem__)
         desired, _owned = codex_resources_mod.compose_fragments(
@@ -603,6 +607,7 @@ def _capture_sync_store_snapshots(
             ctx.profile, file_id(resource_id)
         ),
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+        historical_paths=codex_lifecycle.historical_config_paths(),
         reconcile=False,
     ):
         entries.append(
@@ -798,6 +803,8 @@ def _run_capture(
         ownership_authorized=ownership_authorized,
     )
     for codex_plan in codex_plans:
+        if not codex_plan.sources and not codex_plan.generated_bytes:
+            continue
         changed = codex_resources_mod.capture_config_plan(
             codex_plan, write=atomicio.atomic_write_bytes
         )

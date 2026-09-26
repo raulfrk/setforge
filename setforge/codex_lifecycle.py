@@ -5,12 +5,32 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from setforge import codex_plugins, codex_resources, reconcile_adapter
-from setforge.compare import CompareReport, CompareStatus, DriftClass, FileCompare
+from setforge import codex_plugins, codex_resources, reconcile_adapter, transitions
+from setforge.compare import (
+    CompareReport,
+    CompareStatus,
+    DriftClass,
+    FileCompare,
+    _touched_paths_from_meta,
+)
 from setforge.config import Config, ResolvedProfile
 from setforge.errors import PluginToolMissing
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import file_id
+
+
+def historical_config_paths() -> tuple[Path, ...]:
+    """Return recorded candidate paths; stored base digests establish identity."""
+    return tuple(
+        sorted(
+            (
+                path
+                for path in _touched_paths_from_meta(transitions.transitions_root())
+                if path.name == "config.toml" and path.is_absolute()
+            ),
+            key=str,
+        )
+    )
 
 
 def append_projection(
@@ -31,6 +51,7 @@ def append_projection(
             profile, file_id(resource_id)
         ),
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+        historical_paths=historical_config_paths(),
         reconcile=False,
     )
     for plan in plans:
@@ -110,6 +131,7 @@ def config_destinations(
             profile, file_id(resource_id)
         ),
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+        historical_paths=historical_config_paths(),
         reconcile=False,
     )
     return tuple(sorted({plan.destination for plan in plans}, key=str))

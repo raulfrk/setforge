@@ -610,7 +610,8 @@ def test_codex_mcp_sync_preserves_ownership_for_deselect_and_revert(
     assert deselected.exit_code == 0, deselected.output
     assert b"mcp_servers.notes" not in live.read_bytes()
     assert b"mcp_servers.personal" in live.read_bytes()
-    assert reconcile_store.read_base(_PROFILE, file_id(marker)) is None
+    assert reconcile_store.read_base(_PROFILE, file_id(marker)) == b""
+    assert reconcile_store.read_base(_PROFILE, file_id(f"codex/config/{digest}")) == b""
 
     reverted = CliRunner().invoke(
         app,

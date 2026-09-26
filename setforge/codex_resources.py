@@ -95,16 +95,80 @@ def _decode_mcp_target_marker(marker: str) -> tuple[Path, Path | None]:
         ) from exc
     if not destination.is_absolute():
         raise CodexResourceError(f"relative Codex MCP target marker: {marker}")
+    if destination.name != "config.toml" or ".." in destination.parts:
+        raise CodexResourceError(f"malformed Codex config target marker: {marker}")
     project = destination.parent.parent if scope == "project" else None
-    if project is not None:
-        safe_destination = _safe_destination(project, Path(".codex/config.toml"))
-        if destination != safe_destination:
-            raise CodexResourceError(f"malformed project MCP target marker: {marker}")
-    else:
-        safe_destination = _safe_destination(codex_home(), Path("config.toml"))
-        if destination != safe_destination:
-            raise CodexResourceError(f"stale user MCP target marker: {marker}")
+    if project is not None and destination.parent.name != ".codex":
+        raise CodexResourceError(f"malformed project MCP target marker: {marker}")
+    safe_destination = _safe_destination(
+        Path(destination.anchor), destination.relative_to(destination.anchor)
+    )
     return safe_destination, project
+
+
+def _stored_config_targets(  # noqa: C901 - bind legacy identities and validate historical scope
+    config: Config,
+    stored_ids: tuple[str, ...],
+    historical_paths: tuple[Path, ...],
+) -> tuple[tuple[Path, Path | None], ...]:
+    """Bind stored bases to exact recorded or declared destinations."""
+    if not any(
+        item.startswith(("codex/config/", _MCP_MARKER_PREFIX)) for item in stored_ids
+    ):
+        return ()
+    targets: dict[Path, Path | None] = {}
+    for marker in stored_ids:
+        if not marker.startswith(_MCP_MARKER_PREFIX):
+            continue
+        destination, marked_project = _decode_mcp_target_marker(marker)
+        if destination in targets and targets[destination] != marked_project:
+            raise CodexResourceError(
+                f"conflicting stored Codex config scopes: {destination}"
+            )
+        targets[destination] = marked_project
+    known = {codex_home() / "config.toml": None, **targets}
+    for declared_project in config._codex_project_paths.values():
+        known.setdefault(declared_project / ".codex/config.toml", declared_project)
+    candidates = {*known, *historical_paths}
+    for resource_id in stored_ids:
+        if not resource_id.startswith("codex/config/"):
+            continue
+        matches = [
+            path
+            for path in candidates
+            if path.is_absolute()
+            and path.name == "config.toml"
+            and resource_id
+            == f"codex/config/{sha256(str(path).encode()).hexdigest()[:16]}"
+        ]
+        if len(matches) != 1:
+            raise CodexResourceError(
+                f"cannot uniquely resolve stored Codex config destination "
+                f"{resource_id}; "
+                "restore its destination marker or recorded transition history"
+            )
+        destination = matches[0]
+        if destination not in known and destination.parent.name == ".codex":
+            raise CodexResourceError(
+                f"cannot determine historical Codex config scope for {destination}; "
+                "restore its destination marker or project locator"
+            )
+        targets[destination] = known.get(destination)
+    checked = []
+    for destination, project in targets.items():
+        if ".." in destination.parts:
+            raise CodexResourceError(
+                f"noncanonical stored Codex destination: {destination}"
+            )
+        _safe_destination(
+            Path(destination.anchor), destination.relative_to(destination.anchor)
+        )
+        if project is not None and not project_is_trusted(project):
+            raise CodexResourceError(
+                f"Codex project is not trusted for prior config ownership: {project}"
+            )
+        checked.append((destination, project))
+    return tuple(checked)
 
 
 def codex_home() -> Path:
@@ -428,13 +492,14 @@ def _regular_bytes(path: Path, *, absent_ok: bool) -> bytes | None:
         raise CodexResourceError(f"cannot read Codex resource {path}: {exc}") from exc
 
 
-def plan_config_resources(  # noqa: C901 - one pass freezes all destination inputs
+def plan_config_resources(  # noqa: C901 - one pass freezes and checks destination scopes
     config: Config,
     resolved: ResolvedProfile,
     repo_root: Path,
     *,
     read_base: Callable[[str], bytes | None],
     stored_ids: tuple[str, ...] = (),
+    historical_paths: tuple[Path, ...] = (),
     reconcile: bool = True,
 ) -> tuple[CodexConfigPlan, ...]:
     """Freeze selected fragments, merge bases, live bytes, and results.
@@ -474,14 +539,12 @@ def plan_config_resources(  # noqa: C901 - one pass freezes all destination inpu
             generated.append(
                 render_mcp_server(name, ref, config._codex_environment_vars)
             )
-    for marker in stored_ids:
-        if not marker.startswith(_MCP_MARKER_PREFIX):
-            continue
-        destination, marker_project = _decode_mcp_target_marker(marker)
-        if marker_project is not None and not project_is_trusted(marker_project):
+    for destination, marker_project in _stored_config_targets(
+        config, stored_ids, historical_paths
+    ):
+        if destination in grouped and grouped[destination][0] != marker_project:
             raise CodexResourceError(
-                "Codex project is not trusted for prior MCP ownership: "
-                f"{marker_project}"
+                f"active and stored Codex config scopes conflict: {destination}"
             )
         grouped.setdefault(destination, (marker_project, [], []))
     plans: list[CodexConfigPlan] = []
@@ -514,9 +577,7 @@ def plan_config_resources(  # noqa: C901 - one pass freezes all destination inpu
                 sources=tuple(sources),
                 source_bytes=source_bytes,
                 generated_bytes=tuple(generated),
-                mcp_marker_id=(
-                    mcp_target_marker(destination, project) if generated else None
-                ),
+                mcp_marker_id=mcp_target_marker(destination, project),
                 desired=desired,
                 base=base,
                 live=live,
@@ -549,6 +610,7 @@ def config_target_roots(
     repo_root: Path,
     *,
     stored_ids: tuple[str, ...] = (),
+    historical_paths: tuple[Path, ...] = (),
 ) -> tuple[Path, ...]:
     """Return descriptor-lock roots for selected native config destinations."""
     selected = resolved.codex
@@ -570,9 +632,9 @@ def config_target_roots(
     )
     roots.update(
         destination.parent
-        for marker in stored_ids
-        if marker.startswith(_MCP_MARKER_PREFIX)
-        for destination, _project in (_decode_mcp_target_marker(marker),)
+        for destination, _project in _stored_config_targets(
+            config, stored_ids, historical_paths
+        )
     )
     return tuple(sorted(roots, key=str))
 
@@ -583,6 +645,7 @@ def selected_trusted_projects(
     repo_root: Path,
     *,
     stored_ids: tuple[str, ...] = (),
+    historical_paths: tuple[Path, ...] = (),
 ) -> tuple[Path, ...]:
     """Freeze every selected project whose native resources require trust."""
     selected = resolved.codex
@@ -634,9 +697,9 @@ def selected_trusted_projects(
     }
     projects.update(
         project
-        for marker in stored_ids
-        if marker.startswith(_MCP_MARKER_PREFIX)
-        for _destination, project in (_decode_mcp_target_marker(marker),)
+        for _destination, project in _stored_config_targets(
+            config, stored_ids, historical_paths
+        )
         if project is not None
     )
     return tuple(

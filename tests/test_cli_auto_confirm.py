@@ -605,6 +605,34 @@ def test_capture_confirmation_includes_auxiliary_source_writes(
     assert (b'"live"' if kind == "codex" else b"new.ext") in source.read_bytes()
 
 
+def test_capture_does_not_erase_retired_codex_merge_base(
+    runner: CliRunner, stubbed_install_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hashlib import sha256
+
+    from setforge import locking
+    from setforge.codex_resources import mcp_target_marker
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    home = stubbed_install_env.parent / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    destination = home / "config.toml"
+    base = b'model = "previous"\n'
+    destination.write_bytes(base)
+    resource = "codex/config/" + sha256(str(destination).encode()).hexdigest()[:16]
+    with locking.profile_lock("testp"):
+        store.write_base("testp", file_id(resource), base)
+        store.write_base("testp", file_id(mcp_target_marker(destination, None)), b"")
+    result = runner.invoke(
+        app, ["capture", "--profile=testp", f"--config={stubbed_install_env}"]
+    )
+    assert result.exit_code == 0, result.output
+    assert destination.read_bytes() == base
+    assert store.read_base("testp", file_id(resource)) == base
+
+
 @pytest.mark.parametrize("command", ["capture", "sync"])
 def test_yes_without_auto_is_rejected_consistently(
     command: str,

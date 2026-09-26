@@ -24,6 +24,7 @@ import typer
 from setforge import (
     atomicio,
     binaries,
+    codex_lifecycle,
     deploy,
     operations,
     reconcile_adapter,
@@ -494,12 +495,14 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             ctx.profile, file_id(resource_id)
         ),
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+        historical_paths=codex_lifecycle.historical_config_paths(),
     )
     codex_trusted_projects = codex_resources_mod.selected_trusted_projects(
         ctx.cfg,
         ctx.resolved,
         ctx.repo_root,
         stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+        historical_paths=codex_lifecycle.historical_config_paths(),
     )
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
@@ -1653,6 +1656,7 @@ def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
             resolved,
             config.parent,
             stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+            historical_paths=codex_lifecycle.historical_config_paths(),
         ),
     }
     return tuple(sorted(roots, key=str))
