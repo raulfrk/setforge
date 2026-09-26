@@ -265,13 +265,21 @@ def test_profile_show_unknown_name_exits_nonzero(tmp_path: Path) -> None:
     assert "not defined" in message
 
 
-def test_profile_show_marketplaces_lists_global_entries(tmp_path: Path) -> None:
+@pytest.mark.parametrize("profile", ["derived", "empty"])
+def test_profile_show_marketplaces_lists_global_entries(
+    tmp_path: Path, profile: str
+) -> None:
     """marketplaces section enumerates the config-level registry."""
-    cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
-    result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
+    cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML + "  empty: {}\n")
+    result = CliRunner().invoke(app, ["profile", "show", profile, f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "shared-market" in result.output
     assert "owner/marketplace" in result.output
+    row = next(
+        line for line in result.output.splitlines() if "owner/marketplace" in line
+    )
+    assert "[from config]" in row
+    assert "from profile" not in row
 
 
 def test_profile_show_help_exits_0(tmp_path: Path) -> None:

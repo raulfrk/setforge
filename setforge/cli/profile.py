@@ -40,7 +40,7 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.errors import SetforgeError
-from setforge.overlay_provenance import OverlayOrigin
+from setforge.overlay_provenance import OverlayOrigin, display_tag
 
 # Compatibility placeholder for the retired marker-section output block.
 _OVERLAY_PENDING_NOTE: str = "(overlay surface not yet implemented)"
@@ -481,11 +481,10 @@ def _render_marketplaces(
     }
     for mp_name, source in items.items():
         target = source.repo if source.repo is not None else str(source.path)
-        tag = _tag_provenance(
-            mp_name,
-            chain_resolved_by_name=[],
-            leaf_name=ctx.profile,
-            overlay_add=frozenset(local_add),
+        tag = (
+            display_tag(OverlayOrigin.LOCAL_ADD)
+            if mp_name in local_add
+            else "[from config]"
         )
         table.add_row(mp_name, source.source.value, target, tag)
     console.print(table)
