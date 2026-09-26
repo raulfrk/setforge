@@ -2274,15 +2274,15 @@ def _refuse_below_floor(raw_floor: object, path: Path) -> None:
 
 
 def guard_minimum_version(cfg_path: Path) -> None:
-    """Enforce file-format support and the minimum-version floor from a path.
+    """Enforce file-format/schema support and the minimum-version floor.
 
     Verbs that inspect the schema via
     :func:`~setforge.migrations.detect_current_schema` rather than
     :func:`load_config` (notably ``migrate --check`` / ``--apply`` / ``--pin``)
     bypass the guards baked into :func:`_guard_schema_version`. Call this on
-    those paths so unsupported file formats and below-floor engines refuse
+    those paths so unsupported file formats/schema majors and below-floor engines refuse
     there too — and, for mutating modes, BEFORE any lock or mutation. No-op
-    when the file is absent / empty or declares neither marker; malformed or
+    when the file is absent / empty or declares no version markers; malformed or
     unsupported values raise a clean :class:`ConfigError`.
     """
     if not cfg_path.exists():
@@ -2293,9 +2293,7 @@ def guard_minimum_version(cfg_path: Path) -> None:
             data = yaml.load(fh)
     except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"invalid YAML in {cfg_path}: {exc}") from exc
-    _guard_file_format_version(data, cfg_path)
-    raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
-    _refuse_below_floor(raw_floor, cfg_path)
+    _guard_schema_version(data, cfg_path)
 
 
 def _warn_unknown_keys(unknown: list[str]) -> None:

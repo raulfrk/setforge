@@ -27,6 +27,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.errors import ConfigError
 from setforge.migrations import (
     ManifestEntry,
     ManifestType,
@@ -36,6 +37,33 @@ from setforge.migrations import (
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        [],
+        ["--check"],
+        ["--apply", "--yes"],
+        ["--pin=6.5"],
+        ["--finalize", "--yes"],
+        ["--to=7.0"],
+        ["--apply", "--to=7.0", "--yes"],
+    ],
+)
+def test_future_schema_major_refused_before_any_migrate_action(
+    tmp_path: Path, options: list[str]
+) -> None:
+    cfg = tmp_path / "setforge.yaml"
+    before = (
+        b'version: 1\nschema_version: "7.0"\ntracked_files: {}\nprofiles: {p: {}}\n'
+    )
+    cfg.write_bytes(before)
+    result = CliRunner().invoke(app, ["migrate", *options, f"--config={cfg}"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ConfigError)
+    assert "upgrade setforge" in str(result.exception)
+    assert cfg.read_bytes() == before
 
 
 def _fake_button_bar(value: Any) -> Any:
