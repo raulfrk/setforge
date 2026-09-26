@@ -98,11 +98,11 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-sys.path.insert(0, "{repo_root}")
+sys.path.insert(0, {repo_root!r})
 
 from scripts.check_policy_lints import check_source  # noqa: E402
 
-_MODULE_PATH = Path("{module_path}")
+_MODULE_PATH = Path({module_path!r})
 
 
 def _load_wizard():

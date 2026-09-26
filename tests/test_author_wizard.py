@@ -53,6 +53,38 @@ def test_valid_name_emits_two_files(tmp_path: Path) -> None:
     assert tmp_path in test_path.parents
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        'double"quote',
+        "single'quote",
+        "back\\slash",
+        "back\\newline",
+        "line\nbreak",
+        "tab\tname",
+        "unicode-☃",
+    ],
+)
+def test_generated_path_literals_round_trip_and_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from scripts import author_wizard
+
+    repo_root = tmp_path / ("repo-" + name)
+    monkeypatch.setattr(author_wizard, "REPO_ROOT", repo_root)
+    module_path, test_path = draft("demo", dest_root=tmp_path / ("dest-" + name))
+    for path in (module_path, test_path):
+        compile(path.read_text(), str(path), "exec")
+    tree = ast.parse(test_path.read_text())
+    literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert str(module_path) in literals
+    assert str(repo_root) in literals
+
+
 def test_never_clobbers(tmp_path: Path) -> None:
     draft("demo", dest_root=tmp_path)
     with pytest.raises(FileExistsError):
