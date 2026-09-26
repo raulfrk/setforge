@@ -263,6 +263,41 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+@pytest.mark.parametrize("present", [False, True])
+def test_missing_managed_tree_fails_compare_check(
+    tmp_path: Path, present: bool
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.config import load_config
+
+    repo = tmp_path / "repo"
+    source = repo / "tracked" / "tree"
+    source.mkdir(parents=True)
+    (source / "ignored").write_text("excluded source\n")
+    destination = tmp_path / "live"
+    if present:
+        destination.mkdir()
+        (destination / "ignored").write_text("different excluded live\n")
+    config_path = repo / "setforge.yaml"
+    config_path.write_text(
+        'version: 1\nschema_version: "6.5"\nminimum_version: "6.5"\n'
+        "tracked_files:\n  tree:\n    src: tree\n"
+        f"    dst: {destination}\n    tree: {{exclude: [ignored]}}\n"
+        "profiles:\n  p: {tracked_files: [tree]}\n"
+    )
+    report = compare_profile(load_config(config_path), "p", repo)
+    assert report.entries[0].status is (
+        CompareStatus.UNCHANGED if present else CompareStatus.MISSING
+    )
+    assert report.has_unexpected_drift is not present
+    result = CliRunner().invoke(
+        app, ["compare", "--check", "--profile=p", f"--config={config_path}"]
+    )
+    assert result.exit_code == (0 if present else 1), result.output
+
+
 def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 1 when unexpected drift exists."""
     from typer.testing import CliRunner

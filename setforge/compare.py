@@ -740,7 +740,7 @@ def compare_profile(
                 unexpected = False
             elif not live.root_present:
                 entry = FileCompare(name, CompareStatus.MISSING, "")
-                unexpected = False
+                unexpected = True
             else:
                 summary = "\n".join(
                     f"{action.kind.value}: {action.path} ({action.detail})"
