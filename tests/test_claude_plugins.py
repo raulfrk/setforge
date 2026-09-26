@@ -40,6 +40,43 @@ from tests.conftest import (
     _regular_yaml,
 )
 
+
+@pytest.mark.parametrize(
+    ("operation", "arguments"),
+    [
+        ("list_installed", ()),
+        ("list_marketplaces", ()),
+        (
+            "marketplace_add",
+            (
+                "test",
+                MarketplaceSource(
+                    source=MarketplaceSourceKind.GITHUB, repo="owner/repo"
+                ),
+            ),
+        ),
+        ("marketplace_remove", ("test",)),
+        ("marketplace_update", ("test",)),
+        ("plugin_install", ("tool", "test")),
+        ("plugin_uninstall", ("tool@test",)),
+        ("plugin_enable", ("tool@test",)),
+        ("plugin_disable", ("tool@test",)),
+    ],
+)
+def test_claude_launch_failure_is_a_domain_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    arguments: tuple[object, ...],
+) -> None:
+    executable = tmp_path / "claude"
+    executable.write_text("#!/nonexistent/setforge-test-interpreter\n")
+    executable.chmod(0o755)
+    monkeypatch.setattr(cp, "_get_claude_bin", lambda: executable)
+    with pytest.raises(PluginToolMissing, match="could not start"):
+        getattr(cp, operation)(*arguments)
+
+
 # ---------------------------------------------------------------------------
 # P3.1 — Wrapper tests
 # ---------------------------------------------------------------------------

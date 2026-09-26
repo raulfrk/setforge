@@ -83,6 +83,18 @@ def _get_claude_bin() -> Path:
     return path
 
 
+def _run_claude(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a native operation, reporting process-start failures as domain errors."""
+    try:
+        return subprocess.run(
+            argv, check=True, text=True, capture_output=True, timeout=_TIMEOUT_S
+        )
+    except OSError as exc:
+        raise PluginToolMissing(
+            f"Claude CLI could not start: {stderr_of(exc)}"
+        ) from exc
+
+
 def ensure_claude_available() -> None:
     """Resolve the claude CLI or raise.
 
@@ -308,13 +320,7 @@ def list_marketplaces() -> dict[str, dict[str, object]]:
     """
     claude = str(_get_claude_bin())
     try:
-        result = subprocess.run(
-            [claude, "plugin", "marketplace", "list", "--json"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
+        result = _run_claude([claude, "plugin", "marketplace", "list", "--json"])
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PluginToolMissing(
             f"`claude plugin marketplace list` failed: {stderr_of(exc)}"
@@ -352,13 +358,7 @@ def list_installed() -> dict[str, dict[str, object]]:
     """
     claude = str(_get_claude_bin())
     try:
-        result = subprocess.run(
-            [claude, "plugin", "list", "--json"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
+        result = _run_claude([claude, "plugin", "list", "--json"])
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PluginToolMissing(
             f"`claude plugin list` failed: {stderr_of(exc)}"
@@ -395,37 +395,19 @@ def marketplace_add(name: str, source: MarketplaceSource) -> None:
         source_arg = source.repo or ""
     else:
         source_arg = str(source.path or "")
-    subprocess.run(
-        [claude, "plugin", "marketplace", "add", "--", source_arg],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "marketplace", "add", "--", source_arg])
 
 
 def marketplace_remove(name: str) -> None:
     """Remove a marketplace via ``claude plugin marketplace remove <name>``."""
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "marketplace", "remove", name],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "marketplace", "remove", name])
 
 
 def marketplace_update(name: str) -> None:
     """Update a marketplace via ``claude plugin marketplace update <name>``."""
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "marketplace", "update", name],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "marketplace", "update", name])
 
 
 def plugin_install(name: str, marketplace: str) -> None:
@@ -434,13 +416,7 @@ def plugin_install(name: str, marketplace: str) -> None:
     Always passes ``--scope=user`` per spec § Locked decisions row 8.
     """
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "install", f"{name}@{marketplace}", "--scope=user"],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "install", f"{name}@{marketplace}", "--scope=user"])
 
 
 def plugin_uninstall(plugin_id: str) -> None:
@@ -451,13 +427,7 @@ def plugin_uninstall(plugin_id: str) -> None:
     when reversing a transition's ``PluginDelta.installed`` list.
     """
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "uninstall", plugin_id],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "uninstall", plugin_id])
 
 
 def plugin_enable(plugin_id: str) -> None:
@@ -474,13 +444,7 @@ def plugin_enable(plugin_id: str) -> None:
     """
     claude = str(_get_claude_bin())
     try:
-        subprocess.run(
-            [claude, "plugin", "enable", plugin_id],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
+        _run_claude([claude, "plugin", "enable", plugin_id])
     except subprocess.CalledProcessError as exc:
         if "already enabled" in stderr_of(exc).lower():
             return
@@ -493,13 +457,7 @@ def plugin_disable(plugin_id: str) -> None:
     ``plugin_id`` should be in ``"<name>@<marketplace>"`` form.
     """
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "disable", plugin_id],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    _run_claude([claude, "plugin", "disable", plugin_id])
 
 
 # ---------------------------------------------------------------------------
