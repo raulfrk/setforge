@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-09-27
+
+### Fixed
+
+- Compare and orphan cleanup no longer classify active native Codex configuration
+  or managed skill directories as leftovers. Protection includes tree roots,
+  empty nested directories, preserved symlinks, and active containing directories
+  while keeping genuinely retired tracked files eligible for cleanup.
+- Orphan cleanup retains the fully resolved profile, including native Codex
+  instructions and skills, when rechecking candidates before deletion.
+
 ## [1.3.5] - 2026-09-26
 
 ### Fixed
@@ -459,7 +470,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.5...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.6...HEAD
+[1.3.6]: https://github.com/raulfrk/setforge/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/raulfrk/setforge/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/raulfrk/setforge/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/raulfrk/setforge/compare/v1.3.2...v1.3.3
