@@ -778,6 +778,50 @@ profiles:
     assert "drop.me" not in includes
 
 
+@pytest.mark.parametrize("parent_installed", [False, True])
+@pytest.mark.parametrize("excluded", [False, True])
+def test_derived_extension_capture_preserves_effective_inventory(
+    tmp_path: Path, fake_code, parent_installed: bool, excluded: bool
+) -> None:
+    from setforge.config import load_config, resolve_profile
+    from setforge.reconcile_adapter import extensions_input
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\n"
+        "tracked_files: {d: {src: x, dst: y}}\n"
+        "packages:\n"
+        "  parent-ext: {type: extension, extension: Parent.Ext}\n"
+        "  child-ext: {type: extension, extension: child.ext}\n"
+        "profiles:\n"
+        "  parent: {tracked_files: [d], packages: [parent-ext]}\n"
+        "  child:\n"
+        "    extends: parent\n"
+        "    packages: [child-ext]\n"
+        + (
+            "    reconcile: {extensions: {exclude: [parent.ext]}}\n" if excluded else ""
+        ),
+        encoding="utf-8",
+    )
+    installed = ["new.ext"] + (["parent.ext"] if parent_installed else [])
+    fake_code(installed)
+    before = cfg.read_bytes()
+    if not parent_installed and not excluded:
+        with pytest.raises(ConfigError, match=r"inherited.*Parent\.Ext"):
+            capture_extensions(cfg, "child")
+        assert cfg.read_bytes() == before
+    else:
+        assert capture_extensions(cfg, "child")
+        loaded = load_config(cfg)
+        effective = extensions_input(loaded, resolve_profile(loaded, "child"))
+        exclusions = {item.casefold() for item in effective.exclude}
+        assert {item.casefold() for item in effective.include} - exclusions == {
+            item.casefold() for item in installed
+        } - exclusions
+        assert loaded.profiles["parent"].packages == ["parent-ext"]
+        assert capture_extensions(cfg, "child") is False
+
+
 def test_capture_extensions_does_not_leak_host_overlay(
     tmp_path: Path, fake_code
 ) -> None:

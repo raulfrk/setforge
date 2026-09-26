@@ -743,6 +743,29 @@ def capture_extensions(
     captured.update(local_removes)
     new_include = sorted(captured.values())
 
+    # Capture can replace only this profile's literal extension declarations.
+    # Check what inheritance and selected bundles retain before writing YAML.
+    retained_cfg = cfg.model_copy(deep=True)
+    retained_cfg.profiles[profile].packages = [
+        ref
+        for ref in cfg.profiles[profile].packages
+        if not isinstance(cfg.packages.get(ref), ExtensionPackage)
+    ]
+    retained = reconcile_adapter.extensions_input(
+        retained_cfg, resolve_profile(retained_cfg, profile)
+    )
+    absent = sorted(
+        item
+        for item in retained.include
+        if item.casefold() not in captured and item.casefold() not in exclude_keys
+    )
+    if absent:
+        raise ConfigError(
+            "extension capture cannot remove inherited or bundled declarations: "
+            f"{', '.join(absent)}; edit the declaring profile/bundle or use "
+            f"`setforge ext remove <id> --exclude --profile={profile}` first"
+        )
+
     if _profile_include_ids(cfg, profile) == set(new_include):
         return False
 
