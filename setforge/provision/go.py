@@ -5,14 +5,17 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from setforge.binaries import resolve_binary, stderr_of
+from setforge.errors import SetforgeError
 from setforge.provision.protocol import (
     Identity,
     ObservationOrigin,
     Outcome,
     PackageObservation,
+    ProvisionDelta,
     Provisioner,
     ProvisionItem,
     ProvisionOutcome,
@@ -57,11 +60,58 @@ class GoProvisioner(Provisioner):
             receipts if receipts is not None else ReceiptStore(default_receipt_root())
         )
 
+    def validate_destinations(self, identities: Iterable[Identity]) -> Path:
+        """Refuse distinct module identities sharing a recorded or selected binary."""
+        gobin = self._gobin_dir()
+        candidates = [
+            (
+                identity,
+                self._receipts.path_for(identity, provider=self.type)
+                or gobin / _binary_name(identity.key),
+            )
+            for identity in self._receipts.installed_for(self.type)
+        ]
+        candidates.extend(
+            (identity, gobin / _binary_name(identity.key)) for identity in identities
+        )
+        destinations: dict[Path, Identity] = {}
+        for identity, binary in candidates:
+            absolute = binary.absolute()
+            try:
+                destination = absolute.parent.resolve(strict=False) / absolute.name
+            except (OSError, RuntimeError) as exc:
+                raise SetforgeError(
+                    f"cannot resolve Go executable destination {binary}: {exc}"
+                ) from exc
+            previous = destinations.get(destination)
+            if previous is not None and previous != identity:
+                raise SetforgeError(
+                    f"Go executable collision at {destination}: "
+                    f"{previous.key!r} and {identity.key!r}"
+                )
+            destinations[destination] = identity
+        return gobin
+
+    def plan(
+        self, items: Sequence[ProvisionItem], installed: set[Identity]
+    ) -> ProvisionDelta:
+        binaries: dict[str, Identity] = {}
+        for item in items:
+            name = _binary_name(item.identity.key)
+            previous = binaries.get(name)
+            if previous is not None and previous != item.identity:
+                raise SetforgeError(
+                    f"Go executable collision in GOBIN/{name}: "
+                    f"{previous.key!r} and {item.identity.key!r}"
+                )
+            binaries[name] = item.identity
+        return super().plan(items, installed)
+
     def probe(self) -> set[Identity]:
         # Fails OPEN (empty) when go is missing — never assume-installed.
         if self._resolve() is None:
             return set()
-        gobin = self._gobin_dir()
+        gobin = self.validate_destinations(())
         present: set[Identity] = set()
         for identity in self._receipts.installed_for(self.type):
             recorded = self._receipts.path_for(identity, provider=self.type)
@@ -107,6 +157,7 @@ class GoProvisioner(Provisioner):
                     "https://go.dev/dl/ to enable this module"
                 ),
             )
+        gobin = self.validate_destinations((item.identity,))
         entry = self._receipts.entry_for(item.identity, self.type)
         if (
             item.identity in self.probe()
@@ -123,6 +174,7 @@ class GoProvisioner(Provisioner):
                 text=True,
                 capture_output=True,
                 timeout=_INSTALL_TIMEOUT_S,
+                env={**os.environ, "GOBIN": str(gobin)},
             )
         except (
             subprocess.CalledProcessError,
@@ -133,7 +185,7 @@ class GoProvisioner(Provisioner):
             LOGGER.warning("go install failed for %s: %s", spec, msg)
             return ProvisionOutcome(item=item, outcome=Outcome.SOFT, detail=msg)
         # Receipt is the LAST step — written only after exit-0.
-        binary = self._gobin_dir() / _binary_name(item.identity.key)
+        binary = gobin / _binary_name(item.identity.key)
         self._receipts.record(
             item.identity,
             version=item.version,

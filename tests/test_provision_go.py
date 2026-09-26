@@ -48,8 +48,10 @@ class FakeGo:
             if self.gobin_dir is not None:
                 module = spec.rsplit("@", 1)[0]
                 name = prov_go._binary_name(module)
-                self.gobin_dir.mkdir(parents=True, exist_ok=True)
-                (self.gobin_dir / name).write_text("", encoding="utf-8")
+                environment = kwargs.get("env") or {}
+                destination = Path(environment.get("GOBIN", self.gobin_dir))
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / name).write_text("", encoding="utf-8")
             return subprocess.CompletedProcess(argv, 0, stdout="")
         raise AssertionError(f"unexpected go argv {argv!r}")
 
@@ -99,6 +101,84 @@ def test_binary_name_strips_vN_major_suffix() -> None:
 
 def test_binary_name_honors_cmd_leaf() -> None:
     assert prov_go._binary_name("github.com/owner/proj/cmd/foo") == "foo"
+
+
+@pytest.mark.parametrize("binary_exists", [False, True])
+def test_apply_refuses_colliding_receipt_without_mutation(
+    fake_go, binary_exists: bool
+) -> None:
+    from setforge.errors import SetforgeError
+
+    prov, cli, store, gobin = fake_go()
+    original = Identity("example.org/one/tool", "example.org/one/tool")
+    binary = gobin / "tool"
+    gobin.mkdir()
+    if binary_exists:
+        binary.write_bytes(b"original executable")
+    store.record(original, version="1", checksum=None, path=binary, provider="go")
+    before = store.entry_for(original, "go")
+
+    with pytest.raises(SetforgeError, match="Go executable collision"):
+        prov.apply_one(_item("example.org/two/tool/v2"))
+
+    assert _install_calls(cli) == []
+    assert store.installed_for("go") == {original}
+    assert store.entry_for(original, "go") == before
+    assert (binary.read_bytes() if binary.exists() else None) == (
+        b"original executable" if binary_exists else None
+    )
+
+
+def test_probe_refuses_two_receipts_for_one_executable(fake_go) -> None:
+    from setforge.errors import SetforgeError
+
+    prov, _cli, store, gobin = fake_go()
+    gobin.mkdir()
+    (gobin / "tool").write_bytes(b"ambiguous")
+    for module in ("example.org/one/tool", "example.org/two/tool"):
+        store.record(
+            Identity(module, module),
+            version="1",
+            checksum=None,
+            path=gobin / "tool",
+            provider="go",
+        )
+    with pytest.raises(SetforgeError, match="Go executable collision"):
+        prov.probe()
+
+
+def test_same_go_binary_name_at_different_locations_is_supported(
+    fake_go, tmp_path: Path
+) -> None:
+    prov, cli, store, gobin = fake_go()
+    other = tmp_path / "old-gobin/tool"
+    other.parent.mkdir()
+    other.write_bytes(b"old executable")
+    original = Identity("example.org/one/tool", "example.org/one/tool")
+    store.record(original, version="1", checksum=None, path=other, provider="go")
+
+    result = prov.apply_one(_item("example.org/two/tool"))
+
+    assert result.outcome is Outcome.OK
+    assert other.read_bytes() == b"old executable"
+    assert store.path_for(result.item.identity, provider="go") == gobin / "tool"
+    assert len(_install_calls(cli)) == 1
+
+
+def test_go_install_and_receipt_use_the_checked_destination(
+    fake_go, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prov, _cli, store, gobin = fake_go()
+    later = tmp_path / "changed-gobin"
+    observations = iter((gobin, later))
+    monkeypatch.setattr(prov, "_gobin_dir", lambda: next(observations))
+
+    result = prov.apply_one(_item("example.org/tool"))
+
+    assert result.outcome is Outcome.OK
+    assert (gobin / "tool").is_file()
+    assert not later.exists()
+    assert store.path_for(result.item.identity, provider="go") == gobin / "tool"
 
 
 def test_binary_name_cmd_leaf_with_vN() -> None:
@@ -161,6 +241,15 @@ def test_plan_excludes_present_and_is_pure(fake_go) -> None:
     installed = {a.identity}
     delta = prov.plan([a, b], installed)
     assert delta.installed == (b.identity,)
+    assert cli.calls == []
+
+
+def test_plan_refuses_same_command_without_running_go(fake_go) -> None:
+    from setforge.errors import SetforgeError
+
+    prov, cli, _store, _gobin = fake_go()
+    with pytest.raises(SetforgeError, match="Go executable collision"):
+        prov.plan([_item("example.org/one/tool"), _item("example.org/two/tool")], set())
     assert cli.calls == []
 
 

@@ -9,13 +9,14 @@ from itertools import groupby
 
 import setforge.provision.cargo as _cargo  # noqa: F401
 import setforge.provision.github_release as _github_release  # noqa: F401
-import setforge.provision.go as _go  # noqa: F401
+import setforge.provision.go as _go
 import setforge.provision.local as _local  # noqa: F401
 import setforge.provision.python as _python  # noqa: F401
 from setforge.config import (
     Config,
     ExtensionPackage,
     GitHubReleasePackage,
+    GoPackage,
     PluginPackage,
     ResolvedProfile,
 )
@@ -161,6 +162,18 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
         batches.append(batch)
     bundles = tuple(resolved.bundles)
     bundle_graphs = tuple(validate_bundle(cfg.bundles[name], cfg) for name in bundles)
+    go_identities = {item.identity for item in items if item.type == "go"}
+    for name in bundles:
+        for component in cfg.bundles[name].components:
+            package = (
+                cfg.packages[component.package]
+                if component.package is not None
+                else component.go
+            )
+            if isinstance(package, GoPackage):
+                go_identities.add(package_identity(package))
+    if go_identities:
+        _go.GoProvisioner().validate_destinations(go_identities)
     if host is None:
         bundle_requires_platform = any(
             isinstance(item.config, GitHubReleasePackage)

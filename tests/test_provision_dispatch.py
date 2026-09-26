@@ -622,6 +622,46 @@ def test_bundle_install_publishes_provider_claim(
     assert claim.owner_id == owner_id
 
 
+@pytest.mark.parametrize("placement", ["direct", "bundle", "mixed"])
+def test_go_executable_collision_refuses_selected_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, placement: str
+) -> None:
+    from setforge.provision.go import GoProvisioner
+
+    gobin = tmp_path / "gobin"
+    monkeypatch.setattr(GoProvisioner, "probe", lambda _: set())
+    monkeypatch.setattr(GoProvisioner, "_gobin_dir", lambda _: gobin)
+    packages = {
+        "one": GoPackage(module="example.org/one/tool"),
+        "two": GoPackage(module="example.org/two/tool/v2"),
+    }
+    direct = (
+        ["one", "two"]
+        if placement == "direct"
+        else ["one"]
+        if placement == "mixed"
+        else []
+    )
+    bundled = [key for key in packages if key not in direct]
+    cfg = _cfg(
+        packages=packages,
+        bundles={
+            "tools": BundleSpec(
+                components=[BundleComponent(id=key, package=key) for key in bundled]
+            )
+        }
+        if bundled
+        else {},
+    )
+
+    with pytest.raises(SetforgeError, match="Go executable collision"):
+        plan_provisioning(
+            cfg, ResolvedProfile(packages=direct, bundles=["tools"] if bundled else [])
+        )
+
+    assert not gobin.exists()
+
+
 def test_bundle_same_key_across_providers_applies_both(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
