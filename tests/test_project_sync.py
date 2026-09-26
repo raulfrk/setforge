@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import os
+import stat
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -548,11 +553,11 @@ def test_unresolved_plan_refuses_render_and_apply_with_exact_errors(
     assert plan.conflicts == 1
 
     with pytest.raises(
-        SetforgeError, match="cannot render unresolved project sync manifests"
+        SetforgeError, match=r"^cannot render unresolved project sync manifests$"
     ):
         render_sync_manifests(plan)
     with pytest.raises(
-        SetforgeError, match="cannot apply an unresolved project sync plan"
+        SetforgeError, match=r"^cannot apply an unresolved project sync plan$"
     ):
         apply_sync(plan)
 
@@ -878,6 +883,63 @@ def test_project_sync_cli_dry_run_then_apply(
     assert (target / "AGENTS.md").read_text() == "updated\n"
 
 
+@pytest.mark.parametrize("operation", ["sync", "remove"])
+def test_project_apply_refuses_tracked_claim_published_after_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from setforge.file_ownership import file_resource_id, observe_file
+    from setforge.locking import mutation_locks
+    from setforge.ownership import (
+        OwnershipStore,
+        load_or_create_owner_id,
+        read_owner_id,
+    )
+    from setforge.project_injection import apply_removal, plan_removal
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    live = target / "AGENTS.md"
+    if operation == "sync":
+        (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
+        sync_plan = plan_sync(target)
+    else:
+        removal_plan = plan_removal(profile="demo", target=target, config_path=config)
+    other = _git_repo(tmp_path / "other-config")
+    owner = load_or_create_owner_id(other)
+    assert owner != read_owner_id(config.parent)
+    store = OwnershipStore()
+    observation = observe_file(live)
+    with mutation_locks(resources=True):
+        claim = store.claim_locked(
+            resource_id=observation.resource_id,
+            owner_id=owner,
+            declaration_refs=("tracked_files.agents",),
+            provenance=(),
+            locator=str(live),
+            fingerprint=observation.fingerprint,
+            expected_generation=None,
+        )
+    before = {path: path.read_bytes() for path in state.rglob("*.json")}
+
+    if operation == "sync":
+        with pytest.raises(SetforgeError, match="active tracked-file ownership claim"):
+            apply_sync(sync_plan)
+    else:
+        with pytest.raises(SetforgeError, match="active tracked-file ownership claim"):
+            apply_removal(removal_plan)
+
+    assert live.read_text() == "managed\n"
+    assert store.read(file_resource_id(live)) == claim
+    assert {path: path.read_bytes() for path in state.rglob("*.json")} == before
+
+
 def test_apply_sync_locks_and_updates_multiple_config_repositories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -910,9 +972,165 @@ def test_apply_sync_locks_and_updates_multiple_config_repositories(
         resolve_owner_common_dir(item.config_root) for item in plan.injections
     }
     assert len(identity_dirs) == 2
+    from setforge import locking, operations
+    from setforge import project_sync as sync_module
+
+    expected_profile = (
+        "project-sync-" + hashlib.sha256(str(target).encode()).hexdigest()[:24]
+    )
+    expected_configs = tuple(sorted((alpha.parent, beta.parent), key=str))
+    original_refuse = sync_module.refuse_active_file_claims
+    original_prepare = operations.prepare
+    original_checkpoint = operations.begin_checkpoint
+    journals: list[operations.OperationJournal] = []
+    checkpoints: list[operations.OperationCheckpoint] = []
+    checked_claims: list[bool] = []
+
+    def check_claims(destinations: Iterable[Path]) -> None:
+        held = locking._HELD_RANKS.get()
+        locking.require_resources_lock()
+        assert {key for rank, key in held if rank is locking.LockRank.CONFIG} == {
+            str(path) for path in expected_configs
+        }
+        assert (locking.LockRank.PROFILE, expected_profile) in held
+        checked_claims.append(True)
+        return original_refuse(destinations)
+
+    def capture_journal(**kwargs: Any) -> operations.OperationJournal:
+        journal = original_prepare(**kwargs)
+        journals.append(journal)
+        return journal
+
+    def capture_checkpoint(
+        journal: operations.OperationJournal, **kwargs: Any
+    ) -> operations.OperationJournal:
+        result = original_checkpoint(journal, **kwargs)
+        checkpoints.extend(result.checkpoints)
+        return result
+
+    monkeypatch.setattr(sync_module, "refuse_active_file_claims", check_claims)
+    monkeypatch.setattr(operations, "prepare", capture_journal)
+    monkeypatch.setattr(operations, "begin_checkpoint", capture_checkpoint)
     assert apply_sync(plan)
+    assert checked_claims == [True]
+    assert len(journals) == 1
+    journal = journals[0]
+    assert journal.profile == expected_profile
+    assert journal.command == "project-sync"
+    assert journal.command_line == ("project", "sync", str(target))
+    assert journal.resources_lock is True
+    assert journal.reserved_config_dirs == expected_configs
+    assert journal.reserved_profiles == (expected_profile,)
+    assert len(checkpoints) == 1
+    checkpoint = checkpoints[0]
+    assert checkpoint.name == "synchronize-project-files-and-state"
+    assert checkpoint.kind is operations.CheckpointKind.REVERSIBLE
+    assert (
+        checkpoint.recovery
+        == "restore all project files, manifests, ownership, and visibility"
+    )
+    assert checkpoint.restore_state is False
+    assert checkpoint.restore_transitions is False
     assert (target / "ALPHA.md").read_text() == "alpha-updated\n"
     assert (target / "BETA.md").read_text() == "beta-updated\n"
+
+
+@pytest.mark.parametrize("changed_side", ["live", "source"])
+def test_apply_sync_refuses_file_drift_without_manifest_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_side: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    plan = plan_sync(target)
+    live = target / "AGENTS.md"
+    source = config.parent / "project/demo/AGENTS.md"
+    (live if changed_side == "live" else source).write_text("concurrent edit\n")
+    before = {path: path.read_bytes() for path in (tmp_path / "state").rglob("*.json")}
+    before_live = live.read_bytes()
+    with pytest.raises(
+        SetforgeError, match=r"^project sync plan changed before apply; retry$"
+    ):
+        apply_sync(plan)
+    assert live.read_bytes() == before_live
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_apply_sync_refuses_mismatched_existing_member_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    live = target / "AGENTS.md"
+    (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
+    plan = plan_sync(target)
+    store = OwnershipStore()
+    claim = next(item for item in store.list_claims() if item.locator == str(live))
+    with mutation_locks(resources=True):
+        changed = store.claim_locked(
+            resource_id=claim.resource_id,
+            owner_id=claim.owner_id,
+            declaration_refs=claim.declaration_refs,
+            provenance=claim.provenance,
+            locator=claim.locator,
+            fingerprint="different recorded fingerprint",
+            expected_generation=claim.generation,
+        )
+    before = {path: path.read_bytes() for path in (tmp_path / "state").rglob("*.json")}
+    with pytest.raises(
+        SetforgeError,
+        match=r"^project injection ownership state is missing or mismatched$",
+    ):
+        apply_sync(plan)
+    assert live.read_bytes() == b"managed\n"
+    assert store.read(claim.resource_id) == changed
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_sync_manifest_mode_is_private_independent_of_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import atomicio
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
+    plan = plan_sync(target)
+    manifest = plan.injections[0].manifest_path
+    original_write = atomicio.atomic_write_bytes
+
+    def restricted_write(path: Path, payload: bytes, **kwargs: Any) -> Path | None:
+        if path != manifest:
+            return original_write(path, payload, **kwargs)
+        prior = os.umask(0o777)
+        try:
+            return original_write(path, payload, **kwargs)
+        finally:
+            os.umask(prior)
+
+    monkeypatch.setattr(atomicio, "atomic_write_bytes", restricted_write)
+    assert apply_sync(plan)
+    assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
 
 
 def test_apply_sync_refuses_visibility_change_after_plan(
@@ -1030,3 +1248,151 @@ def test_sync_preserves_local_deletion_and_remove_releases_it(
     )
     assert removed.exit_code == 0, removed.exception
     assert not (target / "AGENTS.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("owner", "message"),
+    [
+        ("invalid", "project injection has invalid config ownership state"),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            "project injection belongs to a different config checkout",
+        ),
+    ],
+)
+def test_apply_sync_refuses_invalid_or_foreign_config_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str, message: str
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    manifest = plan_sync(target).injections[0].manifest_path
+    raw = json.loads(manifest.read_bytes())
+    raw["config_owner_id"] = owner
+    manifest.write_text(json.dumps(raw) + "\n")
+    (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
+    plan = plan_sync(target)
+    before_state = {path: path.read_bytes() for path in state.rglob("*.json")}
+
+    with pytest.raises(SetforgeError) as failure:
+        apply_sync(plan)
+
+    assert str(failure.value) == message
+    assert (target / "AGENTS.md").read_bytes() == b"managed\n"
+    assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state
+
+
+def test_apply_sync_rechecks_manifest_after_fresh_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import project_sync
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
+    plan = plan_sync(target)
+    manifest = plan.injections[0].manifest_path
+    changed_manifest = manifest.read_bytes() + b"\n"
+    before_state = {path: path.read_bytes() for path in state.rglob("*.json")}
+    before_state[manifest] = changed_manifest
+
+    def plan_then_external_write(target: Path) -> project_sync.ProjectSyncPlan:
+        fresh = plan_sync(target)
+        manifest.write_bytes(changed_manifest)
+        return fresh
+
+    monkeypatch.setattr(project_sync, "plan_sync", plan_then_external_write)
+    with pytest.raises(SetforgeError) as failure:
+        apply_sync(plan)
+
+    assert str(failure.value) == "project sync plan changed before apply; retry"
+    assert (target / "AGENTS.md").read_bytes() == b"managed\n"
+    assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state
+
+
+def test_apply_sync_refuses_addition_with_surviving_project_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore
+    from setforge.project_injection import _resource_id
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    (config.parent / "project/demo/EXTRA.md").write_text("extra\n")
+    config.write_text(
+        config.read_text()
+        + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+    plan = plan_sync(target)
+    store = OwnershipStore()
+    existing = next(iter(store.list_claims()))
+    resource = _resource_id(target, Path("EXTRA.md"))
+    with mutation_locks(resources=True):
+        claim = store.claim_locked(
+            resource_id=resource,
+            owner_id=existing.owner_id,
+            declaration_refs=("project-profile:demo:extra",),
+            provenance=existing.provenance,
+            locator=str(target / "EXTRA.md"),
+            fingerprint="surviving claim after external file deletion",
+            expected_generation=None,
+        )
+    before_state = {path: path.read_bytes() for path in state.rglob("*.json")}
+
+    with pytest.raises(SetforgeError) as failure:
+        apply_sync(plan)
+
+    assert str(failure.value) == (
+        "a project destination already has an active ownership claim"
+    )
+    assert not (target / "EXTRA.md").exists()
+    assert store.read(resource) == claim
+    assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state
+
+
+def test_sync_refuses_resolved_content_without_a_file_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.exception
+    (target / "AGENTS.md").unlink()
+    (config.parent / "project/demo/AGENTS.md").write_text("new\n")
+    resolved = resolve_sync_plan(plan_sync(target), auto=AutoResolution.USE_PROFILE)
+    assert resolved is not None
+    assert resolved.conflicts == 0
+    before_state = {path: path.read_bytes() for path in state.rglob("*.json")}
+
+    with pytest.raises(SetforgeError) as failure:
+        apply_sync(resolved)
+
+    assert str(failure.value) == "project sync result has no file mode"
+    assert not (target / "AGENTS.md").exists()
+    assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state

@@ -22,7 +22,7 @@ from setforge.config import (
     ResolvedProjectProfile,
 )
 from setforge.errors import SetforgeError
-from setforge.file_ownership import file_resource_id
+from setforge.file_ownership import file_resource_id, refuse_active_file_claims
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
@@ -1564,6 +1564,7 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
         )
         if fresh != plan:
             raise SetforgeError("project removal plan changed before apply; retry")
+        refuse_active_file_claims(item.destination for item in plan.files)
         identity = guards.config_identity
         if identity is None:
             raise SetforgeError("project config identity lock is missing")

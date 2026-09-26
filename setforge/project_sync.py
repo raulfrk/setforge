@@ -15,6 +15,7 @@ from pathlib import Path
 from setforge import atomicio, operations
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
 from setforge.errors import MergeTypeMismatch, SetforgeError, StructuredParseError
+from setforge.file_ownership import refuse_active_file_claims
 from setforge.git_overlay import (
     OverlayClaim,
     apply_overlay_git,
@@ -1036,6 +1037,9 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             map(_basis, fresh.files)
         ) != tuple(map(_basis, plan.files)):
             raise SetforgeError("project sync plan changed before apply; retry")
+        refuse_active_file_claims(
+            plan.target / item.relative_destination for item in plan.files
+        )
         identity_by_dir = {
             guard.common_dir: guard for guard in guards.config_identities
         }

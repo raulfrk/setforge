@@ -18,3 +18,22 @@
 #   setforge.scalar_merge.x_resolve_scalar__mutmut_4  # equivalent: reordered
 #
 # Empty by default — add entries only with a justification above.
+
+setforge.project_sync.x_apply_sync__mutmut_14  # equivalent: mutation_locks and operations.prepare independently canonicalize/sort config directories.
+setforge.project_sync.x_apply_sync__mutmut_16  # equivalent: mutation_locks and operations.prepare independently canonicalize/sort config directories.
+setforge.project_sync.x_apply_sync__mutmut_20  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
+setforge.project_sync.x_apply_sync__mutmut_22  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
+setforge.project_sync.x_apply_sync__mutmut_195  # equivalent: discover_injections validates one shared git_dir; after None every remaining member is also non-Git.
+setforge.project_sync.x_apply_sync__mutmut_287  # equivalent: initial None and False are only replaced with True or ORed with the boolean state_changed result.
+setforge.project_sync.x_apply_sync__mutmut_300  # equivalent: explicit paths plus captured absent ancestors are the complete journal.paths; omitted selection covers the same set.
+setforge.project_sync.x_apply_sync__mutmut_307  # equivalent: explicit paths plus captured absent ancestors are the complete journal.paths; omitted selection covers the same set.
+setforge.project_sync.x_apply_sync__mutmut_301  # equivalent: this journal has no state_snapshots, so the default restore_state evaluates to the explicit False.
+setforge.project_sync.x_apply_sync__mutmut_308  # equivalent: this journal has no state_snapshots, so the default restore_state evaluates to the explicit False.
+setforge.project_sync.x_apply_sync__mutmut_438  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
+setforge.project_sync.x_apply_sync__mutmut_441  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
+setforge.project_sync.x_apply_sync__mutmut_324  # equivalent: unlink of live bytes requires REMOVE, whose manifest entry removal necessarily makes state_changed True.
+setforge.project_sync.x_apply_sync__mutmut_325  # equivalent: unlink of live bytes requires REMOVE, whose manifest entry removal necessarily makes state_changed True.
+setforge.project_sync.x_apply_sync__mutmut_350  # equivalent: valid non-removal overlays always have byte-valued base and result; plan construction refuses absent live overlays.
+setforge.project_sync.x_apply_sync__mutmut_353  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
+setforge.project_sync.x_apply_sync__mutmut_354  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
+setforge.project_sync.x_apply_sync__mutmut_355  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
