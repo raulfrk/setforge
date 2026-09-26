@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-09-26
+
+### Fixed
+
+- Codex plugin operations accept current native JSON receipts and register
+  declared marketplaces when native registration is missing. Marketplace cache
+  aliases and SHA-256 Git pins remain consistent across resolution and install.
+- Plugin, MCP, Git, and executable boundaries reject option-shaped identifiers,
+  malformed inventories, and failed process launches with actionable errors.
+  Executable overrides remain valid when child processes change directories.
+- Orphan cleanup, project sync, and project removal honor active ownership
+  claims. Historical ignore IDs survive declaration removal, while unknown IDs
+  are rejected and managed-tree inventory paths use canonical identities.
+- Shared direct and bundled packages follow dependency order without duplicate
+  actions. Soft prerequisite failures block dependent capabilities, Python pins
+  use canonical identities, and relocking prunes obsolete profile memberships.
+- Ambiguous lock updates require qualified selectors, colliding Go executable
+  destinations are rejected, and release installers use the selected artifact's
+  checksum. Pinned prerelease metadata and provisioned-package receipts are
+  handled consistently.
+- Capture confirmation includes Codex and extension writes, missing staged files
+  fail during preview, and inherited extension selections must be representable
+  before capture changes configuration. Extension mutations are case-insensitive.
+- Meaningful Markdown trailing whitespace requires confirmation, and structured
+  staging validates reconstruction before saving classifications. Existing shared
+  Markdown confirmations may require reconfirmation.
+- Deselected or moved Codex configuration fragments retire managed keys at old
+  destinations while preserving unrelated content. Unknown overlay removals and
+  normalized plugin add/remove conflicts are rejected.
+- Backup refresh is atomic, declared symlink snapshots include their managed
+  payloads, and absent-state restoration flushes affected directories.
+- Configuration mutations validate profile selection and YAML octal modes;
+  migration rejects unsupported future schemas and reports invalid UTF-8 cleanly.
+- Generated templates allow only supported expressions, generated identifiers and
+  path literals are validated, and local relocation anchors remain Markdown-only.
+- Compare checks retain missing-tree and mode drift despite staged content;
+  status reports branches behind their remote, marketplace provenance is accurate,
+  and the inspect JSON help example is directly executable.
+- Release preflight recognizes the current Workbox CI jobs and continues to
+  reject missing required workflow jobs.
+
 ## [1.3.4] - 2026-09-19
 
 ### Fixed
@@ -418,7 +459,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.4...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.5...HEAD
+[1.3.5]: https://github.com/raulfrk/setforge/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/raulfrk/setforge/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/raulfrk/setforge/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/raulfrk/setforge/compare/v1.3.1...v1.3.2

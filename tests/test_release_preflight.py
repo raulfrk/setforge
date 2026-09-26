@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 
 from scripts import release_preflight
 
@@ -44,3 +45,43 @@ def test_installed_checks_share_isolated_uv_tool_environment(
     for _, env in calls:
         assert env["UV_TOOL_DIR"] == str(root / "tools")
         assert env["UV_TOOL_BIN_DIR"] == str(root / "bin")
+
+
+def test_preflight_accepts_current_repository_workflows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(Path(__file__).resolve().parent.parent)
+    release_preflight.step_7_workflow_yaml_integrity()
+
+
+@pytest.mark.parametrize(
+    ("workflow", "missing_job"),
+    [
+        ("ci.yml", "workbox-unit"),
+        ("ci.yml", "workbox-integration"),
+        ("ci.yml", "secrets-scan"),
+        ("publish-pypi.yml", "build-and-publish"),
+        ("release.yml", "release"),
+    ],
+)
+def test_preflight_refuses_missing_required_workflow_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workflow: str,
+    missing_job: str,
+) -> None:
+    source = Path(__file__).resolve().parent.parent / ".github/workflows"
+    destination = tmp_path / ".github/workflows"
+    destination.mkdir(parents=True)
+    for path in source.glob("*.yml"):
+        (destination / path.name).write_bytes(path.read_bytes())
+    yaml = YAML(typ="safe")
+    path = destination / workflow
+    data = yaml.load(path.read_text())
+    del data["jobs"][missing_job]
+    with path.open("w") as stream:
+        yaml.dump(data, stream)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AssertionError, match=missing_job):
+        release_preflight.step_7_workflow_yaml_integrity()

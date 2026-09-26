@@ -38,7 +38,7 @@ _REQUIRED_COMMANDS = (
 )
 
 _WORKFLOW_REQUIRED_JOBS: dict[str, frozenset[str]] = {
-    "ci.yml": frozenset({"build-verify"}),
+    "ci.yml": frozenset({"workbox-unit", "workbox-integration", "secrets-scan"}),
     "publish-pypi.yml": frozenset({"build-and-publish"}),
     "release.yml": frozenset({"release"}),
 }
