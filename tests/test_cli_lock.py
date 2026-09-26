@@ -272,6 +272,51 @@ def test_python_lock_update_accepts_normalized_aliases(
     assert [(pin.key, pin.version) for pin in lock.packages] == [("some-tool", "2.0")]
 
 
+@pytest.mark.parametrize("selector", ["tool", "cargo:tool", "python:Tool"])
+def test_lock_update_requires_qualified_colliding_identity(
+    tmp_path: Path, selector: str
+) -> None:
+    config = _write_config(
+        tmp_path,
+        "tracked_files: {}\npackages:\n"
+        "  native: {type: cargo, crate: tool}\n"
+        "  py: {type: python, package: tool}\n"
+        "profiles:\n  p: {packages: [native, py]}\n",
+    )
+    for kind in (PackageType.CARGO, PackageType.PYTHON):
+        _register_stub(kind, "tool", "1.0")
+    runner = CliRunner()
+    initial = runner.invoke(app, ["lock", "--profile=p", f"--config={config}"])
+    assert initial.exit_code == 0, initial.output
+    lock_path = tmp_path / "setforge.lock"
+    before = lock_path.read_bytes()
+    registry._REGISTRY.clear()
+    for kind in (PackageType.CARGO, PackageType.PYTHON):
+        _register_stub(kind, "tool", "2.0", raises=selector == "tool")
+
+    updated = runner.invoke(
+        app, ["lock", "--profile=p", f"--config={config}", f"--update={selector}"]
+    )
+
+    if selector == "tool":
+        assert updated.exit_code != 0
+        assert "ambiguous" in str(updated.exception)
+        assert "cargo:tool" in str(updated.exception)
+        assert "python:tool" in str(updated.exception)
+        assert lock_path.read_bytes() == before
+    else:
+        assert updated.exit_code == 0, updated.output
+        versions = {
+            pin.type.value: pin.version
+            for pin in parse_lock(lock_path.read_text()).packages
+        }
+        selected_type = selector.partition(":")[0]
+        assert versions == {
+            kind: "2.0" if kind == selected_type else "1.0"
+            for kind in ("cargo", "python")
+        }
+
+
 def test_lock_update_without_existing_lock_errors(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path)
     _register_full_stubs()

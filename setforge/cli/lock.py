@@ -102,8 +102,8 @@ def lock(
     update: str | None = typer.Option(
         None,
         "--update",
-        help="Re-resolve ONLY this package (by its lock key), preserving the "
-        "rest of the lock.",
+        help="Re-resolve ONLY this package by lock key (or TYPE:KEY when names "
+        "collide), preserving the rest of the lock.",
     ),
     config: Path = _CONFIG_OPTION,
 ) -> None:
@@ -155,19 +155,27 @@ def _run_update(
             f"cannot --update {update_key!r}: no {path.name} exists yet; run "
             f"'setforge lock --profile={profile}' first"
         )
-    target = next(
-        (
-            item
-            for item in items
-            if item.lock_key()
-            == (
-                normalize_python_package_name(update_key)
-                if item.pkg_type is PackageType.PYTHON
-                else update_key
-            )
-        ),
-        None,
-    )
+    prefix, separator, suffix = update_key.partition(":")
+    kinds = {kind.value: kind for kind in PackageType}
+    selected_type = kinds.get(prefix) if separator else None
+    key = suffix if selected_type is not None else update_key
+    matches = [
+        item
+        for item in items
+        if (selected_type is None or item.pkg_type is selected_type)
+        and item.lock_key()
+        == (
+            normalize_python_package_name(key)
+            if item.pkg_type is PackageType.PYTHON
+            else key
+        )
+    ]
+    choices = sorted({f"{item.pkg_type.value}:{item.lock_key()}" for item in matches})
+    if len(choices) > 1:
+        raise ResolveError(
+            f"ambiguous lock key {update_key!r}; use one of: {', '.join(choices)}"
+        )
+    target = matches[0] if matches else None
     if target is None:
         raise ResolveError(
             f"cannot --update {update_key!r}: no package with that lock key is "
