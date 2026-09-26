@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import stat
 from dataclasses import replace
@@ -585,3 +587,75 @@ def test_inventory_codec_rejects_corruption(tmp_path: Path) -> None:
     assert loads_inventory(encoded) == inventory
     with pytest.raises(InvariantViolation, match="fingerprint mismatch"):
         loads_inventory(encoded.replace(inventory.fingerprint, "0" * 64))
+
+
+def _legacy_inventory_text(document: dict[str, object]) -> str:
+    payload = {key: document[key] for key in ("entries", "root_mode", "root_present")}
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    document["fingerprint"] = hashlib.sha256(encoded).hexdigest()
+    return json.dumps(document)
+
+
+@pytest.mark.parametrize("alias", ["./x", ".//x"])
+@pytest.mark.parametrize("boundary", ["read", "write"])
+def test_inventory_aliases_do_not_retain_owned_orphans(
+    tmp_path: Path, alias: str, boundary: str
+) -> None:
+    live, source = tmp_path / "live", tmp_path / "source"
+    live.mkdir()
+    source.mkdir()
+    child = live / "x"
+    child.write_bytes(b"owned")
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    inventory = scan_tree(live, policy).inventory
+    document = json.loads(dumps_inventory(inventory))
+    document["entries"][0]["path"] = alias
+    document["owned_paths"] = [alias]
+    encoded = _legacy_inventory_text(document)
+    if boundary == "write":
+        aliased = replace(
+            inventory,
+            entries=(replace(inventory.entries[0], path=alias),),
+            owned_paths=(alias,),
+            fingerprint=str(document["fingerprint"]),
+        )
+        encoded = dumps_inventory(aliased)
+        assert json.loads(encoded)["entries"][0]["path"] == "x"
+    prior = loads_inventory(encoded)
+    desired = scan_tree(source, policy, capture_payloads=True)
+    plan = plan_tree(desired, inventory, prior, policy)
+
+    result = apply_tree(plan, live, policy)
+
+    assert not child.exists()
+    assert result.entries == ()
+    assert prior.owned_paths == ("x",)
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_inventory_canonical_duplicates_require_matching_payload(
+    tmp_path: Path, conflicting: bool
+) -> None:
+    (tmp_path / "x").write_bytes(b"owned")
+    document = json.loads(dumps_inventory(scan_tree(tmp_path, TreePolicy()).inventory))
+    entry = document["entries"][0]
+    alias = dict(entry, path="./x")
+    if conflicting:
+        alias["content_hash"] = "0" * 64
+    document["entries"] = [alias, entry]
+    document["owned_paths"] = ["./x", "x"]
+    encoded = _legacy_inventory_text(document)
+    if conflicting:
+        with pytest.raises(InvariantViolation, match="conflicting canonical"):
+            loads_inventory(encoded)
+    else:
+        inventory = loads_inventory(encoded)
+        assert [item.path for item in inventory.entries] == ["x"]
+        assert inventory.owned_paths == ("x",)
+        assert loads_inventory(dumps_inventory(inventory)) == inventory
+
+
+@pytest.mark.parametrize("path", ["../x", "a/../x", "/x", ".", "", "\x00"])
+def test_inventory_rejects_unsafe_entry_path(path: str) -> None:
+    with pytest.raises(InvariantViolation, match="unsafe tree inventory path"):
+        TreeEntry(path, TreeEntryKind.FILE, 0o644, content_hash="0" * 64)

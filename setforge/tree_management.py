@@ -8,7 +8,7 @@ import json
 import os
 import stat
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -59,6 +59,8 @@ class TreeEntry:
         relative = PurePosixPath(self.path)
         if (
             not self.path
+            or not relative.parts
+            or "\x00" in self.path
             or relative.is_absolute()
             or any(part in {"", ".", ".."} for part in relative.parts)
         ):
@@ -167,6 +169,38 @@ def _inventory_fingerprint(
     }
     encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_inventory(inventory: TreeInventory) -> TreeInventory:
+    """Normalize codec output and already-verified input to safe relative paths."""
+    by_path: dict[str, TreeEntry] = {}
+    for entry in inventory.entries:
+        canonical = replace(entry, path=PurePosixPath(entry.path).as_posix())
+        prior = by_path.get(canonical.path)
+        if prior is not None and prior != canonical:
+            raise InvariantViolation(
+                f"conflicting canonical tree entries: {canonical.path!r}"
+            )
+        by_path[canonical.path] = canonical
+    entries = tuple(sorted(by_path.values(), key=lambda entry: entry.path))
+    owned_paths = None
+    if inventory.owned_paths is not None:
+        owned_paths = tuple(
+            sorted({PurePosixPath(path).as_posix() for path in inventory.owned_paths})
+        )
+        if not set(owned_paths).issubset(by_path):
+            raise InvariantViolation("tree inventory owned_paths must name entries")
+    return TreeInventory(
+        inventory.root_present,
+        inventory.root_mode,
+        entries,
+        _inventory_fingerprint(
+            root_present=inventory.root_present,
+            root_mode=inventory.root_mode,
+            entries=entries,
+        ),
+        owned_paths,
+    )
 
 
 def _excluded(spec: pathspec.PathSpec, relative: str, *, directory: bool) -> bool:
@@ -963,6 +997,7 @@ def inventory_path(profile: str, tracked_id: str) -> Path:
 
 def dumps_inventory(inventory: TreeInventory) -> str:
     """Serialize one inventory in canonical schema-1 form."""
+    inventory = _canonical_inventory(inventory)
     return (
         json.dumps(
             {
@@ -1034,8 +1069,10 @@ def loads_inventory(text: str) -> TreeInventory:
         or not set(owned_paths).issubset(entry.path for entry in ordered)
     ):
         raise InvariantViolation("tree inventory owned_paths must be sorted entries")
-    return TreeInventory(
-        bool(raw["root_present"]), root_mode, ordered, computed, owned_paths
+    return _canonical_inventory(
+        TreeInventory(
+            bool(raw["root_present"]), root_mode, ordered, computed, owned_paths
+        )
     )
 
 
