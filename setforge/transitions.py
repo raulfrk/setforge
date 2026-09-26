@@ -1093,6 +1093,7 @@ def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
         target = _snapshot_target(entry.store, entry.profile, entry.key)
         if entry.payload is None:
             target.unlink(missing_ok=True)
+            atomicio.fsync_dir(target.parent)
         else:
             atomicio.atomic_write_bytes(target, entry.payload)
 

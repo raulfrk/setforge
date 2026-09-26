@@ -218,6 +218,38 @@ def test_restore_deletes_absent_and_rewrites_present(state_dir: Path) -> None:
     assert paths[SnapshotStore.SCALAR_BASE].read_bytes() == b""
 
 
+@pytest.mark.parametrize(
+    "store",
+    [SnapshotStore.BASE, SnapshotStore.LOCAL_CONTENT, SnapshotStore.LOCAL_ABSENT],
+)
+@pytest.mark.parametrize("payload", [None, b""])
+def test_restore_flushes_parent_after_state_change(
+    monkeypatch: pytest.MonkeyPatch, store: SnapshotStore, payload: bytes | None
+) -> None:
+    from setforge import atomicio
+    from setforge.transitions import _snapshot_target
+
+    entry = StateSnapshotEntry(
+        store=store, profile=_PROFILE, key="file", payload=payload
+    )
+    target = _snapshot_target(store, _PROFILE, "file")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"prior state")
+    observed: list[tuple[Path, bytes | None]] = []
+    real_fsync = atomicio.fsync_dir
+
+    def flush(directory: Path) -> None:
+        observed.append((directory, target.read_bytes() if target.exists() else None))
+        real_fsync(directory)
+
+    monkeypatch.setattr(atomicio, "fsync_dir", flush)
+
+    restore_state_snapshots((entry,))
+    restore_state_snapshots((entry,))
+
+    assert observed == [(target.parent, payload), (target.parent, payload)]
+
+
 def test_restore_is_idempotent(state_dir: Path) -> None:
     """A re-run after an interrupted revert reproduces the same end state."""
     restore_state_snapshots(_entries())
