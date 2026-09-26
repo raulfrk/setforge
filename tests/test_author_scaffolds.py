@@ -86,9 +86,11 @@ def test_invariants_stays_under_dest_root(tmp_path: Path) -> None:
 # --- author_config_entry ---------------------------------------------------
 
 
-def test_config_entry_drafts_collectable_file(tmp_path: Path) -> None:
-    out = author_config_entry.draft(key="retry_count", pytype="int", dest_root=tmp_path)
+@pytest.mark.parametrize("key", ["retry_count", "_", "name2", "match", "case"])
+def test_config_entry_drafts_collectable_file(tmp_path: Path, key: str) -> None:
+    out = author_config_entry.draft(key=key, pytype="int", dest_root=tmp_path)
     tree = _assert_parses(out)
+    compile(out.read_text(), str(out), "exec")
     classdefs = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
     assert classdefs, "scaffold drafted no schema-entry class"
     # A round-trip test function is part of the skeleton.
@@ -104,11 +106,28 @@ def test_config_entry_refuses_overwrite(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "key",
-    ["../escape", "/abs/path", "has space", "has-dash", "semi;colon", "with.dot", ""],
+    [
+        "../escape",
+        "/abs/path",
+        "has space",
+        "has-dash",
+        "semi;colon",
+        "with.dot",
+        "",
+        "name\n",
+        " name",
+        "name ",
+        "name\r",
+        "class",
+        "return",
+        "None",
+        "True",
+    ],
 )
 def test_config_entry_rejects_bad_key(tmp_path: Path, key: str) -> None:
     with pytest.raises(ValueError, match="invalid --key"):
         author_config_entry.draft(key=key, pytype="int", dest_root=tmp_path)
+    assert not list(tmp_path.rglob("*.py"))
 
 
 @pytest.mark.parametrize("pytype", ["int", "str", "bool", "float"])

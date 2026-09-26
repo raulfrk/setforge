@@ -32,6 +32,7 @@ Invocation::
 from __future__ import annotations
 
 import argparse
+import keyword
 import re
 import sys
 from pathlib import Path
@@ -96,10 +97,10 @@ def test_{key}_round_trips() -> None:
 
 def _validate_key(key: str) -> str:
     """Reject anything that is not a bare Python identifier."""
-    if not _KEY_RE.match(key):
+    if not _KEY_RE.fullmatch(key) or keyword.iskeyword(key):
         raise ValueError(
             f"invalid --key {key!r}: must be a bare identifier (e.g. retry_count); "
-            f"no dots, '..', path separators, or spaces"
+            f"no keywords, dots, '..', path separators, or whitespace"
         )
     return key
 
