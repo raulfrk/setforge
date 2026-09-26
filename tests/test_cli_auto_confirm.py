@@ -533,6 +533,78 @@ def test_capture_commands_use_live_share_yes_contract(
     )
 
 
+@pytest.mark.parametrize(
+    ("command", "kind"),
+    [("capture", "codex"), ("sync", "codex"), ("sync", "extensions")],
+)
+@pytest.mark.parametrize("change_after_confirmation", [False, True])
+def test_capture_confirmation_includes_auxiliary_source_writes(
+    command: str,
+    kind: str,
+    change_after_confirmation: bool,
+    runner: CliRunner,
+    stubbed_install_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = stubbed_install_env
+    if kind == "codex":
+        home = config.parent / "codex-home"
+        home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        (home / "config.toml").write_text('model = "live"\n')
+        source = config.parent / "tracked" / "model.toml"
+        source.write_text('model = "tracked"\n')
+        config.write_text(
+            'version: 1\nschema_version: "6.5"\nminimum_version: "6.5"\n'
+            "tracked_files: {}\n"
+            "codex:\n  config:\n    model: {source: model.toml}\n"
+            "profiles:\n  testp:\n    codex: {config: [model]}\n"
+        )
+    else:
+        source = config
+        monkeypatch.setattr(
+            "setforge.vscode_extensions.list_installed", lambda: ["new.ext"]
+        )
+    before = source.read_bytes()
+    args = [command, "--profile=testp", f"--config={config}"]
+    bare = runner.invoke(app, args)
+    assert bare.exit_code == 1, bare.output
+    assert "--auto=use-live --yes" in bare.output
+    assert source.read_bytes() == before
+    kept = runner.invoke(app, [*args, "--auto=keep-tracked"])
+    assert kept.exit_code == 0, kept.output
+    assert source.read_bytes() == before
+
+    def confirm(*, plan: AutoPlan, **kwargs: object) -> bool:
+        assert source in [change.dest for change in plan.file_changes]
+        if change_after_confirmation:
+            if kind == "codex":
+                (config.parent / "codex-home" / "config.toml").write_text(
+                    'model = "later"\n'
+                )
+            else:
+                monkeypatch.setattr(
+                    "setforge.vscode_extensions.list_installed", lambda: ["later.ext"]
+                )
+        return True
+
+    monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
+    if kind == "extensions":
+        inventory = iter([["new.ext"], ["new.ext"], ["unconfirmed.ext"]])
+        monkeypatch.setattr(
+            "setforge.vscode_extensions.list_installed", lambda: next(inventory)
+        )
+    accepted = runner.invoke(app, [*args, "--auto=use-live", "--yes"])
+    if change_after_confirmation:
+        assert accepted.exit_code == 1, accepted.output
+        assert "plan changed after confirmation" in accepted.output
+        assert source.read_bytes() == before
+        return
+    assert accepted.exit_code == 0, accepted.output
+    assert source.read_bytes() != before
+    assert (b'"live"' if kind == "codex" else b"new.ext") in source.read_bytes()
+
+
 @pytest.mark.parametrize("command", ["capture", "sync"])
 def test_yes_without_auto_is_rejected_consistently(
     command: str,

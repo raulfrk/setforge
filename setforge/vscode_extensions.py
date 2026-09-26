@@ -64,6 +64,7 @@ __all__ = [
     "capture_extensions",
     "install_one",
     "list_installed",
+    "preview_capture_extensions",
     "reconcile",
     "remove_from_include",
     "uninstall_one",
@@ -697,7 +698,23 @@ def capture_extensions(
     *,
     overlay_extensions: list[ResolvedExtension] | None = None,
 ) -> bool:
-    """Replace the profile's extension includes with the installed set minus
+    """Capture the exact projected extension declaration bytes."""
+    content = preview_capture_extensions(
+        config_path, profile, overlay_extensions=overlay_extensions
+    )
+    if content is None:
+        return False
+    atomic_write_text(config_path, content, mode=config_path.stat().st_mode & 0o777)
+    return True
+
+
+def preview_capture_extensions(
+    config_path: Path,
+    profile: str,
+    *,
+    overlay_extensions: list[ResolvedExtension] | None = None,
+) -> str | None:
+    """Project the profile's extension includes from the installed set minus
     the resolved profile's ``exclude``.
 
     Per locked decision (spec § Locked implementation decisions #7): capture
@@ -708,9 +725,9 @@ def capture_extensions(
     local additions are omitted from shared YAML and local removals are
     retained there even when absent from the host's installed set.
 
-    Rewrites the profile's ``packages`` list so its extension refs are exactly
+    Projects the profile's ``packages`` list so its extension refs are exactly
     the captured set (minting any missing top-level ExtensionPackage), leaving
-    non-extension package refs in place. Returns ``True`` iff the YAML changed.
+    non-extension package refs in place. Returns proposed YAML text when changed.
     Comments and key order survive via ruamel.yaml round-trip.
 
     Raises :class:`ProfileNotFound` if ``profile`` isn't declared in
@@ -767,7 +784,7 @@ def capture_extensions(
         )
 
     if _profile_include_ids(cfg, profile) == set(new_include):
-        return False
+        return None
 
     yaml, doc = _load_yaml_doc(config_path)
     if profile not in doc.get("profiles", {}):
@@ -792,8 +809,9 @@ def capture_extensions(
         profile_block["packages"] = CommentedSeq(kept)
     elif "packages" in profile_block:
         del profile_block["packages"]
-    _dump_yaml_doc(yaml, doc, config_path)
-    return True
+    buf = io.StringIO()
+    yaml.dump(doc, buf)
+    return buf.getvalue()
 
 
 def remove_from_include(

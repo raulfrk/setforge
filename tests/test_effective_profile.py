@@ -55,7 +55,7 @@ _LEGACY_RESOLVER_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
         ("compare.py", "compare_profile", "resolve_and_expand"),
         ("config.py", "resolve_and_expand", "resolve_profile"),
         ("config.py", "resolve_effective_profile", "resolve_and_expand"),
-        ("vscode_extensions.py", "capture_extensions", "resolve_profile"),
+        ("vscode_extensions.py", "preview_capture_extensions", "resolve_profile"),
         ("cli/profile.py", "_chain_resolved_by_name_field", "resolve_profile"),
         ("cli/profile.py", "_extensions_chain_by_name", "resolve_profile"),
         ("cli/profile.py", "_plugins_chain_by_name", "resolve_profile"),

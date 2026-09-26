@@ -580,8 +580,21 @@ class TestSync:
         # Sync surveys current state via `code --list-extensions`.
         # Track call count before sync so we can assert sync triggered a list.
         list_calls_before = sum(1 for c in fk.calls if c[1:] == ["--list-extensions"])
-        synced = _invoke(
+        before = fixture_repo.read_bytes()
+        refused = _invoke(
             ["sync", "--profile=test-comprehensive", f"--config={fixture_repo}"]
+        )
+        assert refused.exit_code == 1
+        assert "--auto=use-live --yes" in refused.output
+        assert fixture_repo.read_bytes() == before
+        synced = _invoke(
+            [
+                "sync",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+                "--auto=use-live",
+                "--yes",
+            ]
         )
         assert synced.exit_code == 0, synced.output
         list_calls_after = sum(1 for c in fk.calls if c[1:] == ["--list-extensions"])

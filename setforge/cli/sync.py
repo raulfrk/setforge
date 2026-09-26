@@ -62,7 +62,6 @@ from setforge.config import (
 from setforge.errors import ExtensionToolMissing
 from setforge.file_ownership import FileAction, FileDecision, decide_file, observe_file
 from setforge.locking import mutation_locks
-from setforge.overlay_provenance import ResolvedExtension
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import content_sha, file_id
@@ -77,6 +76,9 @@ class _CaptureSnapshot:
     ownership: tuple[FileDecision, ...]
     ownership_authorized: tuple[tuple[str, bool], ...]
     preview: tuple[capture_mod.CapturePreview, ...]
+    codex_plans: tuple[codex_resources_mod.CodexConfigPlan, ...]
+    extension_content: str | None
+    extension_warning: str | None
 
 
 def _read_capture_owner_id(repo_root: Path) -> UUID | None:
@@ -174,7 +176,7 @@ def _load_capture_preview(
     *,
     verb: str,
     owner_id: UUID | None,
-) -> tuple[ProfileContext, _CaptureSnapshot, tuple[ResolvedExtension, ...]]:
+) -> tuple[ProfileContext, _CaptureSnapshot]:
     """Reload effective configuration and build an exact read-only capture plan."""
     cfg = load_config(config)
     refuse_unmigrated_host_local_leak(cfg, verb=verb, profile=profile)
@@ -186,13 +188,83 @@ def _load_capture_preview(
     if verb == "sync":
         _refuse_duplicate_section_names(ctx, command="sync")
     ownership, authorized = _capture_ownership(ctx, owner_id)
-    preview = capture_mod.preview_capture_profile(
-        cfg,
-        profile,
-        repo_root,
-        resolved=resolved,
-        ownership_authorized=authorized,
+    preview = list(
+        capture_mod.preview_capture_profile(
+            cfg,
+            profile,
+            repo_root,
+            resolved=resolved,
+            ownership_authorized=authorized,
+        )
     )
+    codex_plans = codex_resources_mod.plan_config_resources(
+        cfg,
+        resolved,
+        repo_root,
+        read_base=lambda resource_id: reconcile_store.read_base(
+            profile, file_id(resource_id)
+        ),
+        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+        reconcile=False,
+    )
+    for plan in codex_plans:
+        writes: dict[Path, bytes] = {}
+        codex_resources_mod.capture_config_plan(plan, write=writes.__setitem__)
+        desired, _owned = codex_resources_mod.compose_fragments(
+            (
+                *[
+                    writes.get(source, tracked)
+                    for source, tracked in zip(
+                        plan.sources, plan.source_bytes, strict=True
+                    )
+                ],
+                *plan.generated_bytes,
+            )
+        )
+        for source, content in writes.items():
+            preview.append(
+                capture_mod.CapturePreview(
+                    name=f"{plan.resource_id}/{source.name}",
+                    src=source,
+                    dst=plan.destination,
+                    action=capture_mod.CaptureAction.UPDATED,
+                    proposed_hash=content_sha(content),
+                    route="codex",
+                )
+            )
+        if desired != plan.base:
+            preview.append(
+                capture_mod.CapturePreview(
+                    name=plan.resource_id,
+                    src=plan.destination,
+                    dst=plan.destination,
+                    action=capture_mod.CaptureAction.NOOP,
+                    store_update=True,
+                    route="codex",
+                )
+            )
+    extension_content = None
+    extension_warning = None
+    if verb == "sync":
+        try:
+            extension_content = vscode_extensions.preview_capture_extensions(
+                config,
+                profile,
+                overlay_extensions=list(effective.local_overlay.extensions),
+            )
+        except ExtensionToolMissing as exc:
+            extension_warning = str(exc)
+        if extension_content is not None:
+            preview.append(
+                capture_mod.CapturePreview(
+                    name="extensions",
+                    src=config,
+                    dst=config,
+                    action=capture_mod.CaptureAction.UPDATED,
+                    proposed_hash=content_sha(extension_content.encode("utf-8")),
+                    route="extensions",
+                )
+            )
     return (
         ctx,
         _CaptureSnapshot(
@@ -200,9 +272,11 @@ def _load_capture_preview(
             effective_hash=content_sha(repr(effective).encode("utf-8")),
             ownership=ownership,
             ownership_authorized=tuple(sorted(authorized.items())),
-            preview=preview,
+            preview=tuple(preview),
+            codex_plans=codex_plans,
+            extension_content=extension_content,
+            extension_warning=extension_warning,
         ),
-        tuple(effective.local_overlay.extensions),
     )
 
 
@@ -305,7 +379,7 @@ def capture(
     owner_id = _read_capture_owner_id(repo_root)
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
-        initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
+        initial_ctx, initial_snapshot = _load_capture_preview(
             config, profile, repo_root, verb="capture", owner_id=owner_id
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
@@ -320,7 +394,7 @@ def capture(
     )
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
-        locked_ctx, locked_snapshot, _locked_extensions = _load_capture_preview(
+        locked_ctx, locked_snapshot = _load_capture_preview(
             config, profile, repo_root, verb="capture", owner_id=owner_id
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
@@ -333,6 +407,7 @@ def capture(
                 auto_enum,
                 resolved=locked_ctx.resolved,
                 ownership_authorized=dict(locked_snapshot.ownership_authorized),
+                codex_plans=locked_snapshot.codex_plans,
             )
         except KeyboardInterrupt:
             # Plain ``capture`` takes no snapshot (only ``sync`` records a
@@ -389,7 +464,7 @@ def sync(
     owner_id = _read_capture_owner_id(repo_root)
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
-        initial_ctx, initial_snapshot, _initial_extensions = _load_capture_preview(
+        initial_ctx, initial_snapshot = _load_capture_preview(
             config, profile, repo_root, verb="sync", owner_id=owner_id
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
@@ -407,7 +482,7 @@ def sync(
         operations.recover_on_error(profile, "sync"),
     ):
         operations.refuse_active(profile)
-        ctx, locked_snapshot, locked_extensions = _load_capture_preview(
+        ctx, locked_snapshot = _load_capture_preview(
             config, profile, repo_root, verb="sync", owner_id=owner_id
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
@@ -450,13 +525,14 @@ def sync(
                 auto_enum,
                 resolved=resolved,
                 ownership_authorized=dict(locked_snapshot.ownership_authorized),
+                codex_plans=locked_snapshot.codex_plans,
             )
             _render_capture_results(results)
 
             _capture_extensions(
                 config,
-                profile,
-                overlay_extensions=list(locked_extensions),
+                content=locked_snapshot.extension_content,
+                warning=locked_snapshot.extension_warning,
             )
         except (KeyboardInterrupt, OSError) as exc:
             # capture_profile writes tracked srcs and re-baselines stores
@@ -652,22 +728,23 @@ def _sync_snapshot_paths(
 
 def _capture_extensions(
     config: Path,
-    profile: str,
     *,
-    overlay_extensions: list[ResolvedExtension],
+    content: str | None,
+    warning: str | None,
 ) -> None:
-    """Capture vscode-extension include changes; surface tool-missing as a warning."""
-    try:
-        changed = vscode_extensions.capture_extensions(
-            config, profile, overlay_extensions=overlay_extensions
-        )
-    except ExtensionToolMissing as exc:
+    """Write the confirmed extension projection without rediscovering inventory."""
+    if warning is not None:
         typer.secho(
-            f"warning: skipping extension capture — {exc}",
+            f"warning: skipping extension capture — {warning}",
             err=True,
             fg=typer.colors.YELLOW,
         )
         return
+    changed = content is not None
+    if content is not None:
+        atomicio.atomic_write_text(
+            config, content, mode=stat.S_IMODE(config.stat().st_mode)
+        )
     typer.echo(f"extensions: include {'updated' if changed else 'unchanged'}")
 
 
@@ -695,6 +772,7 @@ def _run_capture(
     *,
     resolved: ResolvedProfile,
     ownership_authorized: dict[str, bool],
+    codex_plans: tuple[codex_resources_mod.CodexConfigPlan, ...],
 ) -> list[capture_mod.CaptureResult]:
     """Run ``capture_profile``.
 
@@ -710,16 +788,6 @@ def _run_capture(
     the SHARED hunks into tracked and keeps LOCAL host-only content out, so
     the legacy local.yaml ``host_local_sections`` strip is redundant.
     """
-    codex_plans = codex_resources_mod.plan_config_resources(
-        cfg,
-        resolved,
-        repo_root,
-        read_base=lambda resource_id: reconcile_store.read_base(
-            profile, file_id(resource_id)
-        ),
-        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
-        reconcile=False,
-    )
     results = capture_mod.capture_profile(
         cfg,
         profile,

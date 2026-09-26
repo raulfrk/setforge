@@ -861,6 +861,7 @@ def test_module_all_declares_exactly_the_public_surface() -> None:
         "uninstall_one",
         "add_to_include",
         "capture_extensions",
+        "preview_capture_extensions",
         "remove_from_include",
     }
     declared = set(vscode_extensions.__all__)
