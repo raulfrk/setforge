@@ -5,7 +5,16 @@ import json
 from enum import StrEnum
 from typing import ClassVar, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+from setforge.provision.identity import normalize_python_package_name
 
 
 class PackageType(StrEnum):
@@ -106,6 +115,13 @@ class ResolvedPin(BaseModel):
     integrity_kind: IntegrityKind
     profiles: tuple[str, ...] = Field(default_factory=tuple)
     artifacts: tuple[ResolvedArtifact, ...] = Field(default_factory=tuple)
+
+    @field_validator("key")
+    @classmethod
+    def _canonical_python_key(cls, value: str, info: ValidationInfo) -> str:
+        if info.data.get("type") is PackageType.PYTHON:
+            return normalize_python_package_name(value)
+        return value
 
     @model_validator(mode="after")
     def _artifacts_are_canonical(self) -> "ResolvedPin":

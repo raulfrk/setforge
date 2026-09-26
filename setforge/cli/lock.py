@@ -20,7 +20,8 @@ from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import LockConflict, ResolveError
 from setforge.lockfile import LockFile, lock_path, parse_lock, write_lock
 from setforge.locking import mutation_locks
-from setforge.provision.resolve.protocol import ResolvedPin
+from setforge.provision.identity import normalize_python_package_name
+from setforge.provision.resolve.protocol import PackageType, ResolvedPin
 from setforge.provision.resolve.registry import get_resolver
 
 
@@ -154,7 +155,19 @@ def _run_update(
             f"cannot --update {update_key!r}: no {path.name} exists yet; run "
             f"'setforge lock --profile={profile}' first"
         )
-    target = next((item for item in items if item.lock_key() == update_key), None)
+    target = next(
+        (
+            item
+            for item in items
+            if item.lock_key()
+            == (
+                normalize_python_package_name(update_key)
+                if item.pkg_type is PackageType.PYTHON
+                else update_key
+            )
+        ),
+        None,
+    )
     if target is None:
         raise ResolveError(
             f"cannot --update {update_key!r}: no package with that lock key is "

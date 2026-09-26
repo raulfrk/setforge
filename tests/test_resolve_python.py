@@ -79,6 +79,16 @@ def test_resolve_pure_picks_universal_wheel() -> None:
     assert pin.version == "1.0"
 
 
+@pytest.mark.parametrize("name", ["some_tool", "Some.Tool", "some--tool"])
+def test_python_resolution_uses_canonical_identity(name: str) -> None:
+    requests: list[str] = []
+    pin = _resolver(_body(_PURE_URLS), record=requests).resolve(
+        PythonPackage(package=name)
+    )
+    assert pin.key == "some-tool"
+    assert requests == ["some-tool@None"]
+
+
 def test_resolve_never_returns_latest() -> None:
     record: list[str] = []
     pin = _resolver(_body(_COMPILED_URLS), record=record).resolve(

@@ -18,6 +18,7 @@ from setforge.config import (
     ResolvedProfile,
 )
 from setforge.errors import ConfigError
+from setforge.provision.identity import normalize_python_package_name
 from setforge.provision.resolve.extension import ExtensionResolveItem
 from setforge.provision.resolve.plugin import PluginResolveItem, marketplace_git_url
 from setforge.provision.resolve.protocol import PackageType
@@ -33,7 +34,7 @@ class _LockItem:
             case CargoPackage():
                 return self.resolve_input.crate
             case PythonPackage():
-                return self.resolve_input.package
+                return normalize_python_package_name(self.resolve_input.package)
             case GoPackage():
                 return self.resolve_input.module
             case GitHubReleasePackage():

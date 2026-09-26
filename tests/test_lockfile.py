@@ -147,6 +147,29 @@ def test_parse_rejects_duplicate_package_identity(second: ResolvedPin) -> None:
         parse_lock(text)
 
 
+@pytest.mark.parametrize("conflict", [False, True])
+def test_legacy_python_alias_pins_merge_only_when_identical(conflict: bool) -> None:
+    text = "version = 1\n" + "".join(
+        '[[package]]\ntype = "python"\n'
+        f'key = "{key}"\nversion = "{version}"\n'
+        f'checksum = "sha256:cafe"\nprofiles = ["{profile}"]\n'
+        for key, version, profile in (
+            ("Some_Tool", "1.2.3", "a"),
+            ("some.tool", "2.0" if conflict else "1.2.3", "b"),
+        )
+    )
+    if conflict:
+        with pytest.raises(MalformedLockError, match=r"duplicate.*python.*some-tool"):
+            parse_lock(text)
+    else:
+        lock = parse_lock(text)
+        assert len(lock.packages) == 1
+        assert lock.packages[0].key == "some-tool"
+        assert lock.packages[0].profiles == ("a", "b")
+        assert 'key = "some-tool"' in dump_lock(lock)
+        assert parse_lock(dump_lock(lock)) == lock
+
+
 def test_parse_allows_same_key_for_different_package_types() -> None:
     go_pin = _sum_pin().model_copy(update={"key": _checksum_pin().key})
     lock = LockFile(packages=(_checksum_pin(), go_pin))

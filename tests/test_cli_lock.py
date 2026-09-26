@@ -246,6 +246,32 @@ def test_lock_update_reresolves_only_named_package(tmp_path: Path) -> None:
     assert by_key["black"].version == "24.1.0", "other packages preserved verbatim"
 
 
+@pytest.mark.parametrize("selector", ["Some__Tool", "some.tool", "some-tool"])
+def test_python_lock_update_accepts_normalized_aliases(
+    tmp_path: Path, selector: str
+) -> None:
+    config = _write_config(
+        tmp_path,
+        "tracked_files: {}\npackages:\n"
+        "  tool: {type: python, package: Some__Tool}\n"
+        "profiles:\n  p: {packages: [tool]}\n",
+    )
+    _register_stub(PackageType.PYTHON, "Some__Tool", "1.0")
+    runner = CliRunner()
+    initial = runner.invoke(app, ["lock", "--profile=p", f"--config={config}"])
+    assert initial.exit_code == 0, initial.output
+    registry._REGISTRY.clear()
+    _register_stub(PackageType.PYTHON, "Some__Tool", "2.0")
+
+    updated = runner.invoke(
+        app, ["lock", "--profile=p", f"--config={config}", f"--update={selector}"]
+    )
+
+    assert updated.exit_code == 0, updated.output
+    lock = parse_lock((tmp_path / "setforge.lock").read_text())
+    assert [(pin.key, pin.version) for pin in lock.packages] == [("some-tool", "2.0")]
+
+
 def test_lock_update_without_existing_lock_errors(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path)
     _register_full_stubs()

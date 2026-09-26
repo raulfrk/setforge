@@ -73,16 +73,28 @@ def parse_lock(text: str) -> LockFile:
         raise MalformedLockError("setforge.lock: 'package' must be an array of tables")
 
     pins = tuple(_parse_pin(entry, lock_version=version) for entry in packages_raw)
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], ResolvedPin] = {}
     for pin in pins:
         identity = pin.sort_key()
-        if identity in seen:
+        prior = seen.get(identity)
+        if prior is not None:
+            if pin.type is PackageType.PYTHON and prior.model_copy(
+                update={"profiles": ()}
+            ) == pin.model_copy(update={"profiles": ()}):
+                seen[identity] = prior.model_copy(
+                    update={
+                        "profiles": tuple(
+                            sorted(set(prior.profiles) | set(pin.profiles))
+                        )
+                    }
+                )
+                continue
             raise MalformedLockError(
                 f"setforge.lock: duplicate package identity "
                 f"{pin.type.value!r}/{pin.key!r}"
             )
-        seen.add(identity)
-    return LockFile(version=version, packages=pins)
+        seen[identity] = pin
+    return LockFile(version=version, packages=tuple(seen.values()))
 
 
 def write_lock(lockfile: LockFile, path: Path) -> None:

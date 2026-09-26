@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.lockfile import LockFile, lock_path, write_lock
-from setforge.provision.protocol import Outcome, ProvisionOutcome
+from setforge.provision.protocol import Outcome, ProvisionItem, ProvisionOutcome
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
@@ -77,6 +77,50 @@ def _pin(pkg_type: PackageType, key: str, version: str) -> ResolvedPin:
         integrity_kind=kind,
         profiles=(_PROFILE,),
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "locked"),
+    [
+        ("some_tool", "some_tool"),
+        ("Some.Tool", "some-tool"),
+        ("some-tool", "Some__Tool"),
+    ],
+)
+def test_locked_python_alias_receives_exact_pin(
+    install_repo: Path, monkeypatch: pytest.MonkeyPatch, configured: str, locked: str
+) -> None:
+    config = _write_config(
+        install_repo,
+        packages_block=(
+            f"packages:\n  tool:\n    type: python\n    package: {configured}\n"
+        ),
+        profile_body="    packages: [tool]\n",
+    )
+    lock_path(config).write_text(
+        'version = 1\n[[package]]\ntype = "python"\n'
+        f'key = "{locked}"\nversion = "1.2.3"\nchecksum = "sha256:cafe"\n'
+    )
+    received: list[ProvisionItem] = []
+    monkeypatch.setattr(
+        "setforge.provision.python.PythonProvisioner.probe", lambda _: set()
+    )
+
+    def install(_self: object, item: ProvisionItem) -> ProvisionOutcome:
+        received.append(item)
+        return ProvisionOutcome(item=item, outcome=Outcome.OK)
+
+    monkeypatch.setattr(
+        "setforge.provision.python.PythonProvisioner.apply_one", install
+    )
+
+    result = _install(config, "--locked", "--no-fetch")
+
+    assert result.exit_code == 0, result.output
+    assert [(item.identity.key, item.version, item.checksum) for item in received] == [
+        ("some-tool", "1.2.3", "sha256:cafe")
+    ]
+    assert received[0].identity.display == configured
 
 
 def test_locked_fails_when_lockable_package_missing_from_lock(

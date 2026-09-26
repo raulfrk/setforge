@@ -10,6 +10,7 @@ from typing import Any, ClassVar
 
 from setforge.config import PythonPackage
 from setforge.errors import ResolveError
+from setforge.provision.identity import normalize_python_package_name
 from setforge.provision.resolve._fetch import fetch_bytes
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
@@ -99,7 +100,7 @@ class PythonResolver:
             raise ResolveError(
                 f"python resolver received {type(item).__name__}, not PythonPackage"
             )
-        name = item.package
+        name = normalize_python_package_name(item.package)
         body = self._fetch_json(name, item.version)
         version = _concrete_version(body, name)
         urls = _wheel_entries(body, name)
