@@ -59,6 +59,23 @@ def test_generated_resolution_refuses_ambient_or_undeclared_values() -> None:
 @pytest.mark.parametrize(
     "source",
     [
+        "{% if true %}{{ host.home }}{% endif %}",
+        "{% for item in [1] %}literal{% endfor %}",
+        "{% set item = 1 %}{{ item }}",
+        "{% block content %}literal{% endblock %}",
+        "{{ self }}",
+        "{{ host }}",
+        "{{ host.home }} {{ host }}",
+    ],
+)
+def test_generated_templates_allow_only_declared_input_expressions(source: str) -> None:
+    with pytest.raises(ConfigError, match=r"expression-only|declared host"):
+        resolve_generated(source, _generated())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         "{{ cycler.__init__.__globals__.os.environ }}",
         "{{ lipsum.__globals__['os'].name }}",
         "{{ host.home.__class__.__mro__ }}",

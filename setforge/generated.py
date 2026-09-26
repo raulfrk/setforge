@@ -49,6 +49,14 @@ def resolve_generated(source: str, spec: GeneratedContent) -> GeneratedResolutio
         )
         environment.globals.clear()
         parsed = environment.parse(source)
+        if any(
+            not isinstance(statement, nodes.Output)
+            for statement in parsed.find_all(nodes.Stmt)
+        ):
+            raise ConfigError(
+                "generated tracked-file templates are expression-only; "
+                "statements are not allowed"
+            )
         if next(parsed.find_all(nodes.Call), None) is not None:
             raise ConfigError(
                 "generated tracked-file templates cannot call functions or methods"
@@ -57,6 +65,7 @@ def resolve_generated(source: str, spec: GeneratedContent) -> GeneratedResolutio
             raise ConfigError(
                 "generated tracked-file templates cannot use filters or tests"
             )
+        declared_roots: set[int] = set()
         for attribute in parsed.find_all(nodes.Getattr):
             if not (
                 isinstance(attribute.node, nodes.Name)
@@ -67,6 +76,12 @@ def resolve_generated(source: str, spec: GeneratedContent) -> GeneratedResolutio
                     "generated tracked-file templates may only read declared "
                     "host.<name> values"
                 )
+            declared_roots.add(id(attribute.node))
+        if any(id(name) not in declared_roots for name in parsed.find_all(nodes.Name)):
+            raise ConfigError(
+                "generated tracked-file templates may only read declared "
+                "host.<name> values"
+            )
         if next(parsed.find_all(nodes.Getitem), None) is not None:
             raise ConfigError(
                 "generated tracked-file templates may only read declared "
