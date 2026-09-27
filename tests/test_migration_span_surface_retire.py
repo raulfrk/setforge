@@ -171,6 +171,26 @@ def test_apply_without_local_yaml_just_stamps(tmp_path) -> None:
     assert detect_current_schema(roots.cfg_path) == "4.0"
 
 
+def test_fold_preserves_legacy_profile_fields_for_later_migration(
+    tmp_path: Path,
+) -> None:
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
+    roots.cfg_path.write_text(
+        roots.cfg_path.read_text().replace(
+            "tracked_files: [notes]", "tracked_files: [notes]\n    cargo_binaries: [rg]"
+        )
+    )
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert "cargo_binaries: [rg]" in roots.cfg_path.read_text()
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+    assert reconcile.read_base("default", file_id("notes")) == _BASE
+    assert reconcile.read_local("default", file_id("notes")) == (
+        b"## Alpha\n## My Tweaks\nmy custom line\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
+    )
+
+
 def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
     """(a) A deployed file with a PRE-EXISTING store entry (shared drift + a staged
     hunk) folds the local.yaml section as a LOCAL+reloc unit WITHOUT clobbering the

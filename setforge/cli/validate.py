@@ -1341,7 +1341,7 @@ def validate(
         profiles_to_check = [profile]
 
     for prof_name in profiles_to_check:
-        _check_profile(cfg, prof_name, repo_root, failures)
+        _check_profile(cfg.model_copy(deep=True), prof_name, repo_root, failures)
 
     _check_project_profiles(cfg, repo_root, failures)
 

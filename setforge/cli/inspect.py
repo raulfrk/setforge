@@ -19,10 +19,12 @@ from setforge.cli._output import OutputContext, OutputFormat, render, wrap_json
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import (
     Config,
+    GeneratedContent,
     ResolvedProfile,
     load_config,
     resolve_effective_profile,
 )
+from setforge.generated import rendered_source
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.index_model import FileEntry
@@ -45,14 +47,14 @@ _WIDE_THRESHOLD = 120
 
 def _resolve_fid(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, arg: str
-) -> tuple[FileId, Path, Path] | None:
+) -> tuple[FileId, Path, Path, GeneratedContent | None] | None:
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if arg in (name, sub_name, str(sub_dst), sub_dst.name):
-                return file_id(sub_name), sub_dst, sub_src
+                return file_id(sub_name), sub_dst, sub_src, tracked_file.generated
     return None
 
 
@@ -144,7 +146,7 @@ def inspect(
             f"(run `setforge compare --profile={profile}` to list tracked files)",
         )
         raise typer.Exit(code=2)
-    fid, dst, src = match
+    fid, dst, src, generated = match
 
     staging_rows = summarize_stages(
         collect_stages(cfg, resolved, repo_root, profile, only=str(dst)),
@@ -164,6 +166,8 @@ def inspect(
     else:
         live = ABSENT
     upstream: bytes | Absent = src.read_bytes() if src.exists() else ABSENT
+    if upstream is not ABSENT and generated is not None:
+        upstream = rendered_source(src, generated).encode("utf-8")
 
     base_present = base is not None
     if base is not None:

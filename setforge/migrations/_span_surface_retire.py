@@ -353,6 +353,7 @@ def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
     """
     from setforge.compare import resolve_src
     from setforge.config import Config, resolve_profile
+    from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
     from setforge.migrations._yaml_ops import yaml_rt
     from setforge.reconcile import file_id
     from setforge.source import load_local_host_local_sections
@@ -369,6 +370,7 @@ def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
         raw = yaml.load(fh)
     if not isinstance(raw, dict):
         return []
+    _strip_legacy_profile_fields(raw)
     config = Config.model_validate(raw)
 
     folds: list[_SectionFold] = []

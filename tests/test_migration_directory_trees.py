@@ -49,3 +49,28 @@ def test_directory_tree_reverse_refuses_lossy_downgrade(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"cannot downgrade schema 6\.2"):
         DirectoryTreesMigration().reverse.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.2"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "tracked_files:\n  tree: {src: config, dst: ~/config}\n",
+        "tracked_files: {}\nbundles:\n  tree:\n    components:\n"
+        "      - id: config\n        file: {src: config, dst: ~/config}\n",
+        "tracked_files:\n  config:\n    src: config.j2\n    dst: ~/config\n"
+        "    generated: {inputs: {tree: home}}\n",
+    ],
+)
+def test_tree_reverse_preserves_unrelated_names(tmp_path: Path, body: str) -> None:
+    roots = _roots(
+        tmp_path,
+        "schema_version: '6.2'\nminimum_version: '6.2'\nprofiles: {}\n" + body,
+    )
+    expected = _data(roots.cfg_path) | {
+        "schema_version": "6.1",
+        "minimum_version": "6.1",
+    }
+
+    DirectoryTreesMigration().reverse.apply(roots=roots)
+
+    assert _data(roots.cfg_path) == expected

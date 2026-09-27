@@ -69,6 +69,34 @@ def test_validate_passes_valid_file_component(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.parametrize("override", ["dst: ~/host-launch.sh", "mode: 0o644"])
+def test_validate_all_keeps_inherited_bundle_overlays_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, override: str
+) -> None:
+    repo = _repo_with_launcher(tmp_path)
+    cfg = _write(
+        repo,
+        "schema_version: '6.5'\ntracked_files: {}\n"
+        + _good_bundle_block()
+        + "profiles:\n  base: {bundles: [revdiff]}\n  child: {extends: base}\n",
+    )
+    local = tmp_path / "local.yaml"
+    local.write_text(f"tracked_files:\n  revdiff.launcher:\n    {override}\n")
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
+    original = (cfg.read_bytes(), local.read_bytes())
+    runner = CliRunner()
+    for profile in ("base", "child"):
+        result = runner.invoke(
+            app, ["validate", f"--profile={profile}", f"--config={cfg}"]
+        )
+        assert result.exit_code == 0, result.output
+
+    result = runner.invoke(app, ["validate", "--all", f"--config={cfg}"])
+
+    assert result.exit_code == 0, result.output
+    assert (cfg.read_bytes(), local.read_bytes()) == original
+
+
 def test_validate_rejects_name_collision(tmp_path: Path) -> None:
     repo = _repo_with_launcher(tmp_path)
     cfg = _write(

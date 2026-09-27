@@ -81,3 +81,51 @@ def test_generated_resources_reverse_refuses_lossy_downgrade(tmp_path: Path) -> 
         GeneratedResourcesMigration().reverse.apply(roots=roots)
 
     assert _data(roots.cfg_path)["schema_version"] == "6.1"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "tracked_files:\n  generated: {src: config, dst: ~/config}\n",
+        "tracked_files: {}\nbundles:\n  generated:\n    components:\n"
+        "      - id: config\n        file: {src: config, dst: ~/config}\n",
+    ],
+)
+def test_generated_reverse_preserves_unrelated_registry_names(
+    tmp_path: Path, body: str
+) -> None:
+    roots = _roots(
+        tmp_path,
+        "schema_version: '6.1'\nminimum_version: '6.1'\nprofiles: {}\n" + body,
+    )
+    expected = _data(roots.cfg_path) | {
+        "schema_version": "6.0",
+        "minimum_version": "6.0",
+    }
+
+    GeneratedResourcesMigration().reverse.apply(roots=roots)
+
+    assert _data(roots.cfg_path) == expected
+
+
+@pytest.mark.parametrize("feature", ["generated", "tree"])
+def test_reverse_refuses_feature_on_bundle_file(tmp_path: Path, feature: str) -> None:
+    migration = (
+        GeneratedResourcesMigration()
+        if feature == "generated"
+        else DirectoryTreesMigration()
+    )
+    body = "{inputs: {home: home}}" if feature == "generated" else "{}"
+    roots = _roots(
+        tmp_path,
+        f"schema_version: '{migration.to_version}'\ntracked_files: {{}}\n"
+        "bundles:\n  configs:\n    components:\n      - id: config\n"
+        "        file:\n          src: config\n          dst: ~/config\n"
+        f"          {feature}: {body}\nprofiles: {{}}\n",
+    )
+    original = roots.cfg_path.read_bytes()
+
+    with pytest.raises(ConfigError, match="cannot downgrade"):
+        migration.reverse.apply(roots=roots)
+
+    assert roots.cfg_path.read_bytes() == original

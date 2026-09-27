@@ -45,6 +45,7 @@ single-step down-migration the migrate driver records for).
 
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -82,6 +83,16 @@ _LEGACY_FIELDS = (
     "plugins_reconcile",
     "extensions",
 )
+
+
+def _strip_legacy_profile_fields(data: object) -> None:
+    """Omit later-contracted fields from a file migration's model input only."""
+    profiles = data.get("profiles") if isinstance(data, Mapping) else None
+    if isinstance(profiles, Mapping):
+        for profile in profiles.values():
+            if isinstance(profile, MutableMapping):
+                for field in _LEGACY_FIELDS:
+                    profile.pop(field, None)
 
 
 def _package_body(kind: str, name: str) -> CommentedMap:

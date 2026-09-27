@@ -1984,6 +1984,15 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
             data = yaml.load(fh)
     except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
+    config = _validate_config_data(data, path, tolerate_unknown=tolerate_unknown)
+    _warn_on_schema_mismatch(config)
+    return config
+
+
+def _validate_config_data(
+    data: object, path: Path, *, tolerate_unknown: bool = False
+) -> Config:
+    """Validate parsed config at both loading and pre-write boundaries."""
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
     if not isinstance(data, Mapping):
@@ -1999,7 +2008,6 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     _guard_directory_trees(config, path)
     _guard_platform_release_assets(config, path)
     _guard_codex_contract(config, path)
-    _warn_on_schema_mismatch(config)
     return config
 
 

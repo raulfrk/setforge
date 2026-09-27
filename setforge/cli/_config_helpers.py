@@ -336,6 +336,8 @@ def apply_add(
         if value in existing:
             raise SetforgeError(f"{dotted!r} already contains {value!r}")
         existing.append(value)
+    elif dotted == "version":
+        parent[leaf] = 1 if value == "1" else value
     elif (
         dotted.startswith("tracked_files.")
         and dotted.endswith(".mode")

@@ -670,6 +670,7 @@ def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
 
     from setforge.compare import resolve_dst, resolve_src
     from setforge.config import Config, resolve_profile
+    from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
     from setforge.migrations._yaml_ops import yaml_rt
     from setforge.reconcile import file_id
 
@@ -695,6 +696,7 @@ def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
             if isinstance(tf, dict):
                 tf.pop("disposition", None)
                 tf.pop("spans", None)
+    _strip_legacy_profile_fields(stripped)
     config = Config.model_validate(stripped)
 
     records: list[_FidLegacy] = []

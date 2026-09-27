@@ -74,7 +74,7 @@ from setforge.config import (
     Config,
     MarketplaceSource,
     MarketplaceSourceKind,
-    validate_config_semantics,
+    _validate_config_data,
 )
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
@@ -251,7 +251,9 @@ def _enumerate_paths(scope: ConfigScope) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _validate_candidate(scope: ConfigScope, doc: CommentedMap) -> None:
+def _validate_candidate(
+    scope: ConfigScope, doc: CommentedMap, *, yaml_path: Path
+) -> None:
     """Run the appropriate schema check against the in-memory candidate.
 
     Raises :class:`SetforgeError` on validation failure with a
@@ -268,12 +270,11 @@ def _validate_candidate(scope: ConfigScope, doc: CommentedMap) -> None:
             ) from exc
     elif scope is ConfigScope.TRACKED:
         try:
-            candidate = Config.model_validate(plain)
+            _validate_config_data(plain, yaml_path)
         except ValidationError as exc:
             raise SetforgeError(
                 f"setforge.yaml candidate failed validation:\n{exc}"
             ) from exc
-        validate_config_semantics(candidate)
     else:
         raise SetforgeError(f"_validate_candidate: unexpected scope {scope!r}")
 
@@ -640,7 +641,7 @@ def _mutate_and_write(
         _apply_add(doc, dotted, op_value, is_list=is_list)
     else:
         _apply_remove(doc, dotted, op_value, is_list=is_list)
-    _validate_candidate(scope, doc)
+    _validate_candidate(scope, doc, yaml_path=yaml_path)
     _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
 
 

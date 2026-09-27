@@ -73,6 +73,46 @@ def test_inspect_human_renders_three_panes(
     assert "upstream edit" in result.output
 
 
+@pytest.mark.parametrize("with_base", [False, True])
+def test_inspect_generated_resource_uses_rendered_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_base: bool
+) -> None:
+    template = b"root={{ host.home }}\n"
+    rendered = f"root={Path.home().resolve()}\n"
+    cfg_path, _ = _setup(
+        tmp_path,
+        monkeypatch,
+        base=rendered.encode() if with_base else None,
+        live=rendered.encode(),
+        tracked=template,
+    )
+    cfg_path.write_text(
+        "schema_version: '6.1'\nminimum_version: '6.1'\n"
+        + cfg_path.read_text().replace(
+            "    src: CLAUDE.md\n",
+            "    src: CLAUDE.md\n    generated: {inputs: {home: home}}\n",
+        )
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--format=json",
+            "inspect",
+            "CLAUDE.md",
+            "--profile=p",
+            f"--config={cfg_path}",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + str(result.exception)
+    data = json.loads(result.stdout)["data"]
+    assert data["panes"]["merge"] == rendered
+    assert data["index"]["conflict"] == []
+    assert data["staging"] is None
+    assert (cfg_path.parent / "tracked" / "CLAUDE.md").read_bytes() == template
+
+
 def test_rendered_inspect_json_help_example_executes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

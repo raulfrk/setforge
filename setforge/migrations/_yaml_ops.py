@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import stat
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,31 @@ def load_yaml_mapping(path: Path) -> CommentedMap:
     if not isinstance(data, CommentedMap):
         raise ConfigError(f"setforge.yaml root must be a mapping: {path}")
     return data
+
+
+def _has_tracked_file_field(data: CommentedMap, field: str) -> bool:
+    """Check feature fields on tracked files and bundle file components only."""
+    tracked_files = data.get("tracked_files")
+    if isinstance(tracked_files, Mapping) and any(
+        isinstance(item, Mapping) and field in item for item in tracked_files.values()
+    ):
+        return True
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping):
+        return False
+    for bundle in bundles.values():
+        if not isinstance(bundle, Mapping):
+            continue
+        components = bundle.get("components")
+        if not isinstance(components, Sequence):
+            continue
+        for component in components:
+            if not isinstance(component, Mapping):
+                continue
+            file = component.get("file")
+            if isinstance(file, Mapping) and field in file:
+                return True
+    return False
 
 
 def rename_key(node: CommentedMap, old: str, new: str) -> None:
