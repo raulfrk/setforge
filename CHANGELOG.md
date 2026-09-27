@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-09-27
+
+### Fixed
+
+- Orphan cleanup protects native Codex configuration used by other configured
+  profiles, including settings retained in reconciliation state. Native setting
+  retirement no longer exposes the entire config file to unrelated cleanup.
+- Unrecorded-path scanning protects declared native config even without
+  transition history, and recognizes preserved dangling and directory symlinks
+  in managed trees while still finding genuinely unrecorded neighbors.
+- Managed-tree snapshots capture and restore preserved symlinks, respect tree
+  exclusions, and use the same policy for current restore authorization.
+
 ## [1.3.6] - 2026-09-27
 
 ### Fixed
@@ -470,7 +483,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.6...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.7...HEAD
+[1.3.7]: https://github.com/raulfrk/setforge/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/raulfrk/setforge/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/raulfrk/setforge/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/raulfrk/setforge/compare/v1.3.3...v1.3.4
