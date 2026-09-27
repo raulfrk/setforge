@@ -72,6 +72,13 @@ class GitHubReleaseResolver:
         if item.asset is None:  # pragma: no cover - config model invariant
             raise ResolveError("github_release package has no asset")
         digest = self._hash_asset(item.repo, tag, item.asset)
+        if item.checksum is not None:
+            algorithm, _, expected = item.checksum.partition(":")
+            if algorithm != "sha256" or expected.strip().lower() != digest:
+                raise ResolveError(
+                    f"GitHub release asset checksum mismatch for {item.repo!r} "
+                    f"asset {item.asset!r}"
+                )
         return ResolvedPin(
             type=PackageType.GITHUB_RELEASE,
             key=item.repo,

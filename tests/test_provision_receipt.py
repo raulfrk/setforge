@@ -91,6 +91,49 @@ def test_iter_receipts_treats_a_directory_receipt_as_corrupt(tmp_path: Path) -> 
     assert store.installed_for("cargo") == set()
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"key":"broken","display":"Broken","path":123}',
+        b'{"key":[],"display":"Broken"}',
+        b'{"key":123,"display":"Broken"}',
+        b'{"key":"broken","display":{}}',
+        b'{"key":"broken","display":"Broken","provider":123}',
+        b'{"key":"broken","display":"Broken","checksum":{}}',
+        b"\xff",
+    ],
+)
+def test_iter_receipts_contains_malformed_fields_and_preserves_neighbors(
+    tmp_path: Path, payload: bytes
+) -> None:
+    store = ReceiptStore(tmp_path)
+    good = _ident("good", "Good")
+    store.record(good, version="1", checksum=None, provider="local")
+    bad = tmp_path / "broken.json"
+    bad.write_bytes(payload)
+
+    entries = list(store.iter_receipts())
+
+    assert {entry.identity for entry in entries if entry.identity is not None} == {good}
+    assert [entry.corrupt_path for entry in entries if entry.corrupt_path] == [bad]
+    assert store.installed_for("local") == {good}
+    assert bad.read_bytes() == payload
+
+
+def test_unqualified_lookup_ignores_nonobject_neighbor_receipt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    identity = _ident()
+    destination = tmp_path / "bin" / "pkg"
+    store.record(
+        identity, version="1", checksum=None, path=destination, provider="local"
+    )
+    bad = tmp_path / "broken.json"
+    bad.write_text("[]", encoding="utf-8")
+
+    assert store.path_for(identity) == destination
+    assert bad.read_text(encoding="utf-8") == "[]"
+
+
 def test_installed_ignores_stray_tmp_file(tmp_path: Path) -> None:
     store = ReceiptStore(tmp_path)
     store.record(_ident(), version="1", checksum=None)

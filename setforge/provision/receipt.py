@@ -65,30 +65,37 @@ def _receipt_name(identity: Identity, provider: str | None = None) -> str:
 
 def _entry_from_payload(path: Path, data: Mapping[str, Any]) -> ReceiptEntry:
     """Map one parsed receipt payload onto a ReceiptEntry."""
+    identity = _identity_from_payload(data)
+    for field in (
+        "provider",
+        "version",
+        "checksum",
+        "source_digest",
+        "artifact",
+        "platform",
+    ):
+        value = data.get(field)
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"receipt {field} must be a string or null")
     recorded = data.get("path")
     return ReceiptEntry(
-        identity=Identity(key=data["key"], display=data["display"]),
+        identity=identity,
         path=Path(recorded) if recorded is not None else None,
         corrupt_path=None,
-        provider=(
-            data.get("provider") if isinstance(data.get("provider"), str) else None
-        ),
-        version=(data.get("version") if isinstance(data.get("version"), str) else None),
-        checksum=(
-            data.get("checksum") if isinstance(data.get("checksum"), str) else None
-        ),
-        source_digest=(
-            data.get("source_digest")
-            if isinstance(data.get("source_digest"), str)
-            else None
-        ),
-        artifact=(
-            data.get("artifact") if isinstance(data.get("artifact"), str) else None
-        ),
-        platform=(
-            data.get("platform") if isinstance(data.get("platform"), str) else None
-        ),
+        provider=data.get("provider"),
+        version=data.get("version"),
+        checksum=data.get("checksum"),
+        source_digest=data.get("source_digest"),
+        artifact=data.get("artifact"),
+        platform=data.get("platform"),
     )
+
+
+def _identity_from_payload(data: Mapping[str, Any]) -> Identity:
+    key, display = data["key"], data["display"]
+    if not isinstance(key, str) or not isinstance(display, str):
+        raise TypeError("receipt key and display must be strings")
+    return Identity(key=key, display=display)
 
 
 class ReceiptStore:
@@ -190,11 +197,11 @@ class ReceiptStore:
         for path in self._root.glob(f"*{_RECEIPT_SUFFIX}"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                result.add(Identity(key=data["key"], display=data["display"]))
+                result.add(_identity_from_payload(data))
             except FileNotFoundError:
                 # Unlinked between glob enumeration and read: not corrupt, just gone.
                 continue
-            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError) as exc:
                 raise CorruptReceiptError(path) from exc
         return result
 
@@ -213,50 +220,14 @@ class ReceiptStore:
         for path in sorted(self._root.glob(f"*{_RECEIPT_SUFFIX}")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                identity = Identity(key=data["key"], display=data["display"])
-                recorded = data.get("path")
+                entry = _entry_from_payload(path, data)
             except FileNotFoundError:
                 # Unlinked between glob enumeration and read: not corrupt, just gone.
                 continue
-            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            except (OSError, ValueError, KeyError, TypeError):
                 yield ReceiptEntry(identity=None, path=None, corrupt_path=path)
                 continue
-            bin_path = Path(recorded) if recorded is not None else None
-            yield ReceiptEntry(
-                identity=identity,
-                path=bin_path,
-                corrupt_path=None,
-                provider=(
-                    data.get("provider")
-                    if isinstance(data.get("provider"), str)
-                    else None
-                ),
-                version=(
-                    data.get("version")
-                    if isinstance(data.get("version"), str)
-                    else None
-                ),
-                checksum=(
-                    data.get("checksum")
-                    if isinstance(data.get("checksum"), str)
-                    else None
-                ),
-                source_digest=(
-                    data.get("source_digest")
-                    if isinstance(data.get("source_digest"), str)
-                    else None
-                ),
-                artifact=(
-                    data.get("artifact")
-                    if isinstance(data.get("artifact"), str)
-                    else None
-                ),
-                platform=(
-                    data.get("platform")
-                    if isinstance(data.get("platform"), str)
-                    else None
-                ),
-            )
+            yield entry
 
     def entry_for(self, identity: Identity, provider: str) -> ReceiptEntry | None:
         """Read one provider-qualified receipt, falling back to legacy evidence."""
@@ -295,8 +266,8 @@ class ReceiptStore:
             data = json.loads(receipt.read_text(encoding="utf-8"))
             # Discarded: validates key/display shape only, so a malformed
             # receipt raises here rather than reading a digest off it.
-            Identity(key=data["key"], display=data["display"])
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            _identity_from_payload(data)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             raise CorruptReceiptError(receipt) from exc
         recorded = data.get("source_digest")
         return recorded if isinstance(recorded, str) else None
@@ -339,10 +310,10 @@ class ReceiptStore:
             data = json.loads(receipt.read_text(encoding="utf-8"))
             # Discarded: validates key/display shape only, to raise CorruptReceiptError
             # on a malformed receipt before returning a path from it.
-            Identity(key=data["key"], display=data["display"])
+            _identity_from_payload(data)
             recorded = data.get("path")
             return Path(recorded) if recorded is not None else None
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             raise CorruptReceiptError(receipt) from exc
 
     def _lookup_path(self, identity: Identity, provider: str | None) -> Path:
@@ -357,9 +328,9 @@ class ReceiptStore:
             for candidate in self._root.glob(f"*{_RECEIPT_SUFFIX}"):
                 try:
                     raw = json.loads(candidate.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                except (OSError, ValueError):
                     continue
-                if raw.get("key") == identity.key:
+                if isinstance(raw, Mapping) and raw.get("key") == identity.key:
                     matches.append(candidate)
         if len(matches) > 1:
             raise CorruptReceiptError(self._root)

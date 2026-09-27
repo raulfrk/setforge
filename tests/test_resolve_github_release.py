@@ -66,6 +66,40 @@ def test_resolve_concrete_tag_hashes_asset() -> None:
     assert [u for u, _ in record] == [asset_url]
 
 
+@pytest.mark.parametrize(
+    "checksum", [None, f"sha256:{_ASSET_SHA}", f"sha256: {_ASSET_SHA.upper()} "]
+)
+def test_resolve_scalar_accepts_absent_or_matching_declared_checksum(
+    checksum: str | None,
+) -> None:
+    package = _pkg().model_copy(update={"checksum": checksum})
+    resolver = GitHubReleaseResolver(
+        fetch=_fetcher(
+            {
+                "https://github.com/owner/tool/releases/download/v0.8.9/"
+                "tool-linux.tar.gz": _ASSET_BYTES
+            }
+        )
+    )
+
+    assert resolver.resolve(package).integrity == f"sha256:{_ASSET_SHA}"
+
+
+def test_resolve_scalar_refuses_declared_checksum_mismatch() -> None:
+    package = _pkg().model_copy(update={"checksum": f"sha256:{'0' * 64}"})
+    resolver = GitHubReleaseResolver(
+        fetch=_fetcher(
+            {
+                "https://github.com/owner/tool/releases/download/v0.8.9/"
+                "tool-linux.tar.gz": _ASSET_BYTES
+            }
+        )
+    )
+
+    with pytest.raises(ResolveError, match="checksum mismatch"):
+        resolver.resolve(package)
+
+
 def test_resolve_latest_queries_api_then_hashes_asset() -> None:
     api_url = "https://api.github.com/repos/owner/tool/releases/latest"
     asset_url = (

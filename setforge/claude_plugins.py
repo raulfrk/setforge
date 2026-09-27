@@ -343,7 +343,11 @@ def list_marketplaces() -> dict[str, dict[str, object]]:
                 "`claude plugin marketplace list` returned a non-object list "
                 f"element: {e!r}"
             )
-    return {e["name"]: e for e in entries if "name" in e}
+        if not isinstance(e.get("name"), str) or not e["name"]:
+            raise PluginToolMissing(
+                "`claude plugin marketplace list` returned an invalid marketplace name"
+            )
+    return {e["name"]: e for e in entries}
 
 
 def list_installed() -> dict[str, dict[str, object]]:
@@ -378,7 +382,11 @@ def list_installed() -> dict[str, dict[str, object]]:
             raise PluginToolMissing(
                 f"`claude plugin list` returned a non-object list element: {e!r}"
             )
-    return {e["id"]: e for e in entries if "id" in e}
+        if not isinstance(e.get("id"), str) or not e["id"]:
+            raise PluginToolMissing(
+                "`claude plugin list` returned an invalid plugin id"
+            )
+    return {e["id"]: e for e in entries}
 
 
 def marketplace_add(name: str, source: MarketplaceSource) -> None:

@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import io
+import lzma
 import stat
 import tarfile
 import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,9 +65,20 @@ def install_from_bytes(
     with tempfile.TemporaryDirectory(prefix="setforge-install-") as tmp:
         staging = Path(tmp)
         if spec.extract:
-            binary_bytes = _extract_and_pick(
-                data, spec, staging, max_uncompressed=max_uncompressed
-            )
+            try:
+                binary_bytes = _extract_and_pick(
+                    data, spec, staging, max_uncompressed=max_uncompressed
+                )
+            except (
+                tarfile.TarError,
+                zipfile.BadZipFile,
+                zlib.error,
+                lzma.LZMAError,
+                OSError,
+                EOFError,
+                RuntimeError,
+            ) as exc:
+                raise InstallError(f"invalid archive {spec.asset!r}: {exc}") from exc
         else:
             binary_bytes = data
         _atomic_install(binary_bytes, dest, mode)

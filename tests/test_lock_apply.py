@@ -144,6 +144,49 @@ def test_github_release_latest_spec_gets_pinned_concrete_tag() -> None:
     assert "latest" not in _asset_url(locked_pkg)
 
 
+@pytest.mark.parametrize(
+    ("configured", "locked", "matches"),
+    [
+        (f"sha256:{'0' * 64}", f"sha256:{'1' * 64}", False),
+        (f"sha256:{'a' * 64}", f"sha256: {'A' * 64} ", True),
+        (f"sha256: {'A' * 64} ", f"sha256:{'a' * 64}", True),
+    ],
+)
+def test_scalar_release_lock_checks_declared_checksum(
+    configured: str, locked: str, matches: bool
+) -> None:
+    package = GitHubReleasePackage(
+        repo="owner/tool",
+        tag="v1",
+        asset="tool",
+        binary="tool",
+        install="~/.local/bin",
+        extract=False,
+        checksum=configured,
+    )
+    config = _cfg(packages={"tool": package})
+    items = resolve_provision_items(config, ResolvedProfile(packages=["tool"]))
+    lock = LockFile(
+        packages=(
+            _pin(
+                PackageType.GITHUB_RELEASE,
+                "owner/tool",
+                "v1",
+                locked,
+                IntegrityKind.CHECKSUM,
+            ),
+        )
+    )
+
+    if matches:
+        assert apply_lock_to_items(items, lock)[0].checksum == locked
+    else:
+        with pytest.raises(ConfigError, match="checksum does not match config"):
+            apply_lock_to_items(items, lock)
+
+    assert package.checksum == configured
+
+
 def test_portable_github_release_lock_selects_injected_platform_offline() -> None:
     package = GitHubReleasePackage(
         repo="owner/tool",

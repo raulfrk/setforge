@@ -37,6 +37,32 @@ setforge v1.3.2
 - setforge
 """
 
+
+@pytest.mark.parametrize("operation", ["upgrade", "verify", "migrate"])
+def test_unlaunchable_uv_is_reported_as_upgrade_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from setforge.errors import UpgradeError
+
+    # which() finds this executable, but the OS cannot load its interpreter.
+    uv = tmp_path / "uv"
+    uv.write_text("#!/missing-setforge-test-interpreter\n", encoding="utf-8")
+    uv.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    action = {
+        "upgrade": lambda: upgrade_mod._run_uv_tool_upgrade(
+            target="9.9.9", pinned=True
+        ),
+        "verify": lambda: upgrade_mod._verify_post_upgrade(expected="9.9.9"),
+        "migrate": lambda: upgrade_mod._run_migrate_check_subprocess(
+            config=tmp_path / "setforge.yaml"
+        ),
+    }[operation]
+    with pytest.raises(UpgradeError, match="could not start"):
+        action()
+
+
 # ---------------------------------------------------------------------------
 # Schema-change assessment
 # ---------------------------------------------------------------------------

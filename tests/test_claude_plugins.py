@@ -256,6 +256,11 @@ def test_list_installed_non_json_raises_plugin_tool_missing(
         "[42]",  # list of scalars, not dicts
         '[["name"]]',  # list of lists, not dicts
         "[null]",  # list of null
+        '[{"name": []}]',
+        '[{"name": 42}]',
+        '[{"name": null}]',
+        '[{"name": ""}]',
+        "[{}]",
     ],
 )
 def test_list_marketplaces_wrong_shape_raises_plugin_tool_missing(
@@ -282,6 +287,11 @@ def test_list_marketplaces_wrong_shape_raises_plugin_tool_missing(
         "[42]",  # list of scalars, not dicts
         '[["id"]]',  # list of lists, not dicts
         "[null]",  # list of null
+        '[{"id": []}]',
+        '[{"id": 42}]',
+        '[{"id": null}]',
+        '[{"id": ""}]',
+        "[{}]",
     ],
 )
 def test_list_installed_wrong_shape_raises_plugin_tool_missing(

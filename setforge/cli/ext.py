@@ -45,8 +45,8 @@ def ext_list(
     repo_root = config.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     effective = reconcile_adapter.extensions_input(cfg, resolved)
-    declared_include = set(effective.include)
-    declared_exclude = set(effective.exclude)
+    declared_include = {ext_id.casefold(): ext_id for ext_id in effective.include}
+    declared_exclude = {ext_id.casefold(): ext_id for ext_id in effective.exclude}
 
     try:
         installed = vscode_extensions.list_installed()
@@ -54,21 +54,22 @@ def ext_list(
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
         installed = set()
 
-    all_ids = sorted(declared_include | declared_exclude | installed)
+    installed_by_key = {ext_id.casefold(): ext_id for ext_id in sorted(installed)}
+    all_ids = installed_by_key | declared_include | declared_exclude
     if not all_ids:
         typer.echo("(no extensions declared or installed)")
         return
 
-    width = max(len(ext_id) for ext_id in all_ids) + 2
+    width = max(len(ext_id) for ext_id in all_ids.values()) + 2
     typer.echo(f"{'extension':<{width}}{'declared':<12}{'installed':<10}")
-    for ext_id in all_ids:
-        if ext_id in declared_exclude:
+    for key, ext_id in sorted(all_ids.items()):
+        if key in declared_exclude:
             declared = "exclude"
-        elif ext_id in declared_include:
+        elif key in declared_include:
             declared = "include"
         else:
             declared = "-"
-        is_installed = "yes" if ext_id in installed else "no"
+        is_installed = "yes" if key in installed_by_key else "no"
         typer.echo(f"{ext_id:<{width}}{declared:<12}{is_installed:<10}")
 
 

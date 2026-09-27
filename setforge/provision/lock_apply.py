@@ -79,6 +79,18 @@ def _override(
                 platform_os=platform_os,
                 platform_arch=platform_arch,
             )
+        if item.config.checksum is not None:
+            algorithm, _, digest = item.config.checksum.partition(":")
+            locked_algorithm, _, locked_digest = pin.integrity.partition(":")
+            if (
+                algorithm != "sha256"
+                or locked_algorithm != algorithm
+                or digest.strip().lower() != locked_digest.strip().lower()
+            ):
+                raise ConfigError(
+                    f"github_release lock checksum does not match config for "
+                    f"{item.config.repo!r}"
+                )
         return dataclasses.replace(
             item,
             version=pin.version,

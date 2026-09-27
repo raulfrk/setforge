@@ -4,7 +4,7 @@
 ``claude`` CLI is invoked. A :class:`FakeMcpCli` records every argv and
 serves a scripted ``mcp get`` registry, letting tests assert the exact
 converge behavior (add-absent / update-on-change / ignore-undeclared),
-idempotency ("already exists" swallow), and per-item failure isolation.
+idempotency with readable state, and per-item failure isolation.
 """
 
 from __future__ import annotations
@@ -228,7 +228,8 @@ def test_converge_does_not_remove_for_malformed_inventory(
     report = mcp.reconcile(cfg, _resolved(["serena"]))
 
     assert report.updated == []
-    assert report.failed == []
+    assert [name for name, _detail in report.failed] == ["serena"]
+    assert "cannot verify" in report.failed[0][1]
     assert [call[2] for call in cli.calls].count("remove") == 0
     assert cli.registry["serena"] == (["old"], "user")
 
@@ -388,7 +389,7 @@ def test_converge_ignores_undeclared_servers(fake_mcp) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_already_exists_stderr_is_swallowed(fake_mcp) -> None:
+def test_already_exists_without_known_command_is_unverifiable(fake_mcp) -> None:
     # get returns absent (so we attempt add), but add says already exists.
     fake_mcp(
         registry={},
@@ -396,8 +397,84 @@ def test_already_exists_stderr_is_swallowed(fake_mcp) -> None:
     )
     cfg = _cfg({"serena": McpServerRef(command=["serena"])})
     report = mcp.reconcile(cfg, _resolved(["serena"]))
-    assert report.failed == []
+    assert [name for name, _detail in report.failed] == ["serena"]
+    assert "cannot verify" in report.failed[0][1]
     assert report.added == []  # not counted as a fresh add
+
+
+def test_install_reports_unverifiable_server_and_preserves_successful_add(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_mcp
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    run_subprocess = subprocess.run
+    cli = fake_mcp(
+        registry={
+            "existing": (["server", "old exact argument"], "user"),
+            "handmade": (["unrelated"], "user"),
+        },
+        add_errors={"existing": "MCP server existing already exists in user config"},
+    )
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[0] != "/fake/claude":
+            return run_subprocess(argv, **kwargs)
+        if argv[1:3] == ["mcp", "get"]:
+            cli.calls.append(list(argv))
+            # Captured from Claude Code 2.1.219 in an isolated home.
+            raise subprocess.CalledProcessError(
+                1, argv, stderr="error: unknown option '--json'\n"
+            )
+        return cli.run(argv, **kwargs)
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        """\
+version: 1
+schema_version: '6.5'
+tracked_files: {}
+mcp_servers:
+  existing:
+    command: [server, new exact argument]
+  fresh:
+    command: [new-server, argument with spaces]
+profiles:
+  p:
+    mcp_servers: [existing, fresh]
+""",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={config}",
+            "--no-fetch",
+            "--no-git-check",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "cannot verify" in result.output
+    assert cli.registry == {
+        "existing": (["server", "old exact argument"], "user"),
+        "handmade": (["unrelated"], "user"),
+        "fresh": (["new-server", "argument with spaces"], "user"),
+    }
+    assert not any(call[2] == "remove" for call in cli.calls)
+    deltas = list((tmp_path / "state").rglob("mcp.json"))
+    assert len(deltas) == 1
+    assert json.loads(deltas[0].read_text()) == {
+        "added": [["fresh", ["new-server", "argument with spaces"], "user"]],
+        "updated": [],
+    }
 
 
 def test_per_item_failure_does_not_abort_loop(fake_mcp) -> None:

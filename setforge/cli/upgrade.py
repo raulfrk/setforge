@@ -507,6 +507,8 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
         )
     except subprocess.TimeoutExpired as exc:
         raise UpgradeError(f"uv tool {cmd[2]} timed out after 120 seconds") from exc
+    except OSError as exc:
+        raise UpgradeError(f"uv tool {cmd[2]} could not start: {exc}") from exc
     if result.returncode != 0:
         raise UpgradeError(
             f"uv tool {cmd[2]} failed: {result.stderr.strip() or result.stdout.strip()}"
@@ -538,6 +540,10 @@ def _verify_post_upgrade(*, expected: str) -> None:
     except subprocess.TimeoutExpired as exc:
         raise UpgradeError(
             "post-upgrade verification (`uv tool list`) timed out after 30 seconds"
+        ) from exc
+    except OSError as exc:
+        raise UpgradeError(
+            f"post-upgrade verification (`uv tool list`) could not start: {exc}"
         ) from exc
     if result.returncode != 0:
         raise UpgradeError(
@@ -599,6 +605,10 @@ def _run_migrate_check_subprocess(*, config: Path) -> None:
     except subprocess.TimeoutExpired as exc:
         raise UpgradeError(
             "`setforge migrate --check` timed out after 60 seconds"
+        ) from exc
+    except OSError as exc:
+        raise UpgradeError(
+            f"`setforge migrate --check` could not start: {exc}"
         ) from exc
     if result.returncode == 0:
         typer.echo(result.stdout)

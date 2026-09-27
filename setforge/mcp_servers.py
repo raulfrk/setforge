@@ -19,9 +19,9 @@ a literal ``"--"`` separator ahead of the user's command tokens::
 
     claude mcp add --scope <scope> <name> -- <command tokens...>
 
-Idempotency for user-scope servers cannot lean on ``claude mcp list`` /
-``get`` (unreliable for that scope), so an "already exists" stderr from
-``mcp add`` is string-matched and swallowed as a benign no-op. The
+When structured inspection is unavailable, an "already exists" response
+from ``mcp add`` proves presence but cannot prove the command or scope.
+That case reports a failure and preserves the existing registration. The
 per-server loop catches :class:`subprocess.CalledProcessError` /
 :class:`subprocess.TimeoutExpired`, records ``(name, stderr)`` in the
 report's ``failed`` list, and continues — the CLI gates its exit code on
@@ -223,10 +223,10 @@ def mcp_get_command(name: str) -> tuple[list[str], str] | None:
     list and scope out of the JSON. Returns ``None`` when the server is
     absent, when the CLI does not support ``--json`` / ``get``, cannot
     be executed after resolution, or when the output cannot be parsed —
-    every one of those is a "cannot
-    determine current command" signal that the converge path treats as
-    "fall back to a plain add (idempotent)". NEVER raises on a missing
-    server; only the binary-missing case propagates as
+    every one of those is a "cannot determine current command" signal that
+    the converge path treats as "fall back to a plain add". An existing
+    registration is then reported as unverifiable rather than assumed to
+    match. NEVER raises on a missing server; only the binary-missing case propagates as
     :class:`PluginToolMissing` (resolved upstream by the caller).
     """
     claude = str(_get_claude_bin())
@@ -297,7 +297,7 @@ def mcp_remove(name: str, *, scope: str = "user") -> None:
 
 
 def _is_already_exists(stderr: str) -> bool:
-    """Return ``True`` when ``stderr`` reads as an already-registered no-op."""
+    """Return ``True`` when ``stderr`` reports an existing registration."""
     lowered = stderr.lower()
     return any(marker in lowered for marker in _ALREADY_EXISTS_MARKERS)
 
@@ -360,7 +360,7 @@ def _converge_add(
     added: list[tuple[str, list[str], str]],
     failed: list[tuple[str, str]],
 ) -> None:
-    """Add an absent server; swallow an "already exists" stderr as a no-op."""
+    """Add an absent server without mistaking existence for verified convergence."""
     LOGGER.info("adding mcp server: %s", name)
     try:
         mcp_add(name, ref)
@@ -368,7 +368,12 @@ def _converge_add(
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         msg = stderr_of(exc)
         if _is_already_exists(msg):
-            LOGGER.info("mcp server already registered (no-op): %s", name)
+            detail = (
+                "cannot verify existing MCP server command and scope: structured "
+                "inspection was unavailable; existing registration preserved"
+            )
+            LOGGER.warning("mcp add could not verify %s: %s", name, detail)
+            failed.append((name, detail))
             return
         LOGGER.warning("mcp add failed for %s: %s", name, msg)
         failed.append((name, msg))

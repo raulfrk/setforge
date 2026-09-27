@@ -122,6 +122,52 @@ def _register_full_stubs() -> None:
     _register_stub(PackageType.EXTENSION, "esbenp.prettier-vscode", "10.1.0")
 
 
+def test_lock_checksum_mismatch_preserves_existing_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.provision.resolve import github_release
+
+    registry.register(PackageType.GITHUB_RELEASE)(github_release.GitHubReleaseResolver)
+    asset_url = "https://github.com/owner/tool/releases/download/v1/tool"
+
+    def fetch(url: str, *, user_agent: str | None = None) -> bytes:
+        assert url == asset_url
+        return b"bytes that do not match the manifest checksum"
+
+    monkeypatch.setattr(github_release, "_default_fetch", fetch)
+    config = _write_config(
+        tmp_path,
+        f"""\
+version: 1
+schema_version: '6.5'
+tracked_files: {{}}
+packages:
+  tool:
+    type: github_release
+    repo: owner/tool
+    tag: v1
+    asset: tool
+    binary: tool
+    install: ~/.local/bin
+    extract: false
+    checksum: sha256:{"0" * 64}
+profiles:
+  p:
+    packages: [tool]
+""",
+    )
+    path = tmp_path / "setforge.lock"
+    before = dump_lock(LockFile(packages=())).encode("utf-8")
+    path.write_bytes(before)
+
+    result = CliRunner().invoke(app, ["lock", "--profile=p", f"--config={config}"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ResolveError)
+    assert "checksum mismatch" in str(result.exception)
+    assert path.read_bytes() == before
+
+
 def test_lock_writes_one_pin_per_package(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path)
     _register_full_stubs()
