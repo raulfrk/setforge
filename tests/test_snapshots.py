@@ -33,6 +33,8 @@ from setforge.config import (
     Profile,
     ResolvedProfile,
     TrackedFile,
+    TreePolicy,
+    TreeSymlinkPolicy,
 )
 from setforge.errors import SetforgeError
 
@@ -377,6 +379,110 @@ def test_create_snapshot_rejects_existing_id_collision(
     _create(ctx, "twin")
     with pytest.raises(SetforgeError, match="already exists"):
         _create(ctx, "twin")
+
+
+@pytest.mark.parametrize("exclude_private", [False, True])
+def test_managed_tree_snapshot_restores_files_and_preserved_links(
+    fake_home: Path, exclude_private: bool
+) -> None:
+    ctx, source, destination = _build_ctx(
+        fake_home,
+        src_relative="tree",
+        dst_template=str(fake_home / "live-tree"),
+    )
+    ctx.cfg.tracked_files["minimal_text"].tree = TreePolicy(
+        symlinks=TreeSymlinkPolicy.PRESERVE,
+        exclude=["ignored/", "*.tmp", "ignored-link"] if exclude_private else [],
+    )
+    files = {
+        "root.txt": "root contents\n",
+        "nested/leaf.txt": "nested contents\n",
+        "ignored/private.txt": "excluded directory contents\n",
+        "private.tmp": "excluded file contents\n",
+    }
+    links = {
+        "dangling-link": "missing",
+        "directory-link": "nested",
+        "file-link": "root.txt",
+        "nested/nested-link": "../root.txt",
+        "ignored-link": "root.txt",
+    }
+    for tree, prefix in ((source, "tracked "), (destination, "live ")):
+        for relative, body in files.items():
+            path = tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(prefix + body)
+        for relative, target in links.items():
+            (tree / relative).symlink_to(target)
+        (tree / "empty").mkdir()
+    expected = {
+        "root.txt",
+        "nested/leaf.txt",
+        "dangling-link",
+        "directory-link",
+        "file-link",
+        "nested/nested-link",
+    }
+    if not exclude_private:
+        expected |= {"ignored/private.txt", "private.tmp", "ignored-link"}
+
+    meta = _create(ctx, "managed-tree")
+
+    assert set(meta.files) == {destination / relative for relative in expected}
+    for relative in expected:
+        (destination / relative).unlink()
+    for relative in files.keys() - expected:
+        (destination / relative).write_text("changed excluded file\n")
+    for relative in links.keys() - expected:
+        path = destination / relative
+        path.unlink()
+        path.symlink_to("changed-excluded-target")
+    live_only = destination / "live-only.txt"
+    live_only.write_text("preserve this addition\n")
+
+    restored = snap_mod.restore_snapshot(
+        meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
+    )
+
+    assert restored == meta
+    for relative, body in files.items():
+        expected_body = (
+            "live " + body if relative in expected else "changed excluded file\n"
+        )
+        assert (destination / relative).read_text() == expected_body
+    for relative, target in links.items():
+        expected_target = target if relative in expected else "changed-excluded-target"
+        assert (destination / relative).is_symlink()
+        assert (destination / relative).readlink() == Path(expected_target)
+    assert live_only.read_text() == "preserve this addition\n"
+
+
+def test_managed_tree_restore_refuses_newly_excluded_member(fake_home: Path) -> None:
+    ctx, source, destination = _build_ctx(
+        fake_home,
+        src_relative="tree",
+        dst_template=str(fake_home / "live-tree"),
+    )
+    policy = TreePolicy(symlinks=TreeSymlinkPolicy.PRESERVE)
+    ctx.cfg.tracked_files["minimal_text"].tree = policy
+    for tree in (source, destination):
+        tree.mkdir()
+        (tree / "retained.txt").write_text("captured contents\n")
+        (tree / "dangling-link").symlink_to("missing")
+    meta = _create(ctx, "managed-tree")
+    policy.exclude = ["dangling-link"]
+    (destination / "retained.txt").write_text("changed live contents\n")
+    (destination / "dangling-link").unlink()
+
+    with pytest.raises(
+        SetforgeError, match=r"destination is no longer managed.*dangling-link"
+    ):
+        snap_mod.restore_snapshot(
+            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
+        )
+
+    assert (destination / "retained.txt").read_text() == "changed live contents\n"
+    assert not (destination / "dangling-link").is_symlink()
 
 
 # ---------------------------------------------------------------------------

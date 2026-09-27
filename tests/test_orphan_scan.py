@@ -18,6 +18,8 @@ from setforge.config import (
     FileComponent,
     Profile,
     TrackedFile,
+    TreePolicy,
+    TreeSymlinkPolicy,
 )
 from setforge.errors import SetforgeError
 
@@ -71,6 +73,35 @@ def test_scan_finds_only_unrecorded_leaf_under_bounded_root(tmp_path: Path) -> N
 
     assert [entry.path for entry in result.entries] == [stray]
     assert result.entries[0].kind is orphan_scan.ScanEntryKind.REGULAR
+
+
+def test_scan_protects_preserved_tree_links_without_history(tmp_path: Path) -> None:
+    repo, config_path = _repo(tmp_path)
+    source = repo / "tracked/tree"
+    live = Path.home() / ".managed/tree"
+    for root in (source, live):
+        (root / "folder").mkdir(parents=True)
+        (root / "folder/kept.txt").write_text("managed\n")
+        (root / "file-link").symlink_to("folder/kept.txt")
+        (root / "directory-link").symlink_to("folder", target_is_directory=True)
+        (root / "dangling-link").symlink_to("missing")
+    stray = live / "unrecorded-link"
+    stray.symlink_to("also-missing")
+    config = Config(
+        tracked_files={
+            "tree": TrackedFile(
+                src=Path("tree"),
+                dst=str(live),
+                tree=TreePolicy(symlinks=TreeSymlinkPolicy.PRESERVE),
+            )
+        },
+        profiles={"p": Profile(tracked_files=["tree"])},
+    )
+
+    result = _scan(config, repo, config_path, tmp_path / "no-history")
+
+    assert [entry.path for entry in result.entries] == [stray]
+    assert result.entries[0].kind is orphan_scan.ScanEntryKind.SYMLINK
 
 
 def test_double_slash_destination_cannot_broaden_root_or_surface_control(

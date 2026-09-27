@@ -44,6 +44,7 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
     resolve_and_expand,
+    resolve_effective_profile,
     resolve_symlink_target,
 )
 from setforge.errors import BaseStoreError, ConfigError
@@ -811,15 +812,30 @@ def compare_profile(
         # avoids a cycle with the native report projection's compare types.
         from setforge import codex_lifecycle
 
+        protected_paths = set(
+            codex_lifecycle.config_destinations(
+                config, resolved, repo_root, profile=profile_name
+            )
+        )
+        for other_profile in config.profiles:
+            if other_profile == profile_name:
+                continue
+            other_config = config.model_copy(deep=True)
+            other_resolved = resolve_effective_profile(
+                other_config, other_profile, repo_root
+            ).resolved
+            protected_paths.update(
+                codex_lifecycle.config_destinations(
+                    other_config, other_resolved, repo_root, profile=other_profile
+                )
+            )
         detection = detect_orphans(
             resolved,
             config,
             transitions_dir,
             repo_root,
             ignored=ignored,
-            protected_paths=codex_lifecycle.config_destinations(
-                config, resolved, repo_root, profile=profile_name
-            ),
+            protected_paths=protected_paths,
         )
         orphans = detection.orphans
         skipped_absent = detection.skipped_absent

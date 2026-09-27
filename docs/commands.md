@@ -267,6 +267,11 @@ removed tracked-file entries by transition history. It defaults to dry-run;
 chooses the reversible transition branch, and `--ignore=<tracked-id>` adds a
 host-local exclusion without scanning.
 
+Native Codex config containers selected or retained in reconciliation state
+for any configured effective profile are protected in both modes, even when
+cleanup targets a different profile. Retiring native settings belongs to
+native key reconciliation; orphan cleanup does not delete the whole container.
+
 Explicit `--scan` searches only bounded roots inferred from managed
 destinations across all effective profiles. It excludes tracked sources,
 host-local files, ignored/attributed destinations, the config repo, and control

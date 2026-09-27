@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from setforge import codex_lifecycle, operations, snapshots, transitions
 from setforge import compare as compare_mod
-from setforge import operations, snapshots, transitions
 from setforge.config import Config, resolve_effective_profile
 from setforge.errors import SetforgeError
 
@@ -134,6 +134,17 @@ def _managed_inventory(
         effective = resolve_effective_profile(
             effective_config, profile_name, repo_root
         ).resolved
+        attributed.update(
+            _norm(path)
+            for path in codex_lifecycle.config_destinations(
+                effective_config, effective, repo_root, profile=profile_name
+            )
+        )
+        attributed.update(
+            compare_mod._resolved_tracked_dsts(
+                effective, effective_config, repo_root, extra_ids=frozenset()
+            )
+        )
         for tracked_id in effective.tracked_files:
             tracked_file = effective_config.tracked_files[tracked_id]
             src = compare_mod.resolve_src(tracked_file, repo_root)
@@ -144,10 +155,6 @@ def _managed_inventory(
                 root = _individual_file_root(dst)
                 if root is not None:
                     roots.add(root)
-            for _, _, expanded_dst in compare_mod.expand_tracked_file(
-                tracked_id, src, dst
-            ):
-                attributed.add(_norm(expanded_dst))
             if tracked_file.symlink is not None:
                 link_target = _norm(Path(tracked_file.symlink))
                 attributed.add(link_target)

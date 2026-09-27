@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,10 +12,10 @@ from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import compare as compare_mod
-from setforge import transitions
+from setforge import orphan_scan, transitions
 from setforge.cli import app
 from setforge.compare import _touched_paths_from_meta
-from setforge.config import Config, Profile, TrackedFile, resolve_profile
+from setforge.config import Config, Profile, TrackedFile, load_config, resolve_profile
 from setforge.file_ownership import file_resource_id
 from setforge.locking import mutation_locks
 from setforge.ownership import OwnershipStore
@@ -232,3 +233,118 @@ def test_cleanup_still_removes_a_retired_tracked_neighbor(
     assert not retired.exists()
     assert _path_state(paths) == before
     assert store.list_claims() == claims_before
+
+
+@pytest.mark.parametrize("profile", ["files", "child"])
+@pytest.mark.parametrize("retired_native_selection", [False, True])
+def test_cleanup_protects_native_config_from_another_profile(
+    native_profile: Path, profile: str, retired_native_selection: bool
+) -> None:
+    yaml = YAML()
+    document = yaml.load(native_profile.read_text())
+    document["profiles"]["files"] = {
+        "tracked_files": ["retired"],
+        "codex": {"instructions": ["guide"], "skills": ["smoke"]},
+    }
+    document["profiles"]["child"] = {"extends": "files"}
+    if retired_native_selection:
+        document["profiles"]["p"]["codex"]["config"] = []
+    yaml.dump(document, native_profile)
+    paths = _active_paths()
+    before = _path_state(paths)
+    runner = CliRunner()
+    compared = runner.invoke(
+        app,
+        [
+            "--format=json",
+            "compare",
+            f"--profile={profile}",
+            f"--config={native_profile}",
+        ],
+    )
+    assert compared.exit_code == 0, compared.output
+    assert json.loads(compared.stdout)["data"]["orphans"] == []
+
+    stray = Path.home() / ".codex/old.txt"
+    stray.write_text("retired deployment\n")
+    _write_meta_record(transitions.transitions_root(), "old-deployment", [str(stray)])
+    args = ["cleanup-orphans", f"--profile={profile}", f"--config={native_profile}"]
+    preview = runner.invoke(app, args)
+    assert preview.exit_code == 0, preview.output
+    assert str(stray) in _strip_ansi_and_newlines(preview.output)
+    assert "config.toml" not in preview.output
+    applied = runner.invoke(app, [*args, "--apply", "--yes"])
+    assert applied.exit_code == 0, applied.output
+    assert not stray.exists()
+    assert _path_state(paths) == before
+
+
+@pytest.mark.parametrize("profile", ["p", "files", "child"])
+@pytest.mark.parametrize(
+    "installed", [False, True], ids=["no-history", "pruned-history"]
+)
+def test_scan_protects_native_config_without_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str, installed: bool
+) -> None:
+    repo = tmp_path / "repo"
+    source = repo / "tracked"
+    source.mkdir(parents=True)
+    (source / "model.toml").write_text('model = "managed"\n')
+    (source / "instructions.md").write_text("instructions\n")
+    live = Path.home() / ".codex"
+    live.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(live))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = repo / "setforge.yaml"
+    YAML().dump(
+        {
+            "schema_version": "6.5",
+            "minimum_version": "6.4",
+            "tracked_files": {},
+            "codex": {
+                "config": {"model": {"source": "model.toml"}},
+                "instructions": {"guide": {"source": "instructions.md"}},
+            },
+            "profiles": {
+                "p": {"codex": {"config": ["model"], "instructions": ["guide"]}},
+                "files": {"codex": {"instructions": ["guide"]}},
+                "child": {"extends": "p"},
+            },
+        },
+        config,
+    )
+    (live / "config.toml").write_text('personal = "preserve"\n')
+    (live / "AGENTS.md").write_text("instructions\n")
+    if installed:
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        result = CliRunner().invoke(
+            app,
+            [
+                "install",
+                "--profile=p",
+                f"--config={config}",
+                "--yes",
+                "--no-fetch",
+                "--no-git-check",
+                "--no-secrets-scan",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        shutil.rmtree(transitions.transitions_root())
+    stray = live / "unrecorded.txt"
+    stray.write_text("unrecorded neighbor\n")
+    before = _path_state([live / "config.toml", live / "AGENTS.md", stray])
+    scan = orphan_scan.scan_unrecorded_managed_tree(
+        load_config(config),
+        repo,
+        config_path=config,
+        transitions_dir=transitions.transitions_root(),
+    )
+    assert [entry.path for entry in scan.entries] == [stray]
+    preview = CliRunner().invoke(
+        app, ["cleanup-orphans", "--scan", f"--profile={profile}", f"--config={config}"]
+    )
+    assert preview.exit_code == 0, preview.output
+    assert str(stray) in _strip_ansi_and_newlines(preview.output)
+    assert "config.toml" not in preview.output
+    assert _path_state(list(before)) == before

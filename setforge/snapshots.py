@@ -53,6 +53,7 @@ from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_symlink_target
 from setforge.errors import SetforgeError
 from setforge.transitions import now_utc
+from setforge.tree_management import TreeEntryKind, scan_tree
 
 DEFAULT_KEEP: Final[int] = 10
 """Default retention count for auto-prune."""
@@ -236,10 +237,10 @@ def _resolve_dst_paths(
 ) -> list[Path]:
     """Resolve tracked destinations and declared symlink payloads, plus local.yaml.
 
-    Mirrors the existing ``expand_tracked_file`` walk so directory-shaped
-    tracked entries contribute one path per contained file. ``local.yaml``
-    is appended last when it exists; it is NOT a tracked file but is the
-    host-local config surface snapshots must capture.
+    Managed trees contribute their policy-filtered regular files and preserved
+    symlinks without following links. Other entries use ``expand_tracked_file``.
+    ``local.yaml`` is appended last; it is the host-local config surface
+    snapshots must capture when present.
     """
     dst_paths: list[Path] = []
     seen: set[Path] = set()
@@ -247,7 +248,18 @@ def _resolve_dst_paths(
         tracked_file = cfg.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        for _, _, sub_dst in expand_tracked_file(name, src, dst):
+        if tracked_file.tree is not None:
+            inventory = scan_tree(src, tracked_file.tree).inventory
+            tracked_destinations = [
+                dst / entry.path
+                for entry in inventory.entries
+                if entry.kind in (TreeEntryKind.FILE, TreeEntryKind.SYMLINK)
+            ]
+        else:
+            tracked_destinations = [
+                sub_dst for _, _, sub_dst in expand_tracked_file(name, src, dst)
+            ]
+        for sub_dst in tracked_destinations:
             destinations = [sub_dst]
             if tracked_file.symlink is not None:
                 destinations.append(
