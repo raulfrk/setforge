@@ -1083,16 +1083,22 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 item, plan.target
             )
             for item in plan.files
+            if item.kind is not SyncFileKind.REMOVE
         }
-        resources = {key: _resource_id(plan.target, key[1]) for key in ownership_plans}
+        resources = {
+            (item.profile, item.relative_destination): _resource_id(
+                plan.target, item.relative_destination
+            )
+            for item in plan.files
+        }
         prior_claims = {
             key: store.read(resource) for key, resource in resources.items()
         }
         for item in plan.files:
             key = (item.profile, item.relative_destination)
             claim = prior_claims[key]
-            ownership_plan = ownership_plans[key]
             if item.kind is SyncFileKind.ADD:
+                ownership_plan = ownership_plans[key]
                 if claim is not None and not _claim_matches_plan(
                     claim,
                     resource=resources[key],

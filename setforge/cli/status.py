@@ -53,7 +53,7 @@ from setforge.cli._output import render
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import InvalidTransitionRecord
-from setforge.source import LOCAL_CONFIG_PATH, get_resolved_source, resolve_source_dir
+from setforge.source import LOCAL_CONFIG_PATH
 
 _GIT_TIMEOUT_SECONDS: int = 30
 _OVERLAY_KEYS: tuple[str, ...] = (
@@ -422,8 +422,7 @@ def status(
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    source = get_resolved_source()
-    source_dir = resolve_source_dir(source)
+    source_dir = repo_root
     host = platform.node() or "unknown-host"
     meta = _load_last_install_meta(profile)
     git_info = _resolve_git_info(

@@ -15,6 +15,9 @@ Two modes:
   core intersection is a fast exit-0 no-op.
 * **``--full``** — the nightly gate. Skip the diff filter and require a mutation
   score strictly above 80% across the whole core.
+* **``--results-only``** — score a diff from the complete results of a fresh
+  full-core run on this exact checkout, without executing the same mutants
+  again. The caller must retain the full-run log as provenance.
 
 The GATE decision is THIS SCRIPT'S OWN exit code (0 clean / 1 blocked / 2
 fail-closed) — never mutmut's raw exit code (``mutmut run`` exits nonzero on
@@ -63,6 +66,7 @@ Invocation::
 
     uv run python scripts/mutmut_diff_gate.py           # PR diff-scoped
     uv run python scripts/mutmut_diff_gate.py --full     # nightly, whole core
+    uv run python scripts/mutmut_diff_gate.py --results-only --base main
 """
 
 from __future__ import annotations
@@ -545,9 +549,10 @@ def _run_full(allowlist: set[str]) -> int:
     return EXIT_CLEAN if score > FULL_SCORE_THRESHOLD else EXIT_BLOCKED
 
 
-def _run_diff(allowlist: set[str], base_ref: str) -> int:
+def _run_diff(allowlist: set[str], base_ref: str, *, results_only: bool = False) -> int:
     """PR diff-scoped path: run mutmut over only the changed core modules and
-    gate survivors whose function overlaps a changed line."""
+    gate survivors whose function overlaps a changed line. A completed full
+    pass can supply the same results without rerunning its mutants."""
     diff_text = _git_diff_core(base_ref)
     changed = changed_lines_from_diff(diff_text)
     core = set(_existing_core_files())
@@ -556,7 +561,7 @@ def _run_diff(allowlist: set[str], base_ref: str) -> int:
         return EXIT_CLEAN
 
     patterns = [p[: -len(".py")].replace("/", ".") + ".*" for p in sorted(changed)]
-    run = _run_mutmut(patterns)
+    run = MutmutRun(0, "") if results_only else _run_mutmut(patterns)
 
     results_text = _mutmut_results()
     if catastrophic_run(run, results_text, expected=True):
@@ -568,10 +573,15 @@ def _run_diff(allowlist: set[str], base_ref: str) -> int:
         return EXIT_FAILCLOSED
 
     sources = _read_sources(set(changed))
+    records = _result_lines(results_text)
+    if results_only and any(status == "not checked" for _, status in records):
+        _print_failclosed(
+            "results-only diff requires a complete full-core run on this "
+            "checkout; mutation results still contain `not checked` mutants."
+        )
+        return EXIT_FAILCLOSED
     incomplete = [
-        Survivor(name, status)
-        for name, status in _result_lines(results_text)
-        if status == "not checked"
+        Survivor(name, status) for name, status in records if status == "not checked"
     ]
     if survivors_on_changed_lines(incomplete, changed, sources):
         _print_failclosed(
@@ -596,6 +606,12 @@ def main(argv: list[str] | None = None) -> int:
         "(nightly), skipping the PR-diff line filter",
     )
     parser.add_argument(
+        "--results-only",
+        action="store_true",
+        help="score the diff from a complete full-core run on this exact "
+        "checkout, without rerunning mutants",
+    )
+    parser.add_argument(
         "--base",
         metavar="REF",
         default=None,
@@ -604,12 +620,16 @@ def main(argv: list[str] | None = None) -> int:
         "when origin/main is a stale ancestor of it). Ignored with --full.",
     )
     args = parser.parse_args(argv)
+    if args.full and args.results_only:
+        parser.error("--results-only applies only to diff mode")
 
     allowlist = read_allowlist()
     try:
         if args.full:
             return _run_full(allowlist)
-        return _run_diff(allowlist, _resolve_base_ref(args.base))
+        return _run_diff(
+            allowlist, _resolve_base_ref(args.base), results_only=args.results_only
+        )
     except GateFailClosed as exc:
         _print_failclosed(str(exc))
         return EXIT_FAILCLOSED

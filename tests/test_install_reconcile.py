@@ -283,7 +283,7 @@ def test_stale_toml_anchor_has_identical_cli_diagnostics_without_mutation(
     (stage_row,) = json.loads(stage_result.stdout)["data"]
     inspect_data = json.loads(inspect_result.stdout)["data"]
     assert stage_row["pending"] == inspect_data["staging"]["pending"] == 1
-    assert "merge clean" in inspect_human.stdout
+    assert "merge clean" in " ".join(inspect_human.stdout.split())
     assert "unexpected drift in 0 file(s)" in dry_run.stdout
     assert f"WOULD noop      {live}" in dry_run.stdout
     assert "settings: 0 shared-promotable" in dry_run.stdout

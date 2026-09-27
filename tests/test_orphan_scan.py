@@ -196,6 +196,39 @@ def test_scan_excludes_host_ignored_inactive_destination(
     assert [entry.path for entry in result.entries] == [unknown]
 
 
+def test_scan_host_local_override_does_not_mutate_caller_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "repo"
+    original_root = home / ".original"
+    overridden_root = home / ".overridden"
+    local_config = tmp_path / "local.yaml"
+    state = home / "state"
+    for path in (home, repo, original_root, overridden_root, local_config, state):
+        assert path.absolute().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    repo, config_path = _repo(home)
+    config = _config(repo, original_root)
+    before = config.model_dump()
+    tool = overridden_root / "tool"
+    tool.mkdir(parents=True)
+    (tool / "kept.txt").write_text("deployed", encoding="utf-8")
+    unknown = tool / "unknown.txt"
+    unknown.write_text("review", encoding="utf-8")
+    local_config.write_text(
+        f"tracked_files:\n  kept:\n    dst: {tool / 'kept.txt'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
+
+    result = _scan(config, repo, config_path, state / "transitions")
+
+    assert [entry.path for entry in result.entries] == [unknown]
+    assert config.model_dump() == before
+
+
 def test_scan_surfaces_symlink_without_following_target(tmp_path: Path) -> None:
     repo, config_path = _repo(tmp_path)
     live = Path.home() / ".managed"

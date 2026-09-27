@@ -23,6 +23,7 @@ from setforge import git_ops, operations
 from setforge import source as source_mod
 from setforge.cli import app
 from setforge.errors import SetforgeError, SourceNotCloned
+from setforge.locking import MutationLockGuards
 from setforge.source import GitSource, PathSource
 
 _PROFILE = "test-fetch"
@@ -256,16 +257,18 @@ class TestFetchWiring:
         import setforge.cli.install as install_mod
 
         held = False
+        real_locks = install_mod.mutation_locks
 
         @contextmanager
-        def recording_lock(**scopes: object) -> Iterator[None]:
+        def recording_lock(**scopes: Any) -> Iterator[MutationLockGuards]:
             nonlocal held
             assert scopes["resources"] is True
-            held = True
-            try:
-                yield
-            finally:
-                held = False
+            with real_locks(**scopes) as guards:
+                held = True
+                try:
+                    yield guards
+                finally:
+                    held = False
 
         def guarded_fetch(_source: object) -> str:
             assert held, "fetch escaped the cross-profile install resource lock"

@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.errors import SetforgeError
 from setforge.ownership import resolve_owner_common_dir
+from setforge.project_injection import ProjectFileAction
 from setforge.project_sync import (
     AutoResolution,
     _merge_mode,
@@ -591,13 +592,19 @@ def test_resolve_sync_plan_handles_clean_content_mode_conflict(
     assert not adopted.files[0].mode_conflict
 
 
+@pytest.mark.parametrize("git_target", [False, True])
 def test_apply_sync_adds_and_removes_profile_membership_atomically(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, git_target: bool
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
     original_config = config.read_text()
-    target = _git_repo(tmp_path / "target")
+    target = tmp_path / "target"
+    assert target.resolve().is_relative_to(tmp_path.resolve())
+    if git_target:
+        _git_repo(target)
+    else:
+        target.mkdir()
     injected = CliRunner().invoke(
         app,
         ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
@@ -605,29 +612,39 @@ def test_apply_sync_adds_and_removes_profile_membership_atomically(
     assert injected.exit_code == 0, injected.exception
     (config.parent / "project" / "demo" / "EXTRA.md").write_text("extra\n")
     (config.parent / "project" / "demo" / "EXTRA.md").chmod(0o644)
-    config.write_text(
+    (config.parent / "project" / "demo" / "NEXT.md").write_text("next\n")
+    (config.parent / "project" / "demo" / "NEXT.md").chmod(0o644)
+    expanded_config = (
         original_config
         + "      extra:\n        src: EXTRA.md\n        dst: nested/deeper/EXTRA.md\n"
+        + "      next:\n        src: NEXT.md\n        dst: nested-deeper/NEXT.md\n"
     )
+    config.write_text(expanded_config)
 
     add_plan = plan_sync(target)
-    assert any(item.kind.value == "add" for item in add_plan.files)
+    assert [
+        item.relative_destination for item in add_plan.files if item.kind.value == "add"
+    ] == [Path("nested-deeper/NEXT.md"), Path("nested/deeper/EXTRA.md")]
     assert apply_sync(add_plan)
     assert (target / "nested" / "deeper" / "EXTRA.md").read_text() == "extra\n"
-    assert (
-        subprocess.run(
-            ["git", "-C", str(target), "status", "--short"],
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
-        == ""
-    )
+    assert (target / "nested-deeper" / "NEXT.md").read_text() == "next\n"
+    if git_target:
+        assert (
+            subprocess.run(
+                ["git", "-C", str(target), "status", "--short"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            == ""
+        )
 
     config.write_text(original_config)
     remove_plan = plan_sync(target)
     removed_file = next(
-        item for item in remove_plan.files if item.kind.value == "remove"
+        item
+        for item in remove_plan.files
+        if item.relative_destination == Path("nested/deeper/EXTRA.md")
     )
     assert removed_file.profile == "demo"
     assert removed_file.file_id == "extra"
@@ -644,23 +661,88 @@ def test_apply_sync_adds_and_removes_profile_membership_atomically(
     assert removed_file.addition is None
     assert apply_sync(remove_plan)
     assert not (target / "nested").exists()
+    assert not (target / "nested-deeper").exists()
 
-    config.write_text(
-        original_config
-        + "      extra:\n        src: EXTRA.md\n        dst: nested/deeper/EXTRA.md\n"
-    )
+    config.write_text(expanded_config)
     restore_plan = plan_sync(target)
     assert apply_sync(restore_plan)
     assert (target / "nested" / "deeper" / "EXTRA.md").read_text() == "extra\n"
-    assert (
+    assert (target / "nested-deeper" / "NEXT.md").read_text() == "next\n"
+    if git_target:
+        assert (
+            subprocess.run(
+                ["git", "-C", str(target), "status", "--short"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            == ""
+        )
         subprocess.run(
-            ["git", "-C", str(target), "status", "--short"],
+            ["git", "-C", str(target), "add", "-f", "nested/deeper/EXTRA.md"],
             check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
-        == ""
+        )
+        with pytest.raises(SetforgeError, match="unexpectedly became tracked"):
+            plan_sync(target)
+
+
+@pytest.mark.parametrize("local_edit", [False, True])
+def test_sync_removing_replacement_restores_prior_file_or_keeps_local_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_edit: bool
+) -> None:
+    state = tmp_path / "state"
+    target_path = tmp_path / "target"
+    for path in (state, target_path):
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    original_config = config.read_text()
+    target = _git_repo(target_path)
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
     )
+    assert injected.exit_code == 0, injected.output
+    live = target / "EXTRA.md"
+    live.write_bytes(b"prior\n")
+    live.chmod(0o600)
+    source = config.parent / "project" / "demo" / "EXTRA.md"
+    assert source.resolve().is_relative_to(tmp_path.resolve())
+    source.write_bytes(b"profile\n")
+    source.chmod(0o644)
+    config.write_text(
+        original_config + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+    addition = resolve_sync_plan(plan_sync(target), auto=AutoResolution.USE_PROFILE)
+    assert addition is not None
+    assert apply_sync(addition)
+    assert live.read_bytes() == b"profile\n"
+    assert stat.S_IMODE(live.stat().st_mode) == 0o644
+    if local_edit:
+        live.write_bytes(b"local edit\n")
+
+    config.write_text(original_config)
+    removal = plan_sync(target)
+    removed = next(
+        item for item in removal.files if item.relative_destination == Path("EXTRA.md")
+    )
+    assert removed.desired_upstream == b"prior\n"
+    assert removed.desired_mode == 0o600
+    assert removed.result_mode == 0o600
+    assert bool(removal.conflicts) is local_edit
+    synced = CliRunner().invoke(
+        app,
+        [
+            "project",
+            "sync",
+            str(target),
+            *(["--auto=keep-live"] if local_edit else []),
+            "--yes",
+        ],
+    )
+    assert synced.exit_code == 0, synced.output
+    assert live.read_bytes() == (b"local edit\n" if local_edit else b"prior\n")
+    assert stat.S_IMODE(live.stat().st_mode) == 0o600
 
 
 def test_sync_preserves_overlay_visibility_and_reconciles_hidden_claims(
@@ -720,6 +802,9 @@ def test_sync_preserves_overlay_visibility_and_reconciles_hidden_claims(
     )
     assert extra.stored is not None
     assert extra.stored.visibility.value == "tracked"
+    assert extra.addition is not None
+    assert extra.addition.action is ProjectFileAction.OVERLAY
+    assert extra.addition.applied_payload is None
     rendered = json.loads(next(iter(render_sync_manifests(update_plan).values())))
     rendered_extra = next(
         entry for entry in rendered["files"] if entry["destination"] == "EXTRA.md"
@@ -738,15 +823,28 @@ def test_sync_preserves_overlay_visibility_and_reconciles_hidden_claims(
     assert "/EXTRA.md filter=setforge-project" not in attributes.read_text()
 
 
+@pytest.mark.parametrize("had_previous", [False, True])
 def test_plan_sync_legacy_membership_removal_preserves_explicit_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, had_previous: bool
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
     target = _git_repo(tmp_path / "target")
+    if had_previous:
+        (target / "AGENTS.md").write_text("prior\n")
+        (target / "AGENTS.md").chmod(0o600)
     injected = CliRunner().invoke(
         app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto=use-profile",
+            "--yes",
+        ],
     )
     assert injected.exit_code == 0, injected.exception
     record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
@@ -769,12 +867,32 @@ def test_plan_sync_legacy_membership_removal_preserves_explicit_conflict(
     assert removed.kind.value == "remove"
     assert removed.live == b"managed\n"
     assert removed.live_mode == 0o644
-    assert removed.desired_upstream is ABSENT
+    assert removed.desired_upstream == (b"prior\n" if had_previous else ABSENT)
+    assert removed.desired_mode == (0o600 if had_previous else None)
+    assert removed.result_mode == (0o600 if had_previous else None)
+    assert not removed.mode_conflict
     assert removed.legacy is True
     assert plan.conflicts == 1
+    kept = resolve_sync_plan(plan, auto=AutoResolution.KEEP_LIVE)
+    assert kept is not None
+    assert kept.files[0].result.merged() == b"managed\n"
     adopted = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
     assert adopted is not None
-    assert adopted.files[0].result.absent
+    if had_previous:
+        assert adopted.files[0].result.merged() == b"prior\n"
+        assert adopted.files[0].result_mode == 0o600
+    else:
+        assert adopted.files[0].result.absent
+        assert adopted.files[0].result_mode is None
+    synced = CliRunner().invoke(
+        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
+    )
+    assert synced.exit_code == 0, synced.output
+    if had_previous:
+        assert (target / "AGENTS.md").read_bytes() == b"prior\n"
+        assert stat.S_IMODE((target / "AGENTS.md").stat().st_mode) == 0o600
+    else:
+        assert not (target / "AGENTS.md").exists()
 
 
 def test_sync_membership_add_collision_requires_resolution(
@@ -792,7 +910,7 @@ def test_sync_membership_add_collision_requires_resolution(
     (target / "EXTRA.md").write_text("local\n")
     (config.parent / "project" / "demo" / "EXTRA.md").write_text("profile\n")
     (target / "EXTRA.md").chmod(0o644)
-    (config.parent / "project" / "demo" / "EXTRA.md").chmod(0o644)
+    (config.parent / "project" / "demo" / "EXTRA.md").chmod(0o755)
     config.write_text(
         original_config + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
     )
@@ -810,18 +928,32 @@ def test_sync_membership_add_collision_requires_resolution(
     assert added.live == b"local\n"
     assert added.live_mode == 0o644
     assert added.desired_upstream == b"profile\n"
-    assert added.desired_mode == 0o644
+    assert added.desired_mode == 0o755
     assert added.result_mode == 0o644
-    assert not added.legacy
+    assert added.mode_conflict
+    assert added.legacy is False
     assert added.addition is not None
     assert not added.result.clean
     with pytest.raises(SetforgeError, match="unresolved conflicts"):
         resolve_sync_plan(plan)
     assert (target / "EXTRA.md").read_bytes() == before
+    kept = resolve_sync_plan(plan, auto=AutoResolution.KEEP_LIVE)
+    assert kept is not None
+    kept_extra = next(
+        item for item in kept.files if item.relative_destination == Path("EXTRA.md")
+    )
+    assert kept_extra.result.merged() == b"local\n"
+    assert kept_extra.result_mode == 0o644
     adopted = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
     assert adopted is not None
+    adopted_extra = next(
+        item for item in adopted.files if item.relative_destination == Path("EXTRA.md")
+    )
+    assert adopted_extra.result.merged() == b"profile\n"
+    assert adopted_extra.result_mode == 0o755
     assert apply_sync(adopted)
     assert (target / "EXTRA.md").read_text() == "profile\n"
+    assert stat.S_IMODE((target / "EXTRA.md").stat().st_mode) == 0o755
 
 
 def test_sync_membership_add_rejects_mismatched_released_tombstone(
@@ -1031,6 +1163,15 @@ def test_apply_sync_locks_and_updates_multiple_config_repositories(
     )
     assert checkpoint.restore_state is False
     assert checkpoint.restore_transitions is False
+    assert (target / "ALPHA.md").read_text() == "alpha-updated\n"
+    assert (target / "BETA.md").read_text() == "beta-updated\n"
+
+    beta.write_text(beta.read_text().replace("dst: BETA.md", "dst: ALPHA.md"))
+    with pytest.raises(SetforgeError) as collision:
+        plan_sync(target)
+    assert str(collision.value) == (
+        "project profiles 'alpha' and 'beta' both claim ALPHA.md"
+    )
     assert (target / "ALPHA.md").read_text() == "alpha-updated\n"
     assert (target / "BETA.md").read_text() == "beta-updated\n"
 

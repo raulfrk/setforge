@@ -10,6 +10,7 @@ the bottom for the side effect.
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 from collections.abc import Mapping
@@ -110,7 +111,7 @@ from setforge.file_ownership import (
 )
 from setforge.generated import resolve_generated
 from setforge.lockfile import LockFile, lock_path, parse_lock
-from setforge.locking import MutationLockGuards, mutation_locks
+from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.ownership import (
     OwnershipError,
     OwnershipStore,
@@ -646,7 +647,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     if (
         planned_entries != tracked_entries
         or tuple(_iter_all_tracked_files(ctx)) != tracked_entries
-        or compared_names != expected_names
+        or sorted(compared_names) != sorted(expected_names)
     ):
         raise SetforgeError("tracked file inventory changed during planning; retry")
     if _snapshot_inputs(source_paths) != source_bytes:
@@ -1160,6 +1161,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             adapters=(),
         )
         codex_resources_mod.assert_projects_trusted(plan.codex_trusted_projects)
+        mutation_guards.verify_targets()
         deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
             profile,
             plan.deploys,
@@ -1170,19 +1172,20 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             mutation_guards=mutation_guards,
         )
         for tree in plan.trees:
-            guard = next(
+            guard = max(
                 (
                     item
                     for item in mutation_guards.targets
-                    if item.target.absolute() == _tree_lock_target(tree.destination)
+                    if tree.destination.absolute().is_relative_to(
+                        item.target.absolute()
+                    )
                 ),
-                None,
+                key=lambda item: len(item.target.parts),
+                default=None,
             )
             if guard is None:
                 raise SetforgeError("managed tree target lock is missing")
             guard.verify_expected()
-            if guard.target_fd is None:
-                guard.mkdir()
             anchor_fd = guard.target_fd
             if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
                 raise SetforgeError("managed tree target lock has no descriptor")
@@ -1321,6 +1324,35 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             for kind in activators
         )
     )
+    if not any(
+        outcome.target_kind is CapabilityTargetKind.FILE
+        and outcome.status is CapabilityStatus.ACTIVE
+        for outcome in outcomes
+    ):
+        initially_absent = {
+            snapshot.path
+            for snapshot in journal.paths
+            if snapshot.kind is operations.SnapshotKind.ABSENT
+        }
+        prepared = tuple(
+            guard
+            for guard in mutation_guards.targets
+            if guard.target.absolute() in initially_absent
+        )
+        if prepared:
+            journal = operations.begin_checkpoint(
+                journal,
+                name="unused-target-roots",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery="restore initially absent target roots",
+                paths=tuple(guard.target for guard in prepared),
+                restore_state=False,
+                restore_transitions=False,
+                adapters=(),
+            )
+            for guard in prepared:
+                guard.rmdir_if_empty()
+            journal = operations.finish_checkpoint(journal)
     if plan.provisioning.bundle_graphs:
         typer.echo(
             "capabilities: "
@@ -2466,6 +2498,13 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 )
             )
         )
+        missing_roots = tuple(
+            guard.target for guard in mutation_guards.targets if guard.target_fd is None
+        )
+        alias_paths, install_parent_guards = operations.capture_install_parent_guards(
+            journal_paths, missing_roots
+        )
+        journal_paths = tuple(dict.fromkeys((*journal_paths, *alias_paths)))
         tracked_checkpoint_paths = tuple(
             dict.fromkeys(
                 (
@@ -2517,6 +2556,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             resources_lock=True,
             command_line=tuple(redact_argv(sys.argv[1:])),
             paths=journal_paths,
+            path_guards=install_parent_guards,
             state_snapshots=state_pre,
             adapters=adapter_snapshots,
         )
@@ -2525,6 +2565,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             secret_plan=secret_plan,
             bootstrap=plan.bootstrap,
             checkpoint_paths=secrets_checkpoint_paths,
+            target_guards=mutation_guards.targets,
+            codex_roots=frozenset(
+                item.destination.parent.absolute() for item in plan.codex_configs
+            ),
         )
         journal, package_transfers = _publish_adoptions_checkpoint(plan, journal)
         journal, file_transfers = _publish_file_adoptions_checkpoint(plan, journal)
@@ -2888,8 +2932,36 @@ def _apply_secrets_and_bootstrap(
     secret_plan: SecretPlan,
     bootstrap: tuple[Path, ...],
     checkpoint_paths: tuple[Path, ...],
+    target_guards: tuple[TargetLockGuard, ...],
+    codex_roots: frozenset[Path],
 ) -> operations.OperationJournal:
-    """Apply the first reversible phase without claiming untouched paths."""
+    """Prepare guarded roots and apply the first reversible phase."""
+    missing_guards = tuple(guard for guard in target_guards if guard.target_fd is None)
+    if {guard.target.absolute() for guard in missing_guards}.intersection(
+        path.absolute() for path in bootstrap
+    ):
+        raise SetforgeError("bootstrap file conflicts with a managed directory root")
+    if missing_guards:
+        preparing = operations.begin_checkpoint(
+            journal,
+            name="prepare-target-roots",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore initially absent target roots",
+            paths=tuple(guard.target for guard in missing_guards),
+            restore_state=False,
+            restore_transitions=False,
+            adapters=(),
+        )
+        roots: list[tuple[Path, int, int, int]] = []
+        for guard in missing_guards:
+            guard.verify_expected()
+            guard.mkdir(mode=0o700 if guard.target.absolute() in codex_roots else 0o777)
+            assert guard.target_fd is not None
+            info = os.fstat(guard.target_fd)
+            roots.append((guard.target, info.st_dev, info.st_ino, info.st_mode))
+        journal = operations.finish_checkpoint(
+            operations.bind_install_roots(preparing, tuple(roots))
+        )
     if not checkpoint_paths:
         _apply_secret_plan(secret_plan)
         deploy.bootstrap_local(bootstrap)

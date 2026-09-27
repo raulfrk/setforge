@@ -135,11 +135,12 @@ def test_detect_orphans_empty_when_transitions_missing(tmp_path: Path) -> None:
     )
 
 
-def test_detect_orphans_ignores_corrupt_meta(tmp_path: Path) -> None:
+@pytest.mark.parametrize("payload", [b"{not json", b"\xff"], ids=["json", "utf8"])
+def test_detect_orphans_ignores_corrupt_meta(tmp_path: Path, payload: bytes) -> None:
     transitions_dir = tmp_path / "transitions"
     target = transitions_dir / "20260518T120000000000Z-install-p"
     target.mkdir(parents=True)
-    (target / "meta.json").write_text("{not json", encoding="utf-8")
+    (target / "meta.json").write_bytes(payload)
     # Second, valid record with one orphan.
     live_orphan = tmp_path / "live" / "orphan.txt"
     live_orphan.parent.mkdir(parents=True, exist_ok=True)
@@ -1692,3 +1693,52 @@ def test_compare_renders_orphans_block(
     plain = _strip_ansi_and_newlines(result.stdout)
     assert "Orphans (1):" in plain
     assert live_orphan.name in plain
+
+
+def test_compare_and_cleanup_skip_unreadable_history(
+    runner: CliRunner, tmp_path: Path, isolated_state_dir: Path
+) -> None:
+    cfg = _write_minimal_yaml(tmp_path)
+    source_path = tmp_path / "tracked/kept.txt"
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"active tracked bytes\n")
+    live = tmp_path / "live"
+    live.mkdir()
+    active = live / "kept.txt"
+    active.write_bytes(source_path.read_bytes())
+    active.chmod(0o640)
+    orphan = live / "orphan.txt"
+    orphan.write_bytes(b"retired deployment\n")
+    neighbor = live / "unrecorded.txt"
+    neighbor.write_bytes(b"preserve unrecorded bytes\n")
+    preserved = {
+        path: (path.read_bytes(), path.stat().st_mode, path.stat().st_ino)
+        for path in (active, neighbor)
+    }
+    _write_meta_record(
+        isolated_state_dir / "transitions", "valid-history", [str(active), str(orphan)]
+    )
+    bad = isolated_state_dir / "transitions/corrupt-history/meta.json"
+    bad.parent.mkdir()
+    bad.write_bytes(b"\xff")
+
+    compared = runner.invoke(
+        app,
+        ["--format=json", "compare", "--profile=p", f"--config={cfg}"],
+    )
+    assert compared.exit_code == 0, compared.output
+    assert json.loads(compared.stdout)["data"]["orphans"] == [str(orphan)]
+
+    cleaned = runner.invoke(
+        app,
+        ["cleanup-orphans", "--profile=p", f"--config={cfg}", "--apply", "--yes"],
+    )
+    assert cleaned.exit_code == 0, cleaned.output
+    assert not orphan.exists()
+    assert {
+        path: (path.read_bytes(), path.stat().st_mode, path.stat().st_ino)
+        for path in (active, neighbor)
+    } == preserved
+    assert set(live.iterdir()) == {active, neighbor}
+    assert source_path.read_bytes() == b"active tracked bytes\n"
+    assert bad.read_bytes() == b"\xff"

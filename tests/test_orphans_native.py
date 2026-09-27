@@ -12,7 +12,7 @@ from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import compare as compare_mod
-from setforge import orphan_scan, transitions
+from setforge import orphan_scan, source, transitions
 from setforge.cli import app
 from setforge.compare import _touched_paths_from_meta
 from setforge.config import Config, Profile, TrackedFile, load_config, resolve_profile
@@ -277,6 +277,101 @@ def test_cleanup_protects_native_config_from_another_profile(
     assert applied.exit_code == 0, applied.output
     assert not stray.exists()
     assert _path_state(paths) == before
+
+
+def test_compare_accepts_selected_local_codex_removal_absent_from_sibling(
+    native_profile: Path,
+) -> None:
+    yaml = YAML()
+    document = yaml.load(native_profile.read_text())
+    document["profiles"]["files"] = {"tracked_files": ["retired"]}
+    yaml.dump(document, native_profile)
+    source.LOCAL_CONFIG_PATH.write_text("codex:\n  config:\n    remove: [model]\n")
+
+    compared = CliRunner().invoke(
+        app,
+        ["--format=json", "compare", "--profile=p", f"--config={native_profile}"],
+    )
+
+    assert compared.exit_code == 0, compared.output
+    assert json.loads(compared.stdout)["data"]["orphans"] == []
+
+
+def test_compare_protects_sibling_project_mcp_without_selected_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    (repo / "tracked/anchor.txt").write_text("anchor\n")
+    project = tmp_path / "project"
+    native = project / ".codex"
+    native.mkdir(parents=True)
+    (native / "anchor.txt").write_text("anchor\n")
+    project_config = native / "config.toml"
+    project_config.write_text('[mcp_servers.api]\nurl = "https://mcp.example.test"\n')
+    codex_home = Path.home() / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        f'[projects."{project}"]\ntrust_level = "trusted"\n'
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    source.LOCAL_CONFIG_PATH.write_text(
+        f"codex:\n  project_paths:\n    app: {project}\n"
+    )
+    config = repo / "setforge.yaml"
+    document = {
+        "schema_version": "6.5",
+        "minimum_version": "6.5",
+        "tracked_files": {
+            "anchor": {
+                "src": "anchor.txt",
+                "dst": str(native / "anchor.txt"),
+            }
+        },
+        "codex": {
+            "mcp_servers": {
+                "api": {
+                    "transport": "http",
+                    "scope": "project",
+                    "project": "app",
+                    "url": "https://mcp.example.test",
+                    "bearer_token_env_var": "api_token",
+                }
+            }
+        },
+        "profiles": {
+            "selected": {"tracked_files": ["anchor"]},
+            "other": {"codex": {"mcp_servers": ["api"]}},
+        },
+    }
+    YAML().dump(document, config)
+    _write_meta_record(
+        transitions.transitions_root(), "other-profile", [str(project_config)]
+    )
+
+    runner = CliRunner()
+    args = ["--format=json", "compare", "--profile=selected", f"--config={config}"]
+    compared = runner.invoke(app, args)
+    assert compared.exit_code == 0, compared.output
+    assert json.loads(compared.stdout)["data"]["orphans"] == []
+    cleanup_args = ["cleanup-orphans", "--profile=selected", f"--config={config}"]
+    protected = runner.invoke(app, [*cleanup_args, "--apply", "--yes"])
+    assert protected.exit_code == 0, protected.output
+    assert project_config.read_text() == (
+        '[mcp_servers.api]\nurl = "https://mcp.example.test"\n'
+    )
+
+    retired_document = YAML().load(config.read_text())
+    retired_document["profiles"]["other"] = {}
+    YAML().dump(retired_document, config)
+    retired = runner.invoke(app, args)
+    assert retired.exit_code == 0, retired.output
+    assert json.loads(retired.stdout)["data"]["orphans"] == [str(project_config)]
+    removed = runner.invoke(app, [*cleanup_args, "--apply", "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert not project_config.exists()
+    assert (native / "anchor.txt").read_text() == "anchor\n"
 
 
 @pytest.mark.parametrize("profile", ["p", "files", "child"])

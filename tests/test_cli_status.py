@@ -97,6 +97,91 @@ def _invoke_status(
     )
 
 
+@pytest.mark.parametrize("output_format", ["human", "json"])
+@pytest.mark.parametrize("other_source", ["absent", "environment", "flag"])
+def test_status_explicit_config_owns_repository_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output_format: str,
+    other_source: str,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    local_config = home / ".config" / "setforge" / "local.yaml"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    monkeypatch.delenv("SETFORGE_SOURCE", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local_config)
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_config)
+    monkeypatch.setattr(status_mod, "LOCAL_CONFIG_PATH", local_config)
+    monkeypatch.setattr(
+        status_mod, "probe_environment", lambda **_kw: SimpleNamespace(capabilities=())
+    )
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config = _write_empty_config(selected)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _write_empty_config(elsewhere)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    from setforge import transitions
+    from setforge.ownership import OwnershipStore
+
+    for runtime_path in (Path.home(), transitions.state_root(), OwnershipStore().root):
+        assert runtime_path.resolve().is_relative_to(tmp_path.resolve())
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(selected),
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                f"core.hooksPath={tmp_path / 'hooks'}",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                *args,
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("add", "setforge.yaml")
+    git("commit", "-qm", "fixture")
+    expected_head = git("rev-parse", "--short", "HEAD")
+    args = [f"--format={output_format}"]
+    if other_source == "environment":
+        monkeypatch.setenv("SETFORGE_SOURCE", str(elsewhere))
+    elif other_source == "flag":
+        args.extend(["--source", str(elsewhere)])
+
+    result = CliRunner().invoke(
+        app, [*args, "status", "--config", str(config), "--profile", "vm-headless"]
+    )
+
+    assert result.exit_code == 0, result.output + str(result.exception)
+    if output_format == "json":
+        report = json.loads(result.stdout)["data"]["config_repo"]
+        assert report["source_dir"] == str(selected.resolve())
+        assert report["head_short"] == expected_head
+    else:
+        assert (
+            f"config-repo:    {selected.resolve()} @ {expected_head}" in result.stdout
+        )
+
+
 def _stub_transition(
     state_root: Path,
     *,

@@ -430,9 +430,17 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
     )
     missing = []
     for writer in writers:
+        writer_source = inspect.getsource(writer)
+        if writer is snapshot.snapshot_restore:
+            assert any(
+                isinstance(node, ast.Call)
+                and ast.unparse(node.func) == "snap_mod.restore_locks"
+                for node in ast.walk(ast.parse(writer_source))
+            )
+            writer_source = inspect.getsource(snapshot.snap_mod.restore_locks)
         calls = {
             node.func.id
-            for node in ast.walk(ast.parse(inspect.getsource(writer)))
+            for node in ast.walk(ast.parse(writer_source))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
         if "mutation_locks" not in calls:

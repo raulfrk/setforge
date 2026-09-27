@@ -44,7 +44,7 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
     resolve_and_expand,
-    resolve_effective_profile,
+    resolve_profile,
     resolve_symlink_target,
 )
 from setforge.errors import BaseStoreError, ConfigError
@@ -53,7 +53,11 @@ from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
-from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.source import (
+    HostLocalSection,
+    HostLocalSectionName,
+    load_local_codex_overlay,
+)
 from setforge.tree_management import plan_tree, read_inventory, scan_tree
 
 if TYPE_CHECKING:
@@ -452,7 +456,7 @@ def _touched_paths_from_meta(transitions_dir: Path) -> set[Path]:
     for meta_path in transitions_dir.glob("*/meta.json"):
         try:
             payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(payload, dict):
             continue
@@ -817,16 +821,25 @@ def compare_profile(
                 config, resolved, repo_root, profile=profile_name
             )
         )
+        project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
         for other_profile in config.profiles:
             if other_profile == profile_name:
                 continue
             other_config = config.model_copy(deep=True)
-            other_resolved = resolve_effective_profile(
-                other_config, other_profile, repo_root
-            ).resolved
+            other_config._codex_project_paths.update(
+                {
+                    name: path.expanduser().resolve(strict=False)
+                    for name, path in project_paths.items()
+                }
+            )
+            other_resolved = resolve_profile(other_config, other_profile)
             protected_paths.update(
                 codex_lifecycle.config_destinations(
-                    other_config, other_resolved, repo_root, profile=other_profile
+                    other_config,
+                    other_resolved,
+                    repo_root,
+                    profile=other_profile,
+                    destination_only=True,
                 )
             )
         detection = detect_orphans(

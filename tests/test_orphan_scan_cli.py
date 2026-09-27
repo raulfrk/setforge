@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -65,6 +67,169 @@ def test_scan_dry_run_surfaces_unrecorded_without_mutation(tmp_path: Path) -> No
     assert "REVIEW" in result.output
     assert str(candidate) in result.output.replace("\n", "")
     assert candidate.read_bytes() == b"\x00candidate"
+
+
+def test_scan_excludes_managed_tree_nested_in_config_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "repo"
+    source = repo / "tracked" / "tree"
+    inside = repo / "managed" / "tree"
+    outside = home / ".managed" / "tree"
+    state = home / "state"
+    for path in (home, repo, source, inside, outside, state):
+        assert path.absolute().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    for directory in (source, inside, outside):
+        directory.mkdir(parents=True)
+        (directory / "kept.txt").write_text("tracked", encoding="utf-8")
+    inside_candidate = inside / "inside-candidate"
+    outside_candidate = outside / "outside-candidate"
+    inside_candidate.write_text("keep inside", encoding="utf-8")
+    outside_candidate.write_text("review outside", encoding="utf-8")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.2'\n"
+        "minimum_version: '6.2'\n"
+        "tracked_files:\n"
+        "  inside:\n"
+        "    src: tree\n"
+        f"    dst: {inside}\n"
+        "    tree: {}\n"
+        "  outside:\n"
+        "    src: tree\n"
+        f"    dst: {outside}\n"
+        "    tree: {}\n"
+        "profiles:\n"
+        "  p:\n"
+        "    tracked_files: [inside, outside]\n",
+        encoding="utf-8",
+    )
+    original_scandir = os.scandir
+
+    def deny_control_tree(
+        path: str | os.PathLike[str] | int,
+    ) -> Iterator[os.DirEntry[str]]:
+        if not isinstance(path, int) and Path(path) == inside:
+            raise PermissionError("config repo destination must not be scanned")
+        return original_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", deny_control_tree)
+
+    result = CliRunner().invoke(
+        app,
+        ["cleanup-orphans", "--scan", "--profile=p", f"--config={config}"],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", "")
+    assert str(outside_candidate) in output
+    assert str(inside_candidate) not in output
+    assert inside_candidate.read_text(encoding="utf-8") == "keep inside"
+    assert outside_candidate.read_text(encoding="utf-8") == "review outside"
+
+
+def test_scan_keeps_tracked_symlink_target_and_scans_its_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "repo"
+    source = repo / "tracked" / "file.txt"
+    link = home / ".links" / "file-link"
+    target = home / ".targets" / "file.txt"
+    candidate = target.parent / "old.txt"
+    state = home / "state"
+    for path in (home, repo, source, link, target, candidate, state):
+        assert path.absolute().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    source.parent.mkdir(parents=True)
+    link.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    source.write_text("tracked", encoding="utf-8")
+    target.write_text("tracked", encoding="utf-8")
+    candidate.write_text("review", encoding="utf-8")
+    link.symlink_to(target)
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.0'\n"
+        "tracked_files:\n"
+        "  linked:\n"
+        "    src: file.txt\n"
+        f"    dst: {link}\n"
+        f"    symlink: {target}\n"
+        "profiles:\n"
+        "  p:\n"
+        "    tracked_files: [linked]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["cleanup-orphans", "--scan", "--profile=p", f"--config={config}"],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", "")
+    assert str(candidate) in output
+    assert str(target) not in output
+    assert str(link) not in output
+    assert candidate.read_text(encoding="utf-8") == "review"
+    assert target.read_text(encoding="utf-8") == "tracked"
+
+
+def test_scan_reports_first_invalid_root_in_path_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "repo"
+    source = repo / "tracked" / "tree"
+    first = home / ".ordered" / "a-b"
+    second = home / ".ordered" / "a" / "b"
+    first_target = home / "target" / "first"
+    second_target = home / "target" / "second"
+    state = home / "state"
+    for path in (home, repo, source, first, second, first_target, second_target, state):
+        assert path.absolute().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    source.mkdir(parents=True)
+    (source / "kept.txt").write_text("tracked", encoding="utf-8")
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first_target.mkdir(parents=True)
+    second_target.mkdir()
+    first.symlink_to(first_target, target_is_directory=True)
+    second.symlink_to(second_target, target_is_directory=True)
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.2'\n"
+        "minimum_version: '6.2'\n"
+        "tracked_files:\n"
+        "  first:\n"
+        "    src: tree\n"
+        f"    dst: {first}\n"
+        "    tree: {}\n"
+        "  second:\n"
+        "    src: tree\n"
+        f"    dst: {second}\n"
+        "    tree: {}\n"
+        "profiles:\n"
+        "  p:\n"
+        "    tracked_files: [first, second]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["cleanup-orphans", "--scan", "--profile=p", f"--config={config}"],
+    )
+
+    assert isinstance(result.exception, SetforgeError)
+    assert str(first) in str(result.exception)
+    assert str(second) not in str(result.exception)
 
 
 def test_scan_apply_requires_tty(tmp_path: Path) -> None:

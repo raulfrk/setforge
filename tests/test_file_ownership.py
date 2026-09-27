@@ -11,10 +11,12 @@ import pytest
 from setforge.errors import OwnershipError
 from setforge.file_ownership import (
     FileAction,
+    active_file_claims,
     decide_file,
     file_resource_id,
     observe_file,
     publish_file_claim_locked,
+    refuse_active_file_claims,
 )
 from setforge.ownership import (
     Authority,
@@ -74,6 +76,51 @@ def test_file_identity_refuses_root_destination(tmp_path: Path) -> None:
 
     with pytest.raises(OwnershipError, match="below a target root"):
         file_resource_id(Path("/settings.ini"))
+
+
+def test_active_file_claims_ignore_other_providers_at_same_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.locking import install_resources_lock
+
+    state = tmp_path / "state"
+    path = tmp_path / "managed" / "settings.ini"
+    assert state.absolute().is_relative_to(tmp_path.resolve())
+    assert path.absolute().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    path.parent.mkdir()
+    path.write_text("managed", encoding="utf-8")
+    tracked = file_resource_id(path)
+    project = replace(tracked, provider="project-profile")
+    store = OwnershipStore()
+    owner = uuid.uuid4()
+    with install_resources_lock():
+        store.claim_locked(
+            resource_id=project,
+            owner_id=owner,
+            declaration_refs=("project_profile.p",),
+            provenance=(ProvenanceFact(ProvenanceFactKind.ORIGIN, "project-profile"),),
+            locator=str(path),
+            fingerprint=observe_file(path).fingerprint,
+            expected_generation=None,
+        )
+
+    assert active_file_claims((path,)) == ()
+    refuse_active_file_claims((path,))
+
+    with install_resources_lock():
+        tracked_claim = store.claim_locked(
+            resource_id=tracked,
+            owner_id=owner,
+            declaration_refs=("tracked_files.settings",),
+            provenance=(ProvenanceFact(ProvenanceFactKind.ORIGIN, "tracked"),),
+            locator=str(path),
+            fingerprint=observe_file(path).fingerprint,
+            expected_generation=None,
+        )
+    assert active_file_claims((path,)) == ((path, tracked_claim),)
+    with pytest.raises(OwnershipError, match="active tracked-file"):
+        refuse_active_file_claims((path,))
 
 
 def test_observation_binds_bytes_mode_and_symlink_target(tmp_path: Path) -> None:

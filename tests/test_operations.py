@@ -7,7 +7,7 @@ import os
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from pathlib import Path
 
@@ -416,6 +416,49 @@ def test_snapshot_restore_recovery_refuses_replaced_parent_directory(
     assert (original_parent / "file").read_text(encoding="utf-8") == (
         "restored snapshot"
     )
+    assert operations.active("p") is not None
+
+
+def test_recovery_refuses_unscoped_parent_removed_after_preflight(
+    tmp_path: Path,
+    operation_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert operation_state.resolve().is_relative_to(tmp_path.resolve())
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.prepare(
+        command="sync",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("sync", "--profile=p"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    original = tmp_path / "original-live"
+    validate = operations._validate_path_guards
+
+    def remove_after_validation(candidate: operations.OperationJournal) -> None:
+        validate(candidate)
+        parent.rename(original)
+
+    monkeypatch.setattr(operations, "_validate_path_guards", remove_after_validation)
+
+    with pytest.raises(SetforgeError, match="parent changed"):
+        operations.recover_files(journal)
+
+    assert not parent.exists()
+    assert (original / "file").read_text(encoding="utf-8") == "after"
     assert operations.active("p") is not None
 
 
@@ -921,6 +964,115 @@ def test_recovery_removes_missing_parent_directories_created_by_writer(
     operations.recover_files(journal)
 
     assert not (tmp_path / "new-parent").exists()
+
+
+def test_noninstall_recovery_accepts_journaled_created_parent(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    root = tmp_path / "created-root"
+    child = root / "file"
+    assert operation_state.resolve().is_relative_to(tmp_path.resolve())
+    assert child.resolve().is_relative_to(tmp_path.resolve())
+    guards: list[operations.PathGuard] = []
+    for ancestor in child.parents:
+        if ancestor == Path("/"):
+            continue
+        try:
+            info = ancestor.stat()
+        except FileNotFoundError:
+            guards.append(operations.PathGuard(ancestor, None, None, None))
+        else:
+            guards.append(
+                operations.PathGuard(ancestor, info.st_dev, info.st_ino, info.st_mode)
+            )
+    journal = operations.prepare(
+        command="sync",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("sync", "--profile=p"),
+        paths=(child,),
+        path_guards=tuple(guards),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    root.mkdir()
+    child.write_text("created", encoding="utf-8")
+
+    recovered = operations.recover_files(journal)
+
+    assert not root.exists()
+    assert recovered.phase is operations.OperationPhase.RECOVERING
+    operations.complete(recovered)
+    assert operations.active("p") is None
+
+
+@pytest.mark.parametrize("inspection", ["iterdir", "rglob"])
+def test_unbound_install_root_normalizes_inspection_failure(
+    tmp_path: Path,
+    operation_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inspection: str,
+) -> None:
+    root = tmp_path / "prepared-root"
+    assert operation_state.resolve().is_relative_to(tmp_path.resolve())
+    assert root.resolve().is_relative_to(tmp_path.resolve())
+    guards = [operations.PathGuard(root, None, None, None)]
+    for ancestor in root.parents:
+        if ancestor == Path("/"):
+            continue
+        info = ancestor.stat()
+        guards.append(
+            operations.PathGuard(ancestor, info.st_dev, info.st_ino, info.st_mode)
+        )
+    journal = operations.prepare(
+        command="install",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("install", "--profile=p"),
+        paths=(root,),
+        path_guards=tuple(guards),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="prepare-target-roots",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore initially absent target roots",
+        paths=(root,),
+    )
+    root.mkdir()
+    if inspection == "iterdir":
+        original_iterdir = Path.iterdir
+
+        def fail_iterdir(path: Path) -> Iterator[Path]:
+            if path == root:
+                raise PermissionError("injected root listing failure")
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+    else:
+        original_rglob = Path.rglob
+
+        def fail_rglob(path: Path, pattern: str) -> Iterator[Path]:
+            if path == root:
+                raise PermissionError("injected descendant listing failure")
+            return original_rglob(path, pattern)
+
+        monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+    with pytest.raises(SetforgeError) as failure:
+        operations.recover_files(journal)
+
+    assert str(failure.value) == (
+        f"journaled absent parent changed before recovery: {root}"
+    )
+    assert root.is_dir()
+    assert operations.active("p") is not None
 
 
 def test_snapshot_refuses_atomic_replacement_race(

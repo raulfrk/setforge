@@ -18,7 +18,7 @@ import os
 import shutil
 import stat
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
@@ -560,10 +560,12 @@ def test_resolve_snapshot_matches_by_id(fake_home: Path) -> None:
     assert resolved.snapshot_id == meta.snapshot_id
 
 
-def test_resolve_snapshot_scopes_same_label_to_requested_profile(
+def test_snapshot_label_restore_scopes_same_label_to_requested_profile(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(fake_home / "state"))
+    assert snap_mod.snapshots_root().resolve().is_relative_to(fake_home.resolve())
     first_ctx, _, first_dst = _build_ctx(fake_home, profile="first")
     second_ctx, _, second_dst = _build_ctx(
         fake_home,
@@ -587,6 +589,16 @@ def test_resolve_snapshot_scopes_same_label_to_requested_profile(
     resolved = snap_mod.resolve_snapshot("shared", profile="first")
 
     assert resolved.snapshot_id == first.snapshot_id
+    first_dst.write_text("first drift\n")
+    second_dst.write_text("second drift\n")
+
+    restored = snap_mod.restore_snapshot(
+        "shared", pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(first_ctx)
+    )
+
+    assert restored.snapshot_id == first.snapshot_id
+    assert first_dst.read_text() == "first\n"
+    assert second_dst.read_text() == "second drift\n"
 
 
 def test_load_meta_rejects_noncanonical_destination(fake_home: Path) -> None:
@@ -901,9 +913,12 @@ def test_restore_plan_refuses_replaced_destination_directory_before_write(
     dst.parent.mkdir()
     (dst.parent / dst.name).write_text("unrelated replacement\n")
 
-    with pytest.raises(SetforgeError, match="topology changed"):
+    with pytest.raises(SetforgeError) as exc:
         snap_mod._apply_restore_plan(plan)
 
+    assert str(exc.value) == (
+        "snapshot restore: destination parent topology changed after planning; retry"
+    )
     assert (dst.parent / dst.name).read_text() == "unrelated replacement\n"
     assert (original_parent / dst.name).read_text() == "pre-restore body\n"
 
@@ -1106,8 +1121,86 @@ def test_freeze_file_refuses_directory(fake_home: Path) -> None:
 
 
 def test_restore_plan_requires_complete_effective_context(fake_home: Path) -> None:
-    with pytest.raises(SetforgeError, match="incomplete effective-profile context"):
+    with pytest.raises(SetforgeError) as exc:
         snap_mod._plan_restore_snapshot("missing", profile="test")
+    assert str(exc.value) == "snapshot restore: incomplete effective-profile context"
+
+
+def test_restore_refuses_changed_snapshot_metadata_before_write(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(fake_home / "state"))
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("live body\n", encoding="utf-8")
+    meta = _create(ctx, "changed-meta")
+    snapshot_dir = snap_mod.snapshots_root() / meta.snapshot_id
+    assert snapshot_dir.resolve().is_relative_to(fake_home.resolve())
+    monkeypatch.setattr(snap_mod, "resolve_snapshot", lambda *_a, **_kw: meta)
+    monkeypatch.setattr(
+        snap_mod, "_load_meta", lambda _path: replace(meta, label="changed")
+    )
+
+    with pytest.raises(SetforgeError) as exc:
+        snap_mod.restore_snapshot(
+            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
+        )
+
+    assert str(exc.value) == (
+        f"snapshot {meta.snapshot_id}: metadata changed before planning; retry"
+    )
+    assert dst.read_text(encoding="utf-8") == "live body\n"
+
+
+@pytest.mark.parametrize(
+    ("failure", "diagnostic"),
+    [
+        ("before_error", "directory changed before planning; retry"),
+        ("after_error", "directory changed while planning; retry"),
+        ("identity_change", "directory changed while planning; retry"),
+    ],
+)
+def test_restore_refuses_changed_snapshot_directory_before_write(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    diagnostic: str,
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(fake_home / "state"))
+    ctx, _, dst = _build_ctx(fake_home)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("live body\n", encoding="utf-8")
+    meta = _create(ctx, "changed-directory")
+    snapshot_dir = snap_mod.snapshots_root() / meta.snapshot_id
+    assert snapshot_dir.resolve().is_relative_to(fake_home.resolve())
+    monkeypatch.setattr(snap_mod, "resolve_snapshot", lambda *_a, **_kw: meta)
+    monkeypatch.setattr(snap_mod, "_load_meta", lambda _path: meta)
+    original_lstat = Path.lstat
+    visits = 0
+
+    def changed_lstat(path: Path) -> os.stat_result:
+        nonlocal visits
+        if path == snapshot_dir:
+            visits += 1
+            if (failure == "before_error" and visits == 1) or (
+                failure == "after_error" and visits == 2
+            ):
+                raise OSError("directory replaced during planning")
+            if failure == "identity_change" and visits == 2:
+                fields = list(original_lstat(path))
+                fields[1] += 1
+                return os.stat_result(fields)
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", changed_lstat)
+
+    with pytest.raises(SetforgeError) as exc:
+        snap_mod.restore_snapshot(
+            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
+        )
+
+    assert str(exc.value) == f"snapshot {meta.snapshot_id}: {diagnostic}"
+    assert dst.read_text(encoding="utf-8") == "live body\n"
 
 
 @pytest.mark.parametrize("parent_kind", ["symlink", "file"])

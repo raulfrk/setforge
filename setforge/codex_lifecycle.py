@@ -120,9 +120,31 @@ def append_projection(
 
 
 def config_destinations(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, profile: str
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    *,
+    profile: str,
+    destination_only: bool = False,
 ) -> tuple[Path, ...]:
-    """Return selected native Codex TOML destinations without writing them."""
+    """Return native Codex TOML destinations without writing them.
+
+    Sibling-profile orphan protection only needs paths, not rendered MCP
+    content from a profile whose host environment mappings were not selected.
+    """
+    stored_ids = tuple(map(str, reconcile_store.stored_file_ids(profile)))
+    historical_paths = historical_config_paths()
+    if destination_only:
+        return tuple(
+            root / "config.toml"
+            for root in codex_resources.config_target_roots(
+                cfg,
+                resolved,
+                repo_root,
+                stored_ids=stored_ids,
+                historical_paths=historical_paths,
+            )
+        )
     plans = codex_resources.plan_config_resources(
         cfg,
         resolved,
@@ -130,8 +152,8 @@ def config_destinations(
         read_base=lambda resource_id: reconcile_store.read_base(
             profile, file_id(resource_id)
         ),
-        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
-        historical_paths=historical_config_paths(),
+        stored_ids=stored_ids,
+        historical_paths=historical_paths,
         reconcile=False,
     )
     return tuple(sorted({plan.destination for plan in plans}, key=str))

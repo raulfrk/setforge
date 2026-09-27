@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import struct
+from collections import deque
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
@@ -270,6 +271,174 @@ def snapshot_path(path: Path) -> PathSnapshot:
             f"filesystem path changed while snapshotting {path}; retry"
         ) from exc
     raise SetforgeError(f"cannot journal unsupported filesystem object: {path}")
+
+
+def _captured_physical_path(
+    path: Path,
+    aliases: dict[Path, str],
+    *,
+    capture: bool = False,
+    used_aliases: set[Path] | None = None,
+) -> Path:
+    """Resolve a path through recorded symlink targets, not recovery-time links."""
+    pending = deque(path.expanduser().absolute().parts[1:])
+    current = Path("/")
+    links = 0
+    while pending:
+        part = pending.popleft()
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        if capture:
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None and stat.S_ISLNK(info.st_mode):
+                frozen = snapshot_path(candidate)
+                assert frozen.link_target is not None
+                aliases[candidate] = frozen.link_target
+        target = aliases.get(candidate)
+        if target is None:
+            current = candidate
+            continue
+        if used_aliases is not None:
+            used_aliases.add(candidate)
+        links += 1
+        if links > 40:
+            raise SetforgeError(f"too many directory aliases in {path}")
+        link = Path(target)
+        current = Path("/") if link.is_absolute() else current
+        pending.extendleft(
+            reversed(link.parts[1:] if link.is_absolute() else link.parts)
+        )
+    return current
+
+
+def _install_aliases(journal: OperationJournal) -> dict[Path, str]:
+    return {
+        item.path: item.link_target
+        for item in journal.paths
+        if item.kind is SnapshotKind.SYMLINK and item.link_target is not None
+    }
+
+
+def _install_root_paths(journal: OperationJournal) -> tuple[Path, ...]:
+    if journal.command != "install":
+        return ()
+    return tuple(
+        Path(path)
+        for checkpoint in journal.checkpoints
+        if checkpoint.name == "prepare-target-roots"
+        for path in checkpoint.paths
+    )
+
+
+def _install_physical_absent_paths(journal: OperationJournal) -> set[Path]:
+    roots = _install_root_paths(journal)
+    aliases = _install_aliases(journal)
+    return {
+        _captured_physical_path(item.path, aliases)
+        for item in journal.paths
+        if item.kind is SnapshotKind.ABSENT
+        and any(item.path == root or item.path.is_relative_to(root) for root in roots)
+    }
+
+
+def _validate_install_aliases(journal: OperationJournal) -> None:
+    aliases = _install_aliases(journal)
+    used: set[Path] = set()
+    for root in _install_root_paths(journal):
+        _captured_physical_path(root, aliases, used_aliases=used)
+    for alias in used:
+        original = aliases[alias]
+        try:
+            info = alias.lstat()
+            current = str(alias.readlink())
+        except OSError as exc:
+            raise SetforgeError(
+                f"install directory alias changed before recovery: {alias}"
+            ) from exc
+        if not stat.S_ISLNK(info.st_mode) or current != original:
+            raise SetforgeError(
+                f"install directory alias changed before recovery: {alias}"
+            )
+
+
+def capture_install_parent_guards(
+    paths: tuple[Path, ...], roots: tuple[Path, ...]
+) -> tuple[tuple[Path, ...], tuple[PathGuard, ...]]:
+    """Freeze physical parents of paths protected by newly prepared roots."""
+    aliases: dict[Path, str] = {}
+    parents: set[Path] = set()
+    for path in paths:
+        if not any(path == root or path.is_relative_to(root) for root in roots):
+            continue
+        physical_parent = _captured_physical_path(path.parent, aliases, capture=True)
+        parents.update(
+            parent
+            for parent in (physical_parent, *physical_parent.parents)
+            if parent != Path("/")
+        )
+    for root in roots:
+        parents.add(_captured_physical_path(root, aliases, capture=True))
+    guards: list[PathGuard] = []
+    for parent in sorted(parents, key=str):
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            guards.append(PathGuard(parent, None, None, None))
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise SetforgeError(f"install parent is not a directory: {parent}")
+        guards.append(PathGuard(parent, info.st_dev, info.st_ino, info.st_mode))
+    return tuple(sorted(aliases, key=str)), tuple(guards)
+
+
+def bind_install_roots(
+    journal: OperationJournal,
+    roots: tuple[tuple[Path, int, int, int], ...],
+) -> OperationJournal:
+    """Persist newly created target identities before other install effects."""
+    if (
+        journal.command != "install"
+        or not journal.checkpoints
+        or journal.checkpoints[-1].name != "prepare-target-roots"
+        or journal.checkpoints[-1].completed
+    ):
+        raise SetforgeError(
+            "created install roots lack an active preparation checkpoint"
+        )
+    aliases = _install_aliases(journal)
+    by_path = {guard.path: guard for guard in journal.path_guards}
+    for lexical, device, inode, mode in roots:
+        physical = _captured_physical_path(lexical, aliases)
+        original = by_path.get(physical)
+        if original is None or original.exists or not stat.S_ISDIR(mode):
+            raise SetforgeError(
+                f"install root has no captured absent guard: {physical}"
+            )
+        try:
+            observed = physical.lstat()
+        except OSError as exc:
+            raise SetforgeError(
+                f"install root changed before journal binding: {physical}"
+            ) from exc
+        if (observed.st_dev, observed.st_ino) != (device, inode) or not stat.S_ISDIR(
+            observed.st_mode
+        ):
+            raise SetforgeError(
+                f"install root changed before journal binding: {physical}"
+            )
+        by_path[physical] = PathGuard(physical, device, inode, mode)
+    updated = replace(
+        journal, path_guards=tuple(by_path[path] for path in sorted(by_path, key=str))
+    )
+    _write(updated)
+    return updated
 
 
 def _same_snapshot_stat(left: os.stat_result, right: os.stat_result) -> bool:
@@ -599,10 +768,11 @@ def finish_checkpoint(journal: OperationJournal) -> OperationJournal:
     return updated
 
 
-def recover_files(journal: OperationJournal) -> OperationJournal:
+def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 - ordered guarded recovery
     """Restore path/store snapshots and durably enter recovery state."""
     _require_matching_state_root(journal)
     _validate_path_guards(journal)
+    _validate_install_aliases(journal)
     _validate_snapshot_restore_parents(journal)
     if journal.resources_lock:
         # Ownership moves have their own index-last durable intent. Complete
@@ -623,14 +793,48 @@ def recover_files(journal: OperationJournal) -> OperationJournal:
     guard_identities = (
         _guard_identities(recovering.path_guards) if recovering.path_guards else None
     )
+    if recovering.command == "install" and guard_identities is not None:
+        for guard in recovering.path_guards:
+            if not guard.exists:
+                continue
+            try:
+                info = guard.path.lstat()
+            except OSError as exc:
+                raise SetforgeError(
+                    f"install parent changed during recovery: {guard.path}"
+                ) from exc
+            if (info.st_dev, info.st_ino) != (guard.device, guard.inode):
+                raise SetforgeError(
+                    f"install parent changed during recovery: {guard.path}"
+                )
+            guard_identities[guard.path] = (info.st_dev, info.st_ino, info.st_mode)
+    roots = _install_root_paths(recovering)
+    aliases = _install_aliases(recovering)
     for snapshot in sorted(
         (item for item in recovering.paths if str(item.path) in scoped_paths),
         key=lambda item: len(item.path.parts),
         reverse=True,
     ):
+        protected = any(
+            snapshot.path == root or snapshot.path.is_relative_to(root)
+            for root in roots
+        )
+        target = (
+            replace(
+                snapshot,
+                path=_captured_physical_path(snapshot.path.parent, aliases)
+                / snapshot.path.name,
+            )
+            if protected
+            else snapshot
+        )
         restored = _restore_path(
-            snapshot,
-            guard_identities=guard_identities,
+            target,
+            guard_identities=(
+                guard_identities
+                if protected or recovering.command != "install"
+                else None
+            ),
             permit_existing_absent=True,
             require_leaf_absent=recovering.command == "cleanup-orphans",
         )
@@ -1056,6 +1260,7 @@ def validate_recovery(journal: OperationJournal) -> None:
     """Validate the recovery environment before the first compensating effect."""
     _require_matching_state_root(journal)
     _validate_path_guards(journal)
+    _validate_install_aliases(journal)
     _validate_snapshot_restore_parents(journal)
     for snapshot in journal.adapters:
         try:
@@ -1111,6 +1316,8 @@ def _directory_recovery_paths(journal: OperationJournal) -> set[Path]:
 def _recovery_path_guards(journal: OperationJournal) -> tuple[PathGuard, ...]:
     """Persist absence before recreating a directory with a scoped preimage."""
     directories = _directory_recovery_paths(journal)
+    if journal.command == "install":
+        directories |= _install_physical_absent_paths(journal)
     guards: list[PathGuard] = []
     for guard in journal.path_guards:
         if guard.exists and guard.path in directories:
@@ -1126,18 +1333,47 @@ def _recovery_path_guards(journal: OperationJournal) -> tuple[PathGuard, ...]:
     return tuple(guards)
 
 
-def _validate_path_guards(journal: OperationJournal) -> None:
+def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - typed path guards
     """Fail before recovery effects when a guarded directory was replaced."""
     journal_paths = {item.path for item in journal.paths}
     absent_paths = {
         item.path for item in journal.paths if item.kind is SnapshotKind.ABSENT
     }
     directory_paths = _directory_recovery_paths(journal)
+    if journal.command == "install":
+        aliases = _install_aliases(journal)
+        absent_paths |= _install_physical_absent_paths(journal)
+        journal_paths |= {
+            _captured_physical_path(path, aliases) for path in journal_paths
+        }
+        directory_paths |= {
+            _captured_physical_path(path, aliases) for path in directory_paths
+        }
+    preparing_roots = next(
+        (
+            checkpoint
+            for checkpoint in journal.checkpoints
+            if checkpoint.name == "prepare-target-roots" and not checkpoint.completed
+        ),
+        None,
+    )
+    unbound_roots = (
+        {
+            _captured_physical_path(Path(path), _install_aliases(journal))
+            for path in preparing_roots.paths
+        }
+        if preparing_roots is not None and journal.command == "install"
+        else set()
+    )
     for guard in journal.path_guards:
         try:
             info = guard.path.lstat()
         except FileNotFoundError:
-            if not guard.exists or guard.path in directory_paths:
+            if (
+                not guard.exists
+                or guard.path in directory_paths
+                or (journal.command == "install" and guard.path in absent_paths)
+            ):
                 continue
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
@@ -1147,6 +1383,22 @@ def _validate_path_guards(journal: OperationJournal) -> None:
                 f"journaled path parent changed before recovery: {guard.path}"
             ) from exc
         if not guard.exists:
+            if guard.path in unbound_roots:
+                if not stat.S_ISDIR(info.st_mode):
+                    raise SetforgeError(
+                        f"journaled absent parent changed before recovery: {guard.path}"
+                    )
+                try:
+                    has_content = any(guard.path.iterdir())
+                except OSError as exc:
+                    raise SetforgeError(
+                        f"journaled absent parent changed before recovery: {guard.path}"
+                    ) from exc
+                if has_content:
+                    raise SetforgeError(
+                        "unbound install root has content before recovery: "
+                        f"{guard.path}"
+                    )
             try:
                 has_untracked_content = any(
                     item not in journal_paths for item in guard.path.rglob("*")
@@ -1164,10 +1416,12 @@ def _validate_path_guards(journal: OperationJournal) -> None:
                     f"journaled absent parent changed before recovery: {guard.path}"
                 )
             continue
-        if (info.st_dev, info.st_ino, info.st_mode) != (
-            guard.device,
-            guard.inode,
-            guard.mode,
+        current = (info.st_dev, info.st_ino, info.st_mode)
+        expected = (guard.device, guard.inode, guard.mode)
+        if (
+            (current[:2] != expected[:2] or not stat.S_ISDIR(info.st_mode))
+            if journal.command == "install"
+            else current != expected
         ):
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
@@ -1823,8 +2077,26 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     _require_unique((str(item.path) for item in paths), "path snapshot")
     path_guards = tuple(_parse_path_guard(row) for row in path_guard_rows)
     _require_unique((str(item.path) for item in path_guards), "path guard")
+    aliases = {
+        item.path: item.link_target
+        for item in paths
+        if item.kind is SnapshotKind.SYMLINK and item.link_target is not None
+    }
     if any(
-        not any(item.path in snapshot.path.parents for snapshot in paths)
+        not any(
+            item.path in snapshot.path.parents
+            or (
+                command == "install"
+                and (
+                    item.path in _captured_physical_path(snapshot.path, aliases).parents
+                    or (
+                        snapshot.kind is SnapshotKind.ABSENT
+                        and item.path == _captured_physical_path(snapshot.path, aliases)
+                    )
+                )
+            )
+            for snapshot in paths
+        )
         for item in path_guards
     ):
         raise ValueError("path guards must be ancestors of journaled paths")

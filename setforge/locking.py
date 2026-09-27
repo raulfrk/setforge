@@ -19,6 +19,7 @@ Blocking vs. timeout:
     unbounded hang.
 """
 
+import errno
 import fcntl
 import hashlib
 import os
@@ -158,6 +159,22 @@ class TargetLockGuard:
                 raise SetforgeError("held target descriptor changed")
         if self.verify() != self.expected_target_identity:
             raise SetforgeError("target changed while target lock was held")
+
+    def rmdir_if_empty(self) -> bool:
+        """Remove the verified target only when empty, preserving other effects."""
+        self.verify_expected()
+        if self.target_fd is None:
+            return False
+        try:
+            os.rmdir(self.target.name, dir_fd=self.parent_fd)
+        except OSError as exc:
+            if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+                return False
+            raise
+        self.close()
+        self.expected_target_identity = None
+        os.fsync(self.parent_fd)
+        return True
 
     def close(self) -> None:
         """Close the optional target descriptor retained across publication."""

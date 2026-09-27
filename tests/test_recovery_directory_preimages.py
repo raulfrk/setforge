@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,11 @@ from tests.test_operations import operation_state as operation_state
 
 
 def _removed_tree(
-    tmp_path: Path, *, record: bool = True, scope: bool = True
+    tmp_path: Path,
+    *,
+    record: bool = True,
+    scope: bool = True,
+    command: str = "project-sync",
 ) -> tuple[operations.OperationJournal, Path]:
     parent = tmp_path / "retired"
     nested = parent / "deeper"
@@ -25,11 +30,11 @@ def _removed_tree(
     leaf.chmod(0o640)
     paths = (parent, nested, leaf) if record else (leaf,)
     journal = operations.prepare(
-        command="project-sync",
+        command=command,
         profile="p",
         config_dir=None,
         resources_lock=False,
-        command_line=("project", "sync"),
+        command_line=("install",) if command == "install" else ("project", "sync"),
         paths=paths,
         path_guards=_path_guards(leaf),
     )
@@ -62,6 +67,49 @@ def test_recovery_restores_scoped_directory_preimages(
 
     _assert_restored(leaf)
     assert recovered.phase is operations.OperationPhase.RECOVERING
+
+
+def test_install_recovery_restores_scoped_directory_preimages(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    assert operation_state.resolve().is_relative_to(tmp_path.resolve())
+    journal, leaf = _removed_tree(tmp_path, command="install")
+
+    recovered = operations.recover_files(journal)
+
+    _assert_restored(leaf)
+    assert recovered.phase is operations.OperationPhase.RECOVERING
+
+
+def test_install_recovery_reports_directory_inspection_failure(
+    tmp_path: Path,
+    operation_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert operation_state.resolve().is_relative_to(tmp_path.resolve())
+    journal, leaf = _removed_tree(tmp_path, command="install")
+    parent = leaf.parent.parent
+    original_lstat = Path.lstat
+    inspections = 0
+
+    def fail_second_inspection(candidate: Path) -> os.stat_result:
+        nonlocal inspections
+        if candidate == parent:
+            inspections += 1
+            if inspections == 2:
+                raise PermissionError("injected directory inspection failure")
+        return original_lstat(candidate)
+
+    monkeypatch.setattr(Path, "lstat", fail_second_inspection)
+
+    with pytest.raises(SetforgeError) as failure:
+        operations.recover_files(journal)
+
+    assert str(failure.value) == (
+        f"journaled path parent changed before recovery: {parent}"
+    )
+    assert not parent.exists()
+    assert operations.active("p") is not None
 
 
 @pytest.mark.parametrize(("record", "scope"), [(False, True), (True, False)])

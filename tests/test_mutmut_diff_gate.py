@@ -481,6 +481,62 @@ def test_diff_mode_failclosed_on_not_checked_changed_function(
     assert gate.main([]) == EXIT_FAILCLOSED
 
 
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("killed", EXIT_CLEAN), ("survived", EXIT_BLOCKED)],
+)
+def test_diff_results_only_scores_complete_full_run_without_rerunning(
+    monkeypatch: pytest.MonkeyPatch, status: str, expected: int
+) -> None:
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -1 +1 @@ def f():\n"
+        "+def f():\n"
+    )
+    results = (
+        f"    setforge.scalar_merge.x_f__mutmut_1: {status}\n"
+        "    setforge.scalar_merge.x_g__mutmut_1: killed"
+    )
+    calls = _stub_edge(monkeypatch, results=results, diff=diff)
+    monkeypatch.setattr(
+        gate,
+        "_read_sources",
+        lambda paths: {"setforge/scalar_merge.py": "def f():\n    pass\n"},
+    )
+
+    assert gate.main(["--results-only"]) == expected
+    assert calls["run"] == 0
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        "",
+        "    setforge.scalar_merge.x_f__mutmut_1: killed\n"
+        "    setforge.scalar_merge.x_g__mutmut_1: not checked",
+    ],
+)
+def test_diff_results_only_refuses_empty_or_incomplete_full_run(
+    monkeypatch: pytest.MonkeyPatch, results: str
+) -> None:
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -1 +1 @@ def f():\n"
+        "+def f():\n"
+    )
+    calls = _stub_edge(monkeypatch, results=results, diff=diff)
+    monkeypatch.setattr(
+        gate,
+        "_read_sources",
+        lambda paths: {"setforge/scalar_merge.py": "def f():\n    pass\n"},
+    )
+
+    assert gate.main(["--results-only"]) == EXIT_FAILCLOSED
+    assert calls["run"] == 0
+
+
 def test_diff_mode_failclosed_on_missing_origin_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

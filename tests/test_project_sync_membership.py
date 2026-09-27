@@ -8,8 +8,9 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.errors import SetforgeError
 from setforge.project_injection import manifest_path
-from setforge.project_overlay import overlay_path
+from setforge.project_overlay import build_overlay, overlay_path, write_overlay
 from setforge.project_sync import apply_sync, plan_sync
 from tests.test_project_sync import _config, _git_repo
 from tests.test_project_visibility import (
@@ -18,8 +19,15 @@ from tests.test_project_visibility import (
 from tests.test_project_visibility import _git
 
 
-def _inject_overlay(tmp_path: Path, visibility: str = "hidden") -> tuple[Path, Path]:
+def _inject_overlay(
+    tmp_path: Path,
+    visibility: str = "hidden",
+    *,
+    source_payload: bytes | None = None,
+) -> tuple[Path, Path]:
     config = _config(tmp_path)
+    if source_payload is not None:
+        (config.parent / "project/demo/AGENTS.md").write_bytes(source_payload)
     target = _git_repo(tmp_path / "target")
     (target / "AGENTS.md").write_text("team\n")
     _git(target, "add", "AGENTS.md")
@@ -51,6 +59,82 @@ def _inject_overlay(tmp_path: Path, visibility: str = "hidden") -> tuple[Path, P
     )
     assert injected.exit_code == 0, injected.output
     return config, target
+
+
+@pytest.mark.parametrize("drift", ["missing-live", "missing-overlay", "mismatch"])
+def test_sync_plan_refuses_changed_tracked_overlay_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    state = tmp_path / "state"
+    assert state.resolve().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    _config_path, target = _inject_overlay(tmp_path)
+    live = target / "AGENTS.md"
+    private = overlay_path(target, Path("AGENTS.md"))
+    assert live.resolve().is_relative_to(tmp_path.resolve())
+    assert private.resolve().is_relative_to(tmp_path.resolve())
+    if drift == "missing-live":
+        live.unlink()
+        expected = "tracked project overlay is absent: AGENTS.md"
+    elif drift == "missing-overlay":
+        private.unlink()
+        expected = "tracked project overlay is missing or mismatched: AGENTS.md"
+    else:
+        write_overlay(
+            build_overlay(target, Path("AGENTS.md"), b"team\n", b"different\n")
+        )
+        expected = "tracked project overlay is missing or mismatched: AGENTS.md"
+
+    with pytest.raises(SetforgeError) as failure:
+        plan_sync(target)
+    assert str(failure.value) == expected
+
+
+def test_overlay_sync_preserves_local_and_profile_prefix_insertions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    assert state.resolve().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config, target = _inject_overlay(tmp_path)
+    source = config.parent / "project" / "demo" / "AGENTS.md"
+    live = target / "AGENTS.md"
+    assert source.resolve().is_relative_to(tmp_path.resolve())
+    assert live.resolve().is_relative_to(tmp_path.resolve())
+    source.write_bytes(b"profile\nmanaged\n")
+    live.write_bytes(b"local\nmanaged\n")
+
+    plan = plan_sync(target)
+
+    assert plan.conflicts == 0
+    assert plan.files[0].result.merged() == b"local\nprofile\nmanaged\n"
+    synced = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+    assert synced.exit_code == 0, synced.output
+    assert live.read_bytes() == b"local\nprofile\nmanaged\n"
+
+
+def test_overlay_sync_conflicting_edits_use_resolvable_merge_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    assert state.resolve().is_relative_to(tmp_path.resolve())
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config, target = _inject_overlay(tmp_path, source_payload=b"team\n\nprivate v1\n")
+    source = config.parent / "project" / "demo" / "AGENTS.md"
+    live = target / "AGENTS.md"
+    assert source.resolve().is_relative_to(tmp_path.resolve())
+    assert live.resolve().is_relative_to(tmp_path.resolve())
+    source.write_bytes(b"profile team\n\nprivate v1\n")
+    live.write_bytes(b"local team\n\nprivate v1\n")
+
+    plan = plan_sync(target)
+
+    assert plan.conflicts == 1
+    synced = CliRunner().invoke(
+        app, ["project", "sync", str(target), "--auto=keep-live", "--yes"]
+    )
+    assert synced.exit_code == 0, synced.output
+    assert live.read_bytes() == b"local team\n\nprivate v1\n"
 
 
 def test_sync_reconciles_hidden_members_after_an_ordinary_visible_member(

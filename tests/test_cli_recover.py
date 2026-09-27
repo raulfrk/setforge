@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from typer.testing import CliRunner
 from setforge import locking, operations, transitions
 from setforge.cli import app
 from setforge.cli import recover as recover_cli
+from setforge.errors import SetforgeError
 
 
 @pytest.fixture
@@ -76,6 +78,94 @@ def test_recover_apply_restores_and_clears_journal(
     assert f"recovered operation {journal.operation_id}" in result.output
     assert path.read_text(encoding="utf-8") == "before"
     assert operations.active("p") is None
+
+
+@pytest.mark.parametrize(
+    "parent_state",
+    ["replaced", "missing", "absent-file", "created-then-replaced", "inspect-error"],
+)
+def test_recover_rejects_changed_install_parent_before_adapter_effects(
+    runner: CliRunner,
+    tmp_path: Path,
+    recovery_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_state: str,
+) -> None:
+    assert recovery_state.resolve().is_relative_to(tmp_path.resolve())
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    info = parent.stat()
+    absent_parent = tmp_path / "a-absent"
+    absent_path = absent_parent / "newfile"
+    assert absent_path.resolve().is_relative_to(tmp_path.resolve())
+    journal = operations.prepare(
+        command="install",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("install", "--profile=p"),
+        paths=(absent_path, path),
+        path_guards=(
+            operations.PathGuard(absent_parent, None, None, None),
+            operations.PathGuard(parent, info.st_dev, info.st_ino, info.st_mode),
+        ),
+    )
+    operations.begin_checkpoint(
+        journal,
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    original = tmp_path / "original-live"
+    if parent_state == "inspect-error":
+        original_lstat = Path.lstat
+
+        def unreadable(candidate: Path) -> os.stat_result:
+            if candidate == parent:
+                raise PermissionError("injected parent inspection failure")
+            return original_lstat(candidate)
+
+        monkeypatch.setattr(Path, "lstat", unreadable)
+    elif parent_state == "absent-file":
+        absent_parent.write_text("foreign replacement", encoding="utf-8")
+    else:
+        if parent_state == "created-then-replaced":
+            absent_parent.mkdir()
+        parent.rename(original)
+        if parent_state in {"replaced", "created-then-replaced"}:
+            parent.mkdir()
+            path.write_text("unrelated replacement", encoding="utf-8")
+    adapter_calls: list[bool] = []
+    monkeypatch.setattr(
+        operations, "recover_adapters", lambda _journal: adapter_calls.append(True)
+    )
+
+    result = runner.invoke(app, ["recover", "--profile=p", "--apply", "--yes"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SetforgeError)
+    expected = (
+        "journaled absent parent changed before recovery"
+        if parent_state == "absent-file"
+        else "journaled path parent changed before recovery"
+    )
+    assert expected in str(result.exception)
+    assert adapter_calls == []
+    if parent_state in {"replaced", "created-then-replaced"}:
+        assert path.read_text(encoding="utf-8") == "unrelated replacement"
+        if parent_state == "created-then-replaced":
+            assert absent_parent.is_dir()
+    elif parent_state == "missing":
+        assert not parent.exists()
+    else:
+        if parent_state == "absent-file":
+            assert absent_parent.read_text(encoding="utf-8") == "foreign replacement"
+        assert path.read_text(encoding="utf-8") == "before"
+    if parent_state not in {"absent-file", "inspect-error"}:
+        assert (original / "file").read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is not None
 
 
 def test_recover_locks_every_profile_named_by_state_snapshots(

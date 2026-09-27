@@ -37,3 +37,8 @@ setforge.project_sync.x_apply_sync__mutmut_350  # equivalent: valid non-removal 
 setforge.project_sync.x_apply_sync__mutmut_353  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
 setforge.project_sync.x_apply_sync__mutmut_354  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
 setforge.project_sync.x_apply_sync__mutmut_355  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
+setforge.project_sync.x_plan_sync__mutmut_26  # equivalent: addition destinations are disjoint from this injection's own recorded files, so rechecking its manifest cannot find a visibility conflict.
+setforge.project_sync.x_plan_sync__mutmut_155  # equivalent: _legacy_result does not read its live_mode argument.
+setforge.project_sync.x_plan_sync__mutmut_156  # equivalent: _legacy_result does not read its stored argument.
+setforge.project_sync.x_plan_sync__mutmut_234  # equivalent: _legacy_result does not read its live_mode argument.
+setforge.project_sync.x_plan_sync__mutmut_235  # equivalent: _legacy_result does not read its stored argument.

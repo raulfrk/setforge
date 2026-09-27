@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.locking import MutationLockGuards
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 _FIXTURE_YAML = """\
@@ -53,11 +54,11 @@ def _recording_lock() -> tuple[Callable[..., object], list[str]]:
     real_locks = locking.mutation_locks
 
     @contextlib.contextmanager
-    def recording_locks(**kwargs: object) -> Iterator[None]:
+    def recording_locks(**kwargs: object) -> Iterator[MutationLockGuards]:
         events.append("enter")
-        with real_locks(**kwargs):  # type: ignore[arg-type]
+        with real_locks(**kwargs) as guards:  # type: ignore[arg-type]
             try:
-                yield
+                yield guards
             finally:
                 events.append("exit")
 
