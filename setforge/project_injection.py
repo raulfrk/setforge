@@ -275,7 +275,7 @@ def _created_parents(target: Path, destination: Path) -> tuple[Path, ...]:
             continue
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             raise SetforgeError(f"project destination has an unsafe ancestor: {parent}")
-        break
+        parent = parent.parent
     if parent == target:
         info = target.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
@@ -586,6 +586,10 @@ def _require_compatible_visibility(
         try:
             raw = _load_manifest(path)
             other_target = Path(str(raw["target"]))
+            if raw["git_dir"] is None:
+                _, other_git_dir, _ = _verified_project_target(other_target)
+                if other_git_dir is None:
+                    continue
             if info_exclude_path(other_target) != exclude_path:
                 continue
             raw_files = raw["files"]
@@ -914,6 +918,12 @@ def _unlink_project_file(guard: TargetLockGuard, relative: Path) -> None:
 
 
 def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
+    guard.verify_expected()
+    try:
+        (guard.target / relative).lstat()
+    except FileNotFoundError:
+        # A user deletion or another member's cleanup may have removed it.
+        return
     with _relative_parent(guard, relative, create=False) as parent_fd:
         try:
             os.rmdir(relative.name, dir_fd=parent_fd)

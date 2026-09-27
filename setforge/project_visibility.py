@@ -59,7 +59,7 @@ class ProjectFileVisibility(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ProjectListFile:
-    """One listed destination or one record-level diagnostic."""
+    """One listed destination, empty injection, or record-level diagnostic."""
 
     record: Path
     target: Path | None
@@ -321,6 +321,16 @@ def list_projects() -> tuple[ProjectListFile, ...]:
             git_dir = injection.git_dir
             entries = raw["files"]
             assert isinstance(entries, list)
+            if not stored_files:
+                rows.append(
+                    ProjectListFile(
+                        record=record,
+                        target=target,
+                        profile=profile,
+                        destination=None,
+                        visibility=None,
+                    )
+                )
             for entry, stored in zip(entries, stored_files, strict=True):
                 if not isinstance(entry, dict):
                     raise SetforgeError("project injection state has an invalid file")

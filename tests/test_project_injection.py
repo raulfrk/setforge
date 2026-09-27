@@ -1402,6 +1402,46 @@ def test_remove_rejects_mismatched_claim_binding_without_mutation(
     assert claim_path.read_bytes() == mismatched_claim
 
 
+@pytest.mark.parametrize("visibility", ["hidden", "tracked"])
+def test_git_injection_coexists_with_recorded_plain_directory(
+    tmp_path: Path, visibility: str
+) -> None:
+    config = _config(tmp_path)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    for destination in (plain, target):
+        result = runner.invoke(
+            app,
+            [
+                "project",
+                "inject",
+                "demo",
+                str(destination),
+                "--config",
+                str(config),
+                f"--git-{visibility}",
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 0, listed.output
+    assert "not-applicable" in listed.output
+    assert visibility in listed.output
+    plain_manifest = manifest_path(plain, "demo").read_bytes()
+    changed = runner.invoke(
+        app,
+        ["project", "visibility", str(target), "AGENTS.md", "--tracked", "--yes"],
+    )
+    assert changed.exit_code == 0, (changed.output, changed.exception)
+    assert not (plain / ".git").exists()
+    assert (plain / "AGENTS.md").read_text() == "managed instructions\n"
+    assert manifest_path(plain, "demo").read_bytes() == plain_manifest
+
+
 def test_remove_rejects_released_claim_without_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:

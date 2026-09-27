@@ -45,6 +45,7 @@ from setforge.project_injection import (
     _load_manifest_payload,
     _plan_file,
     _remove_created_parent,
+    _require_compatible_visibility,
     _require_guards,
     _resource_id,
     _sha256,
@@ -486,7 +487,7 @@ def _merge_overlay_update(
         return merge_project_content(relative, old_profile, live, desired)
 
 
-def plan_sync(target: Path) -> ProjectSyncPlan:
+def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write target plan
     """Build an immutable target-wide sync plan without changing any state."""
     injections = discover_injections(target)
     if not injections:
@@ -502,6 +503,15 @@ def plan_sync(target: Path) -> ProjectSyncPlan:
             item.destination: item for item in _stored_files(injection)
         }
         current_by_destination = {item.dst: item for item in resolved.files}
+        additions = current_by_destination.keys() - stored_by_destination.keys()
+        if injection.git_dir is not None and additions:
+            raw = json.loads(injection.manifest_payload)
+            _require_compatible_visibility(
+                target=injection.target,
+                manifest=injection.manifest_path,
+                visibility=ProjectVisibility(raw["visibility"]),
+                relative_paths={relative.as_posix() for relative in additions},
+            )
         for relative in sorted(
             stored_by_destination.keys() | current_by_destination.keys(), key=str
         ):

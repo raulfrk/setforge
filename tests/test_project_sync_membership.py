@@ -278,3 +278,276 @@ def test_sync_reports_yaml_reformatting_without_a_manifest_change(
     assert destination.read_text() == canonical
     assert record.read_bytes() == manifest_before
     assert apply_sync(plan_sync(target)) is False
+
+
+@pytest.mark.parametrize("git_target", [False, True])
+def test_sync_removes_members_with_shared_created_parents(
+    tmp_path: Path, git_target: bool
+) -> None:
+    config = _config(tmp_path)
+    config.write_text(
+        config.read_text().replace("dst: AGENTS.md", "dst: nested/deeper/AGENTS.md")
+        + "      extra:\n        src: AGENTS.md\n        dst: nested/deeper/EXTRA.md\n"
+    )
+    target = tmp_path / "target"
+    if git_target:
+        _git_repo(target)
+    else:
+        target.mkdir()
+    unrelated = target / "user.txt"
+    unrelated.write_bytes(b"user content\x00\n")
+    exclude = target / ".git/info/exclude"
+    exclude_before = exclude.read_bytes() if git_target else None
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    assert sorted(path.name for path in (target / "nested/deeper").iterdir()) == [
+        "AGENTS.md",
+        "EXTRA.md",
+    ]
+    config.write_text(
+        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n    files: {}\n"
+    )
+
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert synced.exit_code == 0, synced.output
+    assert not (target / "nested").exists()
+    assert unrelated.read_bytes() == b"user content\x00\n"
+    assert json.loads(manifest_path(target, "demo").read_bytes())["files"] == []
+    assert apply_sync(plan_sync(target)) is False
+    if git_target:
+        assert exclude.read_bytes() == exclude_before
+        assert _git(target, "ls-files", "--stage") == ""
+        assert _git(target, "status", "--porcelain", "--untracked-files=all") == (
+            "?? user.txt\n"
+        )
+
+
+@pytest.mark.parametrize("git_target", [False, True])
+@pytest.mark.parametrize("retire", ["sync", "remove"])
+def test_retire_locally_deleted_member_and_created_directories(
+    tmp_path: Path, git_target: bool, retire: str
+) -> None:
+    config = _config(tmp_path)
+    config.write_text(
+        config.read_text().replace("dst: AGENTS.md", "dst: nested/deeper/AGENTS.md")
+    )
+    target = tmp_path / "target"
+    if git_target:
+        _git_repo(target)
+    else:
+        target.mkdir()
+    exclude = target / ".git/info/exclude"
+    exclude_before = exclude.read_bytes() if git_target else None
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    destination = target / "nested/deeper/AGENTS.md"
+    destination.unlink()
+    destination.parent.rmdir()
+    destination.parent.parent.rmdir()
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert synced.exit_code == 0, synced.output
+    assert not (target / "nested").exists()
+    if retire == "sync":
+        config.write_text(
+            "tracked_files: {}\nprofiles: {}\nproject_profiles:\n"
+            "  demo:\n    files: {}\n"
+        )
+        command = ["project", "sync", str(target), "--yes"]
+    else:
+        command = [
+            "project",
+            "remove",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--yes",
+        ]
+
+    retired = runner.invoke(app, command)
+
+    assert retired.exit_code == 0, retired.output
+    assert not (target / "nested").exists()
+    if retire == "sync":
+        assert json.loads(manifest_path(target, "demo").read_bytes())["files"] == []
+        assert apply_sync(plan_sync(target)) is False
+    else:
+        assert not manifest_path(target, "demo").exists()
+    if git_target:
+        assert exclude.read_bytes() == exclude_before
+        assert _git(target, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+@pytest.mark.parametrize("visibility", ["hidden", "tracked"])
+@pytest.mark.parametrize("overlay", [False, True])
+def test_sync_refuses_new_member_with_opposing_linked_worktree_visibility(
+    tmp_path: Path, visibility: str, overlay: bool
+) -> None:
+    config = _config(tmp_path)
+    full_config = config.read_text()
+    config.write_text(
+        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n    files: {}\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    tracked_name = "AGENTS.md" if overlay else "seed"
+    (target / tracked_name).write_text("team\n")
+    _git(target, "add", tracked_name)
+    _git(
+        target,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "base",
+    )
+    sibling = tmp_path / "sibling"
+    _git(target, "worktree", "add", "-q", "-b", "sibling", str(sibling))
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            f"--git-{visibility}",
+            "--yes",
+        ],
+    )
+    assert injected.exit_code == 0, injected.output
+    config.write_text(full_config)
+    opposite = "tracked" if visibility == "hidden" else "hidden"
+    sibling_injected = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(sibling),
+            "--config",
+            str(config),
+            f"--git-{opposite}",
+            "--auto=use-profile",
+            "--yes",
+        ],
+    )
+    assert sibling_injected.exit_code == 0, sibling_injected.output
+    preserved_paths = [
+        target / ".git/config",
+        target / ".git/info/exclude",
+        target / ".git/index",
+        target / ".git/info/attributes",
+        manifest_path(target, "demo"),
+        manifest_path(sibling, "demo"),
+    ]
+    before = {
+        path: path.read_bytes() if path.exists() else None for path in preserved_paths
+    }
+
+    synced = runner.invoke(
+        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
+    )
+
+    assert synced.exit_code == 1, synced.output
+    assert "conflicts across linked worktrees" in str(synced.exception)
+    assert {
+        path: path.read_bytes() if path.exists() else None for path in preserved_paths
+    } == before
+    assert (sibling / "AGENTS.md").read_text() == "managed\n"
+    if overlay:
+        assert (target / "AGENTS.md").read_text() == "team\n"
+    else:
+        assert not (target / "AGENTS.md").exists()
+
+
+def test_overlay_membership_and_visibility_preserve_unmanaged_worktree_edits(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    member_config = config.read_text()
+    empty_config = (
+        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n    files: {}\n"
+    )
+    config.write_text(empty_config)
+    source = config.parent / "project/demo/AGENTS.md"
+    source.write_text("team\n\nprivate v1\n")
+    target = _git_repo(tmp_path / "target")
+    (target / "AGENTS.md").write_text("team\n")
+    _git(target, "add", "AGENTS.md")
+    _git(
+        target,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "base",
+    )
+    sibling = tmp_path / "sibling"
+    _git(target, "worktree", "add", "-q", "-b", "sibling", str(sibling))
+    attributes = target / ".git/info/attributes"
+    attributes.write_text("*.keep -text\n")
+    _git(target, "config", "test.membership", "preserved")
+    metadata = [target / ".git/config", target / ".git/info/exclude", attributes]
+    metadata_before = {path: path.read_bytes() for path in metadata}
+    index_before = _git(target, "ls-files", "--stage")
+    sibling_index_before = _git(sibling, "ls-files", "--stage")
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    config.write_text(member_config)
+    synced = runner.invoke(
+        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
+    )
+    assert synced.exit_code == 0, synced.output
+    assert (target / "AGENTS.md").read_text() == "team\n\nprivate v1\n"
+    assert _git(target, "diff", "--", "AGENTS.md") == ""
+    (sibling / "AGENTS.md").write_text("sibling edit\n")
+    assert "+sibling edit\n" in _git(sibling, "diff", "--", "AGENTS.md")
+
+    visible = runner.invoke(
+        app,
+        ["project", "visibility", str(target), "AGENTS.md", "--tracked", "--yes"],
+    )
+    assert visible.exit_code == 0, visible.output
+    assert "+private v1\n" in _git(target, "diff", "--", "AGENTS.md")
+    (target / "AGENTS.md").write_text("target edit\n\nprivate v1\n")
+    source.write_text("team\n\nprivate v2\n")
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert synced.exit_code == 0, synced.output
+    assert (target / "AGENTS.md").read_text() == "target edit\n\nprivate v2\n"
+    hidden = runner.invoke(
+        app,
+        ["project", "visibility", str(target), "AGENTS.md", "--hidden", "--yes"],
+    )
+    assert hidden.exit_code == 0, hidden.output
+    diff = _git(target, "diff", "--", "AGENTS.md")
+    assert "+target edit\n" in diff
+    assert "private" not in diff
+
+    config.write_text(empty_config)
+    removed = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert (target / "AGENTS.md").read_text() == "target edit\n"
+    assert (sibling / "AGENTS.md").read_text() == "sibling edit\n"
+    assert _git(target, "ls-files", "--stage") == index_before
+    assert _git(sibling, "ls-files", "--stage") == sibling_index_before
+    assert {path: path.read_bytes() for path in metadata} == metadata_before
+    assert not overlay_path(target, Path("AGENTS.md")).exists()

@@ -142,8 +142,9 @@ def project_list() -> None:
             failed = True
             destination = f"{row.destination}: " if row.destination is not None else ""
             typer.echo(f"  error: {destination}{row.error} ({row.record.name})")
+        elif row.destination is None:
+            typer.echo("  no files")
         else:
-            assert row.destination is not None
             assert row.visibility is not None
             typer.echo(f"  {row.visibility.value}: {row.destination}")
     if failed:
