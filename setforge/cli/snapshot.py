@@ -303,10 +303,12 @@ def snapshot_restore(
         ),
     }
     with (
-        mutation_locks(
+        snap_mod.restore_locks(
+            target.files,
+            repo_root=resolved_config.resolve().parent,
             config_dirs=tuple(config_dirs),
             profile=profile,
-        ),
+        ) as owner_id,
         operations.recover_on_error(profile, "snapshot restore"),
     ):
         ctx = _build_profile_ctx(profile, resolved_config)
@@ -316,6 +318,7 @@ def snapshot_restore(
             resolved=ctx.resolved,
             repo_root=ctx.repo_root,
             profile=ctx.profile,
+            owner_id=owner_id,
         )
         if plan.target != target:
             raise SetforgeError("snapshot selection changed after confirmation; retry")
@@ -338,7 +341,7 @@ def snapshot_restore(
             profile=profile,
             config_dir=resolved_config.resolve().parent,
             config_dirs=tuple(config_dirs),
-            resources_lock=False,
+            resources_lock=True,
             command_line=tuple(redact_argv(sys.argv[1:])),
             paths=tuple(file.path for file in plan.files),
             path_guards=plan.destination_ancestors,

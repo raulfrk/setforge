@@ -613,11 +613,15 @@ def recover_files(journal: OperationJournal) -> OperationJournal:
         ownership = OwnershipStore()
         if ownership.intents_root.exists():
             ownership.recover_moves_locked()
-    recovering = replace(journal, phase=OperationPhase.RECOVERING)
+    recovering = replace(
+        journal,
+        phase=OperationPhase.RECOVERING,
+        path_guards=_recovery_path_guards(journal),
+    )
     _write(recovering)
     scoped_paths, blocked_paths = _recovery_paths(recovering)
     guard_identities = (
-        _guard_identities(journal.path_guards) if journal.path_guards else None
+        _guard_identities(recovering.path_guards) if recovering.path_guards else None
     )
     for snapshot in sorted(
         (item for item in recovering.paths if str(item.path) in scoped_paths),
@@ -1095,17 +1099,45 @@ def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
                 )
 
 
+def _directory_recovery_paths(journal: OperationJournal) -> set[Path]:
+    scoped = {path for checkpoint in journal.checkpoints for path in checkpoint.paths}
+    return {
+        item.path
+        for item in journal.paths
+        if item.kind is SnapshotKind.DIRECTORY and str(item.path) in scoped
+    }
+
+
+def _recovery_path_guards(journal: OperationJournal) -> tuple[PathGuard, ...]:
+    """Persist absence before recreating a directory with a scoped preimage."""
+    directories = _directory_recovery_paths(journal)
+    guards: list[PathGuard] = []
+    for guard in journal.path_guards:
+        if guard.exists and guard.path in directories:
+            try:
+                guard.path.lstat()
+            except FileNotFoundError:
+                guard = replace(guard, device=None, inode=None, mode=None)
+            except OSError as exc:
+                raise SetforgeError(
+                    f"journaled path parent changed before recovery: {guard.path}"
+                ) from exc
+        guards.append(guard)
+    return tuple(guards)
+
+
 def _validate_path_guards(journal: OperationJournal) -> None:
     """Fail before recovery effects when a guarded directory was replaced."""
     journal_paths = {item.path for item in journal.paths}
     absent_paths = {
         item.path for item in journal.paths if item.kind is SnapshotKind.ABSENT
     }
+    directory_paths = _directory_recovery_paths(journal)
     for guard in journal.path_guards:
         try:
             info = guard.path.lstat()
         except FileNotFoundError:
-            if not guard.exists:
+            if not guard.exists or guard.path in directory_paths:
                 continue
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
@@ -1124,7 +1156,7 @@ def _validate_path_guards(journal: OperationJournal) -> None:
                     f"journaled absent parent changed before recovery: {guard.path}"
                 ) from exc
             if (
-                guard.path not in absent_paths
+                guard.path not in absent_paths | directory_paths
                 or not stat.S_ISDIR(info.st_mode)
                 or has_untracked_content
             ):

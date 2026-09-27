@@ -79,12 +79,10 @@ def file_resource_id(destination: Path) -> ResourceId:
     )
 
 
-def refuse_active_file_claims(destinations: Iterable[Path]) -> None:
-    """Refuse mutation of a claimed file or anything inside a claimed tree.
-
-    Apply callers must hold the resources lock through their file effects.
-    A cleanup request does not implicitly release existing ownership.
-    """
+def active_file_claims(
+    destinations: Iterable[Path],
+) -> tuple[tuple[Path, OwnershipClaim], ...]:
+    """Find active claims covering exact destinations or their ancestor trees."""
     claims = tuple(
         claim
         for claim in OwnershipStore().list_claims()
@@ -93,6 +91,7 @@ def refuse_active_file_claims(destinations: Iterable[Path]) -> None:
         and claim.authority is Authority.MANAGE
         and claim.lifecycle is ClaimLifecycle.CLAIMED
     )
+    matches: list[tuple[Path, OwnershipClaim]] = []
     for destination in destinations:
         resource = file_resource_id(destination)
         for claim in claims:
@@ -100,10 +99,24 @@ def refuse_active_file_claims(destinations: Iterable[Path]) -> None:
             if resource.scope == owned.scope and PurePosixPath(
                 resource.coordinate
             ).is_relative_to(owned.coordinate):
-                raise OwnershipError(
-                    f"{destination} has an active tracked-file ownership claim "
-                    f"from {claim.owner_id}; release the claim before mutation"
-                )
+                matches.append((destination, claim))
+    return tuple(matches)
+
+
+def refuse_active_file_claims(
+    destinations: Iterable[Path], *, allowed_owner: uuid.UUID | None = None
+) -> None:
+    """Refuse claimed effects unless the caller has verified the allowed owner.
+
+    Apply callers must hold the resources lock through their file effects.
+    Cleanup passes no owner: it cannot implicitly release existing ownership.
+    """
+    for destination, claim in active_file_claims(destinations):
+        if claim.owner_id != allowed_owner:
+            raise OwnershipError(
+                f"{destination} has an active tracked-file ownership claim "
+                f"from {claim.owner_id}; release the claim before mutation"
+            )
 
 
 def _file_fingerprint(

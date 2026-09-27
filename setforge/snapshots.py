@@ -40,18 +40,22 @@ import logging
 import os
 import shutil
 import stat
-from collections.abc import Sequence
-from contextlib import suppress
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Final
+from uuid import UUID
 
 from setforge import atomicio, operations, transitions
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_symlink_target
 from setforge.errors import SetforgeError
+from setforge.file_ownership import active_file_claims, refuse_active_file_claims
+from setforge.locking import mutation_locks
+from setforge.ownership import read_owner_id_locked, resolve_owner_common_dir
 from setforge.transitions import now_utc
 from setforge.tree_management import TreeEntryKind, scan_tree
 
@@ -211,6 +215,36 @@ class _RestorePlan:
     target: SnapshotMeta
     files: tuple[_FrozenSnapshotFile, ...]
     destination_ancestors: tuple[operations.PathGuard, ...]
+    owner_id: UUID | None = None
+
+
+@contextmanager
+def restore_locks(
+    paths: Sequence[Path],
+    *,
+    repo_root: Path | None,
+    config_dirs: tuple[Path, ...] = (),
+    profile: str | None = None,
+) -> Iterator[UUID | None]:
+    """Hold restore authority through writes without creating checkout identity."""
+    common_dir = (
+        resolve_owner_common_dir(repo_root)
+        if repo_root is not None and active_file_claims(paths)
+        else None
+    )
+    with mutation_locks(
+        resources=True,
+        config_identity_dir=common_dir,
+        config_dirs=config_dirs,
+        profile=profile,
+    ) as guards:
+        owner_id = None
+        if guards.config_identity is not None:
+            assert repo_root is not None
+            owner_id = read_owner_id_locked(
+                repo_root, guards.config_identity.directory_fd
+            )
+        yield owner_id
 
 
 def snapshots_root() -> Path:
@@ -715,6 +749,7 @@ def _plan_restore_snapshot(
     resolved: ResolvedProfile | None = None,
     repo_root: Path | None = None,
     profile: str | None = None,
+    owner_id: UUID | None = None,
 ) -> _RestorePlan:
     """Validate and freeze every source consumed by an additive restore."""
     context_values = (cfg, resolved, repo_root, profile)
@@ -785,11 +820,15 @@ def _plan_restore_snapshot(
         target=target,
         files=tuple(files),
         destination_ancestors=_snapshot_destination_ancestors(target.files),
+        owner_id=owner_id,
     )
 
 
 def _validate_restore_plan(plan: _RestorePlan) -> None:
     """Refuse a changed destination topology before the first restore write."""
+    refuse_active_file_claims(
+        (file.path for file in plan.files), allowed_owner=plan.owner_id
+    )
     if (
         _snapshot_destination_ancestors(tuple(file.path for file in plan.files))
         != plan.destination_ancestors
@@ -879,13 +918,23 @@ def restore_snapshot(
         profile=pre_snapshot_ctx.profile if pre_snapshot_ctx is not None else None,
     )
     target = plan.target
-    if pre_snapshot:
-        if pre_snapshot_ctx is None:
-            raise SetforgeError(
-                "snapshot restore: --pre-snapshot requires a profile context"
-            )
-        _run_pre_snapshot(target, pre_snapshot_ctx)
-    return _apply_restore_plan(plan)
+    with restore_locks(
+        target.files,
+        repo_root=pre_snapshot_ctx.repo_root if pre_snapshot_ctx is not None else None,
+        config_dirs=(pre_snapshot_ctx.repo_root,)
+        if pre_snapshot_ctx is not None
+        else (),
+        profile=target.profile,
+    ) as owner_id:
+        plan = replace(plan, owner_id=owner_id)
+        _validate_restore_plan(plan)
+        if pre_snapshot:
+            if pre_snapshot_ctx is None:
+                raise SetforgeError(
+                    "snapshot restore: --pre-snapshot requires a profile context"
+                )
+            _run_pre_snapshot(target, pre_snapshot_ctx)
+        return _apply_restore_plan(plan)
 
 
 def prune_snapshots(keep: int) -> int:
