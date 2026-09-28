@@ -2991,6 +2991,12 @@ def _install_adapter_snapshots(
                             "prior": (
                                 None if prior is None else [list(prior[0]), prior[1]]
                             ),
+                            "planned": [
+                                [list(entry.command), entry.scope]
+                                for entry in plan.mcp.value.entries
+                                if entry.name == name
+                            ],
+                            "context": plan.mcp.value.context,
                         }
                         for name, prior in plan.mcp.value.preconditions
                     ],

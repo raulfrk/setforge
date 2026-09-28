@@ -1287,8 +1287,8 @@ def test_adapter_recovery_restores_mcp_registration(
     from setforge import mcp_servers
     from setforge.config import McpScope
 
-    current: dict[str, tuple[tuple[str, ...], McpScope]] = {
-        "server": (("new",), McpScope.USER)
+    current: dict[str, tuple[list[str], McpScope]] = {
+        "server": (["new"], McpScope.USER)
     }
     monkeypatch.setattr(mcp_servers, "mcp_get_command", current.get)
     monkeypatch.setattr(
@@ -1297,7 +1297,7 @@ def test_adapter_recovery_restores_mcp_registration(
     monkeypatch.setattr(
         mcp_servers,
         "mcp_add",
-        lambda name, ref: current.__setitem__(name, (tuple(ref.command), ref.scope)),
+        lambda name, ref: current.__setitem__(name, (list(ref.command), ref.scope)),
     )
     journal = operations.OperationJournal(
         operation_id="op",
@@ -1314,7 +1314,16 @@ def test_adapter_recovery_restores_mcp_registration(
         adapters=(
             operations.AdapterSnapshot(
                 operations.AdapterKind.MCP,
-                '[{"name":"server","prior":[["old","--flag"],"user"]}]',
+                json.dumps(
+                    [
+                        {
+                            "name": "server",
+                            "prior": [["old", "--flag"], "user"],
+                            "planned": [[["new"], "user"]],
+                            "context": mcp_servers.inventory_context(),
+                        }
+                    ]
+                ),
             ),
         ),
         checkpoints=(
@@ -1329,7 +1338,7 @@ def test_adapter_recovery_restores_mcp_registration(
 
     operations.recover_adapters(journal)
 
-    assert current == {"server": (("old", "--flag"), McpScope.USER)}
+    assert current == {"server": (["old", "--flag"], McpScope.USER)}
 
 
 def test_plugin_recovery_respects_dependencies_and_replaces_drifted_source(

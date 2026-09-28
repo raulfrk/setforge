@@ -33,6 +33,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,9 +94,9 @@ def ensure_claude_available() -> None:
 class McpReconcileReport:
     """Summary of what an MCP reconcile pass did.
 
-    ``added`` lists ``(name, command, scope)`` triples registered for the
-    first time this pass — the command/scope ride along so the transition
-    delta can re-add the exact registration on a redo.
+    ``added`` lists ``(name, command, scope)`` triples successfully registered
+    this pass, including replacement endpoints. The command/scope ride along
+    so the transition delta can re-add the exact registration on a redo.
     ``updated`` lists ``(name, prior_command, prior_scope)`` triples once the
     prior registration has been removed. The prior command/scope is captured
     immediately so revert can restore it even when replacement registration
@@ -135,13 +136,19 @@ class McpPlan:
 
     entries: tuple[McpPlanEntry, ...]
     preconditions: tuple[tuple[str, tuple[tuple[str, ...], str] | None], ...]
+    context: tuple[str, str, str] | None = None
 
 
 def plan_reconcile(cfg: Config, profile: ResolvedProfile) -> McpPlan:
     """Probe declared servers and retain only absent or drifted entries."""
+    refs = _declared_refs(cfg, profile)
+    if not refs:
+        return McpPlan(entries=(), preconditions=())
+    ensure_claude_available()
+    context = inventory_context()
     entries: list[McpPlanEntry] = []
     preconditions: list[tuple[str, tuple[tuple[str, ...], str] | None]] = []
-    for name, ref in _declared_refs(cfg, profile):
+    for name, ref in refs:
         current = mcp_get_command(name)
         frozen_current = None if current is None else (tuple(current[0]), current[1])
         preconditions.append((name, frozen_current))
@@ -166,11 +173,15 @@ def plan_reconcile(cfg: Config, profile: ResolvedProfile) -> McpPlan:
                 prior=(tuple(prior_command), prior_scope),
             )
         )
-    return McpPlan(entries=tuple(entries), preconditions=tuple(preconditions))
+    return McpPlan(
+        entries=tuple(entries), preconditions=tuple(preconditions), context=context
+    )
 
 
 def apply_plan(plan: McpPlan) -> McpReconcileReport:
     """Apply a plan after validating that each probed precondition still holds."""
+    if plan.preconditions:
+        require_inventory_context(plan.context)
     added: list[tuple[str, list[str], str]] = []
     updated: list[tuple[str, list[str], str]] = []
     failed: list[tuple[str, str]] = []
@@ -197,6 +208,7 @@ def apply_plan(plan: McpPlan) -> McpReconcileReport:
             entry.ref,
             prior_command=list(prior_command),
             prior_scope=prior_scope,
+            added=added,
             updated=updated,
             failed=failed,
         )
@@ -205,6 +217,8 @@ def apply_plan(plan: McpPlan) -> McpReconcileReport:
 
 def validate_plan(plan: McpPlan) -> None:
     """Fail if an MCP registration no longer matches its planned precondition."""
+    if plan.preconditions:
+        require_inventory_context(plan.context)
     for name, frozen_expected in plan.preconditions:
         current = mcp_get_command(name)
         expected = (
@@ -216,18 +230,134 @@ def validate_plan(plan: McpPlan) -> None:
             raise SetforgeError(f"MCP inventory changed after planning: {name}")
 
 
-def mcp_get_command(name: str) -> tuple[list[str], str] | None:
-    """Best-effort read of a registered server's command + scope.
+def inventory_context() -> tuple[str, str, str]:
+    """Resolve native cwd, global config, and Claude's local-project key."""
+    cwd = Path.cwd().resolve()
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    config_dir = Path(override).expanduser() if override else Path.home()
+    try:
+        git = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**os.environ, "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SetforgeError("cannot determine native MCP local-project key") from exc
+    if git.returncode == 0 and git.stdout.strip():
+        local_key = Path(git.stdout.strip()).resolve()
+    elif git.returncode != 0 and "not a git repository" in git.stderr.lower():
+        local_key = cwd
+    else:
+        raise SetforgeError("cannot determine native MCP local-project key")
+    return str(cwd), str((config_dir / ".claude.json").resolve()), str(local_key)
 
-    Calls ``claude mcp get <name> --json`` and parses the command token
-    list and scope out of the JSON. Returns ``None`` when the server is
-    absent, when the CLI does not support ``--json`` / ``get``, cannot
-    be executed after resolution, or when the output cannot be parsed —
-    every one of those is a "cannot determine current command" signal that
-    the converge path treats as "fall back to a plain add". An existing
-    registration is then reported as unverifiable rather than assumed to
-    match. NEVER raises on a missing server; only the binary-missing case propagates as
-    :class:`PluginToolMissing` (resolved upstream by the caller).
+
+def parse_inventory_context(raw: object) -> tuple[str, str, str]:
+    """Validate persisted native coordinates without following old paths."""
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+        raise ValueError("invalid native MCP inventory context")
+    if not all(
+        isinstance(value, str)
+        and Path(value).is_absolute()
+        and ".." not in Path(value).parts
+        and str(Path(value)) == value
+        for value in raw
+    ):
+        raise ValueError("invalid native MCP inventory context")
+    cwd, config, local_key = raw
+    return cwd, config, local_key
+
+
+def require_inventory_context(context: tuple[str, str, str] | None) -> None:
+    """Refuse native effects when their original destination is unprovable."""
+    if context is None:
+        raise SetforgeError(
+            "legacy MCP record lacks native inventory context; automatic reversal "
+            "is unsafe — restore the original registration manually"
+        )
+    if inventory_context() != context:
+        raise SetforgeError("native MCP inventory context changed; refusing mutation")
+
+
+def _unique_native_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate native MCP inventory key")
+        result[key] = value
+    return result
+
+
+def _native_config(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_native_keys
+        )
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise SetforgeError(f"cannot read native MCP inventory: {path}") from exc
+    if not isinstance(payload, dict):
+        raise SetforgeError(f"invalid native MCP inventory: {path}")
+    return payload
+
+
+def _registration_command(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        raise SetforgeError("invalid MCP registration")
+    if set(payload) - {"command", "args", "scope", "type", "env"}:
+        raise SetforgeError("cannot represent MCP registration fields")
+    if payload.get("type", "stdio") != "stdio" or payload.get("env", {}) != {}:
+        raise SetforgeError("cannot represent MCP registration type or environment")
+    command, args = payload.get("command"), payload.get("args", [])
+    if (
+        not isinstance(command, str)
+        or not command
+        or not isinstance(args, list)
+        or not all(isinstance(arg, str) for arg in args)
+    ):
+        raise SetforgeError("invalid MCP registration command")
+    return [command, *args]
+
+
+def _native_command(name: str) -> tuple[list[str], str] | None:
+    cwd, config_path, local_key = inventory_context()
+    config = _native_config(Path(config_path))
+    projects = config.get("projects", {})
+    if not isinstance(projects, dict):
+        raise SetforgeError("invalid native MCP local inventory")
+    local = projects.get(local_key, {})
+    if not isinstance(local, dict):
+        raise SetforgeError("invalid native MCP local inventory")
+    sources = (
+        ("user", config),
+        ("local", local),
+        ("project", _native_config(Path(cwd) / ".mcp.json")),
+    )
+    found: list[tuple[list[str], str]] = []
+    for scope, source in sources:
+        servers = source.get("mcpServers", {})
+        if not isinstance(servers, dict):
+            raise SetforgeError("invalid native MCP server inventory")
+        if name not in servers:
+            continue
+        row = servers[name]
+        if not isinstance(row, dict) or set(row) - {"command", "args", "type", "env"}:
+            raise SetforgeError("cannot represent native MCP registration")
+        found.append((_registration_command(row), scope))
+    if len(found) > 1:
+        raise SetforgeError(f"ambiguous native MCP registration across scopes: {name}")
+    return found[0] if found else None
+
+
+def mcp_get_command(name: str) -> tuple[list[str], str] | None:
+    """Read exact JSON receipts, falling back to native scoped config when unsupported.
+
+    Only a confirmed absence returns None. Invalid, ambiguous or unreadable
+    inventory cannot authorize an add, update, inverse, or recovery.
     """
     claude = str(_get_claude_bin())
     try:
@@ -238,29 +368,26 @@ def mcp_get_command(name: str) -> tuple[list[str], str] | None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return None
+    except subprocess.CalledProcessError as exc:
+        message = stderr_of(exc).lower()
+        if "unknown option" in message and "--json" in message:
+            return _native_command(name)
+        if "no mcp server found" in message:
+            return None
+        raise SetforgeError(f"cannot inspect MCP registration: {name}") from exc
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise SetforgeError(f"cannot inspect MCP registration: {name}") from exc
     try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    command = payload.get("command")
-    args = payload.get("args", [])
+        payload = json.loads(result.stdout, object_pairs_hook=_unique_native_keys)
+    except ValueError as exc:
+        raise SetforgeError(f"invalid MCP JSON receipt: {name}") from exc
+    command = _registration_command(payload)
     scope = payload.get("scope", "user")
-    if (
-        not isinstance(command, str)
-        or not isinstance(args, list)
-        or not all(isinstance(arg, str) for arg in args)
-        or not isinstance(scope, str)
-    ):
-        return None
     try:
         McpScope(scope)
-    except ValueError:
-        return None
-    return [command, *args], scope
+    except (ValueError, TypeError) as exc:
+        raise SetforgeError(f"invalid MCP registration scope: {name}") from exc
+    return command, scope
 
 
 def mcp_add(name: str, ref: McpServerRef) -> None:
@@ -334,11 +461,11 @@ def reconcile(
 
     - read the live command best-effort via :func:`mcp_get_command`;
     - if it matches the declared command + scope, do nothing;
-    - if it differs, remove + re-add and record an ``updated`` entry
-      carrying the PRIOR command + scope (so revert can re-add it);
-    - if the server cannot be read (absent, or ``get`` unsupported),
-      attempt :func:`mcp_add` and treat an "already exists" stderr as a
-      benign no-op rather than a failure.
+    - if it differs, record the removed PRIOR endpoint under ``updated``
+      and a successfully registered replacement under ``added``;
+    - if it is absent, attempt :func:`mcp_add`; an "already exists"
+      response is a failure because it cannot prove convergence;
+    - unreadable or ambiguous inventory refuses planning before effects.
 
     Undeclared live servers are NEVER removed. Per-server subprocess
     failures are caught and appended to the report's ``failed`` list so
@@ -385,6 +512,7 @@ def _converge_update(
     *,
     prior_command: list[str],
     prior_scope: str,
+    added: list[tuple[str, list[str], str]],
     updated: list[tuple[str, list[str], str]],
     failed: list[tuple[str, str]],
 ) -> None:
@@ -413,3 +541,5 @@ def _converge_update(
         msg = stderr_of(exc)
         LOGGER.warning("mcp update failed for %s: %s", name, msg)
         failed.append((name, msg))
+        return
+    added.append((name, list(ref.command), ref.scope))

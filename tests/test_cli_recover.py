@@ -31,6 +31,97 @@ def recovery_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+@pytest.mark.parametrize(
+    "boundary",
+    ["planned", "intermediate", "removed", "unchanged", "stale", "legacy", "context"],
+)
+def test_public_mcp_recovery_uses_exact_evidence_before_effects(
+    runner: CliRunner,
+    tmp_path: Path,
+    recovery_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    import json
+
+    from setforge import mcp_servers
+
+    assert recovery_state.resolve().is_relative_to(tmp_path.resolve())
+    assert locking._user_global_locks_dir().resolve().is_relative_to(tmp_path.resolve())
+    old = (["old", "argument with spaces", "--flag"], "user")
+    new = (["new", 'quote"', "slash\\"], "project")
+    middle = (["middle"], "local")
+    control = (["keep"], "user")
+    current = {"control": control}
+    if boundary != "removed":
+        current["named"] = (
+            old
+            if boundary == "unchanged"
+            else middle
+            if boundary == "intermediate"
+            else (["unexpected"], "project")
+            if boundary == "stale"
+            else new
+        )
+    effects: list[tuple[str, str]] = []
+
+    def remove(name: str, *, scope: str) -> None:
+        assert current[name][1] == scope
+        effects.append(("remove", name))
+        current.pop(name)
+
+    def add(name: str, ref) -> None:
+        assert name not in current
+        effects.append(("add", name))
+        current[name] = (list(ref.command), ref.scope)
+
+    monkeypatch.setattr(mcp_servers, "mcp_get_command", current.get)
+    monkeypatch.setattr(mcp_servers, "mcp_remove", remove)
+    monkeypatch.setattr(mcp_servers, "mcp_add", add)
+    context = mcp_servers.inventory_context()
+    row: dict[str, Any] = {
+        "name": "named",
+        "prior": old,
+        "planned": [new, middle],
+        "context": context,
+    }
+    if boundary == "legacy":
+        row.pop("context")
+    elif boundary == "context":
+        row["context"] = ("/different-cwd", context[1], "/different-cwd")
+    journal = operations.prepare(
+        command="revert",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=True,
+        command_line=(),
+        paths=(),
+        adapters=(
+            operations.AdapterSnapshot(operations.AdapterKind.MCP, json.dumps([row])),
+        ),
+    )
+    journal = operations.begin_checkpoint(
+        journal,
+        name="mcp",
+        kind=operations.CheckpointKind.COMPENSATABLE,
+        recovery="restore MCP",
+        adapters=(operations.AdapterKind.MCP,),
+    )
+    before = dict(current)
+    result = runner.invoke(app, ["recover", "--profile=p", "--apply", "--yes"])
+    if boundary in {"stale", "legacy", "context"}:
+        assert result.exit_code != 0
+        assert current == before
+        assert effects == []
+        assert operations.active("p") is not None
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert current == {"named": old, "control": control}
+        assert operations.active("p") is None
+        if boundary == "unchanged":
+            assert effects == []
+
+
 def _prepare(tmp_path: Path, path: Path) -> operations.OperationJournal:
     journal = operations.prepare(
         command="sync",

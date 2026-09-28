@@ -47,6 +47,7 @@ class FakeMcpCli:
         add_errors: dict[str, str] | None = None,
         remove_errors: dict[str, str] | None = None,
     ) -> None:
+        self.real_run = subprocess.run
         self.registry = registry or {}
         self.get_payloads = get_payloads or {}
         self.add_errors = add_errors or {}
@@ -54,6 +55,8 @@ class FakeMcpCli:
         self.calls: list[list[str]] = []
 
     def run(self, argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[0] == "git":
+            return self.real_run(argv, **kwargs)
         self.calls.append(list(argv))
         # argv[0] is the claude binary; argv[1] == "mcp".
         verb = argv[2]
@@ -189,7 +192,8 @@ def test_mcp_get_command_rejects_malformed_inventory(fake_mcp, payload: object) 
         get_payloads={"serena": payload},
     )
 
-    assert mcp.mcp_get_command("serena") is None
+    with pytest.raises(SetforgeError, match="invalid"):
+        mcp.mcp_get_command("serena")
 
 
 def test_mcp_get_command_treats_os_error_as_unreadable(
@@ -204,7 +208,8 @@ def test_mcp_get_command_treats_os_error_as_unreadable(
 
     monkeypatch.setattr(mcp.subprocess, "run", run)
 
-    assert mcp.mcp_get_command("serena") is None
+    with pytest.raises(SetforgeError, match="cannot inspect"):
+        mcp.mcp_get_command("serena")
 
 
 @pytest.mark.parametrize(
@@ -225,11 +230,8 @@ def test_converge_does_not_remove_for_malformed_inventory(
     )
     cfg = _cfg({"serena": McpServerRef(command=["new"])})
 
-    report = mcp.reconcile(cfg, _resolved(["serena"]))
-
-    assert report.updated == []
-    assert [name for name, _detail in report.failed] == ["serena"]
-    assert "cannot verify" in report.failed[0][1]
+    with pytest.raises(SetforgeError, match="invalid"):
+        mcp.reconcile(cfg, _resolved(["serena"]))
     assert [call[2] for call in cli.calls].count("remove") == 0
     assert cli.registry["serena"] == (["old"], "user")
 
@@ -355,7 +357,7 @@ def test_converge_updates_on_command_change(fake_mcp) -> None:
     cli = fake_mcp(registry={"serena": (["serena", "OLD"], "user")})
     cfg = _cfg({"serena": McpServerRef(command=["serena", "NEW"])})
     report = mcp.reconcile(cfg, _resolved(["serena"]))
-    assert report.added == []
+    assert report.added == [("serena", ["serena", "NEW"], "user")]
     assert report.updated == [("serena", ["serena", "OLD"], "user")]
     assert cli.registry["serena"] == (["serena", "NEW"], "user")
     # remove + re-add happened.
@@ -471,7 +473,9 @@ profiles:
     assert not any(call[2] == "remove" for call in cli.calls)
     deltas = list((tmp_path / "state").rglob("mcp.json"))
     assert len(deltas) == 1
-    assert json.loads(deltas[0].read_text()) == {
+    payload = json.loads(deltas[0].read_text())
+    assert payload.pop("context") == list(mcp.inventory_context())
+    assert payload == {
         "added": [["fresh", ["new-server", "argument with spaces"], "user"]],
         "updated": [],
     }
@@ -568,3 +572,283 @@ def test_missing_claude_binary_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(PluginToolMissing):
         mcp.ensure_claude_available()
     mcp._get_claude_bin.cache_clear()
+
+
+@pytest.fixture
+def native_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_mcp
+) -> tuple[FakeMcpCli, Path, Path]:
+    cli = fake_mcp()
+    cwd = tmp_path / "native-project"
+    cwd.mkdir()
+    config = tmp_path / "native-config" / ".claude.json"
+    config.parent.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config.parent))
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[:3] == ["/fake/claude", "mcp", "get"]:
+            raise subprocess.CalledProcessError(
+                1, argv, stderr="error: unknown option '--json'\n"
+            )
+        return cli.run(argv, **kwargs)
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+    return cli, cwd, config
+
+
+@pytest.mark.parametrize("scope", ["user", "local", "project"])
+def test_native_inventory_preserves_exact_scope_tokens_and_override(
+    native_inventory, scope: str
+) -> None:
+    _cli, cwd, config = native_inventory
+    command = ["server", "argument with spaces", 'quote"', "slash\\", "--flag"]
+    server = {"type": "stdio", "command": command[0], "args": command[1:], "env": {}}
+    if scope == "project":
+        (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"named": server}}))
+    elif scope == "local":
+        config.write_text(
+            json.dumps({"projects": {str(cwd): {"mcpServers": {"named": server}}}})
+        )
+    else:
+        config.write_text(json.dumps({"mcpServers": {"named": server}}))
+    before = {p: p.read_bytes() for p in (config, cwd / ".mcp.json") if p.exists()}
+    assert mcp.mcp_get_command("named") == (command, scope)
+    assert mcp.mcp_get_command("absent") is None
+    assert {p: p.read_bytes() for p in before} == before
+    assert not (Path.home() / ".claude.json").exists()
+
+
+def test_native_local_inventory_uses_git_root_but_project_inventory_uses_cwd(
+    native_inventory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli, root, config = native_inventory
+    cli.real_run(["git", "init", str(root)], check=True, capture_output=True)
+    nested = root / "nested"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+    local = {"command": "local-server", "args": ["local exact"]}
+    project = {"command": "project-server", "args": ["project exact"]}
+    config.write_text(
+        json.dumps({"projects": {str(root): {"mcpServers": {"local": local}}}})
+    )
+    (nested / ".mcp.json").write_text(json.dumps({"mcpServers": {"project": project}}))
+    assert mcp.mcp_get_command("local") == (["local-server", "local exact"], "local")
+    assert mcp.mcp_get_command("project") == (
+        ["project-server", "project exact"],
+        "project",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"mcpServers": {"named": {"command":"x", "args":[9]}}}',
+        '{"mcpServers": {"named": {"command":""}}}',
+        '{"mcpServers": {"named": {"command":"x", "env":{"KEEP":"v"}}}}',
+        '{"mcpServers": {"named": {"type":"http", "url":"https://example.test"}}}',
+        '{"mcpServers": {"named": {"command":"x", "unknown":"v"}}}',
+        '{"mcpServers": []}',
+        '{"projects": []}',
+        '{"mcpServers": {"named":{"command":"x"}, "named":{"command":"y"}}}',
+        "{broken",
+        "[]",
+    ],
+)
+def test_native_inventory_refuses_invalid_or_unrepresentable_state(
+    native_inventory, body: str
+) -> None:
+    cli, _cwd, config = native_inventory
+    config.write_text(body)
+    before = config.read_bytes()
+    with pytest.raises(SetforgeError):
+        mcp.plan_reconcile(
+            _cfg({"named": McpServerRef(command=["new"])}), _resolved(["named"])
+        )
+    assert config.read_bytes() == before
+    assert not any(call[2] in {"add", "remove"} for call in cli.calls)
+
+
+def test_native_inventory_refuses_shadowed_same_name(native_inventory) -> None:
+    _cli, cwd, config = native_inventory
+    config.write_text(json.dumps({"mcpServers": {"named": {"command": "user"}}}))
+    (cwd / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"named": {"command": "project"}}})
+    )
+    with pytest.raises(SetforgeError, match="ambiguous"):
+        mcp.mcp_get_command("named")
+
+
+def test_unknown_git_discovery_refuses_inventory(
+    native_inventory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _cli, _cwd, _config = native_inventory
+    monkeypatch.setattr(
+        mcp.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 128, stdout="", stderr="fatal: bad git configuration"
+        ),
+    )
+    with pytest.raises(SetforgeError, match="local-project key"):
+        mcp.inventory_context()
+
+
+def test_mcp_plan_refuses_changed_native_context(
+    fake_mcp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli = fake_mcp(registry={"named": (["old"], "user")})
+    plan = mcp.plan_reconcile(
+        _cfg({"named": McpServerRef(command=["new"])}), _resolved(["named"])
+    )
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SetforgeError, match="context changed"):
+        mcp.apply_plan(plan)
+    assert cli.registry == {"named": (["old"], "user")}
+    assert not any(call[2] in {"add", "remove"} for call in cli.calls)
+
+
+@pytest.mark.parametrize("extra", [{"cwd": "/unmodeled-cwd"}, {"unknown": "state"}])
+def test_public_install_refuses_unrepresentable_json_receipt_before_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_mcp, extra: dict[str, str]
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge import locking, transitions
+    from setforge.cli import app
+    from setforge.ownership import OwnershipStore
+
+    real_run = subprocess.run
+    cli = fake_mcp(
+        registry={"named": (["old"], "user"), "control": (["keep"], "user")},
+        get_payloads={
+            "named": {"command": "old", "args": [], "scope": "user", **extra}
+        },
+    )
+
+    def run(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        return (
+            cli.run(argv, **kwargs)
+            if argv[0] == "/fake/claude"
+            else real_run(argv, **kwargs)
+        )
+
+    monkeypatch.setattr(mcp.subprocess, "run", run)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "native-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "note.md").write_text("ordinary fixture\n")
+    live = tmp_path / "live"
+    config = tmp_path / "setforge.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "schema_version": "6.5",
+                "tracked_files": {"note": {"src": "note.md", "dst": str(live)}},
+                "mcp_servers": {"named": {"command": ["new"]}},
+                "profiles": {
+                    "p": {"tracked_files": ["note"], "mcp_servers": ["named"]}
+                },
+            }
+        )
+    )
+    for path in (
+        transitions.state_root(),
+        locking._user_global_locks_dir(),
+        OwnershipStore().root,
+    ):
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+    before = dict(cli.registry)
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={config}",
+            "--no-fetch",
+            "--no-git-check",
+            "--yes",
+        ],
+    )
+    assert result.exit_code != 0, (result.output, result.exception)
+    assert "cannot represent" in str(result.exception)
+    assert cli.registry == before
+    assert not live.exists()
+    assert not any(call[2] in {"add", "remove"} for call in cli.calls)
+
+
+def test_successful_update_announces_once_and_retains_both_endpoints(
+    fake_mcp, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from setforge.cli._mcp_helpers import reconcile_mcp_servers
+
+    fake_mcp(registry={"named": (["old"], "user")})
+    cfg = _cfg(
+        {
+            "named": McpServerRef(command=["new"]),
+            "fresh": McpServerRef(command=["fresh"]),
+        }
+    )
+    delta, failures = reconcile_mcp_servers(cfg, _resolved(["named", "fresh"]))
+    assert failures == []
+    assert delta is not None
+    assert ("named", ("new",), "user") in delta.added
+    assert delta.updated == (("named", ("old",), "user"),)
+    output = capsys.readouterr().out
+    assert "mcp added     fresh" in output
+    assert "mcp added     named" not in output
+    assert (
+        sum(
+            line.startswith("mcp updated") and line.endswith(" named")
+            for line in output.splitlines()
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize("claude_available", [False, True])
+def test_missing_claude_skips_before_git_but_available_claude_requires_context(
+    fake_mcp,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_available: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from setforge.cli._mcp_helpers import plan_mcp_servers
+
+    fake_mcp()
+    if not claude_available:
+        monkeypatch.setattr(mcp, "resolve_binary", lambda _name: None)
+    probes: list[list[str]] = []
+
+    def missing_git(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        probes.append(list(argv))
+        raise FileNotFoundError("git unavailable")
+
+    monkeypatch.setattr(mcp.subprocess, "run", missing_git)
+    cfg = _cfg({"named": McpServerRef(command=["server"])})
+    if claude_available:
+        with pytest.raises(SetforgeError, match="local-project key"):
+            plan_mcp_servers(cfg, _resolved(["named"]))
+        assert probes
+    else:
+        assert plan_mcp_servers(cfg, _resolved(["named"])).value is None
+        assert probes == []
+        assert "skipping MCP server reconcile" in capsys.readouterr().err
+
+
+def test_empty_mcp_plan_needs_no_native_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        mcp,
+        "ensure_claude_available",
+        lambda: pytest.fail("empty MCP work probed Claude"),
+    )
+    monkeypatch.setattr(
+        mcp, "inventory_context", lambda: pytest.fail("empty MCP work probed Git")
+    )
+    assert mcp.plan_reconcile(_cfg({}), _resolved([])) == mcp.McpPlan(
+        entries=(), preconditions=()
+    )

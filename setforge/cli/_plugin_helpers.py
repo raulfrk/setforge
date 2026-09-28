@@ -1399,7 +1399,10 @@ def _write_reverse_transition(
     if mcp_file.exists():
         mcp_raw = json.loads(mcp_file.read_text(encoding="utf-8"))
         mcp_payload = transitions.mcp_delta_from_json(mcp_raw)
-        reverse_mcp_delta, _ = _reverse_mcp(mcp_payload)
+        reverse_mcp_delta, mcp_failures = _reverse_mcp(mcp_payload)
+        if mcp_failures:
+            detail = "; ".join(f"{name}: {error}" for name, error in mcp_failures)
+            raise ReconcileAborted(f"MCP reversal failed: {detail}")
 
     file_post = transitions.snapshot_paths(touched_paths)
     reverse_meta = transitions.make_meta(

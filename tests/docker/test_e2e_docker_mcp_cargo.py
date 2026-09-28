@@ -110,6 +110,163 @@ def test_mcp_register_revert_reinstall(
     assert "echo-srv" in (listed2.stdout + listed2.stderr)
 
 
+def _native_registration(c: ContainerHandle, name: str):
+    import json
+
+    home = json.loads(c.read_text("/home/tester/.claude.json"))
+    candidates = [
+        ("user", home),
+        ("local", home.get("projects", {}).get("/workspace", {})),
+    ]
+    project = c.exec(["cat", "/workspace/.mcp.json"], check=False)
+    if project.returncode == 0:
+        candidates.append(("project", json.loads(project.stdout)))
+    found = [
+        ([row["command"], *row.get("args", [])], scope)
+        for scope, source in candidates
+        if (row := source.get("mcpServers", {}).get(name)) is not None
+    ]
+    assert len(found) <= 1, found
+    return found[0] if found else None
+
+
+@pytest.mark.parametrize(
+    ("prior_scope", "scope"),
+    [("user", "project"), ("project", "local"), ("local", "user")],
+)
+def test_native_mcp_update_revert_redo_and_idempotence(
+    docker_container: Callable[..., ContainerHandle], prior_scope: str, scope: str
+) -> None:
+    c = docker_container()
+    _write_source(c, body=_MCP_YAML.replace("scope: user", f"scope: {scope}"))
+    prior = ["echo", "old argument", 'quote"', "slash\\", "--old"]
+    c.exec(["claude", "mcp", "add", "--scope", prior_scope, "echo-srv", "--", *prior])
+    c.exec(
+        [
+            "claude",
+            "mcp",
+            "add",
+            "--scope",
+            "user",
+            "manual-control",
+            "--",
+            "echo",
+            "keep",
+        ]
+    )
+    _install(c)
+    assert _native_registration(c, "echo-srv") == (["echo", "hello"], scope)
+    for expected in [(prior, prior_scope), (["echo", "hello"], scope)]:
+        r = c.exec(
+            ["uv", "run", "setforge", "revert", f"--profile={_PROFILE}", "--yes"],
+            check=False,
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _native_registration(c, "echo-srv") == expected
+        assert _native_registration(c, "manual-control") == (["echo", "keep"], "user")
+    _install(c)
+    assert _native_registration(c, "echo-srv") == (["echo", "hello"], scope)
+    assert _native_registration(c, "manual-control") == (["echo", "keep"], "user")
+
+
+def test_native_mcp_partial_replacement_failure_remains_revertible(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    import json
+
+    c = docker_container()
+    _write_source(
+        c,
+        body=_MCP_YAML.replace(
+            "command: [echo, hello]", "command: [echo, FAIL_REPLACEMENT]"
+        ),
+    )
+    c.exec(["claude", "mcp", "add", "--scope", "user", "echo-srv", "--", "echo", "old"])
+    binary = c.exec(["sh", "-c", "command -v claude"]).stdout.strip()
+    c.write_text(
+        "/tmp/controlled-claude",
+        f"""#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = "FAIL_REPLACEMENT" ]; then
+        echo "controlled replacement failure" >&2
+        exit 1
+    fi
+done
+exec {binary} "$@"
+""",
+    )
+    c.exec(["chmod", "+x", "/tmp/controlled-claude"])
+    result = c.exec(
+        ["uv", "run", "setforge", "install", f"--profile={_PROFILE}", "--yes"],
+        check=False,
+        env={"SETFORGE_CLAUDE_BIN": "/tmp/controlled-claude"},
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert _native_registration(c, "echo-srv") is None
+    files = c.exec(
+        ["find", "/home/tester/.local/state/setforge", "-name", "mcp.json"]
+    ).stdout.splitlines()
+    assert len(files) == 1
+    delta = json.loads(c.read_text(files[0]))
+    assert delta["added"] == []
+    assert delta["updated"] == [["echo-srv", ["echo", "old"], "user"]]
+    result = c.exec(
+        ["uv", "run", "setforge", "revert", f"--profile={_PROFILE}", "--yes"],
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _native_registration(c, "echo-srv") == (["echo", "old"], "user")
+
+
+def test_native_mcp_revert_preserves_stale_registration(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    c = docker_container()
+    body = _MCP_YAML.replace(
+        "mcp_servers:\n  echo-srv:",
+        "mcp_servers:\n  early:\n    command: [echo, new]\n  echo-srv:",
+    ).replace("      - echo-srv", "      - early\n      - echo-srv")
+    _write_source(c, body=body)
+    c.exec(["claude", "mcp", "add", "--scope", "user", "early", "--", "echo", "old"])
+    _install(c)
+    c.exec(["claude", "mcp", "remove", "--scope", "user", "echo-srv"])
+    c.exec(
+        [
+            "claude",
+            "mcp",
+            "add",
+            "--scope",
+            "user",
+            "echo-srv",
+            "--",
+            "echo",
+            "external",
+        ]
+    )
+    snapshot = """from pathlib import Path
+import json
+root = Path('/home/tester/.local/state/setforge')
+print(json.dumps({str(p.relative_to(root)):p.read_bytes().hex()
+    for p in root.rglob('*') if p.is_file()
+    and not {'transitions', 'operations'} & set(p.relative_to(root).parts)},
+    sort_keys=True))
+"""
+    before = c.exec(["uv", "run", "python", "-c", snapshot]).stdout
+    result = c.exec(
+        ["uv", "run", "setforge", "revert", f"--profile={_PROFILE}", "--yes"],
+        check=False,
+    )
+    assert result.returncode != 0
+    assert _native_registration(c, "echo-srv") == (["echo", "external"], "user")
+    assert _native_registration(c, "early") == (["echo", "new"], "user")
+    assert c.read_text("/tmp/out/foo.md") == "# foo\n"
+    assert c.exec(["uv", "run", "python", "-c", snapshot]).stdout == before
+    records = c.exec(
+        ["find", "/home/tester/.local/state/setforge/transitions", "-name", "meta.json"]
+    ).stdout.splitlines()
+    assert len(records) == 1
+
+
 # ---------------------------------------------------------------------------
 # (b) cargo missing toolchain → warn + exit 0
 # ---------------------------------------------------------------------------

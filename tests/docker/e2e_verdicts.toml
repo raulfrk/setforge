@@ -1426,3 +1426,33 @@ verdict = "keep"
 smoke = false
 signal = "install --locked downloads + sha256-verifies the pinned VSIX and installs it via real code"
 verbs = ["install", "lock"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_native_mcp_update_revert_redo_and_idempotence[user-project]"]
+verdict = "keep"
+smoke = false
+signal = "exact native MCP user/project update and closed inverse"
+verbs = ["install", "revert", "mcp"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_native_mcp_update_revert_redo_and_idempotence[project-local]"]
+verdict = "keep"
+smoke = false
+signal = "exact native MCP project/local update and closed inverse"
+verbs = ["install", "revert", "mcp"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_native_mcp_update_revert_redo_and_idempotence[local-user]"]
+verdict = "keep"
+smoke = false
+signal = "exact native MCP local/user update and closed inverse"
+verbs = ["install", "revert", "mcp"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_native_mcp_partial_replacement_failure_remains_revertible"]
+verdict = "keep"
+smoke = false
+signal = "native MCP partial replacement records only successful effects"
+verbs = ["install", "revert", "mcp"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_native_mcp_revert_preserves_stale_registration"]
+verdict = "keep"
+smoke = false
+signal = "public MCP revert preserves externally changed registration"
+verbs = ["install", "revert", "mcp"]

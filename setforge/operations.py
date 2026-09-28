@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, cast
+from typing import Any, Final, cast
 from uuid import uuid4
 
 from setforge import atomicio, transitions
@@ -2565,7 +2565,25 @@ def _validate_plugin_payload(payload: object) -> None:
             raise ValueError("invalid plugin recovery entry")
 
 
+def _validate_mcp_registration(value: object) -> None:
+    from setforge.config import McpScope
+
+    if not (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], list)
+        and bool(value[0])
+        and all(isinstance(token, str) for token in value[0])
+        and bool(value[0][0])
+        and isinstance(value[1], str)
+    ):
+        raise ValueError("invalid MCP recovery registration")
+    McpScope(value[1])
+
+
 def _validate_mcp_payload(payload: object) -> None:
+    from setforge.mcp_servers import parse_inventory_context
+
     if not isinstance(payload, list):
         raise ValueError("invalid MCP recovery baseline")
     names: list[str] = []
@@ -2577,22 +2595,15 @@ def _validate_mcp_payload(payload: object) -> None:
         ):
             raise ValueError("invalid MCP recovery entry")
         names.append(row["name"])
-        prior = row.get("prior")
-        if prior is None:
-            continue
-        if not (
-            isinstance(prior, list)
-            and len(prior) == 2
-            and isinstance(prior[0], list)
-            and bool(prior[0])
-            and all(isinstance(token, str) for token in prior[0])
-            and bool(prior[0][0])
-            and isinstance(prior[1], str)
-        ):
-            raise ValueError("invalid MCP prior registration")
-        from setforge.config import McpScope
-
-        McpScope(prior[1])
+        if row.get("prior") is not None:
+            _validate_mcp_registration(row["prior"])
+        if "context" in row:
+            parse_inventory_context(row["context"])
+        if "planned" in row:
+            if not isinstance(row["planned"], list):
+                raise ValueError("invalid planned MCP recovery registrations")
+            for value in row["planned"]:
+                _validate_mcp_registration(value)
     _require_unique(iter(names), "MCP recovery name")
 
 
@@ -2713,30 +2724,37 @@ def _recover_mcp(payload: object) -> None:
     from setforge import mcp_servers
     from setforge.config import McpScope, McpServerRef
 
-    if not isinstance(payload, list):
-        raise SetforgeError("invalid MCP recovery baseline")
-    for row in payload:
-        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
-            raise SetforgeError("invalid MCP recovery entry")
-        name = row["name"]
-        prior = row.get("prior")
-        current = mcp_servers.mcp_get_command(name)
+    try:
+        _validate_mcp_payload(payload)
+    except (TypeError, ValueError) as exc:
+        raise SetforgeError("invalid MCP recovery baseline") from exc
+    rows = cast(list[dict[str, Any]], payload)
+    decisions: list[
+        tuple[str, tuple[list[str], str] | None, tuple[list[str], str] | None]
+    ] = []
+    # Inspect every affected registration before the first compensating effect.
+    for row in rows:
+        context = (
+            mcp_servers.parse_inventory_context(row["context"])
+            if "context" in row
+            else None
+        )
+        mcp_servers.require_inventory_context(context)
+        prior = None if row.get("prior") is None else (row["prior"][0], row["prior"][1])
+        planned = [(value[0], value[1]) for value in row.get("planned", [])]
+        current = mcp_servers.mcp_get_command(row["name"])
+        if current is not None and current != prior and current not in planned:
+            raise SetforgeError("MCP inventory changed; refusing recovery")
+        decisions.append((row["name"], prior, current))
+    for name, prior, current in decisions:
+        if current == prior:
+            continue
         if current is not None:
             mcp_servers.mcp_remove(name, scope=current[1])
-        if prior is None:
-            continue
-        if not (
-            isinstance(prior, list)
-            and len(prior) == 2
-            and isinstance(prior[0], list)
-            and all(isinstance(token, str) for token in prior[0])
-            and isinstance(prior[1], str)
-        ):
-            raise SetforgeError("invalid MCP prior registration")
-        mcp_servers.mcp_add(
-            name,
-            McpServerRef(command=prior[0], scope=McpScope(prior[1])),
-        )
+        if prior is not None:
+            mcp_servers.mcp_add(
+                name, McpServerRef(command=prior[0], scope=McpScope(prior[1]))
+            )
 
 
 def _require_str(raw: dict[str, object], key: str) -> str:

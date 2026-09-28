@@ -980,6 +980,8 @@ def _prepare_revert_journal(
     chain: tuple[transitions.TransitionDir, ...], profile: str, config: Path
 ) -> operations.OperationJournal:
     """Capture the whole confirmed reverse chain before its first mutation."""
+    from setforge import mcp_servers
+
     touched: dict[Path, None] = {}
     state_keys: dict[
         tuple[transitions.SnapshotStore, str, str],
@@ -988,7 +990,7 @@ def _prepare_revert_journal(
     has_extensions = False
     has_plugins = False
     has_codex_plugins = False
-    mcp_names: dict[str, None] = {}
+    mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     generic_paths: dict[Path, None] = {}
     for transition in chain:
         transfer_claim_paths = {
@@ -1015,8 +1017,12 @@ def _prepare_revert_journal(
             delta = transitions.mcp_delta_from_json(
                 json.loads(mcp_path.read_text(encoding="utf-8"))
             )
-            mcp_names.update(dict.fromkeys(name for name, _, _ in delta.added))
-            mcp_names.update(dict.fromkeys(name for name, _, _ in delta.updated))
+            if not delta.is_empty():
+                mcp_servers.require_inventory_context(delta.context)
+            for name, command, scope in (*delta.added, *delta.updated):
+                endpoints = mcp_endpoints.setdefault(name, [])
+                if (command, scope) not in endpoints:
+                    endpoints.append((command, scope))
         legacy_symlinks = _transition_legacy_symlink_paths(
             transition, config, transitions.load_meta(transition).profile
         )
@@ -1034,7 +1040,7 @@ def _prepare_revert_journal(
             extensions=has_extensions,
             plugins=has_plugins,
             codex_plugins=has_codex_plugins,
-            mcp_names=tuple(mcp_names),
+            mcp_endpoints=mcp_endpoints,
         ),
         path_guards=orphan_scan.capture_parent_path_guards(tuple(generic_paths)),
     )
@@ -1124,7 +1130,7 @@ def _revert_adapter_snapshots(
     extensions: bool,
     plugins: bool,
     codex_plugins: bool,
-    mcp_names: tuple[str, ...],
+    mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]],
 ) -> tuple[operations.AdapterSnapshot, ...]:
     from setforge import claude_plugins, mcp_servers, vscode_extensions
     from setforge import codex_plugins as codex_plugins_mod
@@ -1174,14 +1180,19 @@ def _revert_adapter_snapshots(
                 ),
             )
         )
-    if mcp_names:
+    if mcp_endpoints:
         snapshots.append(
             operations.AdapterSnapshot(
                 operations.AdapterKind.MCP,
                 json.dumps(
                     [
-                        {"name": name, "prior": mcp_servers.mcp_get_command(name)}
-                        for name in mcp_names
+                        {
+                            "name": name,
+                            "prior": mcp_servers.mcp_get_command(name),
+                            "planned": endpoints,
+                            "context": mcp_servers.inventory_context(),
+                        }
+                        for name, endpoints in mcp_endpoints.items()
                     ],
                     sort_keys=True,
                 ),

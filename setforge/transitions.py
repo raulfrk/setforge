@@ -738,13 +738,13 @@ class MCPDelta:
     Two fields because an MCP reconcile has two invertible actions:
 
     - ``added`` — ``(name, command, scope)`` triples for servers
-      registered for the first time this command. The inverse is
+      registered this command, including replacement endpoints. The inverse is
       ``claude mcp remove``; the command + scope are nonetheless stored
       (not just the name) so a redo — a revert of the revert — can re-add
       the exact registration, making the round-trip closed.
     - ``updated`` — ``(name, prior_command, prior_scope)`` triples for
-      servers whose declared command differed and were therefore
-      removed + re-added. The PRIOR command + scope is stored because the
+      servers whose prior registration was successfully removed, even if
+      its replacement failed. The PRIOR command + scope is stored because the
       inverse is re-adding the original registration — a flat name list
       would be non-invertible. Follows
       :class:`PluginDelta.marketplaces_removed`'s (name, repr) precedent.
@@ -756,6 +756,8 @@ class MCPDelta:
 
     added: tuple[tuple[str, tuple[str, ...], str], ...]
     updated: tuple[tuple[str, tuple[str, ...], str], ...]
+    # Absent on legacy records: they decode, but cannot prove native destinations.
+    context: tuple[str, str, str] | None = None
 
     def is_empty(self) -> bool:
         return not (self.added or self.updated)
@@ -2151,6 +2153,7 @@ def _serialize_mcp_payload(mcp_delta: MCPDelta | None) -> str | None:
             {
                 "added": _triples(mcp_delta.added),
                 "updated": _triples(mcp_delta.updated),
+                **({"context": list(mcp_delta.context)} if mcp_delta.context else {}),
             },
             indent=2,
         )
@@ -2194,7 +2197,15 @@ def mcp_delta_from_json(raw: dict[str, object]) -> MCPDelta:
             validated.append((name, tuple(command_tokens), scope))
         return tuple(validated)
 
-    return MCPDelta(added=_triples("added"), updated=_triples("updated"))
+    from setforge.mcp_servers import parse_inventory_context
+
+    try:
+        context = parse_inventory_context(raw["context"]) if "context" in raw else None
+    except ValueError as exc:
+        raise InvalidTransitionRecord("mcp.json: invalid native context") from exc
+    return MCPDelta(
+        added=_triples("added"), updated=_triples("updated"), context=context
+    )
 
 
 def load_latest(

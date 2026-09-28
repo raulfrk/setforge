@@ -11,7 +11,6 @@ install side runs :func:`reconcile_mcp_servers` (a thin wrapper over
 
 from __future__ import annotations
 
-import contextlib
 import subprocess
 from dataclasses import dataclass
 
@@ -20,7 +19,7 @@ import typer
 from setforge import mcp_servers as mcp_mod
 from setforge import transitions
 from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
-from setforge.errors import PluginToolMissing
+from setforge.errors import PluginToolMissing, SetforgeError
 
 
 def _warn_skip_mcp(exc: PluginToolMissing) -> None:
@@ -68,17 +67,19 @@ def reconcile_mcp_servers(
     try:
         if plan is not None and plan.value is None:
             return None, []
-        report = (
-            mcp_mod.apply_plan(plan.value)
-            if plan is not None and plan.value is not None
-            else mcp_mod.reconcile(cfg, resolved)
+        value = (
+            plan.value if plan is not None else mcp_mod.plan_reconcile(cfg, resolved)
         )
+        assert value is not None
+        report = mcp_mod.apply_plan(value)
     except PluginToolMissing as exc:
         _warn_skip_mcp(exc)
         return None, []
 
+    updated_names = {name for name, _command, _scope in report.updated}
     for name, _command, _scope in report.added:
-        typer.echo(f"mcp added     {name}")
+        if name not in updated_names:
+            typer.echo(f"mcp added     {name}")
     failed_names = {name for name, _error in report.failed}
     for name, _prior_command, _prior_scope in report.updated:
         verb = "recovery recorded" if name in failed_names else "updated"
@@ -96,6 +97,7 @@ def reconcile_mcp_servers(
             (name, tuple(prior_command), prior_scope)
             for name, prior_command, prior_scope in report.updated
         ),
+        context=value.context,
     )
     return delta, report.failed
 
@@ -127,6 +129,17 @@ def _reverse_mcp(
     Per-item failures warn-and-continue so the reverse transition is still
     written; :class:`PluginToolMissing` is a skip.
     """
+    if delta.is_empty():
+        return None, []
+    try:
+        mcp_mod.require_inventory_context(delta.context)
+    except SetforgeError as exc:
+        return None, [
+            (name, str(exc))
+            for name in dict.fromkeys(
+                name for name, _, _ in (*delta.added, *delta.updated)
+            )
+        ]
     # reverse_to_readd: servers the redo must RE-ADD → stored under the
     # reverse delta's ``updated`` field (inverse = re-add stored command).
     reverse_to_readd: list[tuple[str, tuple[str, ...], str]] = []
@@ -138,7 +151,7 @@ def _reverse_mcp(
     # ``added`` servers were registered this command → remove them. The
     # redo must re-add them, so record under reverse ``updated``.
     for name, command, scope in delta.added:
-        if _try_remove(name, scope, failed):
+        if _try_remove(name, command, scope, failed):
             reverse_to_readd.append((name, tuple(command), scope))
 
     # ``updated`` servers had their prior command stashed → re-add it. The
@@ -150,15 +163,23 @@ def _reverse_mcp(
     reverse_delta = transitions.MCPDelta(
         added=tuple(reverse_to_remove),
         updated=tuple(reverse_to_readd),
+        context=delta.context,
     )
     if reverse_delta.is_empty():
         return None, failed
     return reverse_delta, failed
 
 
-def _try_remove(name: str, scope: str, failed: list[tuple[str, str]]) -> bool:
+def _try_remove(
+    name: str, command: tuple[str, ...], scope: str, failed: list[tuple[str, str]]
+) -> bool:
     """Remove one server; return ``True`` on success, warn-and-continue otherwise."""
     try:
+        current = mcp_mod.mcp_get_command(name)
+        if current is None:
+            return False
+        if current != (list(command), scope):
+            raise SetforgeError("MCP inventory changed; refusing removal")
         mcp_mod.mcp_remove(name, scope=scope)
     except PluginToolMissing as exc:
         typer.secho(
@@ -167,7 +188,12 @@ def _try_remove(name: str, scope: str, failed: list[tuple[str, str]]) -> bool:
             fg=typer.colors.YELLOW,
         )
         return False
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+        SetforgeError,
+    ) as exc:
         msg = mcp_mod.stderr_of(exc)
         failed.append((name, msg))
         typer.secho(
@@ -185,17 +211,16 @@ def _try_readd(
 ) -> bool:
     """Re-add one server's prior command; ``True`` on success, warn otherwise.
 
-    Removes any install-time registration first so the re-add of the prior
-    command is unambiguous (mirrors the forward remove + re-add converge
-    step). An already-absent server is benign — the subsequent add
-    re-establishes the prior registration regardless.
+    A paired added entry removes the exact replacement first. An unknown
+    registration cannot authorize deletion or replacement of its command.
     """
     prior_ref = McpServerRef(command=list(prior_command), scope=McpScope(prior_scope))
     try:
-        with contextlib.suppress(
-            subprocess.CalledProcessError, subprocess.TimeoutExpired
-        ):
-            mcp_mod.mcp_remove(name, scope=prior_scope)
+        current = mcp_mod.mcp_get_command(name)
+        if current == (list(prior_command), prior_scope):
+            return False
+        if current is not None:
+            raise SetforgeError("MCP inventory changed; refusing replacement")
         mcp_mod.mcp_add(name, prior_ref)
     except PluginToolMissing as exc:
         typer.secho(
@@ -204,7 +229,12 @@ def _try_readd(
             fg=typer.colors.YELLOW,
         )
         return False
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+        SetforgeError,
+    ) as exc:
         msg = mcp_mod.stderr_of(exc)
         failed.append((name, msg))
         typer.secho(

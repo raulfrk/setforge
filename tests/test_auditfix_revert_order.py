@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from setforge import transitions
 from setforge.cli import app
 from setforge.errors import SetforgeError
 
@@ -138,8 +137,6 @@ def test_apply_revert_refuses_with_zero_mutation_on_retargeted_link(
     the symlink refusal, leaving the content file reverted with no reverse
     transition: a partial, un-redoable state.
     """
-    from setforge.cli.revert import _apply_revert
-
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
     cfg, content_dst, link_dst, _link_target = _setup_content_plus_symlink_repo(
@@ -153,17 +150,18 @@ def test_apply_revert_refuses_with_zero_mutation_on_retargeted_link(
 
     transitions_dir = state / "transitions"
     before = {p.name for p in transitions_dir.iterdir()}
-    install_transition = transitions.TransitionDir(
-        next(iter(transitions_dir.iterdir()))
-    )
 
     # User retargets the deployed link to a different path — the documented
     # symlink-revert refusal condition.
     link_dst.unlink()
     link_dst.symlink_to(tmp_path / "live" / "user-chosen-target.sh")
 
-    with pytest.raises(SetforgeError, match="symlink target changed"):
-        _apply_revert(install_transition, "vmh", cfg)
+    result = CliRunner().invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
+    assert result.exit_code != 0
+    assert "filesystem path changed since transition" in str(result.exception)
+    assert link_dst.readlink() == tmp_path / "live" / "user-chosen-target.sh"
 
     # Zero mutation on the content axis: the patch was NOT reversed (would
     # have removed the install-created file or restored /dev/null).
@@ -183,8 +181,6 @@ def test_apply_revert_succeeds_when_link_untouched(
     fully — content patch reversed, link unlinked, reverse transition
     written — confirming the new dry-run gate does not block the happy path.
     """
-    from setforge.cli.revert import _apply_revert
-
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
     cfg, content_dst, link_dst, _link_target = _setup_content_plus_symlink_repo(
@@ -196,12 +192,12 @@ def test_apply_revert_succeeds_when_link_untouched(
     assert link_dst.is_symlink()
 
     transitions_dir = state / "transitions"
-    install_transition = transitions.TransitionDir(
-        next(iter(transitions_dir.iterdir()))
-    )
     before = {p.name for p in transitions_dir.iterdir()}
 
-    _apply_revert(install_transition, "vmh", cfg)
+    result = CliRunner().invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
 
     # Content reverted (install created the file; revert removes it) and the
     # link is gone.
