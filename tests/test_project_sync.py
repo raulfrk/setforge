@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -13,9 +14,10 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from setforge import locking, transitions
 from setforge.cli import app
 from setforge.errors import SetforgeError
-from setforge.ownership import resolve_owner_common_dir
+from setforge.ownership import OwnershipStore, resolve_owner_common_dir
 from setforge.project_injection import ProjectFileAction
 from setforge.project_sync import (
     AutoResolution,
@@ -1202,7 +1204,7 @@ def test_apply_sync_refuses_file_drift_without_manifest_change(
     assert {path: path.read_bytes() for path in before} == before
 
 
-def test_apply_sync_refuses_mismatched_existing_member_claim(
+def test_public_sync_refuses_mismatched_existing_member_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from setforge.locking import mutation_locks
@@ -1218,7 +1220,6 @@ def test_apply_sync_refuses_mismatched_existing_member_claim(
     assert injected.exit_code == 0, injected.exception
     live = target / "AGENTS.md"
     (config.parent / "project/demo/AGENTS.md").write_text("updated\n")
-    plan = plan_sync(target)
     store = OwnershipStore()
     claim = next(item for item in store.list_claims() if item.locator == str(live))
     with mutation_locks(resources=True):
@@ -1232,11 +1233,13 @@ def test_apply_sync_refuses_mismatched_existing_member_claim(
             expected_generation=claim.generation,
         )
     before = {path: path.read_bytes() for path in (tmp_path / "state").rglob("*.json")}
-    with pytest.raises(
-        SetforgeError,
-        match=r"^project injection ownership state is missing or mismatched$",
-    ):
-        apply_sync(plan)
+    refused = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+    assert refused.exit_code != 0
+    assert isinstance(refused.exception, SetforgeError)
+    assert (
+        str(refused.exception)
+        == "project injection ownership state is missing or mismatched"
+    )
     assert live.read_bytes() == b"managed\n"
     assert store.read(claim.resource_id) == changed
     assert {path: path.read_bytes() for path in before} == before
@@ -1537,3 +1540,238 @@ def test_sync_refuses_resolved_content_without_a_file_mode(
     assert str(failure.value) == "project sync result has no file mode"
     assert not (target / "AGENTS.md").exists()
     assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("file_id", ""),
+        ("file_id", 7),
+        ("declaring_profile", ""),
+        ("declaring_profile", 7),
+        ("source", None),
+        ("source_digest", None),
+        ("source_digest", "0" * 64),
+        ("created_parents", None),
+        ("created_parents", [7]),
+        ("created_parents", ["."]),
+        ("created_parents", ["../parent"]),
+        ("destination", "."),
+        ("destination", "../outside"),
+        ("previous_payload", "%%%"),
+        ("previous_payload", "cHJpb3I="),
+        ("previous_mode", 0o640),
+        ("previous_mode", True),
+        ("applied_payload", "%%%"),
+        ("applied_payload", None),
+        ("applied_digest", None),
+        ("applied_digest", "0" * 64),
+        ("applied_mode", None),
+        ("upstream_payload", "%%%"),
+        ("upstream_payload", None),
+        ("upstream_mode", True),
+        ("upstream_mode", None),
+        ("action", "unknown"),
+        ("duplicate_destination", None),
+        ("duplicate_id", None),
+        ("destination_absolute", None),
+        ("absolute_parent", None),
+        ("partial_retained_preimage", None),
+        ("legacy_digest", None),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_public_sync_rejects_malformed_file_record_without_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    dry_run: bool,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert OwnershipStore().root.is_relative_to(tmp_path)
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    record = next((tmp_path / "state/project-injections").glob("*.json"))
+    document = json.loads(record.read_text())
+    entry = document["files"][0]
+    if field.startswith("duplicate"):
+        other = copy.deepcopy(entry)
+        other["file_id" if field == "duplicate_destination" else "destination"] = (
+            "OTHER"
+        )
+        document["files"].append(other)
+    elif field == "destination_absolute":
+        entry["destination"] = str(tmp_path / "outside")
+    elif field == "absolute_parent":
+        entry["destination"] = "nested/AGENTS.md"
+        entry["created_parents"] = [str(target / "nested")]
+    elif field == "partial_retained_preimage":
+        entry["action"] = "retain-identical"
+        entry["previous_payload"] = base64.b64encode(b"managed\n").decode()
+    elif field == "legacy_digest":
+        document["schema"] = 1
+        del document["config_path"]
+        for key in (
+            "visibility",
+            "applied_payload",
+            "upstream_payload",
+            "upstream_mode",
+        ):
+            del entry[key]
+        entry["applied_digest"] = "0" * 64
+    else:
+        entry[field] = value
+    record.write_text(json.dumps(document))
+    before = {
+        p.relative_to(tmp_path): (p.read_bytes(), stat.S_IMODE(p.stat().st_mode))
+        for p in tmp_path.rglob("*")
+        if p.is_file() and "locks" not in p.parts
+    }
+    args = ["project", "sync", str(target), "--yes"]
+    if dry_run:
+        args.append("--dry-run")
+    result = runner.invoke(app, args)
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SetforgeError), result.exception
+    assert str(result.exception) not in ("", "None")
+    after = {
+        p.relative_to(tmp_path): (p.read_bytes(), stat.S_IMODE(p.stat().st_mode))
+        for p in tmp_path.rglob("*")
+        if p.is_file() and "locks" not in p.parts
+    }
+    assert after == before
+
+
+@pytest.mark.parametrize("schema", [1, 2, 3])
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_public_sync_source_and_membership_preserve_exact_retirement_preimages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema: int, preexisting: bool
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert OwnershipStore().root.is_relative_to(tmp_path)
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    original = b"prior user content\n"
+    live = target / "AGENTS.md"
+    if preexisting:
+        live.write_bytes(original)
+        live.chmod(0o640)
+    control = target / "CONTROL.txt"
+    control.write_bytes(b"unrelated\n")
+    control.chmod(0o600)
+    control_inode = control.stat().st_ino
+    subprocess.run(["git", "add", "CONTROL.txt"], cwd=target, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "control",
+        ],
+        cwd=target,
+        check=True,
+    )
+    index_before = (target / ".git/index").read_bytes()
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto=use-profile",
+            "--yes",
+        ],
+    )
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    record = next((state / "project-injections").glob("*.json"))
+    document = json.loads(record.read_text())
+    if schema < 3:
+        document["schema"] = schema
+        for entry in document["files"]:
+            del entry["visibility"]
+            if schema == 1:
+                for field in ("applied_payload", "upstream_payload", "upstream_mode"):
+                    del entry[field]
+        if schema == 1:
+            del document["config_path"]
+        record.write_text(json.dumps(document))
+    source = config.parent / "project/demo/NEW.md"
+    source.write_bytes(b"new profile\n")
+    source.chmod(0o750)
+    (source.parent / "EXTRA.md").write_bytes(b"new member\n")
+    config.write_text(
+        config.read_text().replace("src: AGENTS.md", "src: NEW.md")
+        + "      extra:\n        src: EXTRA.md\n        dst: nested/EXTRA.md\n"
+    )
+    updated = runner.invoke(
+        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
+    )
+    assert updated.exit_code == 0, (updated.output, updated.exception)
+    assert live.read_bytes() == b"new profile\n"
+    assert stat.S_IMODE(live.stat().st_mode) == 0o750
+    assert (target / "nested/EXTRA.md").read_bytes() == b"new member\n"
+    document = json.loads(record.read_text())
+    agents = next(e for e in document["files"] if e["file_id"] == "agents")
+    assert document["schema"] == 3
+    assert agents["source"] == str(source)
+    assert agents["previous_payload"] == (
+        base64.b64encode(original).decode() if preexisting else None
+    )
+    assert agents["previous_mode"] == (0o640 if preexisting else None)
+    claim = next(c for c in OwnershipStore().list_claims() if c.locator == str(live))
+    expected = json.dumps(
+        {
+            "digest": hashlib.sha256(b"new profile\n").hexdigest(),
+            "mode": 0o750,
+            "path": "AGENTS.md",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    assert claim.fingerprint == hashlib.sha256(expected).hexdigest()
+    assert claim.declaration_refs == ("project-profile:demo:agents",)
+    repeated = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+    assert "already current" in repeated.output
+    removed = runner.invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    if preexisting:
+        assert live.read_bytes() == original
+        assert stat.S_IMODE(live.stat().st_mode) == 0o640
+    else:
+        assert not live.exists()
+    assert not (target / "nested").exists()
+    assert not record.exists()
+    assert control.read_bytes() == b"unrelated\n"
+    assert stat.S_IMODE(control.stat().st_mode) == 0o600
+    assert control.stat().st_ino == control_inode
+    assert (target / ".git/index").read_bytes() == index_before

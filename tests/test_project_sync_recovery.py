@@ -271,3 +271,69 @@ def test_sync_recovery_preserves_replacement_parent_and_retains_journal(
     snapshot = next(item for item in journals[0].paths if item.path == replacement)
     assert snapshot.payload == b"managed\n"
     assert snapshot.mode == 0o644
+
+
+def test_public_sync_and_recover_restore_exact_files_claims_and_git_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import locking, transitions
+    from setforge.ownership import OwnershipStore
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert OwnershipStore().root.is_relative_to(tmp_path)
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    runner = CliRunner()
+    initial = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    (config.parent / "project/demo/AGENTS.md").write_bytes(b"updated\n")
+    (config.parent / "project/demo/AGENTS.md").chmod(0o750)
+    control = target / "CONTROL"
+    control.write_bytes(b"unrelated\n")
+    control_inode = control.stat().st_ino
+    before_files = {
+        p.relative_to(target): _file_state(p) for p in target.rglob("*") if p.is_file()
+    }
+    before_state = _private_files(state)
+    reached: list[str] = []
+
+    def after_effects(
+        journal: operations.OperationJournal,
+    ) -> operations.OperationJournal:
+        assert _file_state(target / "AGENTS.md") == (b"updated\n", 0o750)
+        assert _private_files(state) != before_state
+        reached.append(journal.profile)
+        raise OSError("injected after public sync effects")
+
+    def transient_recovery_failure(journal: operations.OperationJournal) -> bool:
+        assert journal.profile == reached[0]
+        raise OSError("injected transient recovery failure")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(operations, "finish_checkpoint", after_effects)
+        fault.setattr(operations, "recover_automatically", transient_recovery_failure)
+        failed = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert isinstance(failed.exception, OSError)
+    assert str(failed.exception) == "injected after public sync effects"
+    assert len(reached) == 1
+    assert operations.active(reached[0]) is not None
+    assert any("journal was retained" in note for note in failed.exception.__notes__)
+    recovered = runner.invoke(
+        app, ["recover", f"--profile={reached[0]}", "--apply", "--yes"]
+    )
+    assert recovered.exit_code == 0, (recovered.output, recovered.exception)
+    assert operations.active(reached[0]) is None
+    assert {
+        p.relative_to(target): _file_state(p) for p in target.rglob("*") if p.is_file()
+    } == before_files
+    assert _private_files(state) == before_state
+    assert control.stat().st_ino == control_inode
