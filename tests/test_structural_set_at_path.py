@@ -13,6 +13,8 @@ import io
 from collections.abc import Mapping
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 from json5.dumper import ModelDumper
 from json5.dumper import dumps as json5_dumps
 from json5.loader import ModelLoader
@@ -360,3 +362,75 @@ def test_set_node_missing_parent_raises_keyerror() -> None:
     dst = _yload("a:\n  b: 1\n")
     with pytest.raises(KeyError):
         set_node_at_path(dst, "missing.child", node)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("tail\\", ["tail\\"]),
+        (r"\.", ["."]),
+        (r"\\", ["\\"]),
+        (r"\0", [""]),
+        (r"\0.\0", ["", ""]),
+    ],
+)
+def test_key_path_legacy_terminal_escape_and_literal_empty_segments(
+    path: str, expected: list[str]
+) -> None:
+    from setforge.structural_merge import split_key_path
+
+    assert split_key_path(path) == expected
+
+
+@pytest.mark.parametrize("container", ["mapping", "sequence"])
+def test_splicing_yaml_subtree_deduplicates_anchor_names_and_preserves_aliases(
+    container: str,
+) -> None:
+    from setforge.structural_merge import get_node_at_path
+
+    target = _yload(
+        "existing: &shared\n  value: 9\nexisting_alias: *shared\npromoted: 0\n"
+    )
+    live = _yload(
+        "promoted:\n  first: &shared\n    value: 1\n  second: *shared\n"
+        "  independent: &distinct\n    value: 2\n  independent_alias: *distinct\n"
+        if container == "mapping"
+        else "promoted:\n  - &shared\n    value: 1\n  - *shared\n"
+        "  - &distinct\n    value: 2\n  - *distinct\n"
+    )
+    node = get_node_at_path(live, "promoted")
+    set_node_at_path(target, "promoted", node)
+    output = _ydump(target)
+    assert output.count("&shared") == 1
+    assert output.count("&distinct") == 1
+    reloaded = _yload(output)
+    assert isinstance(reloaded, Mapping)
+    assert reloaded["existing"] is reloaded["existing_alias"]
+    assert reloaded["existing"]["value"] == 9
+    promoted = reloaded["promoted"]
+    first = promoted["first"] if container == "mapping" else promoted[0]
+    second = promoted["second"] if container == "mapping" else promoted[1]
+    assert first is second
+    assert first["value"] == 1
+
+
+def test_splicing_existing_yaml_node_retains_anchor_through_sequence_aliases() -> None:
+    model = _yload("held: &shared\n  value: 1\naliases:\n  - *shared\n  - *shared\n")
+    assert isinstance(model, Mapping)
+    before = _ydump(model)
+    set_node_at_path(model, "held", model["held"])
+    assert _ydump(model) == before
+    reloaded = _yload(_ydump(model))
+    assert isinstance(reloaded, Mapping)
+    assert reloaded["held"] is reloaded["aliases"][0]
+    assert reloaded["aliases"][0] is reloaded["aliases"][1]
+
+
+@given(st.text(max_size=64))
+@example("XX[XX")
+@example("XX]XX")
+@example(r"name\[].child[*]")
+def test_literal_key_codec_round_trips_identity(key: str) -> None:
+    from setforge.structural_merge import encode_key_segment, split_key_path
+
+    assert split_key_path(encode_key_segment(key)) == [key]

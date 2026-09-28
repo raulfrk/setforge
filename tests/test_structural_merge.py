@@ -7,6 +7,7 @@ delete-vs-edit conflict detection, and byte-stable idempotency.
 """
 
 import io
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -877,3 +878,243 @@ def test_is_structural_true_for_json_and_yaml(name: str) -> None:
 )
 def test_is_structural_false_for_non_structural(name: str) -> None:
     assert is_structural(Path("/some/dir") / name) is False
+
+
+@pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])
+def test_competing_added_mappings_with_distinct_keys_remain_conflicts(
+    backend: str,
+) -> None:
+    import json
+
+    def model(value: dict[str, object]) -> object:
+        text = json.dumps(value)
+        return (
+            _jload(text)
+            if backend == "jsonc"
+            else _yload(text)
+            if backend == "yaml"
+            else value
+        )
+
+    result = merge_structural(
+        model({}), model({"new": {"left": 1}}), model({"new": {"right": 2}})
+    )
+    assert not result.clean
+    assert result.conflicts == [
+        PathConflict(path="new", base=ABSENT, ours={"left": 1}, theirs={"right": 2})
+    ]
+
+
+@pytest.mark.parametrize(
+    ("base", "ours", "theirs"),
+    [
+        ([1], [2], [3]),
+        ([1], [True], [1.0]),
+        ([{"value": None}], [{"value": ""}], [{"value": {}}]),
+    ],
+)
+def test_jsonc_opaque_array_conflicts_keep_original_typed_values(
+    base: list[object], ours: list[object], theirs: list[object]
+) -> None:
+    import json
+
+    result = merge_structural(
+        *(_jload(json.dumps({"items": value})) for value in (base, ours, theirs))
+    )
+    assert not result.clean
+    assert result.conflicts == [
+        PathConflict(path="items", base=base, ours=ours, theirs=theirs)
+    ]
+
+
+def test_jsonc_identifier_keys_merge_with_exact_names_and_values() -> None:
+    base = _jload("{bare: 1, quoted: 0}")
+    ours = _jload("{bare: 1, quoted: 2}")
+    theirs = _jload("{bare: 3, quoted: 0}")
+    result = merge_structural(base, ours, theirs)
+    assert result.clean
+    assert json5_loads(_jdump(result.merged_model)) == {"bare": 3, "quoted": 2}
+
+
+def test_jsonc_identifier_keys_in_opaque_values_keep_exact_conflict_names() -> None:
+    result = merge_structural(
+        _jload("{items: [{bare: 1}]}"),
+        _jload("{items: [{bare: 2}]}"),
+        _jload("{items: [{bare: 3}]}"),
+    )
+    assert not result.clean
+    assert result.conflicts == [
+        PathConflict(
+            path="items", base=[{"bare": 1}], ours=[{"bare": 2}], theirs=[{"bare": 3}]
+        )
+    ]
+
+
+def test_jsonc_added_and_deleted_keys_preserve_both_side_membership() -> None:
+    result = merge_structural(
+        _jload("{old: 1, removed: 2}"),
+        _jload("{old: 1, removed: 2, local: true}"),
+        _jload("{old: 3, added: {nested: false}}"),
+    )
+    assert result.clean
+    assert json5_loads(_jdump(result.merged_model)) == {
+        "old": 3,
+        "local": True,
+        "added": {"nested": False},
+    }
+
+
+@pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])
+@pytest.mark.parametrize("side", ["ours", "theirs"])
+@pytest.mark.parametrize("replacement", [[1], {"nested": None}])
+def test_one_sided_container_shape_replacement_is_a_clean_take(
+    backend: str, side: str, replacement: object
+) -> None:
+    import json
+
+    def model(value: dict[str, object]) -> object:
+        text = json.dumps(value)
+        return (
+            _jload(text)
+            if backend == "jsonc"
+            else _yload(text)
+            if backend == "yaml"
+            else value
+        )
+
+    base: dict[str, object] = {"key": 1}
+    changed: dict[str, object] = {"key": replacement}
+    result = merge_structural(
+        model(base),
+        model(changed if side == "ours" else base),
+        model(changed if side == "theirs" else base),
+    )
+    assert result.clean
+
+    def unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        assert len(pairs) == len({key for key, _value in pairs})
+        return dict(pairs)
+
+    merged = (
+        json.loads(_jdump(result.merged_model), object_pairs_hook=unique_pairs)
+        if backend == "jsonc"
+        else result.merged_model
+    )
+    assert merged == changed
+
+
+@pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])
+@pytest.mark.parametrize("original", [[1], {"nested": None}])
+def test_distinct_scalar_replacements_of_a_container_remain_conflicts(
+    backend: str, original: object
+) -> None:
+    import json
+
+    def model(value: dict[str, object]) -> object:
+        text = json.dumps(value)
+        return (
+            _jload(text)
+            if backend == "jsonc"
+            else _yload(text)
+            if backend == "yaml"
+            else value
+        )
+
+    result = merge_structural(
+        model({"key": original}), model({"key": 2}), model({"key": 3})
+    )
+    assert not result.clean
+    assert result.conflicts == [
+        PathConflict(path="key", base=original, ours=2, theirs=3)
+    ]
+
+
+def test_yaml_explicit_string_tags_remain_distinct_scalar_conflicts() -> None:
+    result = merge_structural(
+        _yload("key: !!str 1\n"), _yload("key: !!str 2\n"), _yload("key: !!str 3\n")
+    )
+    assert not result.clean
+    assert result.conflicts == [
+        PathConflict(path="key", base="1", ours="2", theirs="3")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected", "primitive"),
+    [
+        ("-1", -1, int),
+        ("+1", 1, int),
+        ("-1.5", -1.5, float),
+        ("-0.0", -0.0, float),
+        ("-Infinity", float("-inf"), float),
+        ("+Infinity", float("inf"), float),
+    ],
+)
+def test_jsonc_signed_scalar_unwraps_to_exact_primitive(
+    token: str, expected: object, primitive: type
+) -> None:
+    import math
+
+    from json5.model import JSONText
+
+    from setforge.structural_merge import _to_plain
+
+    model = _jload("{number: " + token + "}")
+    assert isinstance(model, JSONText)
+    parsed = _to_plain(model.value)
+    assert isinstance(parsed, dict)
+    value = parsed["number"]
+    assert type(value) is primitive
+    assert value == expected
+    if token == "-0.0":
+        assert isinstance(value, float)
+        assert math.copysign(1.0, value) == -1.0
+
+
+@pytest.mark.parametrize("backend", ["yaml", "jsonc"])
+def test_equal_scalar_values_keep_live_comment_provenance(backend: str) -> None:
+    load: Callable[[str], object]
+    dump: Callable[[object], str]
+    if backend == "yaml":
+        load, dump = _yload, _ydump
+        base, ours, theirs = "key: 1 # base\n", "key: 1 # live\n", "key: 1 # upstream\n"
+    else:
+        load, dump = _jload, _jdump
+        base, ours, theirs = (
+            '{"key": 1 // base\n}',
+            '{"key": 1 // live\n}',
+            '{"key": 1 // upstream\n}',
+        )
+    expected = dump(load(ours))
+    result = merge_structural(load(base), load(ours), load(theirs))
+    assert result.clean
+    assert dump(result.merged_model) == expected
+
+
+@pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])
+@pytest.mark.parametrize("added", [[1], {"nested": None}])
+def test_identical_added_containers_are_clean_and_retained(
+    backend: str, added: object
+) -> None:
+    import json
+
+    def model(value: dict[str, object]) -> object:
+        text = json.dumps(value)
+        return (
+            _jload(text)
+            if backend == "jsonc"
+            else _yload(text)
+            if backend == "yaml"
+            else value
+        )
+
+    expected = {"new": added}
+    result = merge_structural(model({}), model(expected), model(expected))
+    assert result.clean
+    assert not result.conflicts
+    merged = (
+        json5_loads(_jdump(result.merged_model))
+        if backend == "jsonc"
+        else result.merged_model
+    )
+    assert merged == expected

@@ -42,3 +42,24 @@ setforge.project_sync.x_plan_sync__mutmut_155  # equivalent: _legacy_result does
 setforge.project_sync.x_plan_sync__mutmut_156  # equivalent: _legacy_result does not read its stored argument.
 setforge.project_sync.x_plan_sync__mutmut_234  # equivalent: _legacy_result does not read its live_mode argument.
 setforge.project_sync.x_plan_sync__mutmut_235  # equivalent: _legacy_result does not read its stored argument.
+
+# Pinned json-five scalar representations: UnaryOp is handled before getters.
+setforge.structural_merge.x__json5_scalar_value__mutmut_6  # equivalent: native scalar nodes expose value or characters exclusively, so this predicate agrees.
+setforge.structural_merge.x__json5_scalar_value__mutmut_7  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_11  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_12  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_13  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_14  # equivalent: only non-string nodes reach the value getter; absent characters cannot change the result.
+setforge.structural_merge.x__json5_scalar_value__mutmut_18  # equivalent: only non-string nodes reach the value getter; absent characters cannot change the result.
+setforge.structural_merge.x__json5_scalar_value__mutmut_19  # equivalent: only non-string nodes reach the value getter; absent characters cannot change the result.
+setforge.structural_merge.x__json5_scalar_value__mutmut_20  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_21  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_25  # equivalent: only String nodes reach this getter and always expose characters; its default is redundant.
+setforge.structural_merge.x__json5_scalar_value__mutmut_26  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_27  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_28  # equivalent: getter and native dump/reparse yield identical supported primitive types and values; UnaryOp branch remains intact.
+setforge.structural_merge.x__json5_scalar_value__mutmut_30  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
+setforge.structural_merge.x__json5_scalar_value__mutmut_31  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
+setforge.structural_merge.x__json5_scalar_value__mutmut_32  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
+setforge.structural_merge.x__json5_scalar_value__mutmut_33  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
+setforge.structural_merge.x__json5_scalar_value__mutmut_34  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.

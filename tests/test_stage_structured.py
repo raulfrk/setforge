@@ -461,3 +461,135 @@ def test_structured_share_submenu_draft_cancel_returns_none(
     monkeypatch.setattr(stage_mod.share_draft, "draft_key_unit", lambda *a, **k: CANCEL)
     decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
     assert decision is None
+
+
+@pytest.mark.parametrize("extension", ["yaml", "json", "jsonc"])
+@pytest.mark.parametrize("verb", ["sync", "capture"])
+def test_public_structured_promotion_preserves_shape_comments_and_inverse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str, verb: str
+) -> None:
+    from importlib import import_module
+
+    from ruamel.yaml import YAML
+    from typer.testing import CliRunner
+
+    from setforge import locking, transitions
+    from setforge.cli import app
+    from setforge.ownership import OwnershipStore
+    from tests.test_cli_cleanup import _TerminalInput
+    from tests.test_install_managed_tree import _mixed_config
+
+    config, live_root = _mixed_config(tmp_path, monkeypatch, ("one", "two"))
+    # The established JSONC route uses .json; .jsonc retains line staging.
+    name = f"settings.{'json' if extension == 'jsonc' else extension}"
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    tracked = document["tracked_files"].pop("one")
+    tracked["src"] = name
+    tracked["dst"] = str(live_root / name)
+    document["tracked_files"][name] = tracked
+    document["profiles"]["p"]["tracked_files"] = [name, "two"]
+    yaml.dump(document, config)
+    base_model = {
+        "root": {"gone": 42, "keep": None},
+        "empty": {},
+        "flat.key": 1,
+        "": {"leaf": 2},
+        "slash\\key": True,
+        ".": 1,
+        "\\": 3,
+    }
+    live_model = {
+        "root": {"keep": ""},
+        "empty": {},
+        "flat.key": 2,
+        "": {},
+        "slash\\key": False,
+        ".": 2,
+        "\\": 4,
+    }
+    if extension == "yaml":
+        base_model["private"] = "base-private"
+        base_model["name[]"] = 1
+        base_model["star[*]"] = 1
+        live_model["private"] = "host-private"
+        live_model["name[]"] = 2
+        live_model["star[*]"] = 2
+    shared_model = dict(live_model)
+    if extension == "yaml":
+        shared_model["private"] = "base-private"
+    source = config.parent / "tracked" / name
+    if extension == "yaml":
+        yaml.dump(base_model, source)
+        base = b"# preserved comment\n" + source.read_bytes()
+        temporary = tmp_path / "live-model.yaml"
+        yaml.dump(live_model, temporary)
+        edited = b"# preserved comment\n" + temporary.read_bytes()
+    else:
+        prefix = "// preserved comment\n" if extension == "jsonc" else ""
+        base = (prefix + json.dumps(base_model, indent=2) + "\n").encode()
+        edited = (prefix + json.dumps(live_model, indent=2) + "\n").encode()
+    source.write_bytes(base)
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert OwnershipStore().root.is_relative_to(tmp_path)
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    runner = CliRunner()
+    args = ["--profile=p", f"--config={config}"]
+    installed = runner.invoke(
+        app, ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    )
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    destination = live_root / name
+    destination.write_bytes(edited)
+    before_control = (live_root / "two").read_bytes()
+    seen: list[str] = []
+
+    def choices(_stage: StructuredFileStage):
+        def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
+            seen.append(unit.path)
+            return Decision(
+                HunkClass.LOCAL if unit.path == "private" else HunkClass.SHARED
+            )
+
+        return choose
+
+    monkeypatch.setattr(
+        import_module("setforge.cli.stage"), "_structured_interactive_choice", choices
+    )
+    staged = runner.invoke(app, ["stage", name, *args], input=_TerminalInput())
+    assert staged.exit_code == 0, (staged.output, staged.exception)
+    if extension == "yaml":
+        assert "root.gone" in seen
+        assert r"flat\.key" in seen
+        assert r"\." in seen
+        assert r"\\" in seen
+        assert any(path.startswith(r"\0") for path in seen)
+    else:
+        assert seen == [""]
+    captured = runner.invoke(app, [verb, *args, "--auto=use-live", "--yes"])
+    assert captured.exit_code == 0, (captured.output, captured.exception)
+    result = source.read_bytes()
+    if extension == "yaml":
+        parsed = yaml.load(result)
+        assert parsed == shared_model
+        assert parsed["slash\\key"] is False
+        assert isinstance(parsed["root"]["keep"], str)
+        assert b"# preserved comment" in result
+    else:
+        assert result == edited
+    assert destination.read_bytes() == edited
+    assert (live_root / "two").read_bytes() == before_control
+    if verb == "sync":
+        transition = transitions.load_latest("p")
+        assert transition is not None
+        reversed_result = runner.invoke(app, ["revert", *args, "--yes"])
+        assert reversed_result.exit_code == 0, (
+            reversed_result.output,
+            reversed_result.exception,
+        )
+        assert source.read_bytes() == base
+        assert destination.read_bytes() == edited
+        redone = runner.invoke(app, ["revert", *args, "--yes"])
+        assert redone.exit_code == 0, (redone.output, redone.exception)
+        assert source.read_bytes() == result
+        assert destination.read_bytes() == edited

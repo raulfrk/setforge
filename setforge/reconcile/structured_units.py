@@ -314,7 +314,7 @@ def _normalize_legacy_yaml_paths(
     rows: list[dict[str, object]],
     fmt: StructuredFormat | None,
 ) -> tuple[list[dict[str, object]], dict[str, str]]:
-    """Alias uniquely-shaped pre-codec YAML empty keys to canonical paths."""
+    """Alias uniquely matched legacy YAML empty/bracket keys to canonical paths."""
     if fmt is not StructuredFormat.YAML:
         return rows, {}
     fresh_paths = {unit.path for unit in fresh}
@@ -324,7 +324,10 @@ def _normalize_legacy_yaml_paths(
         old_path = str(row["path"])
         segments = split_key_path(old_path)
         canonical = join_key_segments(segments)
-        if "" in segments and canonical != old_path and canonical in fresh_paths:
+        newly_escaped = "" in segments or any(
+            "[" in segment or "]" in segment for segment in segments
+        )
+        if newly_escaped and canonical != old_path and canonical in fresh_paths:
             candidates = fresh_paths & {old_path, canonical}
             if len(candidates) != 1:
                 raise InvariantViolation(
@@ -426,7 +429,7 @@ def classify_structured(
 def bind_structured_drafts(
     units: list[KeyUnit], drafts: dict[UnitRef, bytes]
 ) -> dict[UnitRef, bytes]:
-    """Bind an old YAML empty-key draft identity to its canonical fresh path."""
+    """Bind a legacy YAML key draft identity to its canonical fresh path."""
     bound = dict(drafts)
     for unit in units:
         if unit.legacy_path is None:

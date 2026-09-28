@@ -1775,3 +1775,51 @@ def test_public_sync_source_and_membership_preserve_exact_retirement_preimages(
     assert stat.S_IMODE(control.stat().st_mode) == 0o600
     assert control.stat().st_ino == control_inode
     assert (target / ".git/index").read_bytes() == index_before
+
+
+@pytest.mark.parametrize(
+    ("change", "extension"),
+    [("signed-fields", "json"), ("root-list", "json"), ("root-list", "yaml")],
+)
+def test_public_jsonc_project_sync_preserves_signed_values_and_root_replacements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str, extension: str
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    config.write_text(config.read_text().replace("AGENTS.md", f"settings.{extension}"))
+    source = config.parent / f"project/demo/settings.{extension}"
+    base = (
+        b'{"n": -1, "left": 0, "right": 0}\n'
+        if change == "signed-fields"
+        else b'{"key": 1}\n'
+    )
+    source.write_bytes(base)
+    target = _git_repo(tmp_path / "target")
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert OwnershipStore().root.is_relative_to(tmp_path)
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    runner = CliRunner()
+    initial = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    live = target / f"settings.{extension}"
+    if change == "signed-fields":
+        live.write_bytes(b'{"n": -1, "left": 2, "right": 0}\n')
+        source.write_bytes(b'{"n": -1, "left": 0, "right": 3}\n')
+        expected: object = {"n": -1, "left": 2, "right": 3}
+    else:
+        source.write_bytes(b"[1, 2]\n")
+        expected = [1, 2]
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert synced.exit_code == 0, (synced.output, synced.exception)
+    if extension == "yaml":
+        from ruamel.yaml import YAML
+
+        assert YAML().load(live.read_bytes()) == expected
+    else:
+        assert json.loads(live.read_bytes()) == expected

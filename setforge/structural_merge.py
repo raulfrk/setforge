@@ -41,6 +41,7 @@ from json5.model import (
     JSONArray,
     JSONObject,
     JSONText,
+    UnaryOp,
     Value,
 )
 from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
@@ -138,12 +139,18 @@ def encode_key_segment(key: str) -> str:
 
     Escapes ``\\`` → ``\\\\`` first (so a pre-existing backslash cannot be
     confused with an escape introduced here), then ``.`` → ``\\.`` (so a literal
-    dot in a key is not mistaken for a segment separator). A key with neither
-    character is returned UNCHANGED (identity) — the byte-compat guarantee.
+    dot in a key is not mistaken for a segment separator). Brackets are escaped
+    so literal keys cannot be mistaken for list selectors. Keys without these
+    characters are returned unchanged.
     """
     if key == "":
         return r"\0"
-    return key.replace("\\", "\\\\").replace(".", "\\.")
+    return (
+        key.replace("\\", "\\\\")
+        .replace(".", "\\.")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )
 
 
 def append_key_segment(prefix: str | None, key: str) -> str:
@@ -588,6 +595,10 @@ def _json5_scalar_value(node: object) -> object:
     ``.characters``. Anything unexpected falls back to a dump+reparse, which
     still yields the correctly-typed plain value.
     """
+    # Signed numbers wrap another numeric model; its .value omits the sign
+    # and is not a primitive. Use the existing parser for this representation.
+    if isinstance(node, UnaryOp):
+        return _json5_loads(_json5_dumps(node, dumper=ModelDumper()))
     if hasattr(node, "value") and not hasattr(node, "characters"):
         return node.value
     characters = getattr(node, "characters", None)

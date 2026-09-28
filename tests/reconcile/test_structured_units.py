@@ -1058,3 +1058,51 @@ def test_serialize_structured_never_emits_reloc_anchor() -> None:
     for row in rows:
         row["kind"] = KIND_KEY
         _check_hunk_row("f", row)
+
+
+@pytest.mark.parametrize(
+    ("key", "legacy"),
+    [("name[]", "name[]"), ("star[*]", "star[*]"), (r"slash\[]", r"slash\\[]")],
+)
+@pytest.mark.parametrize("kind", ["shared", "changed", "drafted", "draft-collision"])
+def test_legacy_bracket_key_keeps_classification_and_draft_binding(
+    key: str, legacy: str, kind: str
+) -> None:
+    import json
+
+    base = (json.dumps(key) + ": old\n").encode()
+    live = (json.dumps(key) + ": new\n").encode()
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    assert len(fresh) == 1
+    assert fresh[0].path != legacy
+    cls = HunkClass.SHARED_DRAFTED if kind.startswith("draft") else HunkClass.SHARED
+    prior = replace(
+        fresh[0],
+        path=legacy,
+        label=legacy,
+        cls=cls,
+        confirmed_hash="sha256:old" if kind == "changed" else fresh[0].value_hash,
+        draft_hash="sha256:draft" if kind.startswith("draft") else None,
+    )
+    stored = serialize_structured([prior])
+    classified = classify_structured(fresh, stored, StructuredFormat.YAML)
+    assert classified[0].cls is cls
+    assert classified[0].legacy_path == legacy
+    assert classified[0].changed is (kind == "changed")
+    drafts = {UnitRef.key(legacy): b"shared\n"} if kind.startswith("draft") else {}
+    if kind == "draft-collision":
+        drafts[classified[0].ref] = b"conflicting\n"
+        with pytest.raises(InvariantViolation, match="legacy and canonical"):
+            reconstruct_structured(
+                base, live, classified, drafts, StructuredFormat.YAML
+            )
+    else:
+        captured = reconstruct_structured(
+            base, live, classified, drafts, StructuredFormat.YAML
+        )
+        model = cast(
+            "Mapping[str, object]", _load_model(captured, StructuredFormat.YAML)
+        )
+        assert model[key] == (
+            "old" if kind == "changed" else "shared" if kind == "drafted" else "new"
+        )
