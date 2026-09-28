@@ -19,6 +19,7 @@ from setforge.overlay_provenance import OverlayOrigin
 
 _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("compare.py", "compare"),
+    ("install.py", "_resolve_install_profile"),
     ("install.py", "_load_install_context"),
     ("install.py", "_preview_package_ownership"),
     ("install.py", "_preview_file_ownership"),
@@ -47,6 +48,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("profile.py", "_run_profile_show"),
     ("revert.py", "_revert_symlink_deployments"),
     ("revert.py", "_revert_symlink_paths"),
+    ("revert.py", "_transition_legacy_symlink_paths"),
 )
 
 _LEGACY_RESOLVER_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
@@ -97,9 +99,9 @@ def test_profile_consumers_use_the_effective_resolver(
         for node in ast.walk(function)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "resolve_effective_profile" in calls, (
-        f"{module_name}:{function_name} bypasses the effective-profile boundary"
-    )
+    assert "resolve_effective_profile" in calls or (
+        module_name == "install.py" and "_resolve_install_profile" in calls
+    ), f"{module_name}:{function_name} bypasses the effective-profile boundary"
     assert not ({"resolve_profile", "resolve_and_expand"} & calls)
 
 
@@ -139,7 +141,8 @@ def test_effective_consumer_inventory_matches_cli_call_sites() -> None:
         )
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-                "resolve_effective_profile" in _direct_calls(node)
+                {"resolve_effective_profile", "_resolve_install_profile"}
+                & _direct_calls(node)
             ):
                 discovered.add((module_path.name, node.name))
     assert discovered == set(_PROFILE_CONSUMERS)

@@ -119,12 +119,45 @@ def _provision_ignore_id(identity: Identity, provider: str | None) -> str:
     return identity.key if provider is None else f"{provider}:{identity.key}"
 
 
+def _ignored_package_resources(
+    ignored: frozenset[str], selected: frozenset[ResourceId] | None
+) -> frozenset[ResourceId]:
+    resources: set[ResourceId] = set()
+    for value in ignored:
+        provider, separator, coordinate = value.partition(":")
+        if not separator:
+            continue
+        try:
+            resources.add(ResourceId.package(provider, coordinate))
+        except OwnershipError:
+            continue
+    blocked = resources.intersection(selected or frozenset())
+    if blocked:
+        names = ", ".join(
+            sorted(f"{resource.provider}:{resource.coordinate}" for resource in blocked)
+        )
+        raise SetforgeError(f"selected package is ignored: {names}")
+    return frozenset(resources)
+
+
 def _ignore_receipt(
     entry: ReceiptEntry,
     ignored: frozenset[str],
     represented: set[ResourceId],
+    selected: frozenset[ResourceId] | None = None,
+    ignored_resources: frozenset[ResourceId] = frozenset(),
 ) -> bool:
     assert entry.identity is not None
+    if selected is not None and (
+        entry.provider is None
+        or ResourceId.package(entry.provider, entry.identity.key) not in selected
+    ):
+        return True
+    if ignored_resources and entry.provider is not None:
+        resource = ResourceId.package(entry.provider, entry.identity.key)
+        if resource in ignored_resources:
+            represented.add(resource)
+            return True
     if _provision_ignore_id(entry.identity, entry.provider) not in ignored:
         return False
     if entry.provider is not None:
@@ -145,8 +178,10 @@ def discover_cleanup_items(
     owner_id: uuid.UUID | None = None,
     declared_resources: frozenset[ResourceId] = frozenset(),
     ignored: frozenset[str] = frozenset(),
+    selected: frozenset[ResourceId] | None = None,
 ) -> list[CleanupItem]:
     # Receipt-scoped only (no $PATH/FS scan); a corrupt receipt is skipped, not fatal.
+    ignored_resources = _ignored_package_resources(ignored, selected)
     items: list[CleanupItem] = []
     represented: set[ResourceId] = set()
     for entry in store.iter_receipts():
@@ -157,9 +192,9 @@ def discover_cleanup_items(
             )
             continue
         assert entry.identity is not None
-        if _ignore_receipt(entry, ignored, represented) or (
-            entry.provider is None and entry.identity in declared
-        ):
+        if _ignore_receipt(
+            entry, ignored, represented, selected, ignored_resources
+        ) or (entry.provider is None and entry.identity in declared):
             continue
         managed = ownership_store is None
         refusal = ""
@@ -183,6 +218,8 @@ def discover_cleanup_items(
                     locator=str(entry.path) if entry.path is not None else None,
                     fingerprint=entry.source_digest,
                     checksum=entry.checksum,
+                    artifact=entry.artifact,
+                    platform=entry.platform,
                 )
                 managed = bool(
                     claim is not None
@@ -215,6 +252,8 @@ def discover_cleanup_items(
             declared=declared,
             declared_resources=declared_resources,
             represented=represented,
+            selected=selected,
+            ignored_resources=ignored_resources,
         )
     )
     return items
@@ -227,12 +266,16 @@ def _discover_claim_items(
     declared: set[Identity],
     declared_resources: frozenset[ResourceId],
     represented: set[ResourceId],
+    selected: frozenset[ResourceId] | None = None,
+    ignored_resources: frozenset[ResourceId] = frozenset(),
 ) -> list[CleanupItem]:
     items: list[CleanupItem] = []
     for claim in ownership_store.list_claims():
         resource_id = claim.resource_id
         if (
             resource_id.kind != "package"
+            or resource_id in ignored_resources
+            or (selected is not None and resource_id not in selected)
             or resource_id in represented
             or resource_id in declared_resources
             or claim.owner_id != owner_id
@@ -548,6 +591,12 @@ def _apply_cleanup(
 def cleanup(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    package: list[str] | None = typer.Option(
+        None,
+        "--package",
+        help="Review only this exact provider:identity-key. Repeat to select several "
+        "undeclared packages; the usual ownership checks still apply.",
+    ),
     apply: bool = typer.Option(
         False,
         "--apply",
@@ -556,6 +605,17 @@ def cleanup(
     ),
 ) -> None:
     """Review and clean up undeclared provisioned binaries for ``profile``."""
+    selected: frozenset[ResourceId] | None = None
+    if package:
+        resources: set[ResourceId] = set()
+        for selector in package:
+            provider, separator, coordinate = selector.partition(":")
+            if not separator or not provider or not coordinate:
+                raise SetforgeError(
+                    f"invalid package selector {selector!r}; use provider:identity-key"
+                )
+            resources.add(ResourceId.package(provider, coordinate))
+        selected = frozenset(resources)
     resolved_config = _resolve_config_arg(config)
     console = Console(stderr=True)
     store = _receipt_store()
@@ -574,7 +634,25 @@ def cleanup(
         owner_id=owner_id,
         declared_resources=declared_resources,
         ignored=load_ignored_provisioned(),
+        selected=selected,
     )
+    if selected is not None:
+        found = frozenset(
+            ResourceId.package(item.provider, item.identity.key)
+            for item in items
+            if item.provider is not None
+        )
+        missing = selected - found
+        if missing:
+            names = ", ".join(
+                sorted(
+                    f"{resource.provider}:{resource.coordinate}" for resource in missing
+                )
+            )
+            raise SetforgeError(
+                f"selected package is not eligible for cleanup: {names}; "
+                "it must be undeclared and not ignored"
+            )
 
     if not apply:
         _print_dry_run(items, console)

@@ -113,6 +113,8 @@ from setforge.generated import resolve_generated
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.ownership import (
+    Authority,
+    ClaimLifecycle,
     OwnershipError,
     OwnershipStore,
     ProvenanceFact,
@@ -149,7 +151,7 @@ from setforge.provision.protocol import ObservationOrigin, Outcome, ReconcileRes
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
 from setforge.reconcile import host_local_record
 from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.types import file_id
+from setforge.reconcile.types import FileId, file_id
 from setforge.secrets import SecretAction, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
@@ -200,6 +202,7 @@ class InstallPlan:
     codex_plugins: codex_plugins_mod.CodexPluginPlan | None
     codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
     codex_trusted_projects: tuple[Path, ...] = ()
+    preserved_store_ids: frozenset[FileId] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,8 +425,42 @@ def _snapshot_live_paths(
     return tuple(snapshots)
 
 
+def _resolve_install_profile(
+    cfg: Config,
+    profile: str,
+    repo_root: Path,
+    file_selection: frozenset[str] | None,
+) -> tuple[ProfileContext, LocalOverlayResolution]:
+    declared = frozenset(cfg.tracked_files)
+    effective = resolve_effective_profile(cfg, profile, repo_root)
+    if file_selection is not None:
+        unavailable = file_selection - (
+            declared & frozenset(effective.resolved.tracked_files)
+        )
+        if unavailable:
+            raise SetforgeError(
+                "selected tracked file is not a declared member of this profile: "
+                + ", ".join(sorted(unavailable))
+            )
+    return (
+        ProfileContext(
+            cfg=cfg,
+            resolved=effective.resolved,
+            repo_root=repo_root,
+            profile=profile,
+            file_selection=file_selection,
+        ),
+        effective.local_overlay,
+    )
+
+
 def _load_install_context(
-    config: Path, profile: str, repo_root: Path, *, locked: bool
+    config: Path,
+    profile: str,
+    repo_root: Path,
+    *,
+    locked: bool,
+    file_selection: frozenset[str] | None = None,
 ) -> tuple[
     ProfileContext,
     LockFile | None,
@@ -435,20 +472,43 @@ def _load_install_context(
     baseline = _snapshot_inputs(input_paths)
     cfg = load_config(config)
     refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
-    effective = resolve_effective_profile(cfg, profile, repo_root)
-    active_lock = _prepare_lock(config, cfg, effective.resolved, locked=locked)
+    ctx, local_overlay = _resolve_install_profile(
+        cfg, profile, repo_root, file_selection
+    )
+    active_lock = (
+        _prepare_lock(config, cfg, ctx.resolved, locked=locked)
+        if file_selection is None
+        else None
+    )
     if _snapshot_inputs(input_paths) != baseline:
         raise SetforgeError("install configuration changed while loading; retry")
     return (
-        ProfileContext(
-            cfg=cfg,
-            resolved=effective.resolved,
-            repo_root=repo_root,
-            profile=profile,
-        ),
+        ctx,
         active_lock,
-        effective.local_overlay,
+        local_overlay,
         baseline,
+    )
+
+
+def _preserved_file_store_ids(
+    ctx: ProfileContext, selected_ids: frozenset[str]
+) -> frozenset[FileId]:
+    if ctx.file_selection is None:
+        return frozenset()
+    unselected = set(ctx.resolved.tracked_files) - ctx.file_selection
+    ambiguous = {
+        fid
+        for fid in selected_ids
+        if any(fid == name or fid.startswith(name + "/") for name in unselected)
+    }
+    if ambiguous:
+        raise SetforgeError(
+            "file-only selection has overlapping tracked-file identities: "
+            + ", ".join(sorted(ambiguous))
+        )
+    return frozenset(
+        reconcile_store.stored_file_ids(ctx.profile)
+        - {file_id(name) for name in selected_ids}
     )
 
 
@@ -474,36 +534,51 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     staging = summarize_stages(
         collect_stages(
             ctx.cfg,
-            ctx.resolved,
+            ctx.file_profile,
             ctx.repo_root,
             ctx.profile,
             include_ownership=False,
         ),
         collect_structured_stages(
             ctx.cfg,
-            ctx.resolved,
+            ctx.file_profile,
             ctx.repo_root,
             ctx.profile,
             include_ownership=False,
         ),
     )
     tree_entries = tuple(_iter_all_trees(ctx))
-    codex_configs = codex_resources_mod.plan_config_resources(
-        ctx.cfg,
-        ctx.resolved,
-        ctx.repo_root,
-        read_base=lambda resource_id: reconcile_store.read_base(
-            ctx.profile, file_id(resource_id)
+    preserved_store_ids = _preserved_file_store_ids(
+        ctx,
+        frozenset(
+            [name for _, name, _, _ in tracked_entries]
+            + [name for _, name, _, _ in tree_entries]
         ),
-        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
-        historical_paths=codex_lifecycle.historical_config_paths(),
     )
-    codex_trusted_projects = codex_resources_mod.selected_trusted_projects(
-        ctx.cfg,
-        ctx.resolved,
-        ctx.repo_root,
-        stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
-        historical_paths=codex_lifecycle.historical_config_paths(),
+    codex_configs = (
+        ()
+        if ctx.file_selection is not None
+        else codex_resources_mod.plan_config_resources(
+            ctx.cfg,
+            ctx.resolved,
+            ctx.repo_root,
+            read_base=lambda resource_id: reconcile_store.read_base(
+                ctx.profile, file_id(resource_id)
+            ),
+            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+            historical_paths=codex_lifecycle.historical_config_paths(),
+        )
+    )
+    codex_trusted_projects = (
+        ()
+        if ctx.file_selection is not None
+        else codex_resources_mod.selected_trusted_projects(
+            ctx.cfg,
+            ctx.resolved,
+            ctx.repo_root,
+            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+            historical_paths=codex_lifecycle.historical_config_paths(),
+        )
     )
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
@@ -528,7 +603,11 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             else sub_dst
             for tf, _, _, sub_dst in tracked_entries
         ]
-        + [Path(str(path)).expanduser() for path in ctx.resolved.bootstrap]
+        + [
+            Path(str(path)).expanduser()
+            for path in ctx.resolved.bootstrap
+            if ctx.file_selection is None
+        ]
         + [codex_plan.destination for codex_plan in codex_configs]
     )
     live_paths = {
@@ -541,7 +620,10 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             else sub_dst,
         )
     }
-    live_paths.update(Path(str(path)).expanduser() for path in ctx.resolved.bootstrap)
+    if ctx.file_selection is None:
+        live_paths.update(
+            Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
+        )
     live_paths.update(codex_plan.destination for codex_plan in codex_configs)
     live_path_snapshot = _snapshot_live_paths(live_paths)
     file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
@@ -557,10 +639,10 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         )
     )
     host_local = _load_validated_host_local_sections(
-        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
+        ctx.cfg, ctx.file_profile, ctx.repo_root, ctx.profile
     )
     frozen_host_local = _freeze_host_local_sections(host_local)
-    deploy.validate_srcs_exist(ctx.cfg, ctx.resolved, ctx.repo_root)
+    deploy.validate_srcs_exist(ctx.cfg, ctx.file_profile, ctx.repo_root)
     if transition:
         transitions.validate_state_dir_writable()
     drift_report = compare_mod.compare_profile(
@@ -576,7 +658,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 for tree in trees
             },
         },
-        resolved=ctx.resolved,
+        resolved=ctx.file_profile,
     )
     deploys = install_helpers_mod._plan_tracked_files(
         ctx,
@@ -587,7 +669,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     deploys = _hold_generated_adoptions(deploys, file_ownership)
     extensions: vscode_extensions_mod.ExtensionPlan | None = None
     extension_input = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
-    if extension_input.include or extension_input.exclude:
+    if ctx.file_selection is None and (
+        extension_input.include or extension_input.exclude
+    ):
         try:
             extensions = vscode_extensions_mod.plan_reconcile(
                 extension_input, pins=extension_pins(lock)
@@ -599,7 +683,9 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 fg=typer.colors.YELLOW,
             )
     plugins: claude_plugins_mod.PluginPlan | None = None
-    if reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved):
+    if ctx.file_selection is None and reconcile_adapter.plugin_bare_names(
+        ctx.cfg, ctx.resolved
+    ):
         try:
             plugins = claude_plugins_mod.plan_reconcile(
                 ctx.cfg,
@@ -618,7 +704,8 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     codex_plugin_ids = reconcile_adapter.codex_plugin_ids(ctx.cfg, ctx.resolved)
     codex_plugin_policy = reconcile_adapter.codex_plugin_policy(ctx.resolved)
     if (
-        ctx.resolved.codex is not None
+        ctx.file_selection is None
+        and ctx.resolved.codex is not None
         and ctx.cfg.codex is not None
         and (codex_plugin_ids or codex_plugin_policy is ReconcilePolicy.PRUNE)
     ):
@@ -634,8 +721,18 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-    provisioning = _plan_owned_provisioning(ctx, lock=lock, owner_id=package_owner_id)
-    mcp = plan_mcp_servers(ctx.cfg, ctx.resolved)
+    provisioning = (
+        _plan_owned_provisioning(ctx, lock=lock, owner_id=package_owner_id)
+        if ctx.file_selection is None
+        else ProvisioningPlan(
+            cfg_json=ctx.cfg.model_dump_json(), bundles=(), bundle_graphs=(), batches=()
+        )
+    )
+    mcp = (
+        plan_mcp_servers(ctx.cfg, ctx.resolved)
+        if ctx.file_selection is None
+        else MCPInstallPlan(value=None)
+    )
     planned_entries = tuple(
         (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
         for record in deploys
@@ -664,10 +761,12 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         staging=staging,
         deploys=deploys,
         reconcile_store_mutation=install_helpers_mod._planned_reconcile_store_mutation(
-            ctx.profile, deploys
+            ctx.profile, deploys, preserved_ids=preserved_store_ids
         ),
         bootstrap=tuple(
-            Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
+            Path(str(path)).expanduser()
+            for path in ctx.resolved.bootstrap
+            if ctx.file_selection is None
         ),
         dst_paths=dst_paths,
         source_bytes=source_bytes,
@@ -685,6 +784,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         codex_plugins=codex_plugins,
         codex_configs=codex_configs,
         codex_trusted_projects=codex_trusted_projects,
+        preserved_store_ids=preserved_store_ids,
     )
 
 
@@ -1165,6 +1265,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
             profile,
             plan.deploys,
+            preserved_ids=plan.preserved_store_ids,
         )
         _apply_codex_config_plans(
             plan.codex_configs,
@@ -1211,7 +1312,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             write_inventory(profile, tree.name, inventory)
         seeded = tuple(
             host_local_record.seed_section_slots_to_store(
-                cfg, resolved, plan.ctx.repo_root, profile
+                cfg, plan.ctx.file_profile, plan.ctx.repo_root, profile
             )
         )
         if seeded:
@@ -1302,14 +1403,18 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             detail="plugin reconciliation left a capability inactive" if failed else "",
         )
 
-    phase_nodes = tuple(
-        CapabilityNode(f"@profile:{kind.value}", kind, ())
-        for kind in (
+    phase_kinds = (
+        (CapabilityTargetKind.FILE,)
+        if plan.ctx.file_selection is not None
+        else (
             CapabilityTargetKind.PACKAGE,
             CapabilityTargetKind.FILE,
             CapabilityTargetKind.EXTENSION,
             CapabilityTargetKind.PLUGIN,
         )
+    )
+    phase_nodes = tuple(
+        CapabilityNode(f"@profile:{kind.value}", kind, ()) for kind in phase_kinds
     )
     graph = CapabilityGraph((*phase_nodes, *plan.provisioning.capability_graph.nodes))
     activators = {
@@ -1321,7 +1426,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     outcomes = graph.execute(
         tuple(
             CapabilityTargetAction(kind, lambda: None, activators[kind])
-            for kind in activators
+            for kind in phase_kinds
         )
     )
     if not any(
@@ -1627,13 +1732,16 @@ def _prepare_package_owner_id(
 
 
 def _preview_file_ownership(
-    config: Path, profile: str, *, owner_id_override: UUID | None = None
+    config: Path,
+    profile: str,
+    *,
+    owner_id_override: UUID | None = None,
+    file_selection: frozenset[str] | None = None,
 ) -> tuple[FileDecision, ...]:
     """Build the file consent surface without holding mutation locks."""
     cfg = load_config(config)
-    resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
+    ctx, _overlay = _resolve_install_profile(
+        cfg, profile, config.parent, file_selection
     )
     owner_id = owner_id_override
     if owner_id is None:
@@ -1671,24 +1779,29 @@ def _preview_file_declaration_refs(
     }
 
 
-def _preview_tree_targets(config: Path, profile: str) -> tuple[Path, ...]:
+def _preview_tree_targets(
+    config: Path, profile: str, *, file_selection: frozenset[str] | None = None
+) -> tuple[Path, ...]:
     """Resolve explicit filesystem roots for mutation-lock acquisition."""
     cfg = load_config(config)
-    resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=config.parent, profile=profile
+    ctx, _overlay = _resolve_install_profile(
+        cfg, profile, config.parent, file_selection
     )
     roots = {
         *(
             _tree_lock_target(destination)
             for *_prefix, destination in _iter_all_trees(ctx)
         ),
-        *codex_resources_mod.config_target_roots(
-            cfg,
-            resolved,
-            config.parent,
-            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
-            historical_paths=codex_lifecycle.historical_config_paths(),
+        *(
+            ()
+            if file_selection is not None
+            else codex_resources_mod.config_target_roots(
+                cfg,
+                ctx.resolved,
+                config.parent,
+                stored_ids=tuple(map(str, reconcile_store.stored_file_ids(profile))),
+                historical_paths=codex_lifecycle.historical_config_paths(),
+            )
         ),
     }
     return tuple(sorted(roots, key=str))
@@ -1700,6 +1813,29 @@ def _read_package_owner_id(repo_root: Path) -> UUID | None:
         return read_owner_id(repo_root)
     except OwnershipError:
         return None
+
+
+def _require_managed_file_selection(
+    decisions: tuple[FileDecision, ...], owner_id: UUID | None
+) -> None:
+    if owner_id is None:
+        raise SetforgeError(
+            "file-only install requires this checkout's existing ownership"
+        )
+    refused = [
+        decision.observation.locator
+        for decision in decisions
+        if decision.claim is None
+        or decision.claim.owner_id != owner_id
+        or decision.claim.authority is not Authority.MANAGE
+        or decision.claim.lifecycle is not ClaimLifecycle.CLAIMED
+        or decision.action is FileAction.HOLD
+    ]
+    if refused:
+        raise SetforgeError(
+            "file-only install requires already-managed files from this checkout: "
+            + ", ".join(refused)
+        )
 
 
 def _publish_package_adoptions(
@@ -2122,6 +2258,12 @@ def _package_owner_id(plan: InstallPlan):
 def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     profile: str = _PROFILE_OPTION,
     config: Path | None = _CONFIG_OPTION,
+    file: list[str] | None = typer.Option(
+        None,
+        "--file",
+        help="Update only this declared tracked-file ID in the profile. Repeat to "
+        "select several already-managed files; other resources are retained.",
+    ),
     no_transition: bool = typer.Option(
         False,
         "--no-transition",
@@ -2221,7 +2363,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         ),
     ),
 ) -> None:
-    """Deploy tracked → live for every tracked_file in the profile."""
+    """Deploy tracked → live for the profile or selected managed files."""
+    file_selection = None if file is None else frozenset(file)
+    if file_selection is not None and retry_failed:
+        raise SetforgeError("--file and --retry-failed cannot be combined")
     # Canonicalize once so a symlink retarget cannot split source discovery,
     # locking, config loading, and input snapshots across two repositories.
     config_is_explicit = config is not None
@@ -2253,9 +2398,14 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=True)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
         ctx, active_lock, _local_overlay, input_baseline = _load_install_context(
-            config, profile, repo_root, locked=locked
+            config, profile, repo_root, locked=locked, file_selection=file_selection
         )
         package_owner_id = _read_package_owner_id(repo_root)
+        if file_selection is not None:
+            _require_managed_file_selection(
+                _preview_file_ownership(config, profile, file_selection=file_selection),
+                package_owner_id,
+            )
         plan = _build_install_plan(
             ctx,
             section_auto=section_auto,
@@ -2277,16 +2427,28 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
     ownership_config = config.read_bytes()
-    ownership_preview = _preview_package_ownership(config, profile, locked=locked)
-    file_ownership_preview = _preview_file_ownership(config, profile)
-    tree_target_preview = _preview_tree_targets(config, profile)
+    ownership_preview = (
+        _preview_package_ownership(config, profile, locked=locked)
+        if file_selection is None
+        else ()
+    )
+    file_ownership_preview = _preview_file_ownership(
+        config, profile, file_selection=file_selection
+    )
+    tree_target_preview = _preview_tree_targets(
+        config, profile, file_selection=file_selection
+    )
     if config.read_bytes() != ownership_config:
         raise SetforgeError("install configuration changed while loading; retry")
-    package_owner_id = _prepare_package_owner_id(
-        repo_root,
-        ownership_preview,
-        required=bool(file_ownership_preview),
-    )
+    if file_selection is not None:
+        package_owner_id = _read_package_owner_id(repo_root)
+        _require_managed_file_selection(file_ownership_preview, package_owner_id)
+    else:
+        package_owner_id = _prepare_package_owner_id(
+            repo_root,
+            ownership_preview,
+            required=bool(file_ownership_preview),
+        )
     _confirm_package_adoptions(
         ownership_preview, yes=yes, receiver_owner=package_owner_id
     )
@@ -2329,7 +2491,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             mutation_guards.config_identity if mutation_guards is not None else None
         )
         ctx, active_lock, local_overlay, input_baseline = _load_install_context(
-            config, profile, repo_root, locked=locked
+            config, profile, repo_root, locked=locked, file_selection=file_selection
         )
         cfg = ctx.cfg
         resolved = ctx.resolved
@@ -2348,6 +2510,8 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto=yes,
             package_owner_id=package_owner_id,
         )
+        if file_selection is not None:
+            _require_managed_file_selection(plan.file_ownership, package_owner_id)
         planned_target_roots = {
             *(_tree_lock_target(tree.destination) for tree in plan.trees),
             *(codex.destination.parent for codex in plan.codex_configs),
@@ -2424,7 +2588,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             transitions.ensure_state_dir_writable()
 
         deploy_state_pre = install_helpers_mod._capture_store_snapshots(
-            profile, plan.deploys
+            profile, plan.deploys, preserved_ids=plan.preserved_store_ids
         )
         captured_base_keys = {
             entry.key
@@ -2524,11 +2688,19 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 )
             )
         )
+        symlink_paths = frozenset(
+            destination
+            for tracked, _name, _source, destination in plan.tracked_entries
+            if tracked.symlink is not None
+        )
         tree_filesystem_paths = tuple(
             dict.fromkeys(
-                path
-                for tree in plan.trees
-                for path in _tree_checkpoint_paths(tree, profile)
+                [
+                    path
+                    for tree in plan.trees
+                    for path in _tree_checkpoint_paths(tree, profile)
+                ]
+                + sorted(symlink_paths, key=str)
             )
         )
         tree_pre_images = {
@@ -2653,7 +2825,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 tree_post_images[path],
             )
             for path in tree_filesystem_paths
-            if tree_pre_images[path] != tree_post_images[path]
+            if tree_pre_images[path] != tree_post_images[path] or path in symlink_paths
         )
 
         _emit_reconcile_summary(plugin_outcomes, ext_outcomes)

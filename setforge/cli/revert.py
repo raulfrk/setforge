@@ -57,6 +57,7 @@ from setforge.cli._revert_confirm import (
 from setforge.config import (
     load_config,
     resolve_effective_profile,
+    resolve_symlink_target,
 )
 from setforge.errors import (
     InvalidTransitionRecord,
@@ -408,13 +409,9 @@ def _apply_revert(
 ) -> None:
     """Apply the reverse transition and print the post-success summary.
 
-    For tracked_files declared with ``symlink:`` the per-path
-    ``patch -R`` loop reverses target-file content only — the symlink
-    itself at ``dst`` is a separate object that must be unlinked
-    explicitly via :func:`revert_symlink_deployment`. This wiring closes
-    the symlink-revert side of the symlink-compare contract; the helper refuses
-    cleanly on user-mutated links (target retargeted or replaced with
-    a regular file) so user data is never deleted.
+    Content patches reverse payload bytes; typed filesystem deltas restore
+    symlink topology while retaining links that existed before the install.
+    Legacy records lacking a touched link's preimage refuse before effects.
 
     Store-state restore (Invariant I5): when the transition carries
     ``state_snapshots/``, the byte bases / spans sidecars / scalar-base
@@ -475,7 +472,10 @@ def _apply_revert(
     # untouched, no reverse transition written). The dry-run pass runs the
     # same readlink / regular-file probes the real unlink does, so revert
     # refuses cleanly with zero mutation.
-    _revert_symlink_deployments(config=config, profile=profile, dry_run=True)
+    legacy_symlinks = _transition_legacy_symlink_paths(transition, config, profile)
+    _revert_symlink_deployments(
+        config=config, profile=profile, dry_run=True, selected_paths=legacy_symlinks
+    )
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
     ownership_store = OwnershipStore()
     _validate_ownership_transfer_reverse(
@@ -488,7 +488,9 @@ def _apply_revert(
 
     transitions.apply_patch_reverse(transition)
     operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
-    _revert_symlink_deployments(config=config, profile=profile)
+    _revert_symlink_deployments(
+        config=config, profile=profile, selected_paths=legacy_symlinks
+    )
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
     # Restore each path's pre-install mode AFTER the patch reverse rewrote
@@ -650,7 +652,11 @@ def _restore_modes(recorded: dict[Path, int]) -> None:
 
 
 def _revert_symlink_deployments(
-    *, config: Path, profile: str, dry_run: bool = False
+    *,
+    config: Path,
+    profile: str,
+    dry_run: bool = False,
+    selected_paths: frozenset[Path] | None = None,
 ) -> None:
     """Unlink every symlink-deployed tracked_file in the resolved profile.
 
@@ -692,6 +698,8 @@ def _revert_symlink_deployments(
     )
     for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is None:
+            continue
+        if selected_paths is not None and sub_dst not in selected_paths:
             continue
         if dry_run:
             _check_symlink_revertable(sub_dst, tracked_file.symlink)
@@ -1009,7 +1017,11 @@ def _prepare_revert_journal(
             )
             mcp_names.update(dict.fromkeys(name for name, _, _ in delta.added))
             mcp_names.update(dict.fromkeys(name for name, _, _ in delta.updated))
-    touched.update(dict.fromkeys(_revert_symlink_paths(config, profile)))
+        legacy_symlinks = _transition_legacy_symlink_paths(
+            transition, config, transitions.load_meta(transition).profile
+        )
+        touched.update(dict.fromkeys(legacy_symlinks))
+        generic_paths.update(dict.fromkeys(legacy_symlinks))
     return operations.prepare(
         command="revert",
         profile=profile,
@@ -1039,6 +1051,55 @@ def _revert_locked_profiles(
             for snapshot in transitions.load_state_snapshots(transition) or ()
         )
     return tuple(sorted(profiles))
+
+
+def _transition_legacy_symlink_paths(
+    transition: transitions.TransitionDir, config: Path, profile: str
+) -> frozenset[Path]:
+    """Refuse uncertain legacy link inverses; typed images handle current links."""
+    covered = {delta.path for delta in transitions.load_filesystem_deltas(transition)}
+    touched = frozenset(_load_meta_touched_paths(transition))
+    metadata = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
+    attribution = metadata.get("tracked_file_destinations", {})
+    if not isinstance(attribution, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(paths, list)
+        or any(
+            not isinstance(path, str) or not Path(path).is_absolute() for path in paths
+        )
+        for name, paths in attribution.items()
+    ):
+        raise InvalidTransitionRecord(
+            f"invalid tracked_file_destinations in {transition / 'meta.json'}"
+        )
+    cfg = load_config(config)
+    repo_root = config.resolve().parent
+    try:
+        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
+    except ProfileNotFound:
+        if profile == transitions.MIGRATE_TRANSITION_PROFILE:
+            return frozenset()
+        raise
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    for tracked, _name, _source, destination in _iter_all_tracked_files(ctx):
+        if tracked.symlink is None or destination in covered:
+            continue
+        target = resolve_symlink_target(destination, tracked.symlink)
+        attributed = any(
+            destination in {Path(os.path.normpath(path)) for path in paths}
+            and touched.intersection(Path(os.path.normpath(path)) for path in paths)
+            for paths in attribution.values()
+        )
+        if destination in touched or target in touched or attributed:
+            raise SetforgeError(
+                f"legacy transition lacks symlink preimage for {destination}; "
+                "revert cannot determine whether to retain or remove this link. "
+                "Preserve the current files and reconcile the desired tracked source "
+                "with install --file instead."
+            )
+    return frozenset()
 
 
 def _revert_symlink_paths(config: Path, profile: str) -> tuple[Path, ...]:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import copy
+import json
+import stat
 import subprocess
 import sys
+import uuid
 from importlib import import_module
 from pathlib import Path
 
@@ -30,8 +34,11 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import SetforgeError
+from setforge.file_ownership import file_resource_id
 from setforge.ownership import OwnershipStore, resolve_owner_common_dir
 from setforge.provision.receipt import default_receipt_root
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import FileId, file_id
 
 
 def _mixed_config(
@@ -713,3 +720,542 @@ def test_managed_tree_dry_run_renders_cleanly(
     assert result.output.rstrip().endswith(
         "=== rerun without --dry-run to apply for real ==="
     )
+
+
+@pytest.mark.parametrize("fail_after_write", [False, True])
+def test_selected_file_preserves_other_resources_and_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_after_write: bool
+) -> None:
+    config, live = _mixed_config(
+        tmp_path, monkeypatch, ("one", "tree", "two"), native=True
+    )
+    tracked = config.parent / "tracked"
+    initial = b"heading\nRTK instructions\nfooter\n"
+    (tracked / "one").write_bytes(initial)
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    runner = CliRunner()
+    installed = runner.invoke(app, args)
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    (live / "one").write_bytes(initial + b"host-only line\n")
+    (tracked / "one").write_bytes(b"heading\nfooter\n")
+    (tracked / "two").write_bytes(b"do not deploy\n")
+    (tracked / "model.toml").write_text('model = "do-not-deploy"\n')
+    document = YAML().load(config.read_text())
+    document["packages"] = {"unrelated": {"type": "cargo", "crate": "unrelated"}}
+    document["mcp_servers"] = {"unrelated": {"command": ["never-invoke"]}}
+    document["profiles"]["p"]["packages"] = ["unrelated"]
+    document["profiles"]["p"]["mcp_servers"] = ["unrelated"]
+    YAML().dump(document, config)
+    install = import_module("setforge.cli.install")
+
+    def unexpected_adapter(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("file-only installation reached an unselected adapter")
+
+    monkeypatch.setattr(install, "_plan_owned_provisioning", unexpected_adapter)
+    monkeypatch.setattr(install, "plan_mcp_servers", unexpected_adapter)
+    monkeypatch.setattr(
+        install.codex_resources_mod, "plan_config_resources", unexpected_adapter
+    )
+    monkeypatch.setattr(
+        install.codex_resources_mod, "config_target_roots", unexpected_adapter
+    )
+    controls = [
+        live / "two",
+        live / "tree/item",
+        live.parent / ".codex/config.toml",
+        live.parent / ".codex/AGENTS.md",
+    ]
+    before_controls = {
+        path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode), path.stat().st_ino)
+        for path in controls
+    }
+    ownership = OwnershipStore()
+    selected_resource = file_resource_id(live / "one")
+    before_claims = {claim.resource_id: claim for claim in ownership.list_claims()}
+    before_index = copy.deepcopy(reconcile_store.read_index("p").files)
+    before_store = {
+        fid: (
+            reconcile_store.read_base("p", file_id(fid)),
+            reconcile_store.read_local("p", file_id(fid)),
+        )
+        for fid in before_index
+    }
+    selected_args = [*args, "--file=one", "--file=one", "--locked"]
+    preview = runner.invoke(app, [*selected_args, "--dry-run"])
+    assert preview.exit_code == 0, (preview.output, preview.exception)
+    assert (live / "one").read_bytes() == initial + b"host-only line\n"
+    injected: list[bytes] = []
+    if fail_after_write:
+        original_apply = _install_helpers._apply_tracked_file_plan
+
+        def fail(
+            profile: str,
+            pending: tuple[_install_helpers._PendingDeploy, ...],
+            *,
+            preserved_ids: frozenset[FileId] = frozenset(),
+        ) -> _install_helpers.DeployOutcome:
+            original_apply(profile, pending, preserved_ids=preserved_ids)
+            content = (live / "one").read_bytes()
+            assert content == b"heading\nfooter\nhost-only line\n"
+            injected.append(content)
+            raise SetforgeError("injected after selected file write")
+
+        monkeypatch.setattr(_install_helpers, "_apply_tracked_file_plan", fail)
+    result = runner.invoke(app, selected_args)
+    if fail_after_write:
+        assert injected == [b"heading\nfooter\nhost-only line\n"]
+        assert str(result.exception) == "injected after selected file write"
+        assert (live / "one").read_bytes() == initial + b"host-only line\n"
+        assert ownership.read(selected_resource) == before_claims[selected_resource]
+        assert reconcile_store.read_index("p").files == before_index
+        assert operations.active("p") is None
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert (live / "one").read_bytes() == b"heading\nfooter\nhost-only line\n"
+        repeated = runner.invoke(app, selected_args)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        reverted = runner.invoke(
+            app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+        )
+        assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+        assert (live / "one").read_bytes() == initial + b"host-only line\n"
+    after_index = reconcile_store.read_index("p").files
+    assert {key: row for key, row in after_index.items() if key != "one"} == {
+        key: row for key, row in before_index.items() if key != "one"
+    }
+    for fid, expected in before_store.items():
+        if fail_after_write or fid != "one":
+            assert (
+                reconcile_store.read_base("p", file_id(fid)),
+                reconcile_store.read_local("p", file_id(fid)),
+            ) == expected
+    assert {
+        claim.resource_id: claim
+        for claim in ownership.list_claims()
+        if claim.resource_id != selected_resource
+    } == {
+        resource: claim
+        for resource, claim in before_claims.items()
+        if resource != selected_resource
+    }
+    assert before_controls == {
+        path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode), path.stat().st_ino)
+        for path in controls
+    }
+
+
+@pytest.mark.parametrize(
+    "case", ["unknown", "nonmember", "unowned", "foreign", "released", "retry"]
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_file_selection_refuses_without_resource_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, dry_run: bool
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    yaml = YAML()
+    if case == "unowned":
+        document = yaml.load(config.read_text())
+        document["profiles"]["p"]["tracked_files"] = ["tree", "two"]
+        yaml.dump(document, config)
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    installed = runner.invoke(app, args)
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    ownership = OwnershipStore()
+    resource = file_resource_id(live / "one")
+    if case in {"foreign", "released"}:
+        claim = ownership.read(resource)
+        assert claim is not None
+        with locking.mutation_locks(resources=True):
+            if case == "foreign":
+                ownership.transfer_locked(
+                    resource,
+                    expected_owner=claim.owner_id,
+                    new_owner=uuid.uuid4(),
+                    expected_generation=claim.generation,
+                    declaration_refs=claim.declaration_refs,
+                )
+            else:
+                ownership.release_locked(
+                    resource,
+                    expected_owner=claim.owner_id,
+                    expected_generation=claim.generation,
+                )
+    document = yaml.load(config.read_text())
+    if case == "nonmember":
+        document["profiles"]["p"]["tracked_files"] = ["tree", "two"]
+    elif case == "unowned":
+        document["profiles"]["p"]["tracked_files"] = ["one", "tree", "two"]
+        (live / "one").write_bytes(b"unowned content\n")
+    yaml.dump(document, config)
+    (config.parent / "tracked/one").write_bytes(b"new source\n")
+    before_paths = {
+        path: path.read_bytes() for path in live.rglob("*") if path.is_file()
+    }
+    before_claims = ownership.list_claims()
+    before_index = copy.deepcopy(reconcile_store.read_index("p"))
+    selected = "missing" if case == "unknown" else "one"
+    extra = [f"--file={selected}"]
+    if case == "retry":
+        extra.append("--retry-failed")
+    if dry_run:
+        extra.append("--dry-run")
+    result = runner.invoke(app, [*args, *extra])
+
+    assert result.exit_code == 1, (result.output, result.exception)
+    assert isinstance(result.exception, SetforgeError)
+    assert {
+        path: path.read_bytes() for path in live.rglob("*") if path.is_file()
+    } == before_paths
+    assert ownership.list_claims() == before_claims
+    assert reconcile_store.read_index("p") == before_index
+    assert operations.active("p") is None
+
+
+def test_selected_directory_does_not_prune_named_sibling_or_retired_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    tracked = config.parent / "tracked"
+    (tracked / "one").unlink()
+    (tracked / "one").mkdir()
+    (tracked / "one/current").write_bytes(b"current baseline\n")
+    (tracked / "one/retired").write_bytes(b"retained baseline\n")
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    document["tracked_files"]["one"]["dst"] = str(live / "directory")
+    document["tracked_files"]["one/sibling"] = {
+        "src": "two",
+        "dst": str(live / "named-sibling"),
+    }
+    document["profiles"]["p"]["tracked_files"].append("one/sibling")
+    yaml.dump(document, config)
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    runner = CliRunner()
+    initial = runner.invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    before = copy.deepcopy(reconcile_store.read_index("p").files)
+    assert {"one/sibling", "one/retired"}.issubset(before)
+    controls = {
+        fid: (
+            reconcile_store.read_base("p", file_id(fid)),
+            reconcile_store.read_local("p", file_id(fid)),
+        )
+        for fid in ("one/sibling", "one/retired")
+    }
+    (tracked / "one/current").write_bytes(b"selected update\n")
+    (tracked / "one/retired").unlink()
+    (tracked / "two").write_bytes(b"unselected source update\n")
+    selected = runner.invoke(app, [*args, "--file=one"])
+
+    assert selected.exit_code == 0, (selected.output, selected.exception)
+    assert (live / "directory/current").read_bytes() == b"selected update\n"
+    assert (live / "named-sibling").read_bytes() == b"two\n"
+    assert (live / "directory/retired").read_bytes() == b"retained baseline\n"
+    after = reconcile_store.read_index("p").files
+    for fid, expected in controls.items():
+        assert after[fid] == before[fid]
+        assert (
+            reconcile_store.read_base("p", file_id(fid)),
+            reconcile_store.read_local("p", file_id(fid)),
+        ) == expected
+
+
+def test_file_only_store_scope_rejects_overlapping_declarations(tmp_path: Path) -> None:
+    cfg = Config(
+        tracked_files={
+            "directory": TrackedFile(
+                src=Path("directory"), dst=str(tmp_path / "directory")
+            ),
+            "directory/item": TrackedFile(
+                src=Path("other"), dst=str(tmp_path / "other")
+            ),
+        },
+        profiles={"p": Profile(tracked_files=["directory", "directory/item"])},
+    )
+    ctx = ProfileContext(
+        cfg=cfg,
+        resolved=ResolvedProfile(tracked_files=["directory", "directory/item"]),
+        repo_root=tmp_path,
+        profile="p",
+        file_selection=frozenset({"directory"}),
+    )
+    install = import_module("setforge.cli.install")
+    with pytest.raises(SetforgeError, match="overlapping tracked-file identities"):
+        install._preserved_file_store_ids(ctx, frozenset({"directory/item"}))
+
+
+@pytest.mark.parametrize("kind", ["generated", "symlink", "tree"])
+def test_file_selection_keeps_supported_resource_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    tracked = config.parent / "tracked"
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    selected = "tree" if kind == "tree" else "one"
+    if kind == "generated":
+        document["tracked_files"]["one"]["generated"] = {"inputs": {"home": "home"}}
+        (tracked / "one").write_text("first={{ host.home }}\n")
+    elif kind == "symlink":
+        document["tracked_files"]["one"]["symlink"] = str(live / "payload")
+    yaml.dump(document, config)
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    initial = runner.invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    target = live / "tree/item" if kind == "tree" else live / "one"
+    before = target.read_bytes()
+    if kind == "generated":
+        (tracked / "one").write_text("second={{ host.home }}\n")
+        expected = f"second={live.parent}\n".encode()
+    else:
+        (tracked / ("tree/item" if kind == "tree" else "one")).write_bytes(
+            b"selected update\n"
+        )
+        expected = b"selected update\n"
+    (tracked / "two").write_bytes(b"unselected change\n")
+    applied = runner.invoke(app, [*args, f"--file={selected}"])
+    assert applied.exit_code == 0, (applied.output, applied.exception)
+    assert target.read_bytes() == expected
+    assert (live / "two").read_bytes() == b"two\n"
+    if kind == "symlink":
+        assert (live / "one").is_symlink()
+        assert (live / "payload").read_bytes() == expected
+    update_transition = transitions.load_latest("p")
+    assert update_transition is not None
+    repeated = runner.invoke(app, [*args, f"--file={selected}"])
+    assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+    assert target.read_bytes() == expected
+    reverted = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=p",
+            f"--config={config}",
+            f"--to-before={update_transition.name}",
+            "--yes",
+        ],
+    )
+    assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+    assert target.read_bytes() == before
+    assert (live / "two").read_bytes() == b"two\n"
+
+
+def test_file_selection_retains_profile_section_template_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    tracked = config.parent / "tracked"
+    (tracked / "guide.md").write_bytes(b"# Guide\nshared baseline\n")
+    templates = config.parent / "templates"
+    templates.mkdir()
+    (templates / "notes.md").write_bytes(b"## Local notes\nlocal template\n")
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    document["tracked_files"]["one"]["src"] = "guide.md"
+    document["tracked_files"]["one"]["dst"] = str(live / "guide.md")
+    document["section_templates"] = {"notes": {"src": "notes.md"}}
+    document["profiles"]["p"]["section_slots"] = {"Local notes": "notes"}
+    yaml.dump(document, config)
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    initial = runner.invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    target = live / "guide.md"
+    assert b"## Local notes\nlocal template\n" in target.read_bytes()
+    (templates / "later.md").write_bytes(b"## Later notes\nnew profile slot\n")
+    document["section_templates"]["later"] = {"src": "later.md"}
+    document["profiles"]["p"]["section_slots"]["Later notes"] = "later"
+    yaml.dump(document, config)
+    selected = runner.invoke(app, [*args, "--file=one"])
+
+    assert selected.exit_code == 0, (selected.output, selected.exception)
+    assert (
+        target.read_bytes()
+        == b"# Guide\nshared baseline\n## Local notes\nlocal template\n"
+        b"## Later notes\nnew profile slot\n"
+    )
+    assert (live / "two").read_bytes() == b"two\n"
+    assert "Local notes" in load_config(config).profiles["p"].section_slots
+
+
+@pytest.mark.parametrize("inject_failure", [False, True])
+def test_selected_symlink_reverse_retains_unselected_link_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inject_failure: bool
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    for name in ("one", "two"):
+        document["tracked_files"][name]["symlink"] = str(live / f"payload-{name}")
+    yaml.dump(document, config)
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    initial = runner.invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    unselected = live / "two"
+    before = (
+        str(unselected.readlink()),
+        unselected.lstat().st_ino,
+        unselected.read_bytes(),
+    )
+    (config.parent / "tracked/one").write_bytes(b"selected update\n")
+    update = runner.invoke(app, [*args, "--file=one"])
+    assert update.exit_code == 0, (update.output, update.exception)
+    injected: list[bool] = []
+    if inject_failure:
+        original = operations.apply_filesystem_deltas_reverse_anchored
+
+        def fail(
+            deltas: tuple[transitions.FilesystemDelta, ...],
+            guards: tuple[operations.PathGuard, ...],
+        ) -> None:
+            original(deltas, guards)
+            assert (live / "one").read_bytes() == b"one\n"
+            injected.append(True)
+            raise SetforgeError("injected after selected reverse effect")
+
+        monkeypatch.setattr(
+            operations, "apply_filesystem_deltas_reverse_anchored", fail
+        )
+    reversed_result = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+    if inject_failure:
+        assert injected == [True], (reversed_result.output, reversed_result.exception)
+        assert reversed_result.exit_code != 0
+        assert "injected after selected reverse effect" in str(
+            reversed_result.exception
+        )
+    else:
+        assert reversed_result.exit_code == 0, (
+            reversed_result.output,
+            reversed_result.exception,
+        )
+        assert (live / "one").is_symlink()
+        assert (live / "one").read_bytes() == b"one\n"
+        redone = runner.invoke(
+            app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+        )
+        assert redone.exit_code == 0, (redone.output, redone.exception)
+        assert (live / "one").read_bytes() == b"selected update\n"
+    assert (
+        str(unselected.readlink()),
+        unselected.lstat().st_ino,
+        unselected.read_bytes(),
+    ) == before
+
+
+@pytest.mark.parametrize("updated", [False, True])
+@pytest.mark.parametrize("attributed", [False, True])
+def test_legacy_symlink_inverse_refuses_without_preimage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, updated: bool, attributed: bool
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    for name in ("one", "two"):
+        document["tracked_files"][name]["symlink"] = str(live / f"payload-{name}")
+    yaml.dump(document, config)
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, (result.output, result.exception)
+    if updated:
+        (config.parent / "tracked/one").write_bytes(b"changed\n")
+        result = runner.invoke(app, [*args, "--file=one"])
+        assert result.exit_code == 0, (result.output, result.exception)
+    transition = transitions.load_latest("p")
+    assert transition is not None
+    # Released records have payload paths and optional attribution, but no
+    # filesystem preimage for flat links (verified against released install).
+    fs = transition / "filesystem_deltas.json"
+    payload = json.loads(fs.read_text())
+    links = {str(live / name) for name in ("one", "two")}
+    payload["entries"] = [e for e in payload["entries"] if e["path"] not in links]
+    fs.write_text(json.dumps(payload))
+    meta_path = transition / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["paths"] = [p for p in meta["paths"] if p not in links]
+    if not attributed:
+        meta.pop("tracked_file_destinations", None)
+    meta_path.write_text(json.dumps(meta))
+    before = tuple(
+        (str(p.readlink()), p.lstat().st_ino, p.read_bytes())
+        for p in (live / "one", live / "two")
+    )
+    state = {
+        p.relative_to(tmp_path / "state"): p.read_bytes()
+        for p in (tmp_path / "state").rglob("*")
+        if p.is_file()
+    }
+    reverse = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+    assert reverse.exit_code != 0
+    assert "legacy transition lacks symlink preimage" in str(reverse.exception)
+    revert_module = import_module("setforge.cli.revert")
+    with pytest.raises(SetforgeError, match="legacy transition lacks symlink preimage"):
+        revert_module._apply_revert(transition, "p", config)
+    assert (
+        tuple(
+            (str(p.readlink()), p.lstat().st_ino, p.read_bytes())
+            for p in (live / "one", live / "two")
+        )
+        == before
+    )
+    assert {
+        p.relative_to(tmp_path / "state"): p.read_bytes()
+        for p in (tmp_path / "state").rglob("*")
+        if p.is_file()
+    } == state

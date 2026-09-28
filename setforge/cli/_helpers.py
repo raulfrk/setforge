@@ -53,6 +53,21 @@ class ProfileContext:
     resolved: ResolvedProfile
     repo_root: Path
     profile: str
+    file_selection: frozenset[str] | None = None
+
+    @property
+    def file_profile(self) -> ResolvedProfile:
+        if self.file_selection is None:
+            return self.resolved
+        return self.resolved.model_copy(
+            update={
+                "tracked_files": [
+                    name
+                    for name in self.resolved.tracked_files
+                    if name in self.file_selection
+                ]
+            }
+        )
 
 
 def _parse_capture_auto(auto: str | None) -> CaptureAuto | None:
@@ -122,7 +137,7 @@ def _iter_all_tracked_files(
     ``preserve_user_*`` attributes; callers that only need a path
     destructure as ``_, _, _, sub_dst`` or ``_, _, sub_src, _``.
     """
-    for name in ctx.resolved.tracked_files:
+    for name in ctx.file_profile.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is not None:
             continue
@@ -136,7 +151,7 @@ def _iter_all_trees(
     ctx: ProfileContext,
 ) -> Iterator[tuple[TrackedFile, str, Path, Path]]:
     """Yield one unexpanded root tuple for every explicit managed tree."""
-    for name in ctx.resolved.tracked_files:
+    for name in ctx.file_profile.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is None:
             continue

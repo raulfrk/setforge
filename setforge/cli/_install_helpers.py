@@ -274,7 +274,7 @@ def _plan_tracked_files(
 ) -> tuple[_PendingDeploy, ...]:
     """Resolve the complete tracked-file write set without mutating it."""
     pending: list[_PendingDeploy] = []
-    for name in ctx.resolved.tracked_files:
+    for name in ctx.file_profile.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is not None:
             continue
@@ -326,10 +326,13 @@ def _planned_deploy_action(record: _PendingDeploy) -> deploy.DeployAction | None
 
 
 def _apply_tracked_file_plan(
-    profile: str, pending: tuple[_PendingDeploy, ...]
+    profile: str,
+    pending: tuple[_PendingDeploy, ...],
+    *,
+    preserved_ids: frozenset[FileId] = frozenset(),
 ) -> DeployOutcome:
     """Apply the exact records returned by :func:`_plan_tracked_files`."""
-    return _execute_pending_deploys(profile, pending)
+    return _execute_pending_deploys(profile, pending, preserved_ids=preserved_ids)
 
 
 def _is_utf8(data: bytes) -> bool:
@@ -685,6 +688,8 @@ class _PendingDeploy:
 def _capture_store_snapshots(
     profile: str,
     pending: tuple[_PendingDeploy, ...],
+    *,
+    preserved_ids: frozenset[FileId] = frozenset(),
 ) -> tuple[transitions.StateSnapshotEntry, ...]:
     """Snapshot the pre-install state of every store entry pass 2 can touch.
 
@@ -697,7 +702,7 @@ def _capture_store_snapshots(
     """
     entries: list[transitions.StateSnapshotEntry] = []
     keep_ids = _reconcile_keep_ids(pending)
-    touched_ids = reconcile_store.stored_file_ids(profile) | keep_ids
+    touched_ids = (reconcile_store.stored_file_ids(profile) - preserved_ids) | keep_ids
     for fid in sorted(touched_ids, key=str):
         entries.append(
             transitions.snapshot_store_state(
@@ -717,9 +722,13 @@ def _capture_store_snapshots(
     return tuple(entries)
 
 
-def _reconcile_keep_ids(pending: tuple[_PendingDeploy, ...]) -> set[FileId]:
+def _reconcile_keep_ids(
+    pending: tuple[_PendingDeploy, ...],
+    *,
+    preserved_ids: frozenset[FileId] = frozenset(),
+) -> set[FileId]:
     """Return the identities this frozen install plan still manages."""
-    return {
+    return set(preserved_ids) | {
         reconcile.file_id(record.sub_name)
         for record in pending
         if record.reconcile is not None
@@ -729,9 +738,13 @@ def _reconcile_keep_ids(pending: tuple[_PendingDeploy, ...]) -> set[FileId]:
 def _planned_reconcile_store_mutation(
     profile: str,
     pending: tuple[_PendingDeploy, ...],
+    *,
+    preserved_ids: frozenset[FileId] = frozenset(),
 ) -> bool:
     """Return whether the frozen file plan advances or prunes reconcile state."""
-    if reconcile_store.stored_file_ids(profile) - _reconcile_keep_ids(pending):
+    if reconcile_store.stored_file_ids(profile) - _reconcile_keep_ids(
+        pending, preserved_ids=preserved_ids
+    ):
         return True
     return any(
         record.reconcile is not None
@@ -772,6 +785,8 @@ class DeployOutcome:
 def _execute_pending_deploys(
     profile: str,
     pending: tuple[_PendingDeploy, ...],
+    *,
+    preserved_ids: frozenset[FileId] = frozenset(),
 ) -> DeployOutcome:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
@@ -793,11 +808,13 @@ def _execute_pending_deploys(
     executed disposition set — so a gate refusal (which never reaches this
     function) prunes nothing.
     """
-    state_snapshots = _capture_store_snapshots(profile, pending)
+    state_snapshots = _capture_store_snapshots(
+        profile, pending, preserved_ids=preserved_ids
+    )
     prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
     store_mutated = False
-    keep_ids = _reconcile_keep_ids(pending)
+    keep_ids = _reconcile_keep_ids(pending, preserved_ids=preserved_ids)
     for record in pending:
         tracked_file = record.tracked_file
         if tracked_file.symlink is not None:
@@ -959,7 +976,7 @@ def _install_recorded_nothing(
         return False
     if mcp_delta is not None and not mcp_delta.is_empty():
         return False
-    if filesystem_deltas:
+    if any(item.pre != item.post for item in filesystem_deltas):
         return False
     if ownership_transfers:
         return False
@@ -1338,6 +1355,10 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
     """
     typer.echo("=== resolving profile + host overlay ===")
     typer.echo(f"profile {ctx.profile}")
+    if ctx.file_selection is not None:
+        typer.echo("  selected files only")
+        typer.echo(f"  tracked_files:  {len(ctx.file_profile.tracked_files)}")
+        return
     ext = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
     typer.echo(f"  tracked_files:  {len(ctx.resolved.tracked_files)}")
     typer.echo(

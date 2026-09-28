@@ -995,6 +995,12 @@ def _replace_filesystem_delta_anchored(
                 f"filesystem path changed since transition: {delta.path}"
             )
         _verify_parent_binding(parent_fd, delta.path.parent)
+        if replacement == expected and replacement.kind is SnapshotKind.SYMLINK:
+            unchanged = os.stat(
+                delta.path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            _verify_parent_binding(parent_fd, delta.path.parent)
+            return (unchanged.st_dev, unchanged.st_ino, unchanged.st_mode)
         restored_identity = _restore_path_at(parent_fd, replacement)
         _verify_parent_binding(parent_fd, delta.path.parent)
         return restored_identity

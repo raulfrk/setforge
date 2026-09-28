@@ -211,6 +211,46 @@ reviews undeclared binaries. `cleanup-orphans` concerns filesystem paths: its
 default mode uses tracked-file transition attribution, while `--scan` opts into
 bounded discovery of unrecorded leaves.
 
+For targeted package retirement, remove its declaration from the selected
+profile, then preview its exact provider-qualified identity:
+
+```sh
+setforge cleanup --profile=work --package=github_release:owner/tool
+setforge cleanup --profile=work --package=github_release:owner/tool --apply
+```
+
+Repeat `--package` to review several identities. A selector uses the provider's
+identity, such as `cargo:ripgrep`, rather than the manifest's package alias.
+Unknown, still-declared and ignored selections fail before removal. Apply keeps
+the interactive per-item wizard and requires matching current ownership and
+package evidence. It leaves other packages and lock pins untouched. Package
+removal is not reversed by a file transition; reinstall is a separate action.
+
+To update an already-managed instructions file belonging to another existing
+profile, edit its current tracked source and preview only that declared file:
+
+```sh
+setforge install --profile=legacy --file=agents --dry-run
+setforge install --profile=legacy --file=agents
+```
+
+Repeat `--file` for several tracked-file IDs in that profile. File-only install
+uses its existing rendering and reconciliation context and retains unselected
+files and native integrations. It does not bootstrap directories, provision
+packages or reconcile plugins, extensions or MCP registrations. Every selected
+container must already be managed by the current checkout; this mode does not
+adopt or transfer resources. `--retry-failed` cannot be combined with `--file`.
+Package lock coverage is not checked in file-only mode and the lock is not
+refreshed.
+
+New installs record symlink topology for exact undo and redo. Older transitions
+without a link preimage refuse an ambiguous symlink undo before changing files;
+use a reviewed file-only install to reconcile the desired source instead.
+
+Removing a declaration and running an ordinary `install` does not uninstall
+packages or rewrite resources outside the selected profile. Explicit retirement
+uses the scoped workflows above; history-only file edits are not supported.
+
 Mutating commands share one lock order: a user-global mutation gate, then
 user-global package/adapter resources, the canonical config repository, and
 finally profile state. The gate covers the interval before a write-ahead journal

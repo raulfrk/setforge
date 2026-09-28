@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -13,9 +15,14 @@ from typer.testing import CliRunner
 from setforge import binaries as binaries_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, SetforgeError
 from setforge.local_config import LocalConfig
-from setforge.ownership import OwnershipStore
+from setforge.ownership import (
+    ClaimLifecycle,
+    OwnershipStore,
+    ResourceId,
+    load_or_create_owner_id,
+)
 from setforge.provision.ownership import (
     PackageAction,
     decide_package,
@@ -29,6 +36,11 @@ from setforge.provision.protocol import (
     ProvisionItem,
 )
 from setforge.provision.receipt import ReceiptStore
+
+
+class _TerminalInput(io.BytesIO):
+    def isatty(self) -> bool:
+        return True
 
 
 @pytest.fixture
@@ -90,21 +102,44 @@ def test_discovery_refuses_typed_receipt_without_matching_claim(
     assert path.exists()
 
 
+@pytest.mark.parametrize(
+    ("provider", "artifact", "platform"),
+    [
+        ("cargo", None, None),
+        ("github_release", "tool.tar.gz", None),
+        ("github_release", None, "linux/x86_64"),
+        ("github_release", "tool.tar.gz", "linux/x86_64"),
+    ],
+)
 def test_discovery_accepts_exact_owned_typed_receipt(
-    tmp_path: Path, confine_root: Path
+    tmp_path: Path,
+    confine_root: Path,
+    provider: str,
+    artifact: str | None,
+    platform: str | None,
 ) -> None:
     owner = uuid.uuid4()
     receipts = ReceiptStore(tmp_path / "receipts")
-    identity = _ident("gone")
+    identity = _ident("owner/gone" if provider == "github_release" else "gone")
     path = _write_binary(confine_root, "gone")
-    receipts.record(identity, version="1", checksum=None, path=path, provider="cargo")
+    receipts.record(
+        identity,
+        version="1",
+        checksum=None,
+        path=path,
+        provider=provider,
+        artifact=artifact,
+        platform=platform,
+    )
     observation = PackageObservation(
         identity,
         ObservationOrigin.CURRENT_RECEIPT,
         version="1",
         locator=str(path),
+        artifact=artifact,
+        platform=platform,
     )
-    item = ProvisionItem(type="cargo", identity=identity)
+    item = ProvisionItem(type=provider, identity=identity)
     ownership = OwnershipStore(tmp_path / "ownership")
     decision = decide_package(item, observation, None, owner_id=owner)
     assert decision.action is PackageAction.ADOPT
@@ -223,8 +258,9 @@ def test_typed_ignore_is_not_a_synthetic_declared_identity(
     assert items == []
 
 
+@pytest.mark.parametrize("selection", [None, "ripgrep", "other"])
 def test_discovery_includes_owned_ambient_package_without_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str | None
 ) -> None:
     owner = uuid.uuid4()
     identity = _ident("ripgrep")
@@ -247,8 +283,11 @@ def test_discovery_includes_owned_ambient_package_without_receipt(
             acquisition="adopted-external",
         )
 
+    probes: list[Identity] = []
+
     class _Provider:
         def probe(self) -> set[Identity]:
+            probes.append(identity)
             return {identity}
 
         def observations(
@@ -264,10 +303,15 @@ def test_discovery_includes_owned_ambient_package_without_receipt(
         console=Console(),
         ownership_store=ownership,
         owner_id=owner,
+        selected=frozenset({ResourceId.package("cargo", selection)})
+        if selection is not None
+        else None,
     )
-    assert [(item.provider, item.identity.key, item.managed) for item in items] == [
-        ("cargo", "ripgrep", True)
-    ]
+    expected = [] if selection == "other" else [("cargo", "ripgrep", True)]
+    assert [
+        (item.provider, item.identity.key, item.managed) for item in items
+    ] == expected
+    assert probes == ([] if selection == "other" else [identity])
 
 
 def test_apply_removes_owned_ambient_package_then_releases_claim(
@@ -810,6 +854,225 @@ def test_cli_default_is_dry_run(
     assert result.exit_code == 0, result.output
     assert binpath.exists()
     assert store.installed() == {_ident("gone")}
+
+
+@pytest.mark.parametrize("drift", [None, "artifact", "platform", "version", "checksum"])
+@pytest.mark.parametrize("selected", [False, True])
+def test_cli_cleanup_github_receipt_checks_complete_claim(
+    runner: CliRunner,
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str | None,
+    selected: bool,
+) -> None:
+    from setforge import locking, transitions
+
+    monkeypatch.setenv("HOME", str(confine_root))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    cfg = _write_cleanup_yaml(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    owner = load_or_create_owner_id(tmp_path)
+    receipts = cleanup_mod._receipt_store()
+    ownership = OwnershipStore()
+    assert locking._user_global_locks_dir().is_relative_to(tmp_path)
+    assert transitions.state_root().is_relative_to(tmp_path)
+    assert ownership.root.is_relative_to(tmp_path)
+    paths = {name: _write_binary(confine_root, name) for name in ("gone", "keep")}
+    identities = {name: _ident(f"owner/{name}") for name in paths}
+    metadata = {
+        "version": "1",
+        "checksum": "a" * 64,
+        "artifact": "tool.tar.gz",
+        "platform": "linux/x86_64",
+    }
+    with cleanup_mod.mutation_locks(resources=True):
+        for name, path in paths.items():
+            identity = identities[name]
+            receipts.record(identity, path=path, provider="github_release", **metadata)
+            observation = PackageObservation(
+                identity,
+                ObservationOrigin.CURRENT_RECEIPT,
+                locator=str(path),
+                **metadata,
+            )
+            decision = decide_package(
+                ProvisionItem(type="github_release", identity=identity),
+                observation,
+                None,
+                owner_id=owner,
+            )
+            publish_claim_locked(
+                ownership,
+                decision,
+                owner_id=owner,
+                declaration_ref=f"packages.{name}",
+                acquisition="managed-install",
+            )
+    if drift is not None:
+        receipts.record(
+            identities["gone"],
+            path=paths["gone"],
+            provider="github_release",
+            **{**metadata, drift: "changed"},
+        )
+    keep_resource = package_resource_id(
+        ProvisionItem(type="github_release", identity=identities["keep"])
+    )
+    keep_claim = ownership.read(keep_resource)
+    keep_receipt = receipts.receipt_path(identities["keep"], provider="github_release")
+    keep_before = (paths["keep"].read_bytes(), keep_receipt.read_bytes())
+    prompted: list[Identity] = []
+
+    def choose(item: cleanup_mod.CleanupItem) -> cleanup_mod.CleanupAction:
+        prompted.append(item.identity)
+        return (
+            cleanup_mod.CleanupAction.DELETE
+            if item.identity == identities["gone"]
+            else cleanup_mod.CleanupAction.SKIP
+        )
+
+    monkeypatch.setattr(cleanup_mod, "_pick_action", choose)
+
+    args = ["cleanup", "--profile=p", f"--config={cfg}"]
+    if selected:
+        args.extend(["--package=github_release:OWNER/GONE"] * 2)
+    preview = runner.invoke(app, args)
+    assert preview.exit_code == 0, preview.output
+    assert paths["gone"].exists()
+    result = runner.invoke(app, [*args, "--apply"], input=_TerminalInput())
+
+    assert (result.exit_code == 0) is (drift is None), result.output
+    if selected:
+        assert "owner/keep" not in preview.output
+        assert prompted == [identities["gone"]]
+    gone_resource = package_resource_id(
+        ProvisionItem(type="github_release", identity=identities["gone"])
+    )
+    gone_claim = ownership.read(gone_resource)
+    assert gone_claim is not None
+    assert paths["gone"].exists() is (drift is not None)
+    assert (gone_claim.lifecycle is ClaimLifecycle.RELEASED) is (drift is None)
+    assert ownership.read(keep_resource) == keep_claim
+    assert (paths["keep"].read_bytes(), keep_receipt.read_bytes()) == keep_before
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("unqualified", "invalid package selector"),
+        ("unknown", "not eligible"),
+        ("declared", "not eligible"),
+        ("ignored", "ignored"),
+    ],
+)
+def test_cli_package_selection_refuses_ineligible_without_effects(
+    runner: CliRunner,
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    message: str,
+) -> None:
+    monkeypatch.setenv("HOME", str(confine_root))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\nschema_version: '6.5'\ntracked_files: {}\n"
+        "packages:\n  gone: {type: cargo, crate: gone}\nprofiles:\n"
+        f"  p: {{packages: {'[gone]' if case == 'declared' else '[]'}}}\n",
+        encoding="utf-8",
+    )
+    binary = _write_binary(confine_root, "gone")
+    store = cleanup_mod._receipt_store()
+    identity = _ident("gone")
+    store.record(identity, version="1", checksum=None, path=binary, provider="cargo")
+    receipt = store.receipt_path(identity, provider="cargo")
+    if case == "ignored":
+        binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        binaries_mod.LOCAL_CONFIG_PATH.write_text(
+            "provision_ignore: [cargo:gone]\n", encoding="utf-8"
+        )
+    before = (binary.read_bytes(), receipt.read_bytes(), cfg.read_bytes())
+    selector = "gone" if case == "unqualified" else "cargo:gone"
+    args = ["cleanup", "--profile=p", f"--config={cfg}", f"--package={selector}"]
+    if case == "unknown":
+        args.append("--package=cargo:missing")
+
+    def unexpected_choice(_item: cleanup_mod.CleanupItem) -> cleanup_mod.CleanupAction:
+        pytest.fail("ineligible selection reached the removal wizard")
+
+    monkeypatch.setattr(cleanup_mod, "_pick_action", unexpected_choice)
+    result = runner.invoke(app, [*args, "--apply"])
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SetforgeError)
+    assert message in str(result.exception)
+    assert (binary.read_bytes(), receipt.read_bytes(), cfg.read_bytes()) == before
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_cli_ignored_ambient_selection_refuses_before_provider_probe(
+    runner: CliRunner,
+    tmp_path: Path,
+    confine_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected: bool,
+) -> None:
+    monkeypatch.setenv("HOME", str(confine_root))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    cfg = _write_cleanup_yaml(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    owner = load_or_create_owner_id(tmp_path)
+    identity = _ident("ripgrep")
+    item = ProvisionItem(type="cargo", identity=identity)
+    observation = PackageObservation(
+        identity, ObservationOrigin.EXTERNAL, version="14.1.0", source="crates.io"
+    )
+    ownership = OwnershipStore()
+    decision = decide_package(item, observation, None, owner_id=owner)
+    with cleanup_mod.mutation_locks(resources=True):
+        claim = publish_claim_locked(
+            ownership,
+            decision,
+            owner_id=owner,
+            declaration_ref="packages.ripgrep",
+            acquisition="adopted-external",
+        )
+    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        "provision_ignore: [cargo:RIPGREP]\n", encoding="utf-8"
+    )
+    probes: list[Identity] = []
+    prompted: list[Identity] = []
+
+    class Provider:
+        def probe(self) -> set[Identity]:
+            probes.append(identity)
+            return {identity}
+
+        def observations(
+            self, _installed: set[Identity]
+        ) -> tuple[PackageObservation, ...]:
+            return (observation,)
+
+    def choose(entry: cleanup_mod.CleanupItem) -> cleanup_mod.CleanupAction:
+        prompted.append(entry.identity)
+        return cleanup_mod.CleanupAction.SKIP
+
+    monkeypatch.setattr(cleanup_mod, "build", lambda _item: Provider())
+    monkeypatch.setattr(cleanup_mod, "_pick_action", choose)
+    args = ["cleanup", "--profile=p", f"--config={cfg}", "--apply"]
+    if selected:
+        args.append("--package=cargo:ripgrep")
+    result = runner.invoke(app, args, input=_TerminalInput())
+
+    assert result.exit_code == (1 if selected else 0), result.output
+    if selected:
+        assert "ignored" in str(result.exception)
+    assert probes == []
+    assert prompted == []
+    assert ownership.read(package_resource_id(item)) == claim
 
 
 def test_receipt_remove_deletes_then_idempotent(tmp_path: Path) -> None:
