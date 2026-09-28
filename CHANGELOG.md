@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.9] - 2026-09-28
+
+### Added
+
+- Targeted retirement through `install --file` and `cleanup --package` selectors,
+  with exact ownership checks and preservation of unrelated managed resources.
+
+### Fixed
+
+- Package cleanup matches complete GitHub release receipts, including the
+  selected artifact and platform, before retiring an owned installation.
+- Structured reconciliation preserves signed JSON values and literal bracket
+  keys, including existing YAML classifications and staged drafts.
+- Claude MCP reconciliation reads current native inventories across user,
+  project and local scopes, honors config overrides, and preserves exact command
+  arguments. Ambiguous or unrepresentable registrations refuse changes.
+- MCP updates record both replacement and prior endpoints for undo and redo.
+  Recovery checks recorded destinations and supports interrupted reverse chains;
+  failed reversals report failure and compensate earlier effects.
+- Missing Claude still warns and skips MCP reconciliation before probing Git.
+
+### Changed
+
+- Automatic MCP reversal requires recorded native context. Older records without
+  this context refuse automatic reversal rather than guessing a destination.
+- Older symlink transitions without recorded link preimages refuse ambiguous
+  automatic reversal before changing files.
+- Expanded public CLI, project-sync, structured-merge and native MCP regression
+  coverage, including isolated recovery, mutation and installed-wheel checks.
+
 ## [1.3.8] - 2026-09-28
 
 ### Fixed
@@ -506,7 +536,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.8...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.9...HEAD
+[1.3.9]: https://github.com/raulfrk/setforge/compare/v1.3.8...v1.3.9
 [1.3.8]: https://github.com/raulfrk/setforge/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/raulfrk/setforge/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/raulfrk/setforge/compare/v1.3.5...v1.3.6
