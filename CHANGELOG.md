@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.8] - 2026-09-28
+
+### Fixed
+
+- Managed-tree installation preserves inventory order independence, ownership,
+  directory modes and rollback state, including recovery after process failure.
+- Snapshot restoration and cleanup preserve current resource membership and
+  ownership. Orphan detection protects other profiles' native configuration and
+  skips unreadable transition history without losing genuine orphan candidates.
+- Configuration authoring validates effective profiles before writing. Migration
+  chains preserve supported intent and refuse unsupported lossy reversals.
+- Project injection, visibility, sync and removal preserve Git and filesystem
+  state across ownership conflicts, membership changes and partial failures.
+- Provisioning receipts, shared package lifecycles and external CLI responses
+  retain verified identities and report failures accurately.
+- Status honors the explicitly selected configuration repository.
+
+### Changed
+
+- Expanded public CLI, mixed-resource lifecycle, crash recovery and migration
+  regression coverage. Completed the functional audit with container, installed
+  wheel and mutation verification.
+
 ## [1.3.7] - 2026-09-27
 
 ### Fixed
@@ -483,7 +506,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.7...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.8...HEAD
+[1.3.8]: https://github.com/raulfrk/setforge/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/raulfrk/setforge/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/raulfrk/setforge/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/raulfrk/setforge/compare/v1.3.4...v1.3.5
