@@ -782,6 +782,38 @@ marketplace_app: typer.Typer = typer.Typer(
 app.add_typer(marketplace_app, name="marketplace")
 
 
+def _refuse_conflicting_marketplace(
+    config: Path, name: str, source: MarketplaceSource
+) -> None:
+    declared = load_config(config).marketplaces.get(name)
+    if declared is None or declared == source:
+        return
+    typer.secho(
+        f"error: marketplace already declared: {name} with a different "
+        "source; remove it first to change the source",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
+
+
+def _refuse_referenced_marketplace(config: Path, name: str) -> None:
+    users = sorted(
+        plugin
+        for plugin, ref in load_config(config).claude_plugins.items()
+        if ref.marketplace == name
+    )
+    if not users:
+        return
+    typer.secho(
+        f"error: marketplace {name!r} is still used by plugin(s): "
+        f"{', '.join(users)}; remove them first",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
+
+
 @marketplace_app.command("add", epilog=MARKETPLACE_ADD_EXAMPLES)
 def marketplace_add_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
@@ -838,6 +870,7 @@ def marketplace_add_cmd(
         raise typer.Exit(code=1) from exc
 
     with mutation_locks(resources=True, config_dir=config.resolve().parent):
+        _refuse_conflicting_marketplace(config, name, source)
         yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
         if yaml_changed:
             typer.echo(f"added {name} to marketplaces in YAML")
@@ -913,11 +946,12 @@ def marketplace_remove_cmd(
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
     with mutation_locks(resources=True, config_dir=config.resolve().parent):
+        _refuse_referenced_marketplace(config, name)
         yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
-        if yaml_changed:
-            typer.echo(f"removed {name} from marketplaces in YAML")
-        else:
+        if not yaml_changed:
             typer.echo(f"marketplace not found in YAML: {name}")
+            return
+        typer.echo(f"removed {name} from marketplaces in YAML")
 
         try:
             claude_plugins_mod.marketplace_remove(name)

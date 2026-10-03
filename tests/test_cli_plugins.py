@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -473,6 +474,11 @@ def test_marketplace_subprocess_error_is_clean(
         plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
     )
     monkeypatch.setattr(
+        plugins_mod,
+        "load_config",
+        lambda _path: SimpleNamespace(marketplaces={}, claude_plugins={}),
+    )
+    monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod,
         "yaml_add_marketplace",
         lambda *a, **k: True,
@@ -817,6 +823,74 @@ profiles:
   default:
     packages: [review-plugin]
 """
+
+
+@pytest.fixture
+def claude_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(claude_plugins_mod, "ensure_claude_available", lambda: None)
+    monkeypatch.setattr(
+        claude_plugins_mod,
+        "marketplace_add",
+        lambda name, source, **_kw: calls.append(("add", name)),
+    )
+    monkeypatch.setattr(
+        claude_plugins_mod,
+        "marketplace_remove",
+        lambda name: calls.append(("remove", name)),
+    )
+    monkeypatch.setattr(claude_plugins_mod, "list_installed", lambda: {})
+    return calls
+
+
+def test_marketplace_remove_refuses_while_plugins_reference_it(
+    tmp_path: Path, claude_calls: list[tuple[str, ...]]
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(_CLAUDE_MARKETPLACE_CONFIG)
+    before = config.read_bytes()
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "remove", "team", f"--config={config}"]
+    )
+
+    assert result.exit_code == 1
+    assert "review" in result.output
+    assert config.read_bytes() == before
+    assert claude_calls == []
+
+
+def test_marketplace_remove_unknown_name_does_not_call_claude(
+    tmp_path: Path, claude_calls: list[tuple[str, ...]]
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(_CLAUDE_MARKETPLACE_CONFIG)
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "remove", "nosuch", f"--config={config}"]
+    )
+
+    assert result.exit_code == 0
+    assert "not found" in result.output
+    assert claude_calls == []
+
+
+def test_marketplace_add_rejects_conflicting_source(
+    tmp_path: Path, claude_calls: list[tuple[str, ...]]
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(_CLAUDE_MARKETPLACE_CONFIG)
+    before = config.read_bytes()
+
+    result = CliRunner().invoke(
+        app,
+        ["marketplace", "add", "team", "--from=path:/srv/other", f"--config={config}"],
+    )
+
+    assert result.exit_code == 1
+    assert "already declared" in result.output
+    assert config.read_bytes() == before
+    assert claude_calls == []
 
 
 def test_plugin_list_joins_declared_and_installed_by_full_id(
