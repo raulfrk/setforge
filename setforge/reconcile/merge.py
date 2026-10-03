@@ -169,6 +169,9 @@ def _groups_to_segments(groups: list[tuple[Any, ...]]) -> list[Segment]:
 
 def _body_merge(base: bytes, ours: bytes, theirs: bytes) -> MergeResult:
     """Line-level 3-way of three present bodies; degrades on binary/oversize."""
+    if ours in (theirs, base) or theirs == base:
+        winner = theirs if ours == base else ours
+        return MergeResult((Clean(winner),) if winner else ())
     for side in (base, ours, theirs):
         if b"\x00" in side or len(side) > _MAX_BYTES:
             return _whole_file_conflict(base, ours, theirs)
