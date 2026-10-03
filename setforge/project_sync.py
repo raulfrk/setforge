@@ -47,6 +47,7 @@ from setforge.project_injection import (
     _remove_created_parent,
     _require_compatible_visibility,
     _require_guards,
+    _require_writable_parents,
     _resource_id,
     _sha256,
     _unlink_project_file,
@@ -1023,6 +1024,13 @@ def _prior_ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFil
     )
 
 
+def _changes_file(item: ProjectSyncFilePlan) -> bool:
+    merged = item.result.merged()
+    if merged is ABSENT:
+        return item.live is not ABSENT
+    return merged != item.live or item.result_mode != item.live_mode
+
+
 def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
     """Apply one fully resolved target-wide plan as a journaled transaction."""
     if plan.conflicts:
@@ -1246,6 +1254,22 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 ]
             )
         )
+        _require_writable_parents(
+            (
+                *(
+                    plan.target / item.relative_destination
+                    for item in plan.files
+                    if _changes_file(item)
+                ),
+                *(
+                    parent
+                    for item in plan.files
+                    if item.kind is SyncFileKind.REMOVE and item.stored is not None
+                    for parent in item.stored.created_parents
+                    if parent.exists()
+                ),
+            )
+        )
         journal = operations.prepare(
             command="project-sync",
             profile=operation_profile,
@@ -1272,21 +1296,20 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             for item in plan.files:
                 guards.verify_targets()
                 merged = item.result.merged()
-                if merged is ABSENT:
-                    if item.live is not ABSENT:
+                if _changes_file(item):
+                    if merged is ABSENT:
                         _unlink_project_file(
                             guards.targets[0], item.relative_destination
                         )
-                        changed = True
-                elif merged != item.live or item.result_mode != item.live_mode:
-                    if item.result_mode is None:
-                        raise SetforgeError("project sync result has no file mode")
-                    _write_project_file(
-                        guards.targets[0],
-                        item.relative_destination,
-                        merged,
-                        item.result_mode,
-                    )
+                    else:
+                        if item.result_mode is None:
+                            raise SetforgeError("project sync result has no file mode")
+                        _write_project_file(
+                            guards.targets[0],
+                            item.relative_destination,
+                            merged,
+                            item.result_mode,
+                        )
                     changed = True
                 action = (
                     item.stored.action

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from typer.testing import CliRunner
 
 from setforge import operations
 from setforge.cli import app
+from setforge.errors import SetforgeError
 from setforge.project_overlay import overlay_path
 from setforge.project_sync import (
     AutoResolution,
@@ -337,3 +339,104 @@ def test_public_sync_and_recover_restore_exact_files_claims_and_git_state(
     } == before_files
     assert _private_files(state) == before_state
     assert control.stat().st_ino == control_inode
+
+
+def _two_member_injection(tmp_path: Path) -> tuple[Path, Path]:
+    config = _config(tmp_path)
+    config.write_text(
+        config.read_text()
+        + "      guide:\n        src: guide.md\n        dst: docs/guide.md\n"
+    )
+    (config.parent / "project" / "demo" / "guide.md").write_text("guide\n")
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    return config, target
+
+
+@pytest.mark.parametrize("change", ["update", "delete"])
+def test_sync_into_read_only_directory_refuses_before_journaling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root writes into read-only directories")
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config, target = _two_member_injection(tmp_path)
+    source = config.parent / "project" / "demo" / "guide.md"
+    if change == "update":
+        source.write_text("guide v2\n")
+    else:
+        config.write_text(config.read_text().split("      guide:")[0])
+    docs = target / "docs"
+    before_state = _private_files(state)
+    runner = CliRunner()
+    docs.chmod(0o555)
+    try:
+        failed = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    finally:
+        docs.chmod(0o755)
+
+    assert failed.exit_code == 1
+    assert isinstance(failed.exception, SetforgeError)
+    assert str(failed.exception) == f"project directory is not writable: {docs}"
+    assert _file_state(docs / "guide.md") == (b"guide\n", 0o644)
+    assert _private_files(state) == before_state
+    assert not list(operations.journals_root().glob("*.json"))
+    retried = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert retried.exit_code == 0, retried.output
+    assert _file_state(docs / "guide.md") == (
+        (b"guide v2\n", 0o644) if change == "update" else None
+    )
+
+
+def test_sync_ignores_read_only_directory_of_unchanged_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root writes into read-only directories")
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config, target = _two_member_injection(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text("managed v2\n")
+    docs = target / "docs"
+    docs.chmod(0o555)
+    try:
+        synced = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+    finally:
+        docs.chmod(0o755)
+
+    assert synced.exit_code == 0, synced.output
+    assert (target / "AGENTS.md").read_bytes() == b"managed v2\n"
+    assert (docs / "guide.md").read_bytes() == b"guide\n"
+
+
+def test_sync_write_failure_is_a_clean_error_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config, target = _two_member_injection(tmp_path)
+    (config.parent / "project" / "demo" / "guide.md").write_text("guide v2\n")
+    before_state = _private_files(state)
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(
+            "setforge.project_injection.atomicio.atomic_write_bytes_at", refuse
+        )
+        failed = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert failed.exit_code == 1
+    assert isinstance(failed.exception, SetforgeError)
+    assert str(failed.exception) == (
+        f"project file cannot be written: {target / 'docs/guide.md'}: "
+        "[Errno 13] Permission denied"
+    )
+    assert _file_state(target / "docs/guide.md") == (b"guide\n", 0o644)
+    assert _private_files(state) == before_state
+    assert not list(operations.journals_root().glob("*.json"))

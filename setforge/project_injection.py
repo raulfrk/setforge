@@ -9,7 +9,7 @@ import os
 import stat
 import subprocess
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -907,14 +907,34 @@ def _write_project_file(
     guard: TargetLockGuard, relative: Path, payload: bytes, mode: int
 ) -> None:
     """Publish one project file through a descriptor-confined atomic write."""
-    with _relative_parent(guard, relative, create=True) as parent_fd:
-        atomicio.atomic_write_bytes_at(parent_fd, relative.name, payload, mode=mode)
+    try:
+        with _relative_parent(guard, relative, create=True) as parent_fd:
+            atomicio.atomic_write_bytes_at(parent_fd, relative.name, payload, mode=mode)
+    except OSError as exc:
+        raise SetforgeError(
+            f"project file cannot be written: {guard.target / relative}: {exc}"
+        ) from exc
 
 
 def _unlink_project_file(guard: TargetLockGuard, relative: Path) -> None:
-    with _relative_parent(guard, relative, create=False) as parent_fd:
-        os.unlink(relative.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
+    try:
+        with _relative_parent(guard, relative, create=False) as parent_fd:
+            os.unlink(relative.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+    except OSError as exc:
+        raise SetforgeError(
+            f"project file cannot be removed: {guard.target / relative}: {exc}"
+        ) from exc
+
+
+def _require_writable_parents(paths: Iterable[Path]) -> None:
+    """Refuse before journaling: rollback cannot restore a read-only directory."""
+    for path in paths:
+        parent = path.parent
+        while not parent.exists():
+            parent = parent.parent
+        if not os.access(parent, os.W_OK | os.X_OK):
+            raise SetforgeError(f"project directory is not writable: {parent}")
 
 
 def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
@@ -929,7 +949,10 @@ def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
             os.rmdir(relative.name, dir_fd=parent_fd)
         except OSError as exc:
             if exc.errno not in {39, 66}:
-                raise
+                raise SetforgeError(
+                    "project directory cannot be removed: "
+                    f"{guard.target / relative}: {exc}"
+                ) from exc
         else:
             os.fsync(parent_fd)
 
@@ -1076,6 +1099,11 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
             *visibility_paths,
+        )
+        _require_writable_parents(
+            item.destination
+            for item in plan.files
+            if item.action is not ProjectFileAction.RETAIN
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(
@@ -1567,6 +1595,19 @@ def _restore_planned_files(
         )
 
 
+def _removal_changes_file(item: ProjectFilePlan) -> bool:
+    if item.action is ProjectFileAction.OVERLAY:
+        return True
+    try:
+        info = item.destination.lstat()
+    except FileNotFoundError:
+        return item.action is not ProjectFileAction.CREATE
+    return item.action is ProjectFileAction.CREATE or (
+        item.destination.read_bytes() != item.previous_payload
+        or stat.S_IMODE(info.st_mode) != item.previous_mode
+    )
+
+
 def apply_removal(plan: ProjectRemovePlan) -> None:
     """Restore one drift-free injection and retire its private state."""
     operation_profile = f"project-{_injection_key(plan.target, plan.profile)}"
@@ -1638,6 +1679,16 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
             *visibility_paths,
+        )
+        _require_writable_parents(
+            (
+                *(
+                    item.destination
+                    for item in plan.files
+                    if _removal_changes_file(item)
+                ),
+                *(parent for parent in plan.created_parents if parent.exists()),
+            )
         )
         path_guards = capture_parent_path_guards(paths)
         journal = operations.prepare(

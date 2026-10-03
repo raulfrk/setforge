@@ -817,6 +817,56 @@ def test_remove_refuses_local_edit_kept_by_sync_until_profile_content_returns(
     assert not state.exists()
 
 
+def test_inject_and_remove_refuse_read_only_directory_before_journaling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root writes into read-only directories")
+    from setforge import operations
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    config.write_text(config.read_text().replace("dst: AGENTS.md", "dst: docs/A.md"))
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config)]
+    remove = ["project", "remove", "demo", str(target), "--config", str(config)]
+
+    target.chmod(0o555)
+    try:
+        refused = runner.invoke(app, [*inject, "--yes"])
+    finally:
+        target.chmod(0o755)
+    assert refused.exit_code == 1
+    assert isinstance(refused.exception, SetforgeError)
+    assert str(refused.exception) == f"project directory is not writable: {target}"
+    assert not (target / "docs").exists()
+    assert not manifest_path(target, "demo").exists()
+    assert not list(operations.journals_root().glob("*.json"))
+
+    injected = runner.invoke(app, [*inject, "--yes"])
+    assert injected.exit_code == 0, injected.output
+    record = manifest_path(target, "demo").read_bytes()
+    for directory in (target / "docs", target):
+        directory.chmod(0o555)
+        try:
+            refused = runner.invoke(app, [*remove, "--yes"])
+        finally:
+            directory.chmod(0o755)
+        assert refused.exit_code == 1
+        assert str(refused.exception) == (
+            f"project directory is not writable: {directory}"
+        )
+        assert (target / "docs/A.md").read_text() == "managed instructions\n"
+        assert manifest_path(target, "demo").read_bytes() == record
+        assert not list(operations.journals_root().glob("*.json"))
+
+    removed = runner.invoke(app, [*remove, "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert not (target / "docs").exists()
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:
