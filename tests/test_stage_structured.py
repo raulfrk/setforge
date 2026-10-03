@@ -593,3 +593,64 @@ def test_public_structured_promotion_preserves_shape_comments_and_inverse(
         assert redone.exit_code == 0, (redone.output, redone.exception)
         assert source.read_bytes() == result
         assert destination.read_bytes() == edited
+
+
+def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ruamel.yaml import YAML
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+    from tests.test_install_managed_tree import _mixed_config
+
+    config, live_root = _mixed_config(tmp_path, monkeypatch, ("one", "two"))
+    name = "conf.yaml"
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    tracked = document["tracked_files"].pop("one")
+    tracked["src"] = name
+    tracked["dst"] = str(live_root / name)
+    document["tracked_files"][name] = tracked
+    document["profiles"]["p"]["tracked_files"] = [name, "two"]
+    yaml.dump(document, config)
+    base = (
+        b"---\n# c\nhost: base-host\nshared: 1   # sh\n"
+        b"l:\n    - a    # first\n    - b\nm: {x: 1,   y: 2}\n"
+    )
+    live = base.replace(b"base-host", b"my-laptop").replace(b"shared: 1", b"shared: 2")
+    shared_only = base.replace(b"shared: 1", b"shared: 2")
+    source = config.parent / "tracked" / name
+    source.write_bytes(base)
+    runner = CliRunner()
+    args = ["--profile=p", f"--config={config}"]
+    install = ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    installed = runner.invoke(app, install)
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    destination = live_root / name
+    assert destination.read_bytes() == base
+    destination.write_bytes(live)
+
+    def choices(_stage: StructuredFileStage):
+        def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
+            return Decision(
+                HunkClass.LOCAL if unit.path == "host" else HunkClass.SHARED
+            )
+
+        return choose
+
+    monkeypatch.setattr(stage_mod, "_structured_interactive_choice", choices)
+    staged = runner.invoke(app, ["stage", name, *args], input=_TerminalInput())
+    assert staged.exit_code == 0, (staged.output, staged.exception)
+
+    synced = runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"])
+
+    assert synced.exit_code == 0, (synced.output, synced.exception)
+    assert source.read_bytes() == shared_only
+    assert destination.read_bytes() == live
+    for _ in range(2):
+        again = runner.invoke(app, install)
+        assert again.exit_code == 0, (again.output, again.exception)
+        assert destination.read_bytes() == live
+        assert source.read_bytes() == shared_only
