@@ -872,3 +872,26 @@ def test_install_pending_units_note_does_not_say_blocked_for_written_file(
     assert result.exit_code == 0, result.output
     assert "blocked:" not in result.output
     assert "kept host-only: 1 pending unit(s)" in result.output
+
+
+def test_install_after_ownership_release_names_claim_and_revert_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    claim_id = OwnershipStore().claim_id(file_resource_id(live))
+    released = CliRunner().invoke(
+        app, ["ownership", "release", claim_id, f"--config={config}", "--yes"]
+    )
+    assert released.exit_code == 0, released.output
+    transition_id = released.output.split("released ownership transition ")[1].split()[
+        0
+    ]
+
+    result = _install(config, yes=True)
+
+    assert result.exit_code != 0
+    message = str(result.exception)
+    assert str(live) in message
+    assert claim_id in message
+    assert f"ownership revert {transition_id}" in message

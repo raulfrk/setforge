@@ -115,6 +115,7 @@ from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.ownership import (
     Authority,
     ClaimLifecycle,
+    OwnershipClaim,
     OwnershipError,
     OwnershipStore,
     ProvenanceFact,
@@ -124,6 +125,7 @@ from setforge.ownership import (
     read_owner_id,
     resolve_owner_common_dir,
 )
+from setforge.ownership_history import OwnershipHistoryStore
 from setforge.provision.bundle import resolve_bundle_items
 from setforge.provision.capability_graph import (
     CapabilityActivation,
@@ -1708,20 +1710,58 @@ def _confirm_package_adoptions(
         )
 
 
-def _blocked_install_message(decision: FileDecision) -> str:
+def _blocked_install_message(
+    decision: FileDecision, *, owner_id: UUID | None, config: Path
+) -> str:
     path = decision.observation.locator
     message = f"tracked file ownership blocks install for {path}: {decision.detail}"
-    if not decision.observation.present and decision.claim is not None:
+    claim = decision.claim
+    if not decision.observation.present and claim is not None:
         message += (
             "; restore the file by hand, or run "
             "`setforge install --auto=use-tracked --yes` to recreate it from the "
             "tracked version and discard those units"
         )
+    elif (
+        claim is not None
+        and owner_id is not None
+        and claim.owner_id == owner_id
+        and claim.lifecycle is ClaimLifecycle.RELEASED
+    ):
+        message += _released_claim_remedy(claim, owner_id, config)
     return message
 
 
+def _released_claim_remedy(claim: OwnershipClaim, owner_id: UUID, config: Path) -> str:
+    claim_id = OwnershipStore().claim_id(claim.resource_id)
+    release = next(
+        (
+            transition
+            for transition in reversed(OwnershipHistoryStore().list(owner_id))
+            if transition.after.resource_id == claim.resource_id
+            and transition.after.generation == claim.generation
+        ),
+        None,
+    )
+    if release is None:
+        return (
+            f" (claim {claim_id} was released; find the release with "
+            f"`setforge ownership history --config={config}` and undo it with "
+            "`setforge ownership revert <transition-id> --yes`)"
+        )
+    return (
+        f" (claim {claim_id} was released; take ownership back with "
+        f"`setforge ownership revert {release.transition_id} "
+        f"--config={config} --yes`)"
+    )
+
+
 def _confirm_file_adoptions(
-    decisions: tuple[FileDecision, ...], *, yes: bool, receiver_owner: UUID | None
+    decisions: tuple[FileDecision, ...],
+    *,
+    yes: bool,
+    receiver_owner: UUID | None,
+    config: Path,
 ) -> None:
     """Confirm container claims separately from reconcile content choices."""
     adopt = tuple(
@@ -1734,7 +1774,12 @@ def _confirm_file_adoptions(
     )
     if blocked:
         raise SetforgeError(
-            "\n".join(_blocked_install_message(decision) for decision in blocked)
+            "\n".join(
+                _blocked_install_message(
+                    decision, owner_id=receiver_owner, config=config
+                )
+                for decision in blocked
+            )
         )
     if not adopt:
         return
@@ -2534,7 +2579,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     )
     if (repo_root / ".git").exists():
         _confirm_file_adoptions(
-            file_ownership_preview, yes=yes, receiver_owner=package_owner_id
+            file_ownership_preview,
+            yes=yes,
+            receiver_owner=package_owner_id,
+            config=config,
         )
     has_transfer = any(
         decision.action is PackageAction.TRANSFER for decision in ownership_preview
