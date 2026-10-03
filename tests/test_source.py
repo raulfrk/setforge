@@ -68,7 +68,7 @@ def test_local_codex_overlay_rejects_unsafe_host_values(
 ) -> None:
     path = _write_local_yaml(tmp_path / "local.yaml", body)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError):
         load_local_codex_overlay(path)
 
 
@@ -84,7 +84,7 @@ def test_local_overlay_rejects_option_shaped_plugin_names(
 ) -> None:
     path = _write_local_yaml(tmp_path / "local.yaml", body)
 
-    with pytest.raises(ValidationError, match="names must not begin"):
+    with pytest.raises(ConfigError, match="names must not begin"):
         _load_local_source_config(path)
 
 
@@ -166,7 +166,7 @@ class TestSchema:
             tmp_path / "local.yaml",
             "source:\n  - kind: path\n    path: /a\n  - kind: path\n    path: /b\n",
         )
-        with pytest.raises(ValueError, match="must be a single mapping"):
+        with pytest.raises(ConfigError, match="must be a single mapping"):
             _load_local_source_config(cfg)
 
     def test_local_source_config_rejects_unknown_kind(self, tmp_path: Path) -> None:
@@ -174,7 +174,7 @@ class TestSchema:
             tmp_path / "local.yaml",
             "source:\n  kind: ftp\n  path: /a\n",
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigError, match=r"local\.yaml"):
             _load_local_source_config(cfg)
 
     def test_local_source_config_rejects_extra_fields(self, tmp_path: Path) -> None:
@@ -182,7 +182,24 @@ class TestSchema:
             tmp_path / "local.yaml",
             "source:\n  kind: path\n  path: /a\n  bogus: yes\n",
         )
-        with pytest.raises(ValidationError, match="bogus"):
+        with pytest.raises(ConfigError, match="bogus"):
+            _load_local_source_config(cfg)
+
+    def test_local_source_config_names_file_and_field_when_path_missing(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _write_local_yaml(tmp_path / "local.yaml", "source:\n  kind: path\n")
+        with pytest.raises(ConfigError) as excinfo:
+            _load_local_source_config(cfg)
+        assert str(cfg) in str(excinfo.value)
+        assert "source.path" in str(excinfo.value)
+
+    def test_local_source_config_unreadable_file_is_config_error(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = tmp_path / "local.yaml"
+        cfg.mkdir()
+        with pytest.raises(ConfigError, match="cannot read"):
             _load_local_source_config(cfg)
 
 

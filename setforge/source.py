@@ -573,8 +573,8 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
 
     Returns an empty :class:`_LocalSourceConfig` when the file is absent
     or carries no ``source:`` key. Raises :class:`ConfigError` on YAML
-    parse failure or non-mapping top level. Pydantic validation errors
-    propagate unchanged (with the field-level message).
+    parse failure, an unreadable file, a non-mapping top level, or a
+    schema-invalid block (the message names ``path`` and each field).
 
     Runs detect-before-validate: a cross-major-newer doc refuses cleanly
     (:class:`ConfigError`), and a retired-key (``host_local_sections`` /
@@ -595,6 +595,8 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
         data = yaml.load(path.read_text(encoding="utf-8"))
     except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc.strerror or exc}") from exc
     if data is None:
         return _LocalSourceConfig()
     if not isinstance(data, MutableMapping):
@@ -616,7 +618,14 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
             payload[key] = data[key]
     if not payload:
         return _LocalSourceConfig()
-    return _LocalSourceConfig.model_validate(payload)
+    try:
+        return _LocalSourceConfig.model_validate(payload)
+    except ValidationError as exc:
+        details = "; ".join(
+            f"{'.'.join(str(step) for step in err['loc'])}: {err['msg']}"
+            for err in exc.errors()
+        )
+        raise ConfigError(f"invalid {path}: {details}") from exc
 
 
 def load_local_tracked_file_overlays(
