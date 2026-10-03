@@ -220,7 +220,8 @@ def test_init_config_repo_idempotent_second_run(home: Path) -> None:
     assert second.exit_code == 0, second.output
 
     assert local_yaml.read_bytes() == first_bytes  # byte-identical
-    assert local_yaml.read_text(encoding="utf-8").count("source:") == 1  # no dup
+    text = local_yaml.read_text(encoding="utf-8")
+    assert text.count("\nsource:") == 1  # no dup
     assert (repo / "setforge.yaml").read_bytes() == cfg_before  # not clobbered
     assert (repo / ".git" / "HEAD").read_bytes() == head_before  # no re-init
 
