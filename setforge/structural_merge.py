@@ -479,6 +479,9 @@ class _RuamelBackend:
 # ---------------------------------------------------------------------------
 
 
+type _Wsc = list[str | Comment]
+
+
 class _Json5Backend:
     """Backend for the json-five model (``JSONObject``).
 
@@ -510,6 +513,10 @@ class _Json5Backend:
             self._sides["theirs"] = theirs
         for side in self._sides.values():
             _json5_settle_cr(side)
+        # Read before any edit: a taken value brings theirs' runs along.
+        self._gone_comments = _json5_comment_texts(
+            self._sides.get("base")
+        ) - _json5_comment_texts(self._sides.get("theirs"))
 
     def keys(self) -> list[str]:
         return [_json5_key_text(k) for k in self._ours.keys]
@@ -554,6 +561,13 @@ class _Json5Backend:
             # The run after the value is positional (separator vs closing
             # brace); in a different position ours' run is the one that fits.
             value.wsc_after = ours.values[o_idx].wsc_after
+        elif ours_last and ours.trailing_comma is None:
+            # Theirs' comment on the value's own line rides along; the lines
+            # below it, up to the closing brace, stay ours.
+            value.wsc_after = [
+                *_json5_same_line(value.wsc_after),
+                *_json5_from_break(ours.values[o_idx].wsc_after),
+            ]
         ours.values[o_idx] = value
 
     def add(self, side: str, key: str) -> None:
@@ -565,12 +579,22 @@ class _Json5Backend:
         ours = self._ours
         new_key, new_value = src.keys[s_idx], src.values[s_idx]
         if not ours.keys:
-            ours.leading_wsc = list(src.leading_wsc)
+            indent = [x for x in src.leading_wsc[-1:] if isinstance(x, str)]
+            if any(isinstance(c, Comment) for c in ours.leading_wsc):
+                # Ours' own comments stay; only the indent of a member is taken.
+                ours.leading_wsc = [*ours.leading_wsc[:-1], *indent]
+            else:
+                ours.leading_wsc = list(src.leading_wsc)
             new_key.wsc_before = []
             new_value.wsc_after = _json5_from_break(_json5_tail(src))
         else:
             trail = _json5_member_trail(src, s_idx)
-            lead = [c for c in _json5_from_break(new_key.wsc_before) if _is_comment(c)]
+            known = _json5_comment_texts(ours)
+            lead = [
+                c
+                for c in _json5_from_break(new_key.wsc_before)
+                if isinstance(c, Comment) and c.value not in known
+            ]
             tail = _json5_tail(ours)
             carried = _json5_same_line(tail)
             closing = _json5_from_break(tail)
@@ -601,6 +625,7 @@ class _Json5Backend:
             # treat an absent key as a no-op rather than crashing the merge.
             return
         removed_before = list(ours.keys[idx].wsc_before)
+        kept = self._kept_lead(removed_before)
         tail = _json5_tail(ours)
         was_last = idx == len(ours.keys) - 1
         # Keep keys / values consistent; key_value_pairs is derived so it
@@ -615,7 +640,7 @@ class _Json5Backend:
             ours.leading_wsc = [*leading, *closing]
             ours.trailing_comma = None
         elif was_last:
-            run = [*_json5_same_line(removed_before), *_json5_from_break(tail)]
+            run = [*_json5_same_line(removed_before), *kept, *_json5_from_break(tail)]
             if ours.trailing_comma is None:
                 ours.values[-1].wsc_after = [*ours.values[-1].wsc_after, *run]
             else:
@@ -633,8 +658,26 @@ class _Json5Backend:
             successor = ours.keys[idx]
             successor.wsc_before = [
                 *_json5_same_line(removed_before),
+                *kept,
                 *_json5_from_break(successor.wsc_before),
             ]
+
+    def _kept_lead(self, removed_before: _Wsc) -> _Wsc:
+        """The comment lines above a deleted member that outlive it.
+
+        A comment above the member goes with it only when upstream removed the
+        comment too: one upstream still has, and one only the host wrote (base
+        never had it), stays. Each is returned behind the line break that led
+        to it.
+        """
+        lead = _json5_from_break(removed_before)
+        sep = lead[0] if lead else ""
+        return [
+            x
+            for c in lead
+            if isinstance(c, Comment) and c.value not in self._gone_comments
+            for x in (sep, c)
+        ]
 
     def _separator(self) -> str:
         """The whitespace that starts a member in ours (line break + indent)."""
@@ -655,11 +698,30 @@ class _Json5Backend:
 # ---------------------------------------------------------------------------
 
 
-type _Wsc = list[str | Comment]
-
-
 def _is_comment(item: object) -> bool:
     return isinstance(item, Comment)
+
+
+def _json5_runs(node: JSONObject) -> list[_Wsc]:
+    """Every whitespace/comment run between the members of ``node``."""
+    runs: list[_Wsc] = [node.leading_wsc]
+    runs += [key.wsc_before for key in node.keys]
+    runs += [value.wsc_after for value in node.values]
+    if node.trailing_comma is not None:
+        runs.append(node.trailing_comma.wsc_after)
+    return runs
+
+
+def _json5_comment_texts(node: JSONObject | None) -> set[str]:
+    """The text of every comment written between the members of ``node``."""
+    if node is None:
+        return set()
+    return {
+        item.value
+        for run in _json5_runs(node)
+        for item in run
+        if isinstance(item, Comment)
+    }
 
 
 def _json5_settle_cr(node: JSONObject) -> None:
@@ -670,12 +732,7 @@ def _json5_settle_cr(node: JSONObject) -> None:
     by their line break, so the break must be whole: otherwise a moved comment
     takes its ``\\r`` along and the separator stays a bare ``\\n``.
     """
-    runs: list[_Wsc] = [node.leading_wsc]
-    runs += [key.wsc_before for key in node.keys]
-    runs += [value.wsc_after for value in node.values]
-    if node.trailing_comma is not None:
-        runs.append(node.trailing_comma.wsc_after)
-    for run in runs:
+    for run in _json5_runs(node):
         for index, item in enumerate(run[:-1]):
             after = run[index + 1]
             if (
