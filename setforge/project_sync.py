@@ -89,6 +89,8 @@ class RecordedProjectInjection:
 
     profile: str
     target: Path
+    target_device: int
+    target_inode: int
     git_dir: Path | None
     config_root: Path
     config_path: Path
@@ -178,10 +180,10 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
         raw, manifest_payload = _load_manifest_payload(path)
         if raw["target"] != str(root):
             continue
-        if (
-            raw["target_device"] != target_stat.st_dev
-            or raw["target_inode"] != target_stat.st_ino
-            or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
+        target_device = raw["target_device"]
+        assert isinstance(target_device, int)
+        if raw["target_inode"] != target_stat.st_ino or raw["git_dir"] != (
+            str(git_dir) if git_dir is not None else None
         ):
             raise SetforgeError(
                 f"project injection state does not match target identity: {path}"
@@ -222,6 +224,8 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
             RecordedProjectInjection(
                 profile=profile,
                 target=root,
+                target_device=target_device,
+                target_inode=target_stat.st_ino,
                 git_dir=git_dir,
                 config_root=config_root,
                 config_path=config_path,
@@ -1093,9 +1097,14 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             for item in plan.files
             if item.kind is not SyncFileKind.REMOVE
         }
+        injection_by_profile = {
+            injection.profile: injection for injection in plan.injections
+        }
         resources = {
             (item.profile, item.relative_destination): _resource_id(
-                plan.target, item.relative_destination
+                injection_by_profile[item.profile].target_device,
+                injection_by_profile[item.profile].target_inode,
+                item.relative_destination,
             )
             for item in plan.files
         }
@@ -1134,9 +1143,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
         visibility_remove: list[VisibilityClaim] = []
         overlay_add: list[OverlayClaim] = []
         overlay_remove: list[OverlayClaim] = []
-        injection_by_profile = {
-            injection.profile: injection for injection in plan.injections
-        }
         for item in plan.files:
             raw = raw_by_profile[item.profile]
             injection = injection_by_profile[item.profile]

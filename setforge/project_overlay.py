@@ -130,7 +130,6 @@ def read_overlay(target: Path, relative_path: Path) -> ProjectOverlay | None:
     if (
         raw["target"] != str(root)
         or raw["path"] != relative.as_posix()
-        or raw["target_device"] != current.st_dev
         or raw["target_inode"] != current.st_ino
         or not isinstance(raw["hunks"], list)
     ):

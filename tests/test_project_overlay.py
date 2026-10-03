@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from setforge.errors import SetforgeError
 from setforge.project_overlay import (
     build_overlay,
     clean_content,
+    overlay_path,
     process_filter,
     read_overlay,
     smudge_content,
@@ -188,3 +190,27 @@ def test_real_git_process_filter_hides_overlay_but_not_project_edit(
 
     assert b"team edited" in diff
     assert b"private" not in diff
+
+
+@pytest.mark.parametrize(
+    ("field", "accepted"), [("target_device", True), ("target_inode", False)]
+)
+def test_read_overlay_binds_the_directory_inode_but_not_its_device_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, accepted: bool
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "target"
+    target.mkdir()
+    overlay = build_overlay(target, Path("CLAUDE.md"), b"team\n", b"team\nlocal\n")
+    write_overlay(overlay)
+    state = overlay_path(target, Path("CLAUDE.md"))
+    record = json.loads(state.read_bytes())
+    record[field] += 1
+    state.write_text(json.dumps(record))
+
+    if accepted:
+        assert read_overlay(target, Path("CLAUDE.md")) == overlay
+    else:
+        with pytest.raises(SetforgeError) as failure:
+            read_overlay(target, Path("CLAUDE.md"))
+        assert str(failure.value) == f"project overlay identity changed: {state}"

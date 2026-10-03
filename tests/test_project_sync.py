@@ -1494,7 +1494,9 @@ def test_apply_sync_refuses_addition_with_surviving_project_claim(
     plan = plan_sync(target)
     store = OwnershipStore()
     existing = next(iter(store.list_claims()))
-    resource = _resource_id(target, Path("EXTRA.md"))
+    resource = _resource_id(
+        target.stat().st_dev, target.stat().st_ino, Path("EXTRA.md")
+    )
     with mutation_locks(resources=True):
         claim = store.claim_locked(
             resource_id=resource,

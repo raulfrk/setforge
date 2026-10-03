@@ -50,6 +50,7 @@ from setforge.ownership import (
     ProvenanceFactKind,
     ResourceId,
     ResourceScope,
+    ScopeKind,
     load_or_create_owner_id_locked,
     read_owner_id_locked,
     resolve_owner_common_dir,
@@ -123,6 +124,8 @@ class ProjectRemovePlan:
 
     profile: str
     target: Path
+    target_device: int
+    target_inode: int
     config_path: Path
     manifest_path: Path
     owner_id: uuid.UUID
@@ -429,8 +432,11 @@ def plan_injection(
                 files=files,
                 visibilities=recorded,
             )
+        recorded_device = raw["target_device"]
+        assert isinstance(recorded_device, int)
         return replace(
             plan,
+            target_device=recorded_device,
             visibility_plan=visibility_plan,
             overlay_git_plan=overlay_git_plan,
             no_op=True,
@@ -623,12 +629,20 @@ def _require_compatible_visibility(
             )
 
 
-def _resource_id(target: Path, relative: Path) -> ResourceId:
+def _resource_id(device: int, inode: int, relative: Path) -> ResourceId:
+    """Address one claim by the target identity recorded at injection.
+
+    A network filesystem reports another device number after a remount, so the
+    recorded number stays the ledger key while path, inode, and Git directory
+    decide whether the worktree is still the same.
+    """
     return ResourceId(
         kind="file",
         provider="project-profile",
         coordinate=relative.as_posix(),
-        scope=ResourceScope.target_root(target),
+        scope=ResourceScope._from_wire(
+            ScopeKind.TARGET_ROOT, f"object:{device}:{inode}"
+        ),
     )
 
 
@@ -783,7 +797,14 @@ def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
     }
     if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
         required.add("config_path")
-    if set(raw) != required or not isinstance(raw["files"], list):
+    if (
+        set(raw) != required
+        or not isinstance(raw["files"], list)
+        or any(
+            not isinstance(raw[field], int) or isinstance(raw[field], bool)
+            for field in ("target_device", "target_inode")
+        )
+    ):
         raise SetforgeError(f"project injection state has invalid fields: {path}")
     return raw, payload
 
@@ -800,7 +821,6 @@ def _validate_existing_injection(
     if (
         raw["profile"] != plan.profile
         or raw["target"] != str(plan.target)
-        or raw["target_device"] != plan.target_device
         or raw["target_inode"] != plan.target_inode
         or raw["git_dir"] != (str(plan.git_dir) if plan.git_dir is not None else None)
         or raw["config_root"] != str(plan.config_root)
@@ -991,7 +1011,10 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             raise SetforgeError("project config identity lock is missing")
         store = OwnershipStore()
         resources = tuple(
-            _resource_id(plan.target, item.relative_destination) for item in plan.files
+            _resource_id(
+                fresh.target_device, fresh.target_inode, item.relative_destination
+            )
+            for item in plan.files
         )
         claims = tuple(store.read(resource) for resource in resources)
         tracked_claims = tuple(
@@ -1214,7 +1237,6 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     if (
         raw["profile"] != profile
         or raw["target"] != str(root)
-        or raw["target_device"] != target_stat.st_dev
         or raw["target_inode"] != target_stat.st_ino
         or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
         or raw["config_root"] != str(config_root)
@@ -1519,9 +1541,13 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         if git_dir is not None and overlay_to_remove
         else None
     )
+    recorded_device = raw["target_device"]
+    assert isinstance(recorded_device, int)
     return ProjectRemovePlan(
         profile=profile,
         target=root,
+        target_device=recorded_device,
+        target_inode=target_stat.st_ino,
         config_path=canonical_config_path,
         manifest_path=state_path,
         owner_id=owner_id,
@@ -1638,7 +1664,10 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
             )
         store = OwnershipStore()
         resources = tuple(
-            _resource_id(plan.target, item.relative_destination) for item in plan.files
+            _resource_id(
+                plan.target_device, plan.target_inode, item.relative_destination
+            )
+            for item in plan.files
         )
         claims = tuple(store.read(resource) for resource in resources)
         if any(

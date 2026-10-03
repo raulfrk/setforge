@@ -280,9 +280,10 @@ def _validated_record(
 ) -> tuple[RecordedProjectInjection, tuple[StoredProjectFile, ...]]:
     target = Path(str(raw["target"]))
     root, git_dir, target_info = _verified_project_target(target)
+    target_device = raw["target_device"]
+    assert isinstance(target_device, int)
     if (
         str(root) != raw["target"]
-        or raw["target_device"] != target_info.st_dev
         or raw["target_inode"] != target_info.st_ino
         or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
     ):
@@ -297,6 +298,8 @@ def _validated_record(
     injection = RecordedProjectInjection(
         profile=str(raw["profile"]),
         target=root,
+        target_device=target_device,
+        target_inode=target_info.st_ino,
         git_dir=git_dir,
         config_root=config_root,
         config_path=config_path,
@@ -560,11 +563,7 @@ def plan_project_visibility(
     ):
         raise SetforgeError("project visibility file must be target-relative")
     record, raw, payload, entry = _find_record(root, destination)
-    target_info = root.stat()
-    if (
-        raw["target_device"] != target_info.st_dev
-        or raw["target_inode"] != target_info.st_ino
-    ):
+    if raw["target_inode"] != root.stat().st_ino:
         raise SetforgeError("project target identity does not match the record")
     profile = str(raw["profile"])
     config_root = Path(str(raw["config_root"])).resolve(strict=True)

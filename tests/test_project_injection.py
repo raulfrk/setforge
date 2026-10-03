@@ -867,6 +867,195 @@ def test_inject_and_remove_refuse_read_only_directory_before_journaling(
     assert not (target / "docs").exists()
 
 
+def _remount_with_new_device_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report another st_dev for every path, as an NFS remount or second host does."""
+
+    def shifted(call: Callable[..., os.stat_result]) -> Callable[..., os.stat_result]:
+        def wrapper(*args: object, **kwargs: object) -> os.stat_result:
+            info = call(*args, **kwargs)
+            fields = list(info)[:10]
+            fields[2] += 7
+            return os.stat_result(
+                (
+                    *fields,
+                    info.st_atime,
+                    info.st_mtime,
+                    info.st_ctime,
+                    info.st_atime_ns,
+                    info.st_mtime_ns,
+                    info.st_ctime_ns,
+                )
+            )
+
+        return wrapper
+
+    for name in ("stat", "lstat", "fstat"):
+        monkeypatch.setattr(os, name, shifted(getattr(os, name)))
+
+
+@pytest.mark.parametrize("git_target", [False, True])
+def test_recorded_injection_survives_a_changed_device_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, git_target: bool
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    source = config.parent / "project" / "demo" / "AGENTS.md"
+    target = tmp_path / "target"
+    if git_target:
+        _git_repo(target)
+    else:
+        target.mkdir()
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config)]
+    injected = runner.invoke(app, [*inject, "--yes"])
+    assert injected.exit_code == 0, injected.output
+    state = manifest_path(target, "demo")
+    recorded_device = json.loads(state.read_bytes())["target_device"]
+    assert recorded_device == target.stat().st_dev
+    claim_ids = {claim.resource_id for claim in OwnershipStore().list_claims()}
+    visibility = "hidden" if git_target else "not-applicable"
+
+    with monkeypatch.context() as remounted:
+        _remount_with_new_device_number(remounted)
+        assert target.stat().st_dev == recorded_device + 7
+
+        listed = runner.invoke(app, ["project", "list"])
+        assert listed.exit_code == 0, listed.output
+        assert listed.output == f"{target}  [demo]\n  {visibility}: AGENTS.md\n"
+        repeated = runner.invoke(app, [*inject, "--yes"])
+        assert repeated.exit_code == 0, repeated.output
+        assert "already current" in repeated.output
+        if git_target:
+            tracked = runner.invoke(
+                app,
+                ["project", "visibility", str(target), "AGENTS.md", "--tracked", "-y"],
+            )
+            assert tracked.exit_code == 0, tracked.output
+        source.write_text("managed instructions v2\n")
+        synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+        assert synced.exit_code == 0, synced.output
+        assert (target / "AGENTS.md").read_text() == "managed instructions v2\n"
+        assert json.loads(state.read_bytes())["target_device"] == recorded_device
+        assert {
+            claim.resource_id for claim in OwnershipStore().list_claims()
+        } == claim_ids
+        removed = runner.invoke(
+            app,
+            ["project", "remove", "demo", str(target), "--config", str(config), "-y"],
+        )
+        assert removed.exit_code == 0, removed.output
+
+    assert not (target / "AGENTS.md").exists()
+    assert not state.exists()
+    assert [claim.lifecycle for claim in OwnershipStore().list_claims()] == [
+        ClaimLifecycle.RELEASED
+    ]
+
+
+def test_tracked_overlay_injection_survives_a_changed_device_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--auto=use-profile",
+            "--yes",
+        ],
+    )
+    assert injected.exit_code == 0, injected.output
+
+    with monkeypatch.context() as remounted:
+        _remount_with_new_device_number(remounted)
+        listed = runner.invoke(app, ["project", "list"])
+        assert listed.exit_code == 0, listed.output
+        assert "tracked-overlay: AGENTS.md" in listed.output
+        removed = runner.invoke(
+            app,
+            ["project", "remove", "demo", str(target), "--config", str(config), "-y"],
+        )
+        assert removed.exit_code == 0, removed.output
+
+    assert destination.read_text() == "team instructions\n"
+
+
+@pytest.mark.parametrize("command", ["list", "sync", "inject", "remove"])
+def test_recorded_injection_still_refuses_a_different_directory_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    assert runner.invoke(app, inject).exit_code == 0
+    state = manifest_path(target, "demo")
+    record = json.loads(state.read_bytes())
+    record["target_inode"] += 1
+    state.write_text(json.dumps(record))
+    arguments = {
+        "list": ["project", "list"],
+        "sync": ["project", "sync", str(target), "--dry-run"],
+        "inject": inject,
+        "remove": [
+            "project",
+            "remove",
+            "demo",
+            str(target),
+            "--config",
+            str(config),
+            "--yes",
+        ],
+    }[command]
+
+    refused = runner.invoke(app, arguments)
+
+    assert refused.exit_code == 1
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+    assert json.loads(state.read_bytes()) == record
+
+
+@pytest.mark.parametrize("field", ["target_device", "target_inode"])
+@pytest.mark.parametrize("value", [True, "25", 1.5, None])
+def test_manifest_with_non_integer_target_identity_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    remove = ["project", "remove", "demo", str(target), "--config", str(config), "-y"]
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    assert runner.invoke(app, inject).exit_code == 0
+    state = manifest_path(target, "demo")
+    record = json.loads(state.read_bytes())
+    record[field] = value
+    state.write_text(json.dumps(record))
+
+    refused = runner.invoke(app, remove)
+
+    assert refused.exit_code == 1
+    assert str(refused.exception) == (
+        f"project injection state has invalid fields: {state}"
+    )
+    assert (target / "AGENTS.md").exists()
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:
