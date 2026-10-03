@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
-import uuid
+from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -52,9 +52,9 @@ from setforge.errors import (
     OrphanCleanupRequiresInteractive,
     SetforgeError,
 )
-from setforge.file_ownership import refuse_active_file_claims
+from setforge.file_ownership import active_file_claims, refuse_active_file_claims
 from setforge.locking import mutation_locks
-from setforge.ownership import OwnershipError, read_owner_id
+from setforge.ownership import OwnershipStore
 
 __all__ = [
     "ApplyChoice",
@@ -139,6 +139,28 @@ def _print_skip_note(
     )
 
 
+def _claim_ids(paths: Iterable[Path]) -> dict[Path, str]:
+    store = OwnershipStore()
+    return {
+        path: store.claim_id(claim.resource_id)
+        for path, claim in active_file_claims(paths)
+    }
+
+
+def _print_claim_note(
+    console: Console, claim_id: str | None, config_path: Path | None
+) -> None:
+    if claim_id is None:
+        return
+    config = config_path if config_path is not None else "setforge.yaml"
+    console.print(
+        f"  active ownership claim {claim_id}; --apply refuses until it is "
+        f"released: setforge ownership release {claim_id} --config={config} --yes",
+        markup=False,
+        highlight=False,
+    )
+
+
 def _print_dry_run(
     orphans: list[OrphanEntry],
     console: Console,
@@ -147,14 +169,17 @@ def _print_dry_run(
     skipped_source: int = 0,
     skipped_unmanaged: int = 0,
     skipped_host_local: int = 0,
+    config_path: Path | None = None,
 ) -> None:
     """Print the default-mode dry-run output."""
     if not orphans:
         console.print("=== no orphans ===")
     else:
         console.print("=== DRY-RUN — nothing will be deleted ===")
+        claimed = _claim_ids(o.path for o in orphans)
         for orphan in orphans:
             console.print(f"WOULD delete  {orphan.path}")
+            _print_claim_note(console, claimed.get(orphan.path), config_path)
         console.print("=== rerun with --apply to delete ===")
     _print_skip_note(
         console,
@@ -165,7 +190,11 @@ def _print_dry_run(
     )
 
 
-def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> None:
+def _print_scan_dry_run(
+    result: orphan_scan.ScanResult,
+    console: Console,
+    config_path: Path | None = None,
+) -> None:
     """Render unrecorded scan candidates without implying attribution."""
     if not result.entries:
         console.print("=== no unrecorded managed-tree candidates ===")
@@ -173,6 +202,7 @@ def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> Non
         console.print(
             "=== unrecorded managed-tree candidates — nothing will be deleted ==="
         )
+        claimed = _claim_ids(entry.path for entry in result.entries)
         for entry in result.entries:
             suffix = (
                 f" -> {entry.link_target}"
@@ -180,6 +210,7 @@ def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> Non
                 else ""
             )
             console.print(f"REVIEW  {entry.kind.value:<7}  {entry.path}{suffix}")
+            _print_claim_note(console, claimed.get(entry.path), config_path)
         console.print("=== rerun with --scan --apply to review each path ===")
     skipped = result.skipped_unsupported + result.skipped_mounts
     if skipped:
@@ -190,19 +221,11 @@ def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> Non
         )
 
 
-def _checkout_owner(config_path: Path) -> uuid.UUID | None:
-    try:
-        return read_owner_id(config_path.resolve().parent)
-    except OwnershipError:
-        return None
-
-
 def _detect_orphans_live(
     profile: str,
     config_path: Path,
     *,
     refuse_claims: bool = True,
-    owner: uuid.UUID | None = None,
 ) -> tuple[Any, OrphanDetection]:
     """Resolve the effective profile and re-detect orphans from live state.
 
@@ -246,7 +269,6 @@ def _detect_orphans_live(
     if refuse_claims:
         refuse_active_file_claims(
             (orphan.path for orphan in detection.orphans),
-            allowed_owner=owner,
             config_path=config_path,
         )
     return cfg, detection
@@ -257,7 +279,6 @@ def _detect_scan_live(
     config_path: Path,
     *,
     refuse_claims: bool = True,
-    owner: uuid.UUID | None = None,
 ) -> tuple[Any, orphan_scan.ScanResult]:
     """Reload config and scan every effective profile from current disk state."""
     cfg = load_config(config_path)
@@ -272,7 +293,6 @@ def _detect_scan_live(
     if refuse_claims:
         refuse_active_file_claims(
             (entry.path for entry in result.entries),
-            allowed_owner=owner,
             config_path=config_path,
         )
     return cfg, result
@@ -319,8 +339,7 @@ def _execute_scan_cleanup(
     console: Console,
 ) -> None:
     """Apply only individually approved candidates surviving a locked re-scan."""
-    owner = _checkout_owner(config_path)
-    _, initial = _detect_scan_live(profile, config_path, owner=owner)
+    _, initial = _detect_scan_live(profile, config_path)
     if not initial.entries:
         console.print("=== no unrecorded managed-tree candidates ===")
         return
@@ -336,7 +355,7 @@ def _execute_scan_cleanup(
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
-        _, refreshed = _detect_scan_live(profile, config_path, owner=owner)
+        _, refreshed = _detect_scan_live(profile, config_path)
         selected = tuple(
             entry
             for entry in refreshed.entries
@@ -604,8 +623,7 @@ def _apply_orphan_cleanup(
     confirm it in the pre-prompt list.
     """
     _require_readable_ignore_list()
-    owner = _checkout_owner(config_path)
-    _, detection = _detect_orphans_live(profile, config_path, owner=owner)
+    _, detection = _detect_orphans_live(profile, config_path)
     orphans = detection.orphans
     if not orphans:
         console.print("=== no orphans ===")
@@ -624,7 +642,7 @@ def _apply_orphan_cleanup(
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
-        _, refreshed = _detect_orphans_live(profile, config_path, owner=owner)
+        _, refreshed = _detect_orphans_live(profile, config_path)
         approved_still_orphaned = [
             orphan
             for orphan in refreshed.orphans
@@ -745,7 +763,7 @@ def cleanup_orphans(
             _execute_scan_cleanup(profile, resolved_config, console=console)
         else:
             _, result = _detect_scan_live(profile, resolved_config, refuse_claims=False)
-            _print_scan_dry_run(result, console)
+            _print_scan_dry_run(result, console, resolved_config)
         return
 
     if not apply:
@@ -759,6 +777,7 @@ def cleanup_orphans(
             skipped_source=detection.skipped_source,
             skipped_unmanaged=detection.skipped_unmanaged,
             skipped_host_local=detection.skipped_host_local,
+            config_path=resolved_config,
         )
         return
 

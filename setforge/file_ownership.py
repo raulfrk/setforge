@@ -121,10 +121,9 @@ def refuse_active_file_claims(
             config = config_path if config_path is not None else "setforge.yaml"
             raise OwnershipError(
                 f"{destination} has an active tracked-file ownership claim "
-                f"{store.claim_id(claim.resource_id)} held by another checkout; "
-                "release the claim before mutation: "
-                f"setforge ownership release {store.claim_id(claim.resource_id)} "
-                f"--config={config} --yes"
+                f"{store.claim_id(claim.resource_id)}; release the claim before "
+                "mutation, then re-run cleanup: setforge ownership release "
+                f"{store.claim_id(claim.resource_id)} --config={config} --yes"
             )
 
 

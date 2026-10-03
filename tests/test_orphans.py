@@ -1076,7 +1076,7 @@ def test_apply_yes_holds_profile_lock(
     monkeypatch.setattr(
         orphans_mod,
         "_detect_orphans_live",
-        lambda profile, config_path, **_kw: (_make_config_with({}), detection),
+        lambda profile, config_path: (_make_config_with({}), detection),
     )
 
     orphans_mod._apply_orphan_cleanup(
@@ -1166,7 +1166,7 @@ def test_apply_never_deletes_orphan_discovered_after_prompt(
         return kwargs["journal"]
 
     monkeypatch.setattr(
-        orphans_mod, "_detect_orphans_live", lambda *_a, **_kw: next(detections)
+        orphans_mod, "_detect_orphans_live", lambda *_a: next(detections)
     )
     monkeypatch.setattr(
         orphans_mod,
@@ -1767,20 +1767,40 @@ def test_cleanup_preview_never_refuses_claimed_file(
     assert candidate.exists()
 
 
-def test_cleanup_apply_deletes_file_claimed_by_this_checkout(
+def test_cleanup_own_claim_refuses_apply_until_released(
     tmp_path: Path,
     isolated_state_dir: Path,
 ) -> None:
+    from setforge.ownership import OwnershipStore
+
     candidate, config = _claimed_candidate(
         tmp_path, isolated_state_dir, scan=False, claimant="own"
     )
+    store = OwnershipStore()
+    claim_id = store.claim_id(store.list_claims()[0].resource_id)
+    runner = CliRunner()
+    base = ["cleanup-orphans", "--profile=p", f"--config={config}"]
 
-    result = CliRunner().invoke(
-        app,
-        ["cleanup-orphans", "--profile=p", f"--config={config}", "--apply", "--yes"],
+    preview = runner.invoke(app, base)
+    assert preview.exit_code == 0, preview.output + str(preview.exception)
+    assert str(candidate) in preview.output
+    assert claim_id in preview.output.replace("\n", "")
+
+    refused = runner.invoke(app, [*base, "--apply", "--yes"])
+    assert refused.exit_code != 0
+    message = str(refused.exception)
+    assert str(candidate) in message
+    assert f"setforge ownership release {claim_id} --config={config} --yes" in message
+    assert "re-run cleanup" in message
+    assert candidate.exists()
+
+    released = runner.invoke(
+        app, ["ownership", "release", claim_id, f"--config={config}", "--yes"]
     )
+    assert released.exit_code == 0, released.output + str(released.exception)
 
-    assert result.exit_code == 0, result.output + str(result.exception)
+    applied = runner.invoke(app, [*base, "--apply", "--yes"])
+    assert applied.exit_code == 0, applied.output + str(applied.exception)
     assert not candidate.exists()
 
 
