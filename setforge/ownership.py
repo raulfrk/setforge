@@ -425,7 +425,7 @@ class OwnershipStore:
     def list_claims(self) -> tuple[OwnershipClaim, ...]:
         """Return every validated claim in canonical identity order."""
         self._refuse_unresolved_intents()
-        with _open_dir_chain(self.claims_root, create=False) as directory_fd:
+        with _open_dir_chain(self.root, "claims", create=False) as directory_fd:
             if directory_fd is None:
                 return ()
             names = sorted(
@@ -464,7 +464,7 @@ class OwnershipStore:
         """Create or refresh a claim using an exact generation CAS."""
         require_resources_lock()
         self._refuse_unresolved_intents()
-        with _open_dir_chain(self.claims_root, create=True) as claims_fd:
+        with _open_dir_chain(self.root, "claims", create=True) as claims_fd:
             assert claims_fd is not None
             current = self._read_path(
                 self._claim_path(resource_id),
@@ -533,7 +533,7 @@ class OwnershipStore:
     ) -> OwnershipClaim:
         """Transfer one exact current claim without changing resource bytes."""
         require_resources_lock()
-        with _open_dir_chain(self.claims_root, create=False) as claims_fd:
+        with _open_dir_chain(self.root, "claims", create=False) as claims_fd:
             if claims_fd is None:
                 raise OwnershipError("ownership claim not found; retry from discovery")
             current = self._require_claim(resource_id, directory_fd=claims_fd)
@@ -565,7 +565,7 @@ class OwnershipStore:
     ) -> OwnershipClaim:
         """Release management authority while retaining the resource and tombstone."""
         require_resources_lock()
-        with _open_dir_chain(self.claims_root, create=False) as claims_fd:
+        with _open_dir_chain(self.root, "claims", create=False) as claims_fd:
             if claims_fd is None:
                 raise OwnershipError("ownership claim not found; retry from discovery")
             current = self._require_claim(resource_id, directory_fd=claims_fd)
@@ -601,7 +601,7 @@ class OwnershipStore:
         require_resources_lock()
         if expected_claim.lifecycle is not ClaimLifecycle.RELEASED:
             raise OwnershipError("ownership restore requires a released claim")
-        with _open_dir_chain(self.claims_root, create=False) as claims_fd:
+        with _open_dir_chain(self.root, "claims", create=False) as claims_fd:
             if claims_fd is None:
                 raise OwnershipError("ownership claim not found; retry from discovery")
             current = self._require_claim(
@@ -771,7 +771,7 @@ class OwnershipStore:
         return self.intents_root / f"{intent_id}.json"
 
     def _intent_paths(self) -> tuple[Path, ...]:
-        with _open_dir_chain(self.intents_root, create=False) as directory_fd:
+        with _open_dir_chain(self.root, "intents", create=False) as directory_fd:
             if directory_fd is None:
                 return ()
             names = sorted(
@@ -799,7 +799,7 @@ class OwnershipStore:
                 (json.dumps(_claim_to_json(claim), sort_keys=True) + "\n").encode(),
             )
             return
-        with _open_dir_chain(self.claims_root, create=True) as directory_fd:
+        with _open_dir_chain(self.root, "claims", create=True) as directory_fd:
             assert directory_fd is not None
             _atomic_write_at(
                 directory_fd,
@@ -818,7 +818,7 @@ class OwnershipStore:
             raise CorruptOwnershipState(f"invalid ownership claim path: {path}")
         try:
             if directory_fd is None:
-                with _open_dir_chain(self.claims_root, create=False) as opened_fd:
+                with _open_dir_chain(self.root, "claims", create=False) as opened_fd:
                     if opened_fd is None:
                         return None
                     payload = _read_regular_at(opened_fd, path.name)
@@ -866,7 +866,7 @@ class OwnershipStore:
                 directory_fd, self._intent_path(intent.intent_id).name, payload
             )
             return
-        with _open_dir_chain(self.intents_root, create=True) as directory_fd:
+        with _open_dir_chain(self.root, "intents", create=True) as directory_fd:
             assert directory_fd is not None
             _atomic_write_at(
                 directory_fd,
@@ -881,7 +881,7 @@ class OwnershipStore:
             if path.parent != self.intents_root or path.name != Path(path.name).name:
                 raise ValueError("invalid ownership intent path")
             if directory_fd is None:
-                with _open_dir_chain(self.intents_root, create=False) as opened_fd:
+                with _open_dir_chain(self.root, "intents", create=False) as opened_fd:
                     if opened_fd is None:
                         raise FileNotFoundError(path)
                     payload = _read_regular_at(opened_fd, path.name)
@@ -929,7 +929,7 @@ class OwnershipStore:
             os.unlink(self._claim_path(resource_id).name, dir_fd=directory_fd)
             os.fsync(directory_fd)
             return
-        with _open_dir_chain(self.claims_root, create=False) as directory_fd:
+        with _open_dir_chain(self.root, "claims", create=False) as directory_fd:
             if directory_fd is None:
                 raise CorruptOwnershipState("ownership claims directory disappeared")
             os.unlink(self._claim_path(resource_id).name, dir_fd=directory_fd)
@@ -942,7 +942,7 @@ class OwnershipStore:
             os.unlink(self._intent_path(intent_id).name, dir_fd=directory_fd)
             os.fsync(directory_fd)
             return
-        with _open_dir_chain(self.intents_root, create=False) as directory_fd:
+        with _open_dir_chain(self.root, "intents", create=False) as directory_fd:
             if directory_fd is None:
                 raise CorruptOwnershipState("ownership intents directory disappeared")
             os.unlink(self._intent_path(intent_id).name, dir_fd=directory_fd)
@@ -1230,9 +1230,14 @@ def _open_child_dir_at(parent_fd: int, name: str, *, create: bool = True) -> int
 
 
 @contextmanager
-def _open_dir_chain(path: Path, *, create: bool) -> Iterator[int | None]:
-    """Open an absolute directory chain without following symlinks."""
-    descriptor = _open_dir_chain_fd(path, create=create)
+def _open_dir_chain(root: Path, *children: str, create: bool) -> Iterator[int | None]:
+    """Open ``root`` and ``children`` without following symlinks from ``root`` down.
+
+    Symlinks in the path leading to ``root`` belong to the user's environment
+    (an automounted home, a relocated state directory) and are followed.
+    """
+    path = root.joinpath(*children)
+    descriptor = _open_dir_chain_fd(root, children, create=create)
     if descriptor is None:
         yield None
         return
@@ -1262,36 +1267,36 @@ def _verify_directory_binding(
         )
 
 
-def _open_dir_chain_fd(path: Path, *, create: bool) -> int | None:
-    absolute = path.absolute()
-    parts = absolute.parts
-    descriptor = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+def _open_dir_chain_fd(
+    root: Path, children: tuple[str, ...], *, create: bool
+) -> int | None:
+    follow = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    anchored = follow | os.O_NOFOLLOW
+    absolute = root.absolute()
+    leading = absolute.parent.parts
+    steps = [
+        *((part, follow) for part in leading[1:]),
+        *((part, anchored) for part in (absolute.name, *children)),
+    ]
+    descriptor = os.open(leading[0], follow)
     try:
-        for part in parts[1:]:
+        for part, flags in steps:
             try:
-                child = os.open(
-                    part,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    dir_fd=descriptor,
-                )
+                child = os.open(part, flags, dir_fd=descriptor)
             except FileNotFoundError:
                 if not create:
                     os.close(descriptor)
                     return None
                 os.mkdir(part, mode=0o700, dir_fd=descriptor)
                 os.fsync(descriptor)
-                child = os.open(
-                    part,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    dir_fd=descriptor,
-                )
+                child = os.open(part, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
         return descriptor
     except OSError as exc:
         os.close(descriptor)
         raise CorruptOwnershipState(
-            f"ownership state directory is not trusted: {path}"
+            f"ownership state directory is not trusted: {root.joinpath(*children)}"
         ) from exc
 
 

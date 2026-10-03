@@ -858,6 +858,48 @@ def test_claim_publication_refuses_symlinked_claims_directory(tmp_path: Path) ->
     assert not tuple(outside.iterdir())
 
 
+@pytest.mark.parametrize("state_parts", [(".local", "state", "setforge"), ()])
+def test_store_follows_symlinks_leading_to_ownership_root(
+    tmp_path: Path, state_parts: tuple[str, ...]
+) -> None:
+    real = tmp_path / "volume"
+    real.mkdir()
+    alias = tmp_path / "home"
+    alias.symlink_to(real, target_is_directory=True)
+    store = OwnershipStore(alias.joinpath(*state_parts, "ownership"))
+    owner = uuid.uuid4()
+
+    claim = _claim(store, owner)
+    with install_resources_lock():
+        moved = store.move_locked(
+            claim.resource_id,
+            _resource("rg"),
+            expected_owner=owner,
+            expected_generation=1,
+        )
+
+    assert store.list_claims() == (moved,)
+    assert store.read(moved.resource_id) == moved
+    stored = real.joinpath(*state_parts, "ownership", "claims")
+    assert [path.name for path in stored.iterdir()] == [
+        store.claim_path(moved.resource_id).name
+    ]
+
+
+def test_store_refuses_symlinked_ownership_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store = OwnershipStore(tmp_path / "state" / "ownership")
+    store.root.parent.mkdir()
+    store.root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CorruptOwnershipState, match="not trusted"):
+        _claim(store, uuid.uuid4())
+    with pytest.raises(CorruptOwnershipState, match="not trusted"):
+        store.list_claims()
+    assert not tuple(outside.iterdir())
+
+
 def test_claim_publication_is_anchored_and_detects_directory_swap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
