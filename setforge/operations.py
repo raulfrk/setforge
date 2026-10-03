@@ -1516,12 +1516,7 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
                 )
             continue
         try:
-            live = _restarted_guard_identity(
-                guard,
-                info,
-                exact_mode=journal.command != "install"
-                and guard.path in directory_paths,
-            )
+            live = _restarted_guard_identity(guard, info)
         except OSError as exc:
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
@@ -1533,14 +1528,14 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
 
 
 def _restarted_guard_identity(
-    guard: PathGuard, info: os.stat_result, *, exact_mode: bool = False
+    guard: PathGuard, info: os.stat_result
 ) -> tuple[int, int, int] | None:
     """Match a persisted guard against ``lstat`` output from a later process.
 
-    Device numbers change across remounts and hosts, and an operator may fix
-    an ancestor's permissions before recovering, so the inode and directory
-    type decide and the observed device and mode are adopted. ``exact_mode``
-    keeps the full mode for a directory the journal itself may recreate.
+    Device numbers change across remounts and hosts, and permission bits change
+    when the operation itself rewrote a directory's mode or an operator fixed
+    an ancestor before recovering. The inode and directory type decide; the
+    observed device and mode are adopted.
     """
     assert guard.mode is not None
     alias = stat.S_ISLNK(guard.mode)
@@ -1549,8 +1544,6 @@ def _restarted_guard_identity(
     if info.st_ino != guard.inode or not stat.S_ISDIR(info.st_mode):
         return None
     mode = alias_guard_mode(info.st_mode) if alias else info.st_mode
-    if exact_mode and mode != guard.mode:
-        return None
     return (info.st_dev, info.st_ino, mode)
 
 

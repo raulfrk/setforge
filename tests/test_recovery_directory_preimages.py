@@ -161,6 +161,38 @@ def test_recovery_retry_after_directory_recreation(
         _assert_restored(leaf)
 
 
+def test_recovery_restores_the_mode_an_operation_changed_on_a_recorded_directory(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    parent = tmp_path / "kept"
+    parent.mkdir()
+    parent.chmod(0o751)
+    leaf = parent / "file"
+    leaf.write_bytes(b"before\n")
+    journal = operations.begin_checkpoint(
+        operations.prepare(
+            command="project-sync",
+            profile="p",
+            config_dir=None,
+            resources_lock=False,
+            command_line=("project", "sync"),
+            paths=(parent, leaf),
+            path_guards=_path_guards(leaf),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore recorded paths",
+    )
+    parent.chmod(0o700)
+    leaf.write_bytes(b"after\n")
+
+    operations.validate_recovery(journal)
+    operations.recover_files(journal)
+
+    assert parent.stat().st_mode & 0o7777 == 0o751
+    assert leaf.read_bytes() == b"before\n"
+
+
 @pytest.mark.parametrize("replacement", ["directory", "symlink"])
 def test_recovery_refuses_replacement_of_recorded_directory(
     tmp_path: Path, operation_state: Path, replacement: str

@@ -1468,3 +1468,93 @@ def test_legacy_symlink_inverse_refuses_without_preimage(
         for p in (tmp_path / "state").rglob("*")
         if p.is_file()
     } == state
+
+
+def _tree_with_restricted_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path, list[str]]:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("tree", "one", "two"))
+    source = config.parent / "tracked/tree"
+    (source / "sub").mkdir()
+    (source / "sub").chmod(0o755)
+    (source / "sub/extra").write_text("extra\n")
+    install = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    return config, live, source, install
+
+
+def test_refused_revert_chain_rolls_back_a_directory_mode_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live, source, install = _tree_with_restricted_subdirectory(
+        tmp_path, monkeypatch
+    )
+    runner = CliRunner()
+    assert runner.invoke(app, install).exit_code == 0
+    (config.parent / "tracked/one").write_text("one v2\n")
+    assert runner.invoke(app, install).exit_code == 0
+    target = transitions.load_latest("p")
+    assert target is not None
+    (source / "sub").chmod(0o700)
+    (source / "sub/extra").write_text("extra v2\n")
+    assert runner.invoke(app, install).exit_code == 0
+    (live / "one").write_text("manually edited\n")
+
+    failed = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=p",
+            f"--config={config}",
+            "--yes",
+            f"--to-before={target.name}",
+        ],
+    )
+
+    assert failed.exit_code != 0
+    assert not getattr(failed.exception, "__notes__", ())
+    assert "rolled back 1 already reverted step(s)" in failed.output
+    assert operations.active("p") is None
+    assert stat.S_IMODE((live / "tree/sub").stat().st_mode) == 0o700
+    assert (live / "tree/sub/extra").read_text() == "extra v2\n"
+    assert (live / "one").read_text() == "manually edited\n"
+    assert runner.invoke(app, install).exit_code == 0
+
+
+@pytest.mark.parametrize("change_child", [True, False])
+def test_failed_revert_rolls_back_a_directory_mode_it_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change_child: bool
+) -> None:
+    config, live, source, install = _tree_with_restricted_subdirectory(
+        tmp_path, monkeypatch
+    )
+    runner = CliRunner()
+    assert runner.invoke(app, install).exit_code == 0
+    (source / "sub").chmod(0o700)
+    if change_child:
+        (source / "sub/extra").write_text("extra v2\n")
+    assert runner.invoke(app, install).exit_code == 0
+    revert_module = import_module("setforge.cli.revert")
+
+    def crash(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated failure after revert effects")
+
+    monkeypatch.setattr(revert_module, "_write_reverse_transition", crash)
+
+    failed = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+
+    assert isinstance(failed.exception, RuntimeError)
+    assert not getattr(failed.exception, "__notes__", ())
+    assert operations.active("p") is None
+    assert stat.S_IMODE((live / "tree/sub").stat().st_mode) == 0o700
+    assert (live / "tree/sub/extra").read_text() == (
+        "extra v2\n" if change_child else "extra\n"
+    )
