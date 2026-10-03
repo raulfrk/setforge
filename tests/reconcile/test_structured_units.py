@@ -1282,3 +1282,41 @@ def test_extract_reports_duplicate_json_keys_as_unparseable() -> None:
 
     with pytest.raises(StructuredParseError, match="duplicate key 'a'"):
         extract_structured_units(base, live, StructuredFormat.JSONC)
+
+
+def test_aligned_pairs_the_most_similar_lines_of_a_run() -> None:
+    from setforge.reconcile.structured_units import _aligned
+
+    old = [b"h3: 8\n", b"k1: 2\n", b"# h note\n"]
+    new = [b"k1: 16\n"]
+
+    assert _aligned(old, new, 10, 20) == [
+        (10, 11, 20, 20),
+        (11, 12, 20, 21),
+        (12, 13, 21, 21),
+    ]
+
+
+def test_aligned_pairs_a_large_run_by_position() -> None:
+    from setforge.reconcile.structured_units import _aligned
+
+    old = [b"x%d: 1\n" % n for n in range(13)]
+    new = [b"x12: 2\n", b"y: 1\n", b"z: 1\n", b"w: 1\n", b"v: 1\n"]
+
+    regions = _aligned(old, new, 0, 0)
+
+    assert regions[0] == (0, 1, 0, 1)
+    assert regions[-1] == (5, 13, 5, 5)
+
+
+def test_restore_puts_a_start_only_line_back_only_when_values_allow() -> None:
+    from setforge.reconcile.structured_units import restore_start_only_lines
+
+    fmt = StructuredFormat.YAML
+    base = b"a: 1\nb: 2\n"
+    start = b"a: 1\n# mine\nb: 2\nc: 3\n"
+    model = _load_model(b"a: 1\n", fmt)
+
+    out = restore_start_only_lines(b"a: 1\n", start, base, model, fmt)
+
+    assert out == b"a: 1\n# mine\n"

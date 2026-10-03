@@ -16,6 +16,7 @@ store (the caller wires all I/O).
 
 from __future__ import annotations
 
+import difflib
 import functools
 import io
 import re
@@ -735,31 +736,66 @@ def _leaf_distance(
 
 
 type _Region = tuple[int, int, int, int]
-type _RegionGroups = list[list[_Region]]
+
+#: Largest old-times-new line count of one changed run that is aligned by line
+#: similarity; a bigger run pairs its lines by position (bounded cost).
+_MAX_ALIGNED_RUN: Final = 64
 
 
-def _changed_runs(current: list[bytes], source: list[bytes]) -> list[_RegionGroups]:
-    """Each changed current↔source line run as alternative region groups.
+def _aligned(old: list[bytes], new: list[bytes], i0: int, j0: int) -> list[_Region]:
+    """One changed run as single-line pairs plus what has no counterpart.
 
-    A replaced run is split into single-line pairs plus its uneven remainder,
-    so a wanted line is not held back by an unwanted neighbour. An uneven run
-    can pair from its head or from its tail; both groups are offered.
+    The two most alike lines pair first (an edited line with its edit), then
+    the lines before and after them recursively; a run too large for that pairs
+    by position. What is left on one side only is a pure removal or insertion.
     """
-    runs: list[_RegionGroups] = []
+    if not old or not new:
+        return [(i0, i0 + len(old), j0, j0 + len(new))] if old or new else []
+    i = j = 0
+    if len(old) * len(new) <= _MAX_ALIGNED_RUN:
+        _ratio, i, j = max(
+            (
+                (difflib.SequenceMatcher(None, a, b).ratio(), -i, -j)
+                for i, a in enumerate(old)
+                for j, b in enumerate(new)
+            )
+        )
+        i, j = -i, -j
+    return [
+        *_aligned(old[:i], new[:j], i0, j0),
+        (i0 + i, i0 + i + 1, j0 + j, j0 + j + 1),
+        *_aligned(old[i + 1 :], new[j + 1 :], i0 + i + 1, j0 + j + 1),
+    ]
+
+
+def _changed_regions(current: list[bytes], source: list[bytes]) -> list[_Region]:
+    """Every changed current↔source line region, last first.
+
+    Last first because a taken region may change the line count below it. A
+    replaced run is split (:func:`_aligned`) so a wanted line is not held back
+    by an unwanted neighbour.
+    """
+    regions: list[_Region] = []
     matcher = PatienceSequenceMatcher(None, current, source)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            continue
-        paired = min(i2 - i1, j2 - j1)
-        groups = [[(i1 + k, i1 + k + 1, j1 + k, j1 + k + 1) for k in range(paired)]]
-        if i2 - i1 != j2 - j1:
-            groups[0].append((i1 + paired, i2, j1 + paired, j2))
-            if paired:
-                i0, j0 = i2 - paired, j2 - paired
-                tail = [(i0 + k, i0 + k + 1, j0 + k, j0 + k + 1) for k in range(paired)]
-                groups.append([*tail, (i1, i0, j1, j0)])
-        runs.append(groups)
-    return runs
+        if tag != "equal":
+            regions.extend(_aligned(current[i1:i2], source[j1:j2], i1, j1))
+    return sorted(regions, reverse=True)
+
+
+def _with_single_lines(region: _Region) -> list[_Region]:
+    """``region``, then each line of a multi-line removal or insertion, last first.
+
+    Lines removed (or inserted) together need not belong together: a key one
+    side added may sit between keys the other side deleted. When the block is
+    not taken whole, each of its lines is tried on its own.
+    """
+    i1, i2, j1, j2 = region
+    if j1 == j2 and i2 - i1 > 1:
+        return [region, *((i, i + 1, j1, j1) for i in range(i2 - 1, i1 - 1, -1))]
+    if i1 == i2 and j2 - j1 > 1:
+        return [region, *((i1, i1, j, j + 1) for j in range(j2 - 1, j1 - 1, -1))]
+    return [region]
 
 
 def _keep_comma(line: bytes, like: bytes) -> bytes:
@@ -827,25 +863,58 @@ def splice_lines_toward(
         return None
     current = split_lines(start)
     source_lines = split_lines(source)
-    runs = _changed_runs(current, source_lines)
-    if sum(len(alternatives[0]) for alternatives in runs) > _MAX_SPLICE_TRIALS:
-        return None
-    for alternatives in reversed(runs):
-        for group in alternatives:
+    budget = _MAX_SPLICE_TRIALS
+    for region in _changed_regions(current, source_lines):
+        for i1, i2, j1, j2 in _with_single_lines(region):
+            budget -= 1
+            if budget < 0:
+                return None
+            limit = remaining + 1 if keep_neutral else remaining
             before = current
-            # Last region first: a taken region may change the line count.
-            for i1, i2, j1, j2 in sorted(group, reverse=True):
-                limit = remaining + 1 if keep_neutral else remaining
-                for lines in _replacements(
-                    current[i1:i2], source_lines[j1:j2], fmt, source_first=keep_neutral
-                ):
-                    trial = current[:i1] + lines + current[i2:]
-                    distance = _leaf_distance(b"".join(trial), target, fmt)
-                    if distance is not None and distance < limit:
-                        current, remaining, limit = trial, distance, distance
-            if current is not before:
-                break
+            for lines in _replacements(
+                current[i1:i2], source_lines[j1:j2], fmt, source_first=keep_neutral
+            ):
+                trial = current[:i1] + lines + current[i2:]
+                distance = _leaf_distance(b"".join(trial), target, fmt)
+                if distance is not None and distance < limit:
+                    current, remaining, limit = trial, distance, distance
+            if current is not before and (i1, i2, j1, j2) == region:
+                break  # the whole region was taken; its single lines are moot
     return b"".join(current) if remaining == 0 else None
+
+
+def restore_start_only_lines(
+    text: bytes, start: bytes, base: bytes, model: object, fmt: StructuredFormat
+) -> bytes:
+    """``text`` with the lines only ``start`` had put back where values allow.
+
+    A rendering of ``model`` can drop a line that exists only in ``start`` (a
+    host comment next to a key the other side removed or replaced). Each such
+    line returns to the place it had, provided the result still parses to
+    exactly ``model``'s values; a line whose removal the merge needs stays out.
+    """
+    try:
+        target = dict(_plain_leaves(get_at_path(model, "")))
+    except (DuplicateKeyInMergeModel, MergeTypeMismatch):
+        return text
+    known = set(split_lines(base))
+    lines = split_lines(text)
+    start_lines = split_lines(start)
+    matcher = PatienceSequenceMatcher(None, start_lines, lines)
+    for tag, i1, i2, j1, j2 in reversed(matcher.get_opcodes()):
+        if tag in ("equal", "insert"):
+            continue
+        present = set(lines[j1:j2])
+        restored = 0
+        for offset, line in enumerate(start_lines[i1:i2]):
+            if line in known or line in present or not line.endswith(b"\n"):
+                continue
+            at = j1 + min(offset, j2 - j1) + restored
+            trial = [*lines[:at], line, *lines[at:]]
+            if _leaf_distance(b"".join(trial), target, fmt) == 0:
+                lines = trial
+                restored += 1
+    return b"".join(lines)
 
 
 def _render_reconstruction(

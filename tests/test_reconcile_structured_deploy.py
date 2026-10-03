@@ -992,3 +992,70 @@ def test_both_sides_inserting_at_one_spot_keeps_both_lines(
     assert out.content == expected
     assert out.new_base == upstream
     _assert_converged(fid, out, upstream, fmt)
+
+
+_INTERLEAVED = [
+    pytest.param(
+        _FMT,
+        b"k0: 3\nk1: 7\nk2: 1\nn: ~\n",
+        b"k0: 3\nk1: 7\n# h note\nk2: 1\nn: ~\n",
+        b"k0: 3\nk2: 1\nn: ~\n",
+        b"k0: 3\n# h note\nk2: 1\nn: ~\n",
+        id="yaml-host-comment-after-a-key-upstream-deletes",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "k0": 7,\n  "k1": 7,\n  "k2": 8,\n  "k3": 0\n}\n',
+        b'{\n  "k0": 7,\n  "k1": 72,\n  // h note\n  "k2": 8,\n  "k3": 0\n}\n',
+        b'{\n  "k0": 7,\n  "k1": 7,\n  "k3": 0\n}\n',
+        b'{\n  "k0": 7,\n  "k1": 72,\n  // h note\n  "k3": 0\n}\n',
+        id="json-host-comment-above-a-key-upstream-deletes",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "k0": 8,\n  "k1": 2\n}\n',
+        b'{\n  "k0": 8,\n  "h3": 7,\n  "k1": 2\n  // h note\n}\n',
+        b'{\n  "k0": 8,\n  "k1": 16\n}\n',
+        b'{\n  "k0": 8,\n  "h3": 7,\n  "k1": 16\n  // h note\n}\n',
+        id="json-host-comment-after-the-last-member-upstream-edits",
+    ),
+    pytest.param(
+        _FMT,
+        b"k0: 3\nk1: 8\nk2:\n    x: 4\n    y: 9\nn: ~\n",
+        b"k0: 3\nk1: 8\nh2: 1\nk2:\n    x: 4\n    y: 9\nn: ~\n",
+        b"k0: 3\nk2:\n    x: 4\n    y: 9\nn: ~\n",
+        b"k0: 3\nh2: 1\nk2:\n    x: 4\n    y: 9\nn: ~\n",
+        id="yaml-host-key-next-to-a-key-upstream-deletes",
+    ),
+    pytest.param(
+        _FMT,
+        b"a: 1\nk3: 3\nk4: 7\nn: ~\n",
+        b"a: 1\nk4: 7\nn: ~\n",
+        b"a: 1\nk3: 3\nt2: 4\nk4: 7\nn: ~\n",
+        b"a: 1\nt2: 4\nk4: 7\nn: ~\n",
+        id="yaml-upstream-key-next-to-a-key-the-host-deleted",
+    ),
+    pytest.param(
+        _FMT,
+        b"a: 1\nk1: 2\nn: ~\n",
+        b"a: 1\nh3: 8\nk1: 2\n# h note\nn: ~\n",
+        b"a: 1\nk1: 16\nn: ~\n",
+        b"a: 1\nh3: 8\nk1: 16\n# h note\nn: ~\n",
+        id="yaml-edited-line-pairs-with-its-edit-inside-a-longer-run",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fmt", "base", "host", "upstream", "expected"), _INTERLEAVED)
+def test_interleaved_edits_keep_every_live_only_line(
+    fmt: StructuredFormat, base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("interleaved")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+    _assert_converged(fid, out, upstream, fmt)

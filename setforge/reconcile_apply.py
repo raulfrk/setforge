@@ -62,6 +62,7 @@ from setforge.reconcile.structured_units import (
     _dump_model,
     _load_model,
     models_equal,
+    restore_start_only_lines,
     splice_lines_toward,
     uses_aliases,
 )
@@ -456,18 +457,39 @@ def _array_root_target(
     return [json.loads(key) for key in merged]
 
 
-def _render_array_root(
-    base: bytes, live: bytes, tracked: bytes, target: list[object]
+def _render(
+    sides: tuple[bytes, bytes, bytes],
+    model: object,
+    fmt: StructuredFormat,
+    *,
+    from_tracked: bool,
+    dump: bool,
 ) -> bytes | None:
-    """``target`` in source bytes: no array re-serialisation exists to fall to."""
-    fmt = StructuredFormat.JSONC
-    for candidate in (
-        lambda: _line_merge_agreeing(base, live, tracked, target, fmt),
-        lambda: splice_lines_toward(live, tracked, target, fmt),
-        lambda: splice_lines_toward(tracked, live, target, fmt, keep_neutral=True),
-    ):
+    """The merged ``model`` as text, in the most byte-preserving form available.
+
+    In order: the line 3-way when it is clean and holds ``model``'s values;
+    live with the tracked line regions that realise them; with ``from_tracked``
+    the same from tracked with live's regions (live's text-only edits winning);
+    with ``dump`` the re-serialised model. Whatever is not the line 3-way gets
+    the lines only live had put back where the values allow.
+    """
+    base, live, tracked = sides
+    text = _line_merge_agreeing(base, live, tracked, model, fmt)
+    if text is not None and not _loses_strictness(text, live, tracked, fmt):
+        return text
+    candidates = [lambda: splice_lines_toward(live, tracked, model, fmt)]
+    if from_tracked:
+        candidates.append(
+            lambda: splice_lines_toward(tracked, live, model, fmt, keep_neutral=True)
+        )
+    if dump:
+        candidates.append(lambda: _dump_model(model, fmt, like=live))
+    for candidate in candidates:
         text = candidate()
-        if text is not None and not _loses_strictness(text, live, tracked, fmt):
+        if text is None:
+            continue
+        text = restore_start_only_lines(text, live, base, model, fmt)
+        if not _loses_strictness(text, live, tracked, fmt):
             return text
     return None
 
@@ -484,29 +506,27 @@ def _key_merge(
 
     A YAML with aliases / merge keys is merged on its resolved values but never
     re-serialised: the dump would inline the shared nodes and invent anchors, so
-    without a rendering from the source lines the result is ``None`` too.
+    without a rendering from the source lines the result is ``None`` too. A JSON
+    array root has no re-serialisation either.
     """
+    sides = (base, live, tracked)
     try:
         aliased = fmt is StructuredFormat.YAML and any(
-            uses_aliases(side) for side in (base, live, tracked)
+            uses_aliases(side) for side in sides
         )
-        models = [_load_model(side, fmt) for side in (base, live, tracked)]
+        models = [_load_model(side, fmt) for side in sides]
         if fmt is StructuredFormat.JSONC:
             target = _array_root_target(*models)
             if target is not None:
-                return _render_array_root(base, live, tracked, target)
+                return _render(sides, target, fmt, from_tracked=True, dump=False)
         result = merge_structural(*models)
         if not result.clean:
             return None
-        model = result.merged_model
-        merged = _line_merge_agreeing(base, live, tracked, model, fmt)
-        if merged is None or _loses_strictness(merged, live, tracked, fmt):
-            merged = splice_lines_toward(live, tracked, model, fmt)
-        if merged is None or _loses_strictness(merged, live, tracked, fmt):
-            merged = None if aliased else _dump_model(model, fmt, like=live)
+        return _render(
+            sides, result.merged_model, fmt, from_tracked=False, dump=not aliased
+        )
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
-    return merged
 
 
 def reconcile_structured_file(
