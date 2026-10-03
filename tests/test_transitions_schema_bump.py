@@ -52,7 +52,6 @@ def test_load_meta_backward_compat_old_record() -> None:
     # The schema-bump fields default to None when absent:
     assert meta.end_timestamp is None
     assert meta.command_line is None
-    assert meta.preserve_user_keys_applied is None
 
 
 def test_to_dict_omits_none_fields() -> None:
@@ -70,8 +69,7 @@ def test_to_dict_omits_none_fields() -> None:
         host="test-host.example",
         version="0.1.42",
         source_sha="abc123",
-        # end_timestamp / command_line / preserve_user_keys_applied
-        # left at their None defaults.
+        # end_timestamp / command_line left at their None defaults.
     )
     payload = meta.to_dict()
     assert "end_timestamp" not in payload
@@ -87,8 +85,7 @@ def test_to_dict_emits_new_fields_when_set() -> None:
     """When the new fields ARE set, to_dict() emits them with correct shape.
 
     Complements the omit-when-None test by pinning the positive shape:
-    ``command_line`` defensive-copies (list, not tuple),
-    ``preserve_user_keys_applied`` round-trips as bool, ``end_timestamp``
+    ``command_line`` defensive-copies (list, not tuple), ``end_timestamp``
     as str. This is the forward-direction half of the invariant.
     """
     argv = ["install", "--profile=vm-headless"]
@@ -100,7 +97,6 @@ def test_to_dict_emits_new_fields_when_set() -> None:
         version="0.1.42",
         end_timestamp="2026-05-10T14:23:42+00:00",
         command_line=argv,
-        preserve_user_keys_applied=True,
     )
     payload = meta.to_dict()
     assert payload["end_timestamp"] == "2026-05-10T14:23:42+00:00"
@@ -109,7 +105,6 @@ def test_to_dict_emits_new_fields_when_set() -> None:
     # dataclass's stored field (we cannot mutate a frozen attr, but the
     # underlying list IS mutable through the attr reference).
     assert payload["command_line"] is not argv
-    assert payload["preserve_user_keys_applied"] is True
 
 
 def test_byte_identical_roundtrip() -> None:

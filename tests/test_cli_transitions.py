@@ -351,3 +351,25 @@ def test_show_renders_command_and_profile_per_mockup(
     # diff stats per file per mockup.
     assert "diff:" in clean
     assert "--to-before=20260518T203015000000Z-install-vm-headless" in clean
+
+
+def test_show_and_list_accept_record_with_retired_overlay_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Older records carry ``preserve_user_keys_applied``; it is ignored."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    target = _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
+    meta_file = target / "meta.json"
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["preserve_user_keys_applied"] = True
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+
+    shown = CliRunner().invoke(app, ["transitions", "show", target.name])
+    listed = CliRunner().invoke(app, ["transitions", "list"])
+
+    assert shown.exit_code == 0, shown.output
+    assert "profile: vmh" in _strip_ansi(shown.output)
+    assert "preserve_user_keys_applied" not in shown.output
+    assert listed.exit_code == 0, listed.output
+    assert target.name in _strip_ansi(listed.output)

@@ -1393,8 +1393,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         )
         journal = operations.finish_checkpoint(journal)
         failed = any(
-            outcome.status in {ReconcileStatus.SKIPPED, ReconcileStatus.ABORTED}
-            for outcome in ext_outcomes
+            outcome.status is ReconcileStatus.SKIPPED for outcome in ext_outcomes
         )
         return CapabilityActivation(
             status=(
@@ -1437,8 +1436,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         codex_plugin_delta, codex_plugin_failed = _apply_codex_plugin_plan(plan)
         journal = operations.finish_checkpoint(journal)
         failed = bool(codex_plugin_failed) or any(
-            outcome.status in {ReconcileStatus.SKIPPED, ReconcileStatus.ABORTED}
-            for outcome in plugin_outcomes
+            outcome.status is ReconcileStatus.SKIPPED for outcome in plugin_outcomes
         )
         return CapabilityActivation(
             status=(

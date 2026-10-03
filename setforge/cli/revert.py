@@ -311,11 +311,9 @@ def _build_revert_plan(
     reverse each item. Plugin / extension reconciles are inferred from
     the transition's ``plugins.json`` / ``extensions.json`` payloads when
     present (via :func:`_plugin_reconciles_from_transition` and
-    :func:`_extension_reconciles_from_transition`). ``user_edit_collision``
-    is left empty for v1 — collision detection runs at apply time via
-    ``patch --dry-run -R`` (see :func:`transitions.apply_patch_reverse`);
-    refusing-on-collision preserves the safety contract without
-    re-implementing hunk parsing here.
+    :func:`_extension_reconciles_from_transition`). Collision detection
+    runs at apply time via ``patch --dry-run -R`` (see
+    :func:`transitions.apply_patch_reverse`).
     """
     meta = transitions.load_meta(transition)
     age = _human_age(meta.timestamp, datetime.now(UTC))
@@ -1299,10 +1297,6 @@ def transitions_show(
         console.print(f"  end:     {end_local}")
     if meta.command_line is not None:
         console.print(f"  argv:    {' '.join(meta.command_line)}")
-    if meta.preserve_user_keys_applied is not None:
-        console.print(
-            f"  overlay: preserve_user_keys_applied={meta.preserve_user_keys_applied}"
-        )
 
     _render_files_section_show(target, console)
     _render_plugins_section_show(target, console)
@@ -1376,8 +1370,7 @@ def _render_plugins_section_show(
         console.print(f"    - {plugin_id}  (disabled)")
     for name in delta.marketplaces_added:
         console.print(f"    + marketplace:{name}")
-    for entry in delta.marketplaces_removed:
-        name = entry[0] if isinstance(entry, tuple) else str(entry)
+    for name, _source in delta.marketplaces_removed:
         console.print(f"    - marketplace:{name}")
 
 

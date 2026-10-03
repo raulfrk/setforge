@@ -107,11 +107,6 @@ def test_file_mutation_frozen_slots() -> None:
     assert "__slots__" in dir(type(fm))
 
 
-def test_file_mutation_default_user_edit_collision() -> None:
-    fm = FileMutation(path=Path("/x"), diff_summary="+1 -0")
-    assert fm.user_edit_collision == ()
-
-
 def test_plugin_reconcile_frozen_slots() -> None:
     pr = PluginReconcile(
         plugin_id="p@m", operation=PluginOperation.ENABLED, source="[local]"
@@ -338,28 +333,6 @@ def test_panel_includes_risks_header(monkeypatch: pytest.MonkeyPatch) -> None:
     console = Console(record=True, width=200)
     confirm_revert_operation(plan=_make_plan(), yes=False, console=console)
     assert "RISKS" in console.export_text()
-
-
-def test_panel_calls_out_user_edit_collision_when_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    _patch_dialog(monkeypatch, return_value=RevertChoice.APPLY)
-    console = Console(record=True, width=200)
-    plan = _make_plan(
-        file_mutations=(
-            FileMutation(
-                path=Path("/x/CLAUDE.md"),
-                diff_summary="+14 -3",
-                user_edit_collision=((14, 22), (47, 49)),
-            ),
-        ),
-    )
-    confirm_revert_operation(plan=plan, yes=False, console=console)
-    text = console.export_text()
-    # Collisions surface in RISKS panel — mockup line 44-48.
-    assert "14-22" in text or "14" in text
-    assert "47-49" in text or "47" in text
 
 
 def test_panel_includes_redo_command_before_confirm(

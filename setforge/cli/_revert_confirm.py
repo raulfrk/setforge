@@ -82,20 +82,10 @@ class FileMutation:
     """One file the revert will mutate.
 
     ``diff_summary`` is the human-readable line-delta string
-    (e.g. ``"+14 -3"``) shown in the per-file listing. ``user_edit_collision``
-    is the sorted tuple of ``(start_line, end_line)`` inclusive ranges that
-    were edited live since the transition was recorded AND overlap with the
-    reverse-patch hunks. Empty tuple means no collision risk has been
-    pre-detected for this file.
-
-    **v1 contract.** ``user_edit_collision`` is always empty in v1 —
-    :func:`setforge.cli.revert._build_revert_plan` does not pre-compute
-    overlap ranges. Real collision detection happens at apply time
-    via ``patch --dry-run -R`` inside
+    (e.g. ``"+14 -3"``) shown in the per-file listing. Collision detection
+    happens at apply time via ``patch --dry-run -R`` inside
     :func:`setforge.transitions.apply_patch_reverse`, which refuses
-    cleanly on conflict. The empty default exists so the panel can
-    surface conflict ranges in a future version that pre-walks the
-    reverse-hunks against live state (e.g. diff vs. recorded baseline).
+    cleanly on conflict.
 
     ``mode_restore`` is a human-readable note (e.g. ``"mode → 0o600"``)
     set when the revert will also chmod this path back to its pre-install
@@ -106,7 +96,6 @@ class FileMutation:
 
     path: Path
     diff_summary: str
-    user_edit_collision: tuple[tuple[int, int], ...] = ()
     mode_restore: str | None = None
 
 
@@ -158,15 +147,6 @@ class RevertPlan:
     redo_command: str = ""
 
 
-def _format_collision_ranges(ranges: tuple[tuple[int, int], ...]) -> str:
-    """Format ``((14, 22), (47, 49))`` as ``"lines 14-22, 47-49"``."""
-    if not ranges:
-        return ""
-    return "lines " + ", ".join(
-        f"{start}-{end}" if start != end else f"{start}" for start, end in ranges
-    )
-
-
 def _render_files_section(plan: RevertPlan, console: Console) -> None:
     """Render the ``files affected (N)`` listing."""
     console.print(f"  files affected ({len(plan.file_mutations)}):")
@@ -198,26 +178,12 @@ def _render_extensions_section(plan: RevertPlan, console: Console) -> None:
 def _render_risks_section(plan: RevertPlan, console: Console) -> None:
     """Render the RISKS panel with patch-reverse-collision callouts."""
     console.print("[bold red]=== RISKS ===[/bold red]")
-    collisions = [fm for fm in plan.file_mutations if fm.user_edit_collision]
-    if collisions:
-        console.print(
-            "  - Live edits since the transition collide with the reverse-patch on:"
-        )
-        for fm in collisions:
-            console.print(
-                f"      {fm.path} ({_format_collision_ranges(fm.user_edit_collision)})"
-            )
-        console.print(
-            "    setforge will refuse cleanly on collision; "
-            "resolve manually then re-run."
-        )
-    else:
-        console.print(
-            "  - Collision check happens at apply time "
-            "(``patch --dry-run -R`` inside apply_patch_reverse); revert "
-            "uses patch-reverse, not whole-file overwrite, and refuses "
-            "cleanly if any reverse-hunk collides with a live edit."
-        )
+    console.print(
+        "  - Collision check happens at apply time "
+        "(``patch --dry-run -R`` inside apply_patch_reverse); revert "
+        "uses patch-reverse, not whole-file overwrite, and refuses "
+        "cleanly if any reverse-hunk collides with a live edit."
+    )
     if plan.plugin_reconciles or plan.extension_reconciles:
         console.print(
             "  - Plugin/extension re-disable triggers actual claude/code CLI calls "

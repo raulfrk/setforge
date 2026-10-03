@@ -226,13 +226,11 @@ class TransitionMeta:
     repo; :meth:`to_dict` omits the key entirely when ``None`` so old
     meta.json files round-trip byte-identically through load + re-dump.
 
-    The trailing three fields (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) were added in a later schema bump so
-    ``setforge transitions show`` can display per-invocation duration,
-    the exact argv, and whether any preserve_user_keys overlay matched
-    a live key during deploy. All three follow the same omit-when-None
-    pattern as ``source_sha`` so old meta.json files (recorded before
-    the bump) still round-trip byte-identically.
+    The trailing two fields (``end_timestamp``, ``command_line``) were
+    added in a later schema bump so ``setforge transitions show`` can
+    display them. Both follow the same omit-when-None pattern as
+    ``source_sha`` so old meta.json files (recorded before the bump) still
+    round-trip byte-identically.
     """
 
     command: TransitionCommand
@@ -249,7 +247,6 @@ class TransitionMeta:
     # round-trip rationale.
     end_timestamp: str | None = None
     command_line: list[str] | None = None
-    preserve_user_keys_applied: bool | None = None
 
     def to_dict(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -268,8 +265,6 @@ class TransitionMeta:
             # ``frozen=True`` only freezes attribute *rebinding*, not
             # list mutation through the attribute reference.
             out["command_line"] = list(self.command_line)
-        if self.preserve_user_keys_applied is not None:
-            out["preserve_user_keys_applied"] = self.preserve_user_keys_applied
         return out
 
 
@@ -308,7 +303,6 @@ def make_meta(
     source_dir: Path | None = None,
     end_timestamp: str | None = None,
     command_line: list[str] | None = None,
-    preserve_user_keys_applied: bool | None = None,
 ) -> TransitionMeta:
     """Build a TransitionMeta with current host + version + UTC timestamp.
 
@@ -319,9 +313,9 @@ def make_meta(
     handy (revert, plugin reconcile sub-record) keep the pre-bump call
     shape.
 
-    The three trailing kwargs (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) are a later schema bump.
-    All default to ``None`` so pre-bump callers compile unchanged. See
+    The two trailing kwargs (``end_timestamp``, ``command_line``) are a
+    later schema bump. Both default to ``None`` so pre-bump callers compile
+    unchanged. See
     the TransitionMeta docstring for the omit-when-None round-trip
     rationale.
     """
@@ -335,7 +329,6 @@ def make_meta(
         source_sha=source_sha,
         end_timestamp=end_timestamp,
         command_line=command_line,
-        preserve_user_keys_applied=preserve_user_keys_applied,
     )
 
 
@@ -376,7 +369,6 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
             # omit-when-None round-trip rationale.
             end_timestamp=payload.get("end_timestamp"),
             command_line=payload.get("command_line"),
-            preserve_user_keys_applied=payload.get("preserve_user_keys_applied"),
         )
     except (KeyError, ValueError) as exc:
         raise InvalidTransitionRecord(
@@ -812,15 +804,12 @@ class ReconcileStatus(StrEnum):
     :class:`ReconcileKind`. ``OK`` covers first-attempt successes;
     ``RETRIED_OK`` second-attempt successes after the user picked
     RETRY at the failure prompt; ``SKIPPED`` items the user opted to
-    leave behind; ``ABORTED`` items that landed before the user picked
-    ABORT and got rolled back as part of the abort path's reverse
-    reconcile.
+    leave behind.
     """
 
     OK = "ok"
     RETRIED_OK = "retried_ok"
     SKIPPED = "skipped"
-    ABORTED = "aborted"
 
 
 @dataclass(slots=True, frozen=True)
