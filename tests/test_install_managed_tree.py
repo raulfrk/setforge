@@ -513,6 +513,36 @@ def test_mixed_file_tree_inventory_accepts_profile_order(
         assert (live / "tree/item").read_bytes() == b"tree\n"
 
 
+def test_first_install_creates_tree_beside_absent_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("tree", "one", "two"))
+    shared_parent = live.parent / ".local"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(shared_parent / "state/setforge"))
+    destination = shared_parent / "share/tree"
+    document = YAML().load(config.read_text())
+    document["tracked_files"]["tree"]["dst"] = str(destination)
+    YAML().dump(document, config)
+    assert not shared_parent.exists()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={config}",
+            "--yes",
+            "--no-fetch",
+            "--no-git-check",
+        ],
+    )
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert (destination / "item").read_bytes() == b"tree\n"
+    assert (live / "one").read_bytes() == b"one\n"
+    assert operations.active("p") is None
+
+
 def test_managed_tree_lifecycle_when_filesystem_rejects_rename_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rename_flags_rejected: list[int]
 ) -> None:

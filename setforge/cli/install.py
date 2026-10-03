@@ -1787,6 +1787,9 @@ def _preview_tree_targets(
     ctx, _overlay = _resolve_install_profile(
         cfg, profile, config.parent, file_selection
     )
+    # The profile lock creates the state root after these roots are locked; a
+    # tree sharing its absent parent would otherwise see its lock root move.
+    transitions.state_root().mkdir(parents=True, exist_ok=True)
     roots = {
         *(
             _tree_lock_target(destination)
