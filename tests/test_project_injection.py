@@ -1606,6 +1606,56 @@ def test_remove_restores_tracked_overlay_after_the_git_directory_was_removed(
     assert not list((state_root / "project-overlays").glob("*.json"))
 
 
+def test_recreated_project_at_the_same_path_names_a_working_remedy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    assert runner.invoke(app, ["project", "inject", "demo", *arguments]).exit_code == 0
+    original_inode = target.stat().st_ino
+    shutil.rmtree(target)
+    _git_repo(target)
+    destination = target / "AGENTS.md"
+
+    if target.stat().st_ino != original_inode:
+        dropped = runner.invoke(app, ["project", "remove", "demo", *arguments])
+        assert dropped.exit_code == 0, dropped.output
+        assert "stale injection: project directory was replaced" in dropped.output
+        assert runner.invoke(app, ["project", "list"]).exit_code == 0
+        return
+    restore = f"`setforge project sync {target} --auto=use-profile`"
+    remedy = (
+        f"run {restore} to restore it, or `setforge project sync {target}` to "
+        "keep it deleted"
+    )
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert (
+        f"  error: AGENTS.md: injected project file is missing; {remedy} "
+    ) in listed.output
+    for verb in ("inject", "remove"):
+        refused = runner.invoke(app, ["project", verb, "demo", *arguments])
+        assert refused.exit_code == 1
+        assert str(refused.exception) == (
+            f"injected project file is missing: {destination}; {remedy}"
+        )
+    assert not destination.exists()
+
+    restored = runner.invoke(
+        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
+    )
+    assert restored.exit_code == 0, restored.output
+    assert destination.read_text() == "managed instructions\n"
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == f"{target}  [demo]\n  hidden: AGENTS.md\n"
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments])
+    assert removed.exit_code == 0, removed.output
+    assert not destination.exists()
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:

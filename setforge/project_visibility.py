@@ -38,6 +38,7 @@ from setforge.project_injection import (
     _sha256,
     _verified_project_target,
     identity_remedy,
+    missing_file_remedy,
     plan_removal,
 )
 from setforge.project_overlay import clean_content, read_overlay
@@ -364,6 +365,12 @@ def list_projects() -> tuple[ProjectListFile, ...]:
                         )
                     )
                     error = None
+                except FileNotFoundError:
+                    visibility = None
+                    error = (
+                        "injected project file is missing; "
+                        f"{missing_file_remedy(target)}"
+                    )
                 except (OSError, SetforgeError) as exc:
                     visibility = None
                     error = str(exc)

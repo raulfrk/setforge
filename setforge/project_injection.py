@@ -174,6 +174,14 @@ def identity_remedy(
     return None
 
 
+def missing_file_remedy(target: Path) -> str:
+    """Name the commands that settle a recorded file missing from the project."""
+    return (
+        f"run `setforge project sync {target} --auto=use-profile` to restore it, "
+        f"or `setforge project sync {target}` to keep it deleted"
+    )
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -1016,7 +1024,8 @@ def _validate_existing_injection(  # noqa: C901 - one fail-closed record compari
             info = item.destination.lstat()
         except FileNotFoundError as exc:
             raise SetforgeError(
-                f"injected project file is missing: {item.destination}"
+                f"injected project file is missing: {item.destination}; "
+                f"{missing_file_remedy(plan.target)}"
             ) from exc
         live_payload = item.destination.read_bytes()
         valid_payload = _sha256(live_payload) == str(record.get("applied_digest"))
@@ -1616,6 +1625,11 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 )
             clean_content(overlay, live_payload)
             live_matches_present = True
+        if info is None and not live_matches_absent:
+            raise SetforgeError(
+                f"injected project file is missing: {destination}; "
+                f"{missing_file_remedy(root)}"
+            )
         if not live_matches_absent and not live_matches_present:
             raise SetforgeError(f"injected project file has drifted: {destination}")
         if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
