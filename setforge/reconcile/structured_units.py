@@ -6,8 +6,9 @@ anchor, this extracts per-KEY units keyed by a **dotted leaf path** (path-only
 identity; composite identity was considered and REJECTED as a non-goal for v1 —
 see ``docs/RULES.md`` DEC-1). A unit is classified by the
 same :class:`~setforge.reconcile.types.HunkClass`, stored in the same index, and
-reconstructed **through the model + re-serialize** (never text substitution) so
-comments, anchors, quoting, and key order survive the round-trip.
+reconstructed **through the model**: the model fixes the values, and the output
+is either the source lines that realise exactly those values or the re-serialised
+model, so comments, anchors, quoting, and key order survive the round-trip.
 
 A **leaf module** like :mod:`setforge.reconcile.hunks`: it does NOT import the
 store (the caller wires all I/O).
@@ -23,15 +24,19 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
+from patiencediff import PatienceSequenceMatcher
 from ruamel.yaml import YAML
 from ruamel.yaml.nodes import ScalarNode
 
 from setforge.errors import (
     DraftConfinementError,
+    DuplicateKeyInMergeModel,
     InvariantViolation,
+    MergeTypeMismatch,
     StructuredParseError,
 )
 from setforge.reconcile.index_model import KIND_KEY
+from setforge.reconcile.merge import split_lines
 from setforge.reconcile.types import HunkClass, UnitRef, content_sha
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
@@ -49,6 +54,11 @@ from setforge.structural_merge import (
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
 _YAML_WIDTH: Final = 4096
+
+#: Changed line regions tried one by one when a reconstruction is re-derived
+#: from the source text (each trial is a full parse); past this the model dump
+#: is used instead. Pathology protection, not a knob.
+_MAX_SPLICE_TRIALS: Final = 64
 
 #: C0 control chars (and DEL) forbidden in a draft scalar, minus tab/newline —
 #: the same untrusted-output gate :mod:`setforge.reconcile.share_draft` applies to
@@ -172,6 +182,11 @@ def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
         raise StructuredParseError(
             f"structured model is not serialisable: {err}"
         ) from err
+
+
+def models_equal(left: object, right: object) -> bool:
+    """Whether two parsed models hold the same typed values (layout ignored)."""
+    return _plain_eq(get_at_path(left, ""), get_at_path(right, ""))
 
 
 class _Missing:
@@ -554,6 +569,88 @@ def _materialize_yaml_parents(
         set_at_path(target, parent_path, {})
 
 
+def _plain_leaves(
+    plain: object, prefix: tuple[object, ...] = ()
+) -> Iterator[tuple[tuple[object, ...], object]]:
+    """Yield ``(key path, value)`` for every leaf of an unwrapped plain value."""
+    if isinstance(plain, dict) and plain:
+        for key, value in plain.items():
+            yield from _plain_leaves(value, (*prefix, key))
+    else:
+        yield prefix, plain
+
+
+def _leaf_distance(
+    text: bytes, target: Mapping[tuple[object, ...], object], fmt: StructuredFormat
+) -> int | None:
+    """How many leaf paths of ``text`` differ from ``target``.
+
+    ``None`` when ``text`` does not parse to a comparable model.
+    """
+    try:
+        leaves = dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
+    except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
+        return None
+    return sum(
+        not _plain_eq(leaves.get(path, _MISSING), target.get(path, _MISSING))
+        for path in leaves.keys() | target.keys()
+    )
+
+
+def splice_lines_toward(
+    start: bytes, source: bytes, model: object, fmt: StructuredFormat
+) -> bytes | None:
+    """``start`` with exactly the ``source`` line regions that realise ``model``.
+
+    The byte-preserving rendering of a merged / reconstructed ``model`` whose
+    values all come from ``start`` or ``source``: each changed start↔source line
+    region is taken only when it moves the text strictly closer to ``model``'s
+    values, so a value ``model`` keeps from ``start``, a comment-only edit and
+    every untouched line keep their ``start`` bytes. ``None`` when no such
+    selection parses to exactly ``model``'s values (a value from neither text, or
+    one line carrying both a wanted and an unwanted change).
+    """
+    try:
+        target = dict(_plain_leaves(get_at_path(model, "")))
+    except (DuplicateKeyInMergeModel, MergeTypeMismatch):
+        return None
+    remaining = _leaf_distance(start, target, fmt)
+    if remaining is None:
+        return None
+    current = split_lines(start)
+    source_lines = split_lines(source)
+    regions: list[tuple[int, int, int, int]] = []
+    matcher = PatienceSequenceMatcher(None, current, source_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        # A replaced run is tried line by line (then its uneven tail), so a
+        # wanted line is not held back by an unwanted neighbour.
+        paired = min(i2 - i1, j2 - j1)
+        regions.extend((i1 + k, i1 + k + 1, j1 + k, j1 + k + 1) for k in range(paired))
+        if i1 + paired < i2 or j1 + paired < j2:
+            regions.append((i1 + paired, i2, j1 + paired, j2))
+    if len(regions) > _MAX_SPLICE_TRIALS:
+        return None
+    for i1, i2, j1, j2 in reversed(regions):
+        trial = current[:i1] + source_lines[j1:j2] + current[i2:]
+        distance = _leaf_distance(b"".join(trial), target, fmt)
+        if distance is not None and distance < remaining:
+            current, remaining = trial, distance
+    return b"".join(current) if remaining == 0 else None
+
+
+def _render_reconstruction(
+    base: bytes, live: bytes, model: object, fmt: StructuredFormat
+) -> bytes:
+    """Serialise a reconstructed ``model``, preferring the source lines for YAML."""
+    if fmt is StructuredFormat.YAML:
+        spliced = splice_lines_toward(base, live, model, fmt)
+        if spliced is not None:
+            return spliced
+    return _dump_model(model, fmt)
+
+
 def reconstruct_structured(
     base: bytes,
     live: bytes,
@@ -565,8 +662,11 @@ def reconstruct_structured(
 
     A promoted ``SHARED`` unit takes its **live** value, set through the model via
     :func:`~setforge.structural_merge.set_node_at_path` (the comment/anchor/quote-
-    preserving wrapped-node splice) and re-serialised — never text substitution, so
-    an untouched unit round-trips byte-identical. A non-``changed`` ``SHARED_DRAFTED``
+    preserving wrapped-node splice). The model decides the VALUES; for YAML the
+    bytes are then ``base`` with the live line regions that realise exactly those
+    values (:func:`splice_lines_toward`), so untouched lines stay byte-identical,
+    and only when no such selection exists is the model re-serialised. A
+    non-``changed`` ``SHARED_DRAFTED``
     unit instead takes its **draft-store** value, bounded-parsed into a typed scalar
     by :func:`parse_scalar_draft` and spliced via
     :func:`~setforge.structural_merge.set_at_path` so its type is preserved (a
@@ -637,7 +737,7 @@ def reconstruct_structured(
                     f"promoted SHARED unit {unit.path!r} addresses no leaf in "
                     f"base or live; cannot reconstruct"
                 )
-    return _dump_model(base_model, fmt)
+    return _render_reconstruction(base, live, base_model, fmt)
 
 
 def assert_stage_fidelity_structured(

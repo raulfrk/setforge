@@ -1106,3 +1106,73 @@ def test_legacy_bracket_key_keeps_classification_and_draft_binding(
         assert model[key] == (
             "old" if kind == "changed" else "shared" if kind == "drafted" else "new"
         )
+
+
+_LAYOUT_BASE = (
+    b"---\n# c\nhost: base-host\nshared: 1   # sh\n"
+    b"l:\n    - a    # first\n    - b\nm: {x: 1,   y: 2}\n"
+)
+
+
+def _classified(
+    base: bytes, live: bytes, classes: dict[str, HunkClass]
+) -> list[KeyUnit]:
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    assert sorted(unit.path for unit in fresh) == sorted(classes)
+    return [replace(unit, cls=classes[unit.path]) for unit in fresh]
+
+
+def test_reconstruct_promotes_only_the_shared_line_and_keeps_layout() -> None:
+    live = _LAYOUT_BASE.replace(b"host: base-host", b"host: my-laptop").replace(
+        b"shared: 1", b"shared: 2"
+    )
+    units = _classified(
+        _LAYOUT_BASE, live, {"host": HunkClass.LOCAL, "shared": HunkClass.SHARED}
+    )
+
+    out = reconstruct_structured(_LAYOUT_BASE, live, units, {}, StructuredFormat.YAML)
+
+    assert out == _LAYOUT_BASE.replace(b"shared: 1", b"shared: 2")
+
+
+def test_reconstruct_with_nothing_promoted_returns_base_layout_verbatim() -> None:
+    live = _LAYOUT_BASE.replace(b"host: base-host", b"host: my-laptop")
+    units = _classified(_LAYOUT_BASE, live, {"host": HunkClass.PENDING})
+
+    out = reconstruct_structured(_LAYOUT_BASE, live, units, {}, StructuredFormat.YAML)
+
+    assert out == _LAYOUT_BASE
+
+
+def test_reconstruct_leaves_unclassified_comment_edit_host_only() -> None:
+    base = b"# c\na: 1\nl:\n    - x\nz: 2\n"
+    live = b"# my note\na: 5\nl:\n    - x\nz: 2   # mine\n"
+    units = _classified(base, live, {"a": HunkClass.SHARED})
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == b"# c\na: 5\nl:\n    - x\nz: 2\n"
+
+
+def test_reconstruct_promoted_add_and_delete_take_live_lines() -> None:
+    base = b"a: 1\nl:\n    - x\nb: 2\nhost: h\n"
+    live = b"l:\n    - x\nb: 2\nhost: mine\nnew:\n    deep: 3\n"
+    units = _classified(
+        base,
+        live,
+        {"a": HunkClass.SHARED, "new.deep": HunkClass.SHARED, "host": HunkClass.LOCAL},
+    )
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == b"l:\n    - x\nb: 2\nhost: h\nnew:\n    deep: 3\n"
+
+
+def test_reconstruct_one_line_with_mixed_intent_falls_back_to_the_model() -> None:
+    base = b"m: {x: 1, y: 2}\nz: 0\n"
+    live = b"m: {x: 5, y: 7}\nz: 0\n"
+    units = _classified(base, live, {"m.x": HunkClass.SHARED, "m.y": HunkClass.LOCAL})
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == b"m: {x: 5, y: 2}\nz: 0\n"

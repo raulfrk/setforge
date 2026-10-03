@@ -402,3 +402,165 @@ def test_duplicate_key_live_json_is_line_merged() -> None:
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "a": 1,\n  "a": 5,\n  "m": 0,\n  "z": 2\n}\n'
+
+
+_BYTE_PRESERVING_MERGES = [
+    pytest.param(
+        _FMT,
+        b"top: 1\nl:\n  - a   # c\n  - b\nmid: 0\nz: 2\n",
+        b"top: 5\nl:\n  - a   # c\n  - b\nmid: 0\nz: 2\n",
+        b"top: 1\nl:\n  - a   # c\n  - b\nmid: 0\nz: 9\n",
+        b"top: 5\nl:\n  - a   # c\n  - b\nmid: 0\nz: 9\n",
+        id="yaml-indented-sequence",
+    ),
+    pytest.param(
+        _FMT,
+        b"top: 1\na: ~\nb: True\nc: +5\nd: .NaN\n? k\n: v\ne: [ a ,b ]\nz: 2\n",
+        b"top: 5\na: ~\nb: True\nc: +5\nd: .NaN\n? k\n: v\ne: [ a ,b ]\nz: 2\n",
+        b"top: 1\na: ~\nb: True\nc: +5\nd: .NaN\n? k\n: v\ne: [ a ,b ]\nz: 9\n",
+        b"top: 5\na: ~\nb: True\nc: +5\nd: .NaN\n? k\n: v\ne: [ a ,b ]\nz: 9\n",
+        id="yaml-scalar-spellings",
+    ),
+    pytest.param(
+        _FMT,
+        b"# old note\na: 1\nmid:\n    deep: [ 1,2 ]\nz: 2\n",
+        b"# old note\na: 1\nmid:\n    deep: [ 1,2 ]\nz: 3   # mine\n",
+        b"# new note\na: 9\nmid:\n    deep: [ 1,2 ]\nz: 2\n",
+        b"# new note\na: 9\nmid:\n    deep: [ 1,2 ]\nz: 3   # mine\n",
+        id="yaml-tracked-comment-and-value",
+    ),
+    pytest.param(
+        _FMT,
+        b"host: base\nshared: 1   # sh\nl:\n    - a    # first\nm: {x: 1,   y: 2}\n",
+        b"host: mine\nshared: 2   # sh\nl:\n    - a    # first\nm: {x: 1,   y: 2}\n",
+        b"host: base\nshared: 2   # sh\nl:\n    - a    # first\nm: {x: 1,   y: 2}\n",
+        b"host: mine\nshared: 2   # sh\nl:\n    - a    # first\nm: {x: 1,   y: 2}\n",
+        id="yaml-after-one-key-was-shared",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  // old comment\n  "a": 1,\n  "m": 0,\n  "b": 2\n}\n',
+        b'{\n  // old comment\n  "a": 1,\n  "m": 0,\n  "b": 3\n}\n',
+        b'{\n  // NEW comment\n  "a": 9,\n  "m": 0,\n  "b": 2\n}\n',
+        b'{\n  // NEW comment\n  "a": 9,\n  "m": 0,\n  "b": 3\n}\n',
+        id="json-tracked-comment-and-value",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("fmt", "base", "host", "upstream", "expected"), _BYTE_PRESERVING_MERGES
+)
+def test_independent_edits_keep_untouched_lines_byte_identical(
+    fmt: StructuredFormat, base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("line-preserving")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+@pytest.mark.parametrize(
+    ("fmt", "base", "host", "upstream", "expected"),
+    [
+        pytest.param(
+            _FMT,
+            b"a: 1\nm: 0\nz: 2\n",
+            b"a: 1\nnew: 1\nm: 0\nz: 2\n",
+            b"a: 1\nm: 0\nz: 2\nnew: 1\n",
+            b"a: 1\nnew: 1\nm: 0\nz: 2\n",
+            id="yaml",
+        ),
+        pytest.param(
+            _JSON,
+            b'{\n  "a": 1,\n  "m": 0,\n  "y": 0,\n  "z": 2\n}\n',
+            b'{\n  "a": 1,\n  "new": 1,\n  "m": 0,\n  "y": 0,\n  "z": 2\n}\n',
+            b'{\n  "a": 1,\n  "m": 0,\n  "y": 0,\n  "z": 2,\n  "new": 1\n}\n',
+            b'{\n  "a": 1,\n  "new": 1,\n  "m": 0,\n  "y": 0,\n  "z": 2\n}\n',
+            id="json",
+        ),
+    ],
+)
+def test_line_merge_that_would_duplicate_a_key_yields_to_the_key_merge(
+    fmt: StructuredFormat, base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("same-key-both")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+def test_adjacent_line_edits_merge_by_key_with_exact_bytes() -> None:
+    fid = file_id("adjacent")
+    base = b"editor:\n  fontSize: 12\n"
+    host = b"editor:\n  fontSize: 18\n"
+    upstream = b"editor:\n  fontSize: 12\n  theme: dark\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"editor:\n  fontSize: 18\n  theme: dark\n"
+
+
+@pytest.mark.parametrize(
+    ("fmt", "base", "host", "upstream", "expected"),
+    [
+        pytest.param(
+            _FMT,
+            b"editor:\n    fontSize: 12   # px\nl:\n    - a\nt: ~\n",
+            b"editor:\n    fontSize: 18   # px\nl:\n    - a\nt: ~\n",
+            b"editor:\n    fontSize: 12   # px\n    theme: dark\nl:\n    - a\nt: ~\n",
+            b"editor:\n    fontSize: 18   # px\n    theme: dark\nl:\n    - a\nt: ~\n",
+            id="yaml-upstream-adds-next-to-host-edit",
+        ),
+        pytest.param(
+            _FMT,
+            b"a: 1\nb: 2\nd: 0\nl:\n    - x\n",
+            b"a: 5\nb: 2\nd: 0\nl:\n    - x\n",
+            b"a: 1\nd: 0\nl:\n    - x\nc: 4\n",
+            b"a: 5\nd: 0\nl:\n    - x\nc: 4\n",
+            id="yaml-upstream-deletes-next-to-host-edit",
+        ),
+        pytest.param(
+            _JSON,
+            b'{\n    "a": 1,\n    "b": 2,\n}\n',
+            b'{\n    "a": 5,\n    "b": 2,\n}\n',
+            b'{\n    "a": 1,\n    "b": 3,\n    "c": 4,\n}\n',
+            b'{\n    "a": 5,\n    "b": 3,\n    "c": 4,\n}\n',
+            id="json-trailing-commas",
+        ),
+    ],
+)
+def test_adjacent_edits_keep_the_live_layout(
+    fmt: StructuredFormat, base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("adjacent-layout")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+def test_two_keys_merged_on_one_line_are_re_serialised() -> None:
+    fid = file_id("one-line")
+    base = b"m: {x: 1, y: 2}\nz: 0\n"
+    host = b"m: {x: 5, y: 2}\nz: 0\n"
+    upstream = b"m: {x: 1, y: 7}\nz: 0\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"m: {x: 5, y: 7}\nz: 0\n"

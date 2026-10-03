@@ -58,6 +58,8 @@ from setforge.reconcile.structured_units import (
     StructuredFormat,
     _dump_model,
     _load_model,
+    models_equal,
+    splice_lines_toward,
 )
 from setforge.reconcile.types import Absent
 from setforge.structural_merge import merge_structural
@@ -345,6 +347,56 @@ def _parses(data: bytes, fmt: StructuredFormat) -> bool:
     return True
 
 
+def _line_merge_agreeing(
+    base: bytes, live: bytes, tracked: bytes, model: object, fmt: StructuredFormat
+) -> bytes | None:
+    """The line 3-way of the three texts when it holds exactly ``model``'s values.
+
+    The line merge keeps every untouched line byte-identical (INV-6) and carries
+    text-only edits (comments, layout) the key merge cannot see, but it is blind
+    to keys: it is trusted only when it is clean AND parses to the same values
+    as the clean key-aware merge. ``None`` otherwise.
+    """
+    lines = merge(base, live, tracked)
+    if not lines.clean:
+        return None
+    text = lines.merged()
+    if not isinstance(text, bytes):
+        return None
+    try:
+        agrees = models_equal(_load_model(text, fmt), model)
+    except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
+        return None
+    return text if agrees else None
+
+
+def _key_merge(
+    base: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
+) -> bytes | None:
+    """The clean key-aware 3-way of three structured texts, or ``None``.
+
+    ``None`` on a same-key conflict and for a side the key engine cannot model
+    (unparseable, multi-document, duplicate or non-string keys, a non-mapping
+    root) — the caller line-merges those. Each side is parsed FRESH because
+    ``merge_structural`` mutates ``ours`` (live) in place.
+    """
+    try:
+        result = merge_structural(
+            _load_model(base, fmt), _load_model(live, fmt), _load_model(tracked, fmt)
+        )
+        if not result.clean:
+            return None
+        model = result.merged_model
+        merged = (
+            _line_merge_agreeing(base, live, tracked, model, fmt)
+            or splice_lines_toward(live, tracked, model, fmt)
+            or _dump_model(model, fmt)
+        )
+    except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
+        return None
+    return merged
+
+
 def reconcile_structured_file(
     profile: str,
     fid: FileId,
@@ -363,13 +415,18 @@ def reconcile_structured_file(
     The key-aware sibling of :func:`reconcile_plain_file`. An independent-key
     upstream change merges CLEAN against a host edit where the line 3-way would
     false-conflict, via :func:`~setforge.structural_merge.merge_structural` over
-    comment-preserving models. The base-absent seed is byte-identical to the plain
-    path. A GENUINE same-key collision (``merge_structural`` reports conflicts) is
-    delegated to :func:`reconcile_plain_file`, so the one proven wizard / ``--auto``
-    / DEFERRED tail resolves it — no separate structured conflict UI is introduced.
+    comment-preserving models. The key merge decides the VALUES; the bytes are the
+    line 3-way's whenever that is clean and holds the same values, else live with
+    the tracked line regions that realise those values (untouched lines stay
+    byte-identical either way), else the re-serialised model. When one side did
+    not move
+    the other side's bytes are used verbatim. The base-absent seed is byte-identical
+    to the plain path. A GENUINE same-key collision (``merge_structural`` reports
+    conflicts) is delegated to :func:`reconcile_plain_file`, so the one proven
+    wizard / ``--auto`` / DEFERRED tail resolves it — no separate structured
+    conflict UI is introduced.
 
-    ``fmt`` is the caller-detected :class:`StructuredFormat`. Each side is parsed
-    FRESH because ``merge_structural`` mutates ``ours`` (live) in place.
+    ``fmt`` is the caller-detected :class:`StructuredFormat`.
     """
     base_raw = read_base(profile, fid)
 
@@ -410,18 +467,7 @@ def reconcile_structured_file(
                 ReconcileKind.WRITE, content=tracked, new_base=tracked
             )
 
-        # Clean-fast-path: a key-aware 3-way over comment-preserving models. A
-        # side the key engine cannot model (unparseable, multi-document,
-        # duplicate or non-string keys, a non-mapping root) is line-merged.
-        try:
-            result = merge_structural(
-                _load_model(base_raw, fmt),
-                _load_model(live, fmt),
-                _load_model(tracked, fmt),
-            )
-            merged = _dump_model(result.merged_model, fmt) if result.clean else None
-        except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
-            merged = None
+        merged = _key_merge(base_raw, live, tracked, fmt)
         if merged is not None:
             return ReconcileOutcome(
                 ReconcileKind.WRITE, content=merged, new_base=tracked
