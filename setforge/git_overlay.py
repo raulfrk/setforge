@@ -20,6 +20,7 @@ _CLAIM_ID = re.compile(r"[0-9a-f]{64}")
 _DRIVER = "setforge-project"
 _PROCESS = "setforge project filter-process"
 _OWNED_KEY = f"filter.{_DRIVER}.setforgeOwned"
+_CREATED_ATTRIBUTES_KEY = f"filter.{_DRIVER}.setforgeCreatedAttributes"
 _MAX_SHARED_FILE = 16 * 1024 * 1024
 
 
@@ -52,6 +53,8 @@ class OverlayGitPlan:
     removed: tuple[OverlayClaim, ...]
     configure_driver: bool
     remove_driver: bool
+    create_attributes: bool = False
+    created_attributes: bool = False
 
     @property
     def changed(self) -> bool:
@@ -59,6 +62,13 @@ class OverlayGitPlan:
             self.attributes_before != self.attributes_after
             or self.configure_driver
             or self.remove_driver
+        )
+
+    @property
+    def remove_attributes(self) -> bool:
+        """Return whether removal must delete the file SetForge itself created."""
+        return (
+            self.remove_driver and self.created_attributes and not self.attributes_after
         )
 
 
@@ -102,6 +112,10 @@ def plan_overlay_git(
         process = _config_values_at(target, common_fd, f"filter.{_DRIVER}.process")
         required = _config_values_at(target, common_fd, f"filter.{_DRIVER}.required")
         owned = _config_values_at(target, common_fd, _OWNED_KEY)
+        created_attributes = _config_values_at(
+            target, common_fd, _CREATED_ATTRIBUTES_KEY
+        ) == ("true",)
+        attributes_missing = not _exists_at(info_fd, "attributes")
         _require_directory_identity(common_dir, common_info)
         _require_directory_identity(attributes_path.parent, info_info)
         if _read_bounded_at(common_fd, "config", config_path, missing_mode=0o600) != (
@@ -181,6 +195,8 @@ def plan_overlay_git(
         removed=tuple(removed),
         configure_driver=configure,
         remove_driver=remove_driver,
+        create_attributes=configure and attributes_missing,
+        created_attributes=created_attributes,
     )
 
 
@@ -222,15 +238,21 @@ def apply_overlay_git(plan: OverlayGitPlan) -> None:
                 (_OWNED_KEY, "true"),
             ):
                 _config_set_at(plan.target, common_fd, key, value)
+            if plan.create_attributes:
+                _config_set_at(plan.target, common_fd, _CREATED_ATTRIBUTES_KEY, "true")
         elif plan.remove_driver:
             for key in (
                 f"filter.{_DRIVER}.process",
                 f"filter.{_DRIVER}.required",
                 _OWNED_KEY,
+                *((_CREATED_ATTRIBUTES_KEY,) if plan.created_attributes else ()),
             ):
                 _config_unset_at(plan.target, common_fd, key)
         _require_directory_identity(plan.common_dir, common_info)
-        if plan.attributes_before != plan.attributes_after:
+        if plan.remove_attributes:
+            os.unlink("attributes", dir_fd=info_fd)
+            os.fsync(info_fd)
+        elif plan.attributes_before != plan.attributes_after:
             atomicio.atomic_write_bytes_at(
                 info_fd,
                 "attributes",
@@ -312,6 +334,14 @@ def _require_directory_identity(
         or (current.st_dev, current.st_ino) != identity
     ):
         raise SetforgeError("Git overlay directory changed before apply; retry")
+
+
+def _exists_at(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _read_bounded_at(

@@ -100,7 +100,7 @@ def test_linked_overlay_claims_reference_count_shared_git_plumbing(
 
     final = plan_overlay_git(linked, remove=(second,))
     apply_overlay_git(final)
-    assert b"setforge project overlays" not in final.attributes_path.read_bytes()
+    assert not final.attributes_path.exists()
     missing = subprocess.run(
         [
             "git",
@@ -241,3 +241,47 @@ def test_overlay_refuses_incompatible_attribute_assignment(
         plan_overlay_git(target, add=(claim,))
     assert (_git_dir(target) / "config").read_bytes() == before_config
     assert attributes.read_bytes() == before_attributes
+
+
+@pytest.mark.parametrize("preexisting", [None, b"", b"*.bin binary\n"])
+def test_last_overlay_claim_removal_restores_the_attributes_file_exactly(
+    tmp_path: Path, preexisting: bytes | None
+) -> None:
+    target = _repo(tmp_path / "target")
+    attributes = target / ".git" / "info" / "attributes"
+    if preexisting is not None:
+        attributes.write_bytes(preexisting)
+        attributes.chmod(0o640)
+    claim = _claim(target, "demo")
+
+    apply_overlay_git(plan_overlay_git(target, add=(claim,)))
+    assert claim.claim_id.encode() in attributes.read_bytes()
+    removal = plan_overlay_git(target, remove=(claim,))
+    assert removal.remove_attributes is (preexisting is None)
+    apply_overlay_git(removal)
+
+    if preexisting is None:
+        assert not attributes.exists()
+    else:
+        assert attributes.read_bytes() == preexisting
+        assert attributes.stat().st_mode & 0o7777 == 0o640
+    leftover = subprocess.run(
+        ["git", "-C", str(target), "config", "--local", "--get-regexp", "^filter\\."],
+        capture_output=True,
+        text=True,
+    )
+    assert (leftover.returncode, leftover.stdout) == (1, "")
+
+
+def test_attributes_file_created_by_setforge_survives_when_the_user_adds_lines(
+    tmp_path: Path,
+) -> None:
+    target = _repo(tmp_path / "target")
+    attributes = target / ".git" / "info" / "attributes"
+    claim = _claim(target, "demo")
+    apply_overlay_git(plan_overlay_git(target, add=(claim,)))
+    attributes.write_bytes(b"*.bin binary\n" + attributes.read_bytes())
+
+    apply_overlay_git(plan_overlay_git(target, remove=(claim,)))
+
+    assert attributes.read_bytes() == b"*.bin binary\n"

@@ -322,7 +322,7 @@ def test_schema_two_mixed_files_reconcile_all_visibility_plumbing(
     assert {
         entry["destination"]: entry["visibility"] for entry in migrated["files"]
     } == {"AGENTS.md": "tracked", "guide.md": "tracked"}
-    assert "/AGENTS.md filter=setforge-project" not in attributes.read_text()
+    assert not attributes.exists()
     assert "+profile" in _git(target, "diff", "--", "AGENTS.md")
     listed = CliRunner().invoke(app, ["project", "list"])
     assert listed.exit_code == 0, listed.output

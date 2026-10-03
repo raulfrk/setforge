@@ -1366,6 +1366,33 @@ def test_tracked_conflict_without_resolution_fails_dry_run_like_apply(
     assert _private_state(state) == {}
 
 
+def test_tracked_overlay_removal_restores_git_private_files_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    info = target / ".git" / "info"
+    before = {path.name: path.read_bytes() for path in info.iterdir()}
+    assert "attributes" not in before
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", *arguments, "--auto=use-profile"]
+    )
+    assert injected.exit_code == 0, injected.output
+    assert (info / "attributes").exists()
+
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, removed.output
+    assert {path.name: path.read_bytes() for path in info.iterdir()} == before
+    assert destination.read_text() == "team instructions\n"
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:
