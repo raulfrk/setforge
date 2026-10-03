@@ -242,6 +242,21 @@ def _wizard_content(result: MergeResult, wizard: WizardResult) -> MergeInput:
     return wizard.merged.merged()
 
 
+def _absence_outcome(
+    profile: str,
+    fid: FileId,
+    base_raw: bytes | None,
+    tracked: bytes,
+    auto: AutoSide | None,
+) -> ReconcileOutcome:
+    """Resolve a clean merge to absence: honor it, or restore under use-tracked."""
+    if auto is AutoSide.THEIRS:
+        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+    if read_local(profile, fid) is ABSENT and base_raw == tracked:
+        return ReconcileOutcome(ReconcileKind.NOOP)
+    return ReconcileOutcome(ReconcileKind.REMOVE, content=ABSENT, new_base=tracked)
+
+
 def reconcile_plain_file(
     profile: str,
     fid: FileId,
@@ -296,11 +311,7 @@ def reconcile_plain_file(
     if result.clean:
         merged = result.merged()
         if result.absent:
-            if read_local(profile, fid) is ABSENT and base_raw == tracked:
-                return ReconcileOutcome(ReconcileKind.NOOP)
-            return ReconcileOutcome(
-                ReconcileKind.REMOVE, content=ABSENT, new_base=tracked
-            )
+            return _absence_outcome(profile, fid, base_raw, tracked, auto)
         if merged == live and base_raw == tracked:
             return ReconcileOutcome(ReconcileKind.NOOP)
         return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)

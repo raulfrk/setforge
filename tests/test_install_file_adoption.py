@@ -41,7 +41,7 @@ def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
     return config, home / ".config" / "example" / "note.md"
 
 
-def _install(config: Path, *, yes: bool) -> Result:
+def _install(config: Path, *, yes: bool, extra: list[str] | None = None) -> Result:
     args = [
         "install",
         "--profile=p",
@@ -52,7 +52,23 @@ def _install(config: Path, *, yes: bool) -> Result:
     ]
     if yes:
         args.append("--yes")
+    args.extend(extra or [])
     return CliRunner().invoke(app, args)
+
+
+def _dry_run(config: Path) -> Result:
+    return CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={config}",
+            "--no-fetch",
+            "--no-git-check",
+            "--no-secrets-scan",
+            "--dry-run",
+        ],
+    )
 
 
 def test_install_adopts_existing_file_without_replacing_it(
@@ -683,3 +699,125 @@ def test_install_missing_tree_source_refuses_without_removing_owned_entries(
     assert "managed tree source is missing" in str(result.exception)
     assert live.joinpath("managed.txt").read_bytes() == before
     assert read_inventory("p", "tools") == prior
+
+
+def _add_second_file(config: Path, home: Path) -> Path:
+    (config.parent / "tracked" / "other.md").write_text("other\n", encoding="utf-8")
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace(
+            "profiles:\n",
+            "  other:\n    src: other.md\n    dst: ~/.config/example/other.md\n"
+            "profiles:\n",
+        )
+        .replace("[note]", "[note, other]"),
+        encoding="utf-8",
+    )
+    return home / ".config" / "example" / "other.md"
+
+
+def test_install_after_live_deletion_keeps_file_absent_and_applies_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    other = _add_second_file(config, tmp_path / "home")
+    assert _install(config, yes=True).exit_code == 0
+    live.unlink()
+    (config.parent / "tracked" / "other.md").write_text("other v2\n", encoding="utf-8")
+
+    result = _install(config, yes=True)
+
+    assert result.exit_code == 0, result.output
+    assert not live.exists()
+    assert other.read_text(encoding="utf-8") == "other v2\n"
+    assert "WOULD remove" not in _dry_run(config).output
+    assert _install(config, yes=True).exit_code == 0
+    claim = OwnershipStore().read(file_resource_id(live))
+    assert claim is not None
+    assert claim.authority is Authority.MANAGE
+
+
+def test_install_dry_run_after_live_deletion_does_not_claim_a_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    live.unlink()
+
+    dry = _dry_run(config)
+
+    assert dry.exit_code == 0, dry.output
+    assert "WOULD remove" not in dry.output
+    assert "WOULD keep-absent" in dry.output
+    assert "--auto=use-tracked" in dry.output
+
+
+def test_install_use_tracked_restores_a_deleted_live_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    live.unlink()
+
+    result = _install(config, yes=True, extra=["--auto=use-tracked"])
+
+    assert result.exit_code == 0, result.output
+    assert live.read_text(encoding="utf-8") == "shared\n"
+    claim = OwnershipStore().read(file_resource_id(live))
+    assert claim is not None
+    assert claim.fingerprint == observe_file(live).fingerprint
+    assert _install(config, yes=True).exit_code == 0
+    assert live.read_text(encoding="utf-8") == "shared\n"
+
+
+def _record_local_units(live: Path) -> None:
+    from dataclasses import replace
+
+    from setforge.reconcile import hunks, store
+    from setforge.reconcile.types import HunkClass, file_id
+
+    base = live.read_bytes()
+    changed = base + b"host only\n"
+    live.write_bytes(changed)
+    units = [
+        replace(unit, cls=HunkClass.LOCAL)
+        for unit in hunks.extract_hunks(base, changed)
+    ]
+    store.record(
+        "p",
+        file_id("note"),
+        base=base,
+        local=changed,
+        hunks=hunks.serialize(units),
+        staged=True,
+    )
+    live.unlink()
+
+
+def test_missing_file_with_local_units_refusal_names_the_remedy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    _record_local_units(live)
+
+    result = _install(config, yes=True)
+
+    assert result.exit_code != 0
+    message = str(result.exception)
+    assert str(live) in message
+    assert "--auto=use-tracked" in message
+    assert not live.exists()
+
+
+def test_use_tracked_recreates_a_missing_file_with_local_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    _record_local_units(live)
+
+    result = _install(config, yes=True, extra=["--auto=use-tracked"])
+
+    assert result.exit_code == 0, result.output
+    assert live.read_text(encoding="utf-8") == "shared\n"

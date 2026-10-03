@@ -920,7 +920,14 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
 
 def _honor_reconcile_removal(record: _PendingDeploy) -> None:
     assert record.resolved is not None
-    record.resolved.real_dst.unlink(missing_ok=True)
+    try:
+        record.resolved.real_dst.unlink()
+    except FileNotFoundError:
+        typer.echo(
+            f"{'absent':>8}  {record.sub_dst} "
+            "(deleted locally; kept absent, --auto=use-tracked restores it)"
+        )
+        return
     typer.echo(f"{deploy.DeployAction.REMOVED.value:>8}  {record.sub_dst}")
 
 
@@ -1402,6 +1409,27 @@ def _dry_run_emit_drift_gate(
     typer.echo(f"unexpected drift in {unexpected} file(s)")
 
 
+def _planned_line(record: _PendingDeploy, sub_dst: Path) -> str:
+    """Dry-run line(s) for a planned regular-file deploy."""
+    assert record.preview_action is not None
+    if (
+        record.preview_action is deploy.DeployAction.REMOVED
+        and record.resolved is not None
+        and not record.resolved.dst_existed
+    ):
+        return (
+            f"  WOULD keep-absent {sub_dst}\n"
+            "    deleted locally; --auto=use-tracked restores it"
+        )
+    verb = {
+        deploy.DeployAction.CREATED: "install",
+        deploy.DeployAction.UPDATED: "update",
+        deploy.DeployAction.NOOP: "noop",
+        deploy.DeployAction.REMOVED: "remove",
+    }[record.preview_action]
+    return f"  WOULD {verb:<9} {sub_dst}"
+
+
 def _dry_run_emit_deploys(
     ctx: ProfileContext,
     drift_report: compare_mod.CompareReport,
@@ -1442,13 +1470,7 @@ def _dry_run_emit_deploys(
     ):
         entry = by_name[sub_name]
         if record is not None and record.preview_action is not None:
-            verb = {
-                deploy.DeployAction.CREATED: "install",
-                deploy.DeployAction.UPDATED: "update",
-                deploy.DeployAction.NOOP: "noop",
-                deploy.DeployAction.REMOVED: "remove",
-            }[record.preview_action]
-            typer.echo(f"  WOULD {verb:<9} {sub_dst}")
+            typer.echo(_planned_line(record, sub_dst))
             continue
         match entry.status:
             case CompareStatus.MISSING:

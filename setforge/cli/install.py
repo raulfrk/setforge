@@ -633,7 +633,12 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     live_path_snapshot = _snapshot_live_paths(live_paths)
     file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
     file_ownership = _plan_file_ownership(
-        tracked_entries, profile=ctx.profile, owner_id=package_owner_id
+        tracked_entries,
+        profile=ctx.profile,
+        owner_id=package_owner_id,
+        discard_protected_units=(
+            section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
+        ),
     ) + tuple(tree.decision for tree in trees)
     ownership_pre = MappingProxyType(
         transitions.snapshot_paths(
@@ -848,6 +853,7 @@ def _plan_file_ownership(
     *,
     profile: str,
     owner_id: UUID | None,
+    discard_protected_units: bool = False,
 ) -> tuple[FileDecision, ...]:
     """Freeze container authority independently from unit classifications."""
     store = OwnershipStore()
@@ -857,7 +863,9 @@ def _plan_file_ownership(
             observation,
             store.read(observation.resource_id),
             owner_id=planning_owner,
-            protected_units=_has_protected_units(profile, name),
+            protected_units=(
+                not discard_protected_units and _has_protected_units(profile, name)
+            ),
         )
         for tracked, name, _src, destination in tracked_entries
         for owned_destination in _ownership_destinations(tracked, destination)
@@ -1700,6 +1708,18 @@ def _confirm_package_adoptions(
         )
 
 
+def _blocked_install_message(decision: FileDecision) -> str:
+    path = decision.observation.locator
+    message = f"tracked file ownership blocks install for {path}: {decision.detail}"
+    if not decision.observation.present and decision.claim is not None:
+        message += (
+            "; restore the file by hand, or run "
+            "`setforge install --auto=use-tracked --yes` to recreate it from the "
+            "tracked version and discard those units"
+        )
+    return message
+
+
 def _confirm_file_adoptions(
     decisions: tuple[FileDecision, ...], *, yes: bool, receiver_owner: UUID | None
 ) -> None:
@@ -1713,8 +1733,9 @@ def _confirm_file_adoptions(
         decision for decision in decisions if decision.action is FileAction.HOLD
     )
     if blocked:
-        names = ", ".join(decision.observation.locator for decision in blocked)
-        raise SetforgeError(f"tracked file ownership blocks install for {names}")
+        raise SetforgeError(
+            "\n".join(_blocked_install_message(decision) for decision in blocked)
+        )
     if not adopt:
         return
     for decision in adopt:
@@ -1772,6 +1793,7 @@ def _preview_file_ownership(
     *,
     owner_id_override: UUID | None = None,
     file_selection: frozenset[str] | None = None,
+    discard_protected_units: bool = False,
 ) -> tuple[FileDecision, ...]:
     """Build the file consent surface without holding mutation locks."""
     cfg = load_config(config)
@@ -1785,7 +1807,10 @@ def _preview_file_ownership(
         except OwnershipError:
             owner_id = None
     regular = _plan_file_ownership(
-        tuple(_iter_all_tracked_files(ctx)), profile=profile, owner_id=owner_id
+        tuple(_iter_all_tracked_files(ctx)),
+        profile=profile,
+        owner_id=owner_id,
+        discard_protected_units=discard_protected_units,
     )
     trees = _plan_trees(tuple(_iter_all_trees(ctx)), profile=profile, owner_id=owner_id)
     return regular + tuple(tree.decision for tree in trees)
@@ -2042,7 +2067,9 @@ def _publish_file_claims(
                     expected_generation=current.generation,
                 )
             resource_id = observed.resource_id
-        if current is not None and current.fingerprint == observed.fingerprint:
+        if not observed.present or (
+            current is not None and current.fingerprint == observed.fingerprint
+        ):
             continue
         locked = decide_file(observed, current, owner_id=owner_id)
         publish_file_claim_locked(
@@ -2444,7 +2471,14 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         package_owner_id = _read_package_owner_id(repo_root)
         if file_selection is not None:
             _require_managed_file_selection(
-                _preview_file_ownership(config, profile, file_selection=file_selection),
+                _preview_file_ownership(
+                    config,
+                    profile,
+                    file_selection=file_selection,
+                    discard_protected_units=(
+                        section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
+                    ),
+                ),
                 package_owner_id,
             )
         plan = _build_install_plan(
@@ -2474,7 +2508,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         else ()
     )
     file_ownership_preview = _preview_file_ownership(
-        config, profile, file_selection=file_selection
+        config,
+        profile,
+        file_selection=file_selection,
+        discard_protected_units=(
+            section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
+        ),
     )
     tree_target_preview = _preview_tree_targets(
         config, profile, file_selection=file_selection

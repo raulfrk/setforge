@@ -567,7 +567,7 @@ def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
     result = _install(config)
     assert result.exit_code == 0, result.output
     assert not _live().exists(), "honored deletion must not resurrect the file"
-    assert "removed" in result.output
+    assert "kept absent" in result.output
     assert _base() == b"v1\n"
 
 
