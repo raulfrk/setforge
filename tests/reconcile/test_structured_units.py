@@ -1157,18 +1157,30 @@ def test_reconstruct_leaves_unclassified_comment_edit_host_only() -> None:
     assert out == b"# c\na: 5\nl:\n    - x\nz: 2\n"
 
 
-def test_reconstruct_promoted_add_and_delete_take_live_lines() -> None:
+def test_reconstruct_promoted_add_and_delete_work_on_their_own_lines() -> None:
     base = b"a: 1\nl:\n    - x\nb: 2\nhost: h\n"
-    live = b"l:\n    - x\nb: 2\nhost: mine\nnew:\n    deep: 3\n"
+    live = b"l:\n    - x\nb: 2\nhost: mine\nnew: 3\n"
     units = _classified(
         base,
         live,
-        {"a": HunkClass.SHARED, "new.deep": HunkClass.SHARED, "host": HunkClass.LOCAL},
+        {"a": HunkClass.SHARED, "new": HunkClass.SHARED, "host": HunkClass.LOCAL},
     )
 
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
-    assert out == b"l:\n    - x\nb: 2\nhost: h\nnew:\n    deep: 3\n"
+    assert out == b"l:\n    - x\nb: 2\nhost: h\nnew: 3\n"
+
+
+def test_reconstruct_promoted_new_block_is_re_serialised() -> None:
+    base = b"a: 1\nl:\n    - x\nhost: h\n"
+    live = b"a: 1\nl:\n    - x\nhost: mine\nnew:\n    deep: 3\n"
+    units = _classified(
+        base, live, {"new.deep": HunkClass.SHARED, "host": HunkClass.LOCAL}
+    )
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == b"a: 1\nl:\n    - x\nhost: h\nnew:\n  deep: 3\n"
 
 
 def test_reconstruct_one_line_with_mixed_intent_falls_back_to_the_model() -> None:
@@ -1199,7 +1211,7 @@ def test_uses_aliases_detects_shared_nodes(document: bytes, expected: bool) -> N
 
 def test_uses_aliases_wraps_a_parse_failure() -> None:
     with pytest.raises(StructuredParseError, match="not parseable"):
-        uses_aliases(b"a: [1\n")
+        uses_aliases(b"a: [*x\n")
 
 
 def test_reconstruct_keeps_anchors_and_merge_keys_byte_identical() -> None:
@@ -1284,44 +1296,6 @@ def test_extract_reports_duplicate_json_keys_as_unparseable() -> None:
         extract_structured_units(base, live, StructuredFormat.JSONC)
 
 
-def test_aligned_pairs_the_most_similar_lines_of_a_run() -> None:
-    from setforge.reconcile.structured_units import _aligned
-
-    old = [b"h3: 8\n", b"k1: 2\n", b"# h note\n"]
-    new = [b"k1: 16\n"]
-
-    assert _aligned(old, new, 10, 20) == [
-        (10, 11, 20, 20),
-        (11, 12, 20, 21),
-        (12, 13, 21, 21),
-    ]
-
-
-def test_aligned_pairs_a_large_run_by_position() -> None:
-    from setforge.reconcile.structured_units import _aligned
-
-    old = [b"x%d: 1\n" % n for n in range(13)]
-    new = [b"x12: 2\n", b"y: 1\n", b"z: 1\n", b"w: 1\n", b"v: 1\n"]
-
-    regions = _aligned(old, new, 0, 0)
-
-    assert regions[0] == (0, 1, 0, 1)
-    assert regions[-1] == (5, 13, 5, 5)
-
-
-def test_restore_puts_a_start_only_line_back_only_when_values_allow() -> None:
-    from setforge.reconcile.structured_units import restore_start_only_lines
-
-    fmt = StructuredFormat.YAML
-    base = b"a: 1\nb: 2\n"
-    start = b"a: 1\n# mine\nb: 2\nc: 3\n"
-    model = _load_model(b"a: 1\n", fmt)
-
-    out = restore_start_only_lines(b"a: 1\n", start, base, model, fmt)
-
-    assert out == b"a: 1\n# mine\n"
-
-
 _SECRET = b"# host private note: token lives in ~/.secret\n"
 _VALUES_ONLY = [
     pytest.param(
@@ -1356,7 +1330,7 @@ _VALUES_ONLY = [
         b"a: 1\nl:\n    - x\n",
         b"a: 1\nl:\n    - x\nnew:\n    # secret\n\n    deep: 3  # eol\n# tail\n",
         {"new.deep": HunkClass.SHARED},
-        b"a: 1\nl:\n    - x\nnew:\n\n    deep: 3\n",
+        b"a: 1\nl:\n    - x\nnew:\n  deep: 3\n",
         id="comments-inside-a-shared-new-block",
     ),
     pytest.param(
@@ -1408,3 +1382,83 @@ def test_reconstruct_never_carries_host_comment_text(
     assert out == expected
     assert b"mine" not in out
     assert b"secret" not in out
+
+
+_LINE_PATH = [
+    pytest.param(
+        b"key1: 3\n# base note\nkey4: 1.5\n",
+        b"h350: 0\n# base note\n# HSECRET note\nkey4: 2\n",
+        {"key1": HunkClass.SHARED, "h350": HunkClass.SHARED, "key4": HunkClass.SHARED},
+        b"h350: 0\n# base note\nkey4: 2\n",
+        id="delete-insert-and-change-keep-the-upstream-comment",
+    ),
+    pytest.param(
+        b"m:\r\n    x: 1\r\n    z: 3\r\nq: ~\r\n",
+        b"m:\r\n    x: 1\r\n    y: 2  # mine\r\n    z: 3\r\nq: ~\r\nt: 1\r\nu: 2",
+        {"m.y": HunkClass.SHARED, "t": HunkClass.SHARED, "u": HunkClass.SHARED},
+        b"m:\r\n    x: 1\r\n    y: 2\r\n    z: 3\r\nq: ~\r\nt: 1\r\nu: 2\r\n",
+        id="inserted-after-the-sibling-above-with-base-line-endings",
+    ),
+    pytest.param(
+        b"# head\na: 1\nb: 2\n",
+        b"# mine\nfirst: 0\na: 1\nb: 2\n",
+        {"first": HunkClass.SHARED},
+        b"# head\nfirst: 0\na: 1\nb: 2\n",
+        id="inserted-in-front-of-the-first-key-without-a-sibling-above",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2  # about b\nc: ~\n",
+        b"a: 1\nc: ~\nh: 1\n",
+        {"b": HunkClass.SHARED, "h": HunkClass.LOCAL},
+        b"a: 1\nc: ~\n",
+        id="deleted-key-takes-its-own-line-only",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2",
+        b"a: 1\nb: 2\nnew: 3\n",
+        {"new": HunkClass.SHARED},
+        b"a: 1\nb: 2\nnew: 3",
+        id="insertion-after-an-unterminated-last-line-is-re-serialised",
+    ),
+    pytest.param(
+        b"a: 1\nl:\n    - x\n",
+        b"a: 1\nl:\n    - x\nblock:\n    - y\n",
+        {"block": HunkClass.SHARED},
+        b"a: 1\nl:\n    - x\nblock:\n    - y\n",
+        id="multi-line-new-value-is-re-serialised",
+    ),
+]
+
+
+@pytest.mark.parametrize(("base", "live", "classes", "expected"), _LINE_PATH)
+def test_reconstruct_updates_each_promoted_key_on_its_own_line(
+    base: bytes, live: bytes, classes: dict[str, HunkClass], expected: bytes
+) -> None:
+    units = _classified(base, live, classes)
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == expected
+
+
+def test_reconstruct_of_a_reformatted_live_file_parses_a_fixed_number_of_times(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge.reconcile import structured_units
+
+    base = b"".join(b"key%d: %d\n" % (n, n) for n in range(2000))
+    live = base.replace(b"key7: 7\n", b"key7: 77\n").replace(b"\n", b"\r\n")
+    units = _classified(base, live, {"key7": HunkClass.SHARED})
+    parses: list[int] = []
+    real_load = structured_units._load_model
+
+    def counting_load(data: bytes, fmt: StructuredFormat) -> object:
+        parses.append(len(data))
+        return real_load(data, fmt)
+
+    monkeypatch.setattr(structured_units, "_load_model", counting_load)
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == base.replace(b"key7: 7\n", b"key7: 77\n")
+    assert len(parses) == 4

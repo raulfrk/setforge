@@ -792,23 +792,6 @@ _KEYS = b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"}\n]\n'
             id="upstream-edits-last-host-appends",
         ),
         pytest.param(
-            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"mine"}\n]\n',
-            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
-            b'  {"key":"T","command":"t"}\n]\n',
-            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"mine"},\n'
-            b'  {"key":"T","command":"t"}\n]\n',
-            id="host-edits-last-upstream-appends",
-        ),
-        pytest.param(
-            b'[\n  // mine\n  {"key":"a","command":"x"},\n'
-            b'  {"key":"b","command":"mine"}\n]\n',
-            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
-            b'  {"key":"T","command":"t"}\n]\n',
-            b'[\n  // mine\n  {"key":"a","command":"x"},\n'
-            b'  {"key":"b","command":"mine"},\n  {"key":"T","command":"t"}\n]\n',
-            id="host-comment-survives-when-upstream-appends",
-        ),
-        pytest.param(
             b'[\n  {"key":"a","command":"x"},\n  {"key":"M","command":"m"},\n'
             b'  {"key":"b","command":"y"}\n]\n',
             b'[\n  {"key":"a","command":"x2"},\n  {"key":"b","command":"y"}\n]\n',
@@ -860,6 +843,12 @@ def test_json_array_root_merges_element_wise(
             id="host-deletes-the-element-upstream-edits",
         ),
         pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"mine"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"T","command":"t"}\n]\n',
+            id="host-edits-last-upstream-appends",
+        ),
+        pytest.param(
             b'[\n  {"key":"a","command":"theirs"},\n  {"key":"b","command":"y"}\n]\n',
             b'[\n  {"key":"b","command":"y"}\n]\n',
             id="upstream-deletes-the-element-host-edits",
@@ -882,12 +871,25 @@ def test_json_array_root_insertion_inside_a_replaced_run_conflicts() -> None:
     fid = file_id("array-root-inside")
     base = b"[\n  1,\n  2,\n  3,\n  4\n]\n"
     host = b"[\n  1,\n  2,\n  9,\n  3,\n  4\n]\n"
-    upstream = b"[\n  1,\n  7,\n  8,\n  4\n]\n"
+    upstream = b"[\n  1,\n  7,\n  8,\n  6,\n  4\n]\n"
     _seed(fid, base=base, local=host)
 
     out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.DEFERRED
+
+
+def test_json_array_root_insertion_between_two_edited_elements_merges() -> None:
+    fid = file_id("array-root-between")
+    base = b"[\n  1,\n  2,\n  3,\n  4\n]\n"
+    host = b"[\n  1,\n  2,\n  9,\n  3,\n  4\n]\n"
+    upstream = b"[\n  1,\n  7,\n  8,\n  4\n]\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"[\n  1,\n  7,\n  9,\n  8,\n  4\n]\n"
 
 
 def test_json_array_root_identical_edits_on_both_sides_merge() -> None:
@@ -947,7 +949,7 @@ _SAME_SPOT_INSERTS = [
         b'{\n  "a": 1,\n  "b": 2\n}\n',
         b'{\n  "a": 1,\n  // host note\n  "b": 2\n}\n',
         b'{\n  "a": 1,\n  "t": 1,\n  "b": 2\n}\n',
-        b'{\n  "a": 1,\n  // host note\n  "t": 1,\n  "b": 2\n}\n',
+        b'{\n  "a": 1,\n  // host note\n  "b": 2,\n  "t": 1\n}\n',
         id="jsonc-host-comment-above-a-key",
     ),
     pytest.param(
@@ -1124,3 +1126,140 @@ def test_commented_json_does_not_gain_a_trailing_comma_either() -> None:
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "k0": 4,\n  "k4": 3\n  // h note\n}\n'
     _assert_converged(fid, out, upstream, _JSON)
+
+
+_F3_BASE = b"a: 3\nb: 1\nc: false\n"
+_DETERMINISTIC = [
+    pytest.param(
+        _F3_BASE,
+        b"a: 3\nb: 1  # host note\nc: false\n",
+        b"a: 3\nt: false\nb: 1\nc: null\n",
+        b"a: 3\nt: false\nb: 1  # host note\nc: null\n",
+        id="host-comment-on-a-line-between-upstream-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2",
+        b"a: 1\nb: 2\n# host note",
+        b"a: 1\nb: 3",
+        b"a: 1\nb: 3\n# host note",
+        id="host-comment-appended-without-final-newline",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 1\nb: 2\n# host note\n",
+        b"a: 1\nb: 3",
+        b"a: 1\nb: 3\n# host note\n",
+        id="only-upstream-lacks-the-final-newline",
+    ),
+    pytest.param(
+        b"x: 1\ny: 2\nz: ~\n",
+        b"x: 5\ny: 2\nz: ~\n",
+        b"x: 1\ny: 7\nz: ~\n",
+        b"x: 5\ny: 7\nz: ~\n",
+        id="adjacent-single-line-edits-by-different-sides",
+    ),
+    pytest.param(
+        b"k: 1\n# upstream note\nm: 2\nz: ~\n",
+        b"k: 1\n# upstream note\nm: 2\nh: 1\nz: ~\n",
+        b"# upstream note\nm: 3\nz: ~\n",
+        b"# upstream note\nm: 3\nh: 1\nz: ~\n",
+        id="upstream-deletes-above-a-comment-both-keep",
+    ),
+    pytest.param(
+        b"k: 1\nm: 2\nz: ~\n",
+        b"k: 1\nm: 2\nz: ~\n# host tail\n",
+        b"k: 1\n# why t\nt: 0\nm: 2\nz: ~\nu: 9\n",
+        b"k: 1\n# why t\nt: 0\nm: 2\nz: ~\n# host tail\nu: 9\n",
+        id="upstream-comment-comes-once-with-its-key",
+    ),
+]
+
+
+@pytest.mark.parametrize(("base", "host", "upstream", "expected"), _DETERMINISTIC)
+def test_non_colliding_edits_in_one_hunk_merge_from_the_lines(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("one-hunk")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    _assert_converged(fid, out, upstream, _FMT)
+
+
+def test_both_sides_changing_one_line_differently_is_re_serialised() -> None:
+    fid = file_id("same-line")
+    base = b"b: 1\nl:\n    - x\n"
+    host = b"b: 1  # host note\nl:\n    - x\n"
+    upstream = b"b: 2\nl:\n    - x\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"b: 2\nl:\n    - x\n"
+
+
+def _reformatted(lines: int, fmt: StructuredFormat) -> tuple[bytes, bytes, bytes]:
+    """A document where the host edits one value and upstream reformats it all."""
+    values = {f"key{n}": n for n in range(lines)}
+    if fmt is _FMT:
+        base = "".join(f"{key}: {value}\n" for key, value in values.items()).encode()
+        host = base.replace(b"key7: 7\n", b"key7: 77\n")
+        upstream = base.replace(b"key9: 9\n", b"key9: 99\n").replace(b"\n", b"\r\n")
+        return base, host, upstream
+    import json
+
+    base = (json.dumps(values, indent=2) + "\n").encode()
+    host = base.replace(b'"key7": 7,', b'"key7": 77,')
+    values["key9"] = 99
+    return base, host, (json.dumps(values, indent=4) + "\n").encode()
+
+
+@pytest.mark.parametrize("fmt", [_FMT, _JSON])
+@pytest.mark.parametrize("lines", [1200, 5000])
+def test_whole_file_reformat_costs_a_fixed_number_of_parses(
+    monkeypatch: pytest.MonkeyPatch, fmt: StructuredFormat, lines: int
+) -> None:
+    import time
+
+    from setforge import reconcile_apply
+    from setforge.reconcile import structured_units
+
+    base, host, upstream = _reformatted(lines, fmt)
+    fid = file_id("reformatted")
+    _seed(fid, base=base, local=host)
+    parses: list[int] = []
+    real_load = structured_units._load_model
+
+    def counting_load(data: bytes, load_fmt: StructuredFormat) -> object:
+        parses.append(len(data))
+        return real_load(data, load_fmt)
+
+    monkeypatch.setattr(structured_units, "_load_model", counting_load)
+    started = time.monotonic()
+
+    out = reconcile_apply.reconcile_structured_file(
+        _P, fid, live=host, tracked=upstream, fmt=fmt
+    )
+
+    elapsed = time.monotonic() - started
+    assert out.kind is ReconcileKind.WRITE
+    assert isinstance(out.content, bytes)
+    merged = real_load(out.content, fmt)
+    assert structured_units.get_at_path(merged, "key7") == 77
+    assert structured_units.get_at_path(merged, "key9") == 99
+    assert len(parses) <= 4
+    assert elapsed < 60
+
+
+def test_checking_a_candidate_with_a_reused_anchor_does_not_warn() -> None:
+    import warnings
+
+    from setforge.reconcile_apply import _parses
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _parses(b"a: &d 1\nb: &d 2\nc: *d\n", _FMT) is True

@@ -7,8 +7,9 @@ identity; composite identity was considered and REJECTED as a non-goal for v1 �
 see ``docs/RULES.md`` DEC-1). A unit is classified by the
 same :class:`~setforge.reconcile.types.HunkClass`, stored in the same index, and
 reconstructed **through the model**: the model fixes the values, and the output
-is either the source lines that realise exactly those values or the re-serialised
-model, so comments, anchors, quoting, and key order survive the round-trip.
+is either base with the promoted keys' own lines updated (when that parses to
+exactly those values) or the re-serialised model, so comments, anchors, quoting,
+and key order survive the round-trip.
 
 A **leaf module** like :mod:`setforge.reconcile.hunks`: it does NOT import the
 store (the caller wires all I/O).
@@ -16,8 +17,6 @@ store (the caller wires all I/O).
 
 from __future__ import annotations
 
-import difflib
-import functools
 import io
 import re
 import warnings
@@ -26,9 +25,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
-from patiencediff import PatienceSequenceMatcher
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import Comment
 from ruamel.yaml.error import ReusedAnchorWarning
@@ -50,6 +48,7 @@ from setforge.structural_merge import (
     _plain_eq,
     append_key_segment,
     delete_node_at_path,
+    encode_key_segment,
     get_at_path,
     get_node_at_path,
     join_key_segments,
@@ -61,11 +60,6 @@ from setforge.structural_merge import (
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
 _YAML_WIDTH: Final = 4096
-
-#: Changed line regions tried one by one when a reconstruction is re-derived
-#: from the source text (each trial is a full parse); past this the model dump
-#: is used instead. Pathology protection, not a knob.
-_MAX_SPLICE_TRIALS: Final = 64
 
 #: C0 control chars (and DEL) forbidden in a draft scalar, minus tab/newline —
 #: the same untrusted-output gate :mod:`setforge.reconcile.share_draft` applies to
@@ -172,6 +166,17 @@ def _load_model(data: bytes, fmt: StructuredFormat) -> object:
         raise StructuredParseError(f"structured input is not parseable: {err}") from err
 
 
+def load_quietly(data: bytes, fmt: StructuredFormat) -> object:
+    """:func:`_load_model` for a text this module assembled itself.
+
+    A candidate text may define a YAML anchor twice; ruamel warns about that on
+    stderr before the candidate is rejected, which is noise to the user.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ReusedAnchorWarning)
+        return _load_model(data, fmt)
+
+
 def uses_aliases(data: bytes) -> bool:
     """Whether YAML ``data`` carries an alias (``*name``) or a ``<<`` merge key.
 
@@ -179,6 +184,8 @@ def uses_aliases(data: bytes) -> bool:
     on each key's resolved value and re-serialises copies, which would inline
     the shared node, invent anchors and break the reference.
     """
+    if b"*" not in data and b"<<" not in data:
+        return False
     try:
         events = list(YAML().parse(io.StringIO(data.decode("utf-8"))))
     except Exception as err:
@@ -193,6 +200,7 @@ def uses_aliases(data: bytes) -> bool:
 
 
 _BOM: Final = "\ufeff"
+_BOM_BYTES: Final = _BOM.encode("utf-8")
 
 #: A line that opens a block scalar (``key: |``, ``- >-``, ``k: |2+  # note``).
 _BLOCK_SCALAR_RE: Final = re.compile(r"(?:^|[\s:-])[|>][0-9+-]{0,2}(?:\s+#.*)?$")
@@ -297,6 +305,14 @@ def _dump_model(
         raise StructuredParseError(
             f"structured model is not serialisable: {err}"
         ) from err
+
+
+def _holds(text: bytes, model: object, fmt: StructuredFormat) -> bool:
+    """Whether ``text`` parses to exactly ``model``'s values."""
+    try:
+        return models_equal(load_quietly(text, fmt), model)
+    except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
+        return False
 
 
 def models_equal(left: object, right: object) -> bool:
@@ -690,129 +706,6 @@ def _materialize_yaml_parents(
         set_at_path(target, parent_path, {})
 
 
-def _plain_leaves(
-    plain: object, prefix: tuple[object, ...] = ()
-) -> Iterator[tuple[tuple[object, ...], object]]:
-    """Yield ``(path, value)`` for every leaf of an unwrapped plain value.
-
-    Descends mappings by key and lists by index; an empty container is a leaf.
-    """
-    if isinstance(plain, dict) and plain:
-        for key, value in plain.items():
-            yield from _plain_leaves(value, (*prefix, key))
-    elif isinstance(plain, list) and plain:
-        for index, value in enumerate(plain):
-            yield from _plain_leaves(value, (*prefix, index))
-    else:
-        yield prefix, plain
-
-
-@functools.lru_cache(maxsize=256)
-def _text_leaves(
-    text: bytes, fmt: StructuredFormat
-) -> Mapping[tuple[object, ...], object] | None:
-    """The leaves of ``text``, or ``None`` when it has no comparable model.
-
-    Cached: staged capture reconstructs the same file several times per run
-    (preflight, preview, write, fidelity check), each trying the same texts.
-    """
-    try:
-        with warnings.catch_warnings():
-            # A trial text may define an anchor twice; it is rejected, not news.
-            warnings.simplefilter("ignore", ReusedAnchorWarning)
-            return dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
-    except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
-        return None
-
-
-def _leaf_distance(
-    text: bytes, target: Mapping[tuple[object, ...], object], fmt: StructuredFormat
-) -> int | None:
-    """How many leaf paths of ``text`` differ from ``target``.
-
-    ``None`` when ``text`` does not parse to a comparable model.
-    """
-    leaves = _text_leaves(text, fmt)
-    if leaves is None:
-        return None
-    return sum(
-        not _plain_eq(leaves.get(path, _MISSING), target.get(path, _MISSING))
-        for path in leaves.keys() | target.keys()
-    )
-
-
-type _Region = tuple[int, int, int, int]
-
-#: Largest old-times-new line count of one changed run that is aligned by line
-#: similarity; a bigger run pairs its lines by position (bounded cost).
-_MAX_ALIGNED_RUN: Final = 64
-
-
-def _aligned(old: list[bytes], new: list[bytes], i0: int, j0: int) -> list[_Region]:
-    """One changed run as single-line pairs plus what has no counterpart.
-
-    The two most alike lines pair first (an edited line with its edit), then
-    the lines before and after them recursively; a run too large for that pairs
-    by position. What is left on one side only is a pure removal or insertion.
-    """
-    if not old or not new:
-        return [(i0, i0 + len(old), j0, j0 + len(new))] if old or new else []
-    i = j = 0
-    if len(old) * len(new) <= _MAX_ALIGNED_RUN:
-        _ratio, i, j = max(
-            (
-                (difflib.SequenceMatcher(None, a, b).ratio(), -i, -j)
-                for i, a in enumerate(old)
-                for j, b in enumerate(new)
-            )
-        )
-        i, j = -i, -j
-    return [
-        *_aligned(old[:i], new[:j], i0, j0),
-        (i0 + i, i0 + i + 1, j0 + j, j0 + j + 1),
-        *_aligned(old[i + 1 :], new[j + 1 :], i0 + i + 1, j0 + j + 1),
-    ]
-
-
-def _changed_regions(current: list[bytes], source: list[bytes]) -> list[_Region]:
-    """Every changed current↔source line region, last first.
-
-    Last first because a taken region may change the line count below it. A
-    replaced run is split (:func:`_aligned`) so a wanted line is not held back
-    by an unwanted neighbour.
-    """
-    regions: list[_Region] = []
-    matcher = PatienceSequenceMatcher(None, current, source)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "equal":
-            regions.extend(_aligned(current[i1:i2], source[j1:j2], i1, j1))
-    return sorted(regions, reverse=True)
-
-
-def _with_single_lines(region: _Region) -> list[_Region]:
-    """``region``, then each line of a multi-line removal or insertion, last first.
-
-    Lines removed (or inserted) together need not belong together: a key one
-    side added may sit between keys the other side deleted. When the block is
-    not taken whole, each of its lines is tried on its own.
-    """
-    i1, i2, j1, j2 = region
-    if j1 == j2 and i2 - i1 > 1:
-        return [region, *((i, i + 1, j1, j1) for i in range(i2 - 1, i1 - 1, -1))]
-    if i1 == i2 and j2 - j1 > 1:
-        return [region, *((i1, i1, j, j + 1) for j in range(j2 - 1, j1 - 1, -1))]
-    return [region]
-
-
-def _keep_comma(line: bytes, like: bytes) -> bytes:
-    """``line`` ending in a comma exactly when ``like`` does."""
-    body = line.rstrip()
-    wanted = like.rstrip().endswith(b",")
-    if body.endswith(b",") == wanted:
-        return line
-    return (body + b"," if wanted else body[:-1]) + line[len(body) :]
-
-
 #: A YAML comment up to the end of a line body, with the blanks before it.
 _YAML_COMMENT_RE: Final = re.compile(rb"(?:^|\s+)#.*$")
 
@@ -823,161 +716,6 @@ def _split_comment(line: bytes) -> tuple[bytes, bytes, bytes]:
     match = _YAML_COMMENT_RE.search(body)
     cut = len(body) if match is None else match.start()
     return body[:cut], body[cut:], line[len(body) :]
-
-
-def _values_only(old: list[bytes], new: list[bytes]) -> list[bytes] | None:
-    """YAML lines ``new`` reduced to their values: no comment text of their own.
-
-    Comment-only lines go and end-of-line comments are cut; a line that replaces
-    exactly one line of ``old`` keeps THAT line's comment. ``None`` when a ``#``
-    is left over: it may sit inside a quoted value, but from here it cannot be
-    told from comment text, and a comment must not travel with a value.
-    """
-    keep = b""
-    if len(old) == 1 and len(new) == 1:
-        code, comment, _ending = _split_comment(old[0])
-        keep = comment if code.strip() else b""
-    lines: list[bytes] = []
-    for line in new:
-        code, comment, ending = _split_comment(line)
-        if b"#" in code:
-            return None
-        if code.strip():
-            lines.append(code + keep + ending)
-        elif not comment:
-            lines.append(line)
-    return lines
-
-
-def _replacements(
-    old: list[bytes],
-    new: list[bytes],
-    fmt: StructuredFormat,
-    *,
-    source_first: bool,
-    values_only: bool = False,
-) -> list[list[bytes]]:
-    """The texts to try in place of ``old``, most preferred first.
-
-    A changed line pair is ambiguous: ``new`` may REPLACE ``old`` (one side
-    edited the line) or both may have been inserted at the same spot (a host
-    comment where upstream adds a key, a key appended by each side), so ``old``
-    followed by ``new`` and the reverse are offered as well. Keeping ``old`` is
-    preferred, unless ``source_first`` asks for the source's text to win.
-
-    A JSON member line carries the separator to the NEXT member, which belongs
-    to the position, not to the member: every form is also tried with the
-    commas its lines need in their new positions.
-
-    With ``values_only`` the source lines come without their comments (see
-    :func:`_values_only`); nothing is offered when that cannot be done.
-    """
-    replace: list[list[bytes]] = [new]
-    keep_both: list[list[bytes]] = []
-    if values_only:
-        bare, fitted = _values_only([], new), _values_only(old, new)
-        if bare is None or fitted is None:
-            return []
-        new, replace = bare, [fitted]
-    if len(old) == 1 and len(new) == 1:
-        keep_both = [old + new, new + old]
-        if fmt is StructuredFormat.JSONC:
-            replace.append([_keep_comma(new[0], old[0])])
-            keep_both += [
-                [_keep_comma(old[0], b","), _keep_comma(new[0], old[0])],
-                [_keep_comma(new[0], b","), old[0]],
-            ]
-    return [*replace, *keep_both] if source_first else [*keep_both, *replace]
-
-
-def splice_lines_toward(
-    start: bytes,
-    source: bytes,
-    model: object,
-    fmt: StructuredFormat,
-    *,
-    keep_neutral: bool = False,
-    values_only: bool = False,
-) -> bytes | None:
-    """``start`` with exactly the ``source`` line regions that realise ``model``.
-
-    The byte-preserving rendering of a merged / reconstructed ``model`` whose
-    values all come from ``start`` or ``source``: each changed start↔source line
-    region is taken only when it moves the text strictly closer to ``model``'s
-    values, in the form that gets closest, so a value ``model`` keeps from
-    ``start``, a comment-only edit and every untouched line keep their ``start``
-    bytes. With ``keep_neutral`` a region that leaves the values as they are is
-    taken too, so ``source``'s text-only edits win instead. With
-    ``values_only`` (YAML) no comment text of ``source`` is taken at all. ``None``
-    when no
-    such selection parses to exactly ``model``'s values (a value from neither
-    text, or one line carrying both a wanted and an unwanted change).
-    """
-    try:
-        target = dict(_plain_leaves(get_at_path(model, "")))
-    except (DuplicateKeyInMergeModel, MergeTypeMismatch):
-        return None
-    remaining = _leaf_distance(start, target, fmt)
-    if remaining is None:
-        return None
-    current = split_lines(start)
-    source_lines = split_lines(source)
-    budget = _MAX_SPLICE_TRIALS
-    for region in _changed_regions(current, source_lines):
-        for i1, i2, j1, j2 in _with_single_lines(region):
-            budget -= 1
-            if budget < 0:
-                return None
-            limit = remaining + 1 if keep_neutral else remaining
-            before = current
-            for lines in _replacements(
-                current[i1:i2],
-                source_lines[j1:j2],
-                fmt,
-                source_first=keep_neutral,
-                values_only=values_only,
-            ):
-                trial = current[:i1] + lines + current[i2:]
-                distance = _leaf_distance(b"".join(trial), target, fmt)
-                if distance is not None and distance < limit:
-                    current, remaining, limit = trial, distance, distance
-            if current is not before and (i1, i2, j1, j2) == region:
-                break  # the whole region was taken; its single lines are moot
-    return b"".join(current) if remaining == 0 else None
-
-
-def restore_start_only_lines(
-    text: bytes, start: bytes, base: bytes, model: object, fmt: StructuredFormat
-) -> bytes:
-    """``text`` with the lines only ``start`` had put back where values allow.
-
-    A rendering of ``model`` can drop a line that exists only in ``start`` (a
-    host comment next to a key the other side removed or replaced). Each such
-    line returns to the place it had, provided the result still parses to
-    exactly ``model``'s values; a line whose removal the merge needs stays out.
-    """
-    try:
-        target = dict(_plain_leaves(get_at_path(model, "")))
-    except (DuplicateKeyInMergeModel, MergeTypeMismatch):
-        return text
-    known = set(split_lines(base))
-    lines = split_lines(text)
-    start_lines = split_lines(start)
-    matcher = PatienceSequenceMatcher(None, start_lines, lines)
-    for tag, i1, i2, j1, j2 in reversed(matcher.get_opcodes()):
-        if tag in ("equal", "insert"):
-            continue
-        present = set(lines[j1:j2])
-        restored = 0
-        for offset, line in enumerate(start_lines[i1:i2]):
-            if line in known or line in present or not line.endswith(b"\n"):
-                continue
-            at = j1 + min(offset, j2 - j1) + restored
-            trial = [*lines[:at], line, *lines[at:]]
-            if _leaf_distance(b"".join(trial), target, fmt) == 0:
-                lines = trial
-                restored += 1
-    return b"".join(lines)
 
 
 def _drop_yaml_comments(node: object) -> None:
@@ -999,19 +737,136 @@ def _drop_yaml_comments(node: object) -> None:
             _drop_yaml_comments(value)
 
 
-def _render_reconstruction(
-    base: bytes, live: bytes, model: object, fmt: StructuredFormat
-) -> bytes:
-    """Serialise a reconstructed ``model``, preferring the source lines for YAML.
+def _parent_and_leaf(model: object, path: str) -> tuple[object, str]:
+    """The node that should hold the key at dotted ``path``, and that key."""
+    *parents, leaf = split_key_path(path)
+    node = model
+    for segment in parents:
+        node = node.get(segment) if isinstance(node, Mapping) else None
+    return node, leaf
 
-    Tracked is shared, so only the promoted VALUES may leave the host: live
-    lines are taken without their comments, and a line that cannot be taken
-    that way is left to the model dump.
+
+def _key_line(model: object, path: str) -> int | None:
+    """The line (0-based) of the key at dotted ``path`` in a ruamel ``model``."""
+    node, leaf = _parent_and_leaf(model, path)
+    position = getattr(node, "lc", None)
+    if not isinstance(node, Mapping) or leaf not in node or position is None:
+        return None
+    try:
+        return int(position.key(leaf)[0])
+    except (KeyError, TypeError, IndexError):
+        return None
+
+
+def _insertion_line(base_model: object, live_model: object, path: str) -> int | None:
+    """The base line a key that only live has goes in front of.
+
+    Right after the key line of the nearest sibling above it (in live's order)
+    that base has too; without one, in front of the mapping's first key.
     """
+    live_parent, leaf = _parent_and_leaf(live_model, path)
+    base_parent, _leaf = _parent_and_leaf(base_model, path)
+    if not isinstance(live_parent, Mapping) or not isinstance(base_parent, Mapping):
+        return None
+    siblings = [key for key, _value in _own_items(live_parent)]
+    parent = path[: len(path) - len(encode_key_segment(leaf))]
+    for sibling in reversed(siblings[: siblings.index(leaf)]):
+        if isinstance(sibling, str) and sibling in base_parent:
+            line = _key_line(base_model, parent + encode_key_segment(sibling))
+            return None if line is None else line + 1
+    first = next((key for key, _value in _own_items(base_parent)), None)
+    if not isinstance(first, str):
+        return None
+    return _key_line(base_model, parent + encode_key_segment(first))
+
+
+def _promoted_lines(
+    texts: tuple[bytes, bytes],
+    promoted: list[KeyUnit],
+    base_model: object,
+    live_model: object,
+) -> bytes | None:
+    """Base with every ``promoted`` key carrying live's state, line by line.
+
+    The shapes taken from the text instead of the dump, each for a key that
+    sits on one line: a changed key's base line gets live's key and value and
+    KEEPS its own comment; a key live deleted loses its base line; a key only
+    live has is inserted as live's key and value alone (:func:`_insertion_line`).
+    No comment text of live is ever taken, and every line is built from the two
+    original texts in a single pass over base. ``None`` for a drafted value,
+    for a key with no line to work on, and for a live line that shows a ``#``
+    outside a comment (it may be inside a quoted value, but cannot be told from
+    comment text here). The caller checks the values of the result.
+    """
+    base, live = texts
+    base_lines, live_lines = split_lines(base), split_lines(live)
+    newline = b"\r\n" if b"\r\n" in base else b"\n"
+    replaced: dict[int, bytes | None] = {}
+    added: dict[int, list[bytes]] = {}
+    sources = {
+        unit.path: _key_line(live_model, _operation_path(unit)) for unit in promoted
+    }
+    for unit in sorted(promoted, key=lambda unit: sources[unit.path] or 0):
+        path, source = _operation_path(unit), sources[unit.path]
+        at = _key_line(base_model, path)
+        if not _promotes(unit) or (at is None and source is None):
+            return None
+        if source is None:
+            replaced[cast("int", at)] = None
+            continue
+        code, _comment, _ending = _split_comment(live_lines[source])
+        if b"#" in code or code.startswith(_BOM_BYTES):
+            return None
+        if at is None:
+            slot = _insertion_line(base_model, live_model, path)
+            if slot is None or (slot == len(base_lines) and not base.endswith(b"\n")):
+                return None
+            added.setdefault(slot, []).append(code + newline)
+        else:
+            kept, comment, ending = _split_comment(base_lines[at])
+            if kept.startswith(_BOM_BYTES):
+                return None
+            replaced[at] = code + comment + ending
+    lines: list[bytes] = []
+    for index, line in enumerate([*base_lines, None]):
+        lines += added.get(index, [])
+        new = replaced.get(index, line)
+        if new is not None:
+            lines.append(new)
+    return b"".join(lines)
+
+
+def _operation_path(unit: KeyUnit) -> str:
+    """``unit``'s path as the path helpers address it.
+
+    Before the canonical empty-key token existed, YAML mapping rows used
+    ``path:""`` for a genuine empty key; on the non-document-root route that
+    old meaning is the only one left.
+    """
+    return r"\0" if unit.path == "" else unit.path
+
+
+def _render_reconstruction(
+    texts: tuple[bytes, bytes],
+    promoted: list[KeyUnit],
+    models: tuple[object, object, object],
+    fmt: StructuredFormat,
+) -> bytes:
+    """Serialise the reconstructed model (``models[2]``) for tracked.
+
+    Nothing promoted is base itself, byte for byte. Otherwise a YAML whose
+    promoted keys each sit on one line is rendered from those lines when that
+    parses to exactly the reconstructed values (one parse, no search); anything
+    else is the model dump in base's layout.
+    """
+    base, _live = texts
+    base_model, live_model, model = models
     if fmt is StructuredFormat.YAML:
-        spliced = splice_lines_toward(base, live, model, fmt, values_only=True)
-        if spliced is not None:
-            return spliced
+        if not promoted:
+            return base
+        text = _promoted_lines(texts, promoted, base_model, live_model)
+        if text is not None and _holds(text, model, fmt):
+            return text
     return _dump_model(model, fmt, like=base)
 
 
@@ -1027,10 +882,10 @@ def reconstruct_structured(
     A promoted ``SHARED`` unit takes its **live** value, set through the model via
     :func:`~setforge.structural_merge.set_node_at_path` (the comment/anchor/quote-
     preserving wrapped-node splice). The model decides the VALUES; for YAML the
-    bytes are then ``base`` with the live line regions that realise exactly those
-    values (:func:`splice_lines_toward`), so untouched lines stay byte-identical,
-    and only when no such selection exists is the model re-serialised. A
-    non-``changed`` ``SHARED_DRAFTED``
+    bytes are then ``base`` with the promoted keys' own lines updated
+    (:func:`_promoted_lines`) when that parses to exactly those values, so
+    untouched lines stay byte-identical, else the re-serialised model. No comment
+    text of live is written either way. A non-``changed`` ``SHARED_DRAFTED``
     unit instead takes its **draft-store** value, bounded-parsed into a typed scalar
     by :func:`parse_scalar_draft` and spliced via
     :func:`~setforge.structural_merge.set_at_path` so its type is preserved (a
@@ -1063,10 +918,9 @@ def reconstruct_structured(
         return _reconstruct_document_root(root, drafts, fmt, base=base, live=live)
     base_model = _load_model(base, fmt)
     for unit in ordered_units:
-        # Before the canonical empty-key token existed, YAML mapping rows used
-        # ``path:""`` for a genuine empty key. ``document_root`` is false only
-        # for mapping↔mapping YAML, which makes that old interpretation safe.
-        operation_path = r"\0" if unit.path == "" else unit.path
+        # ``document_root`` is false only for mapping↔mapping YAML, which makes
+        # the old empty-key reading of ``path:""`` safe.
+        operation_path = _operation_path(unit)
         if unit.cls is HunkClass.SHARED_DRAFTED and not unit.changed:
             try:
                 draft = drafts[unit.ref]
@@ -1102,7 +956,12 @@ def reconstruct_structured(
                     f"promoted SHARED unit {unit.path!r} addresses no leaf in "
                     f"base or live; cannot reconstruct"
                 )
-    return _render_reconstruction(base, live, base_model, fmt)
+    return _render_reconstruction(
+        (base, live),
+        [unit for unit in ordered_units if _has_promoted_intent(unit)],
+        (original_base_model, live_model, base_model),
+        fmt,
+    )
 
 
 def assert_stage_fidelity_structured(

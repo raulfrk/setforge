@@ -31,12 +31,12 @@ Outcomes encode the A0 guards directly:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
-from json5.model import Node
+from json5.model import JSONArray, Node
 from json5.model import walk as json5_walk
 from patiencediff import PatienceSequenceMatcher
 
@@ -58,14 +58,13 @@ from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
 )
+from setforge.reconcile.merge import split_lines
 from setforge.reconcile.merge_model import MergeInput
 from setforge.reconcile.structured_units import (
     StructuredFormat,
     _dump_model,
-    _load_model,
+    load_quietly,
     models_equal,
-    restore_start_only_lines,
-    splice_lines_toward,
     uses_aliases,
 )
 from setforge.reconcile.types import Absent
@@ -348,91 +347,55 @@ def reconcile_plain_file(
 def _parses(data: bytes, fmt: StructuredFormat) -> bool:
     """Whether ``data`` loads as a single ``fmt`` document."""
     try:
-        _load_model(data, fmt)
+        load_quietly(data, fmt)
     except StructuredParseError:
         return False
     return True
 
 
-def _clean_line_merge(base: bytes, live: bytes, tracked: bytes) -> bytes | None:
-    """The line 3-way of the three texts, or ``None`` when it conflicts."""
-    lines = merge(base, live, tracked)
-    text = lines.merged() if lines.clean else None
-    return text if isinstance(text, bytes) else None
+def _terminated(data: bytes) -> bytes:
+    """``data`` with its last line ended like its other lines are."""
+    if not data or data.endswith(b"\n"):
+        return data
+    return data + (b"\r\n" if b"\r\n" in data else b"\n")
 
 
-def _line_merge_agreeing(
-    base: bytes, live: bytes, tracked: bytes, model: object, fmt: StructuredFormat
-) -> bytes | None:
-    """The line 3-way of the three texts when it holds exactly ``model``'s values.
+#: Largest ours-times-theirs count of edits in one conflict hunk that is
+#: checked for collisions; a bigger hunk stays a conflict (bounded cost).
+_MAX_EDIT_PAIRS: Final = 4096
 
-    The line merge keeps every untouched line byte-identical (INV-6) and carries
-    text-only edits (comments, layout) the key merge cannot see, but it is blind
-    to keys: it is trusted only when it is clean AND parses to the same values
-    as the clean key-aware merge. ``None`` otherwise.
+type _Edit = tuple[int, int, int, int]
+
+
+def _edits(base: Sequence[object], side: Sequence[object]) -> list[_Edit]:
+    """The ``(base start, base end, side start, side end)`` ranges ``side`` changed.
+
+    A run replaced by a run of the same length is one edit per element, so an
+    element only one side touched is not held back by its neighbour.
     """
-    text = _clean_line_merge(base, live, tracked)
-    if text is None:
-        return None
-    try:
-        agrees = models_equal(_load_model(text, fmt), model)
-    except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
-        return None
-    return text if agrees else None
-
-
-def _has_trailing_comma(data: bytes) -> bool:
-    """Whether a JSON text closes any object or array after a comma."""
-    try:
-        model = _load_model(data, StructuredFormat.JSONC)
-    except StructuredParseError:
-        return False
-    return any(
-        getattr(node, "trailing_comma", None) is not None
-        for node in json5_walk(cast("Node", model))
-    )
-
-
-def _loses_strictness(
-    text: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
-) -> bool:
-    """Whether ``text`` has a JSON trailing comma that neither source uses.
-
-    Lines joined from two files can leave a comma before a closing brace. The
-    json5 loader accepts it, but a strict consumer of the file rejects it, and
-    in a commented file it is still syntax nobody wrote.
-    """
-    return (
-        fmt is StructuredFormat.JSONC
-        and _has_trailing_comma(text)
-        and not _has_trailing_comma(live)
-        and not _has_trailing_comma(tracked)
-    )
-
-
-type _ElementOp = tuple[int, int, list[str]]
-
-
-def _element_ops(base: list[str], side: list[str]) -> list[_ElementOp]:
-    """The base ranges ``side`` replaced, each with its replacement elements."""
+    edits: list[_Edit] = []
     matcher = PatienceSequenceMatcher(None, base, side)
-    return [
-        (i1, i2, side[j1:j2])
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
-        if tag != "equal"
-    ]
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if i2 - i1 == j2 - j1:
+            edits.extend(
+                (i1 + k, i1 + k + 1, j1 + k, j1 + k + 1) for k in range(i2 - i1)
+            )
+        else:
+            edits.append((i1, i2, j1, j2))
+    return edits
 
 
-def _element_ops_collide(left: _ElementOp, right: _ElementOp) -> bool:
-    """Whether two sides' edits claim the same place in the base array.
+def _edits_collide(left: _Edit, right: _Edit) -> bool:
+    """Whether two sides' edits claim the same place in the base sequence.
 
-    Two replaced ranges collide when they intersect; an insertion collides with
-    another insertion at the same point and with a range it falls strictly
-    inside. An insertion at the EDGE of a replaced range is independent of it.
+    Two replaced ranges collide when they intersect, and an insertion collides
+    with a range it falls strictly inside. An insertion at the EDGE of a range
+    is independent of it, and so are two insertions at the same point (the
+    caller decides whether their order matters).
     """
-    (a1, a2, _), (b1, b2, _) = left, right
-    if a1 == a2 and b1 == b2:
-        return a1 == b1
+    (a1, a2, _, _), (b1, b2, _, _) = left, right
     if a1 == a2:
         return b1 < a1 < b2
     if b1 == b2:
@@ -440,66 +403,164 @@ def _element_ops_collide(left: _ElementOp, right: _ElementOp) -> bool:
     return a1 < b2 and b1 < a2
 
 
-def _array_root_target(
-    base: object, live: object, tracked: object
-) -> list[object] | None:
-    """The element-wise 3-way of three JSON array-root documents, or ``None``.
+def _independent_edits[T](
+    base: Sequence[T], ours: Sequence[T], theirs: Sequence[T]
+) -> tuple[list[_Edit], list[_Edit]] | None:
+    """Both sides' edits of ``base`` when none of them collide, else ``None``.
+
+    An edit both sides made identically is ours alone. The line 3-way calls any
+    two NEIGHBOURING edits a conflict; here only edits of the same place are.
+    """
+    mine = _edits(base, ours)
+    other = [
+        edit
+        for edit in _edits(base, theirs)
+        if not any(
+            edit[:2] == same[:2]
+            and theirs[edit[2] : edit[3]] == ours[same[2] : same[3]]
+            for same in mine
+        )
+    ]
+    if len(mine) * len(other) > _MAX_EDIT_PAIRS:
+        return None
+    if any(_edits_collide(left, right) for left in mine for right in other):
+        return None
+    return mine, other
+
+
+def _resolve_hunk(
+    base: list[bytes], ours: list[bytes], theirs: list[bytes]
+) -> list[bytes] | None:
+    """The lines of one line-merge conflict hunk when the edits do not collide.
+
+    Deterministic, with no trial: each side's edits of the hunk's base lines
+    are applied together when no two of them touch the same line. Lines both
+    sides inserted at the same spot come ours first, then those of theirs that
+    ours did not insert as well. ``None`` when both sides changed the same line
+    differently (a real collision) or the hunk is too large to check.
+    """
+    edits = _independent_edits(base, ours, theirs)
+    if edits is None:
+        return None
+    mine, other = edits
+    lines: list[bytes] = []
+    cursor = 0
+    inserted: tuple[int, list[bytes]] = (-1, [])
+    for i1, i2, rank, new in sorted(
+        [(i1, i2, 0, ours[j1:j2]) for i1, i2, j1, j2 in mine]
+        + [(i1, i2, 1, theirs[j1:j2]) for i1, i2, j1, j2 in other]
+    ):
+        if rank and i1 == i2 == inserted[0]:
+            new = [line for line in new if line not in inserted[1]]
+        elif i1 == i2:
+            inserted = (i1, new)
+        lines += [*base[cursor:i1], *new]
+        cursor = max(cursor, i2)
+    return [*lines, *base[cursor:]]
+
+
+def _line_merge(
+    base: bytes, live: bytes, tracked: bytes, *, refine: bool
+) -> bytes | None:
+    """The line 3-way of the three texts, or ``None`` when it conflicts.
+
+    With ``refine`` a conflict hunk whose edits do not collide
+    (:func:`_resolve_hunk`) is resolved instead; any other hunk still makes the
+    whole result ``None``.
+    A missing final newline is not a difference between the sides: the last line
+    gets a terminator for the merge, and the result ends the way live does.
+    """
+    result = merge(_terminated(base), _terminated(live), _terminated(tracked))
+    parts: list[bytes] = []
+    for segment in result.segments:
+        if isinstance(segment, Clean):
+            parts.append(segment.bytes_)
+            continue
+        hunk = (
+            _resolve_hunk(
+                split_lines(segment.base),
+                split_lines(segment.ours),
+                split_lines(segment.theirs),
+            )
+            if refine
+            else None
+        )
+        if hunk is None:
+            return None
+        parts.extend(hunk)
+    text = b"".join(parts)
+    if live.endswith(b"\n") or not live:
+        return text
+    return text.removesuffix(b"\n").removesuffix(b"\r")
+
+
+def _holds_merge(
+    text: bytes, merged: object, fmt: StructuredFormat, *, commas: bool
+) -> bool:
+    """Whether ``text`` parses to exactly ``merged``'s values.
+
+    Without ``commas`` a JSON text must not close an object or array after a
+    comma either: joined lines can leave one that neither side wrote, which the
+    json5 loader accepts and a strict consumer of the file rejects.
+    """
+    try:
+        candidate = load_quietly(text, fmt)
+        return models_equal(candidate, merged) and (
+            commas or not _has_trailing_comma(candidate)
+        )
+    except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
+        return False
+
+
+def _has_trailing_comma(model: object) -> bool:
+    """Whether a json-five model closes any object or array after a comma."""
+    return any(
+        getattr(node, "trailing_comma", None) is not None
+        for node in json5_walk(cast("Node", model))
+    )
+
+
+def _merge_array_root(base: object, live: object, tracked: object) -> object | None:
+    """Merge three JSON array-root models element-wise INTO ``live``, or ``None``.
 
     An object root has key identity; an array root has none, and its line 3-way
     false-conflicts whenever the last element gains a comma. Each element is one
-    unit here: edits and appends at different positions merge, edits at the same
-    position stay a conflict (``None``, as for a non-array root).
+    unit here. Elements the host inserted or removed are already in ``live``;
+    upstream's edits are applied where they replace elements one for one, each
+    new element taking the whitespace of the one it replaces. ``None`` when a
+    root is not an array, when both sides edited the same place, and when
+    upstream inserted or removed elements (no layout rule for those).
     """
-    sides = [get_at_path(model, "") for model in (base, live, tracked)]
-    if not all(isinstance(side, list) for side in sides):
+    arrays = [getattr(model, "value", None) for model in (base, live, tracked)]
+    if not all(isinstance(array, JSONArray) for array in arrays):
         return None
     base_keys, live_keys, tracked_keys = (
-        [json.dumps(element, sort_keys=True) for element in cast("list[object]", side)]
-        for side in sides
+        [
+            json.dumps(element, sort_keys=True)
+            for element in cast("list[object]", get_at_path(array, ""))
+        ]
+        for array in arrays
     )
-    ours = _element_ops(base_keys, live_keys)
-    theirs = [op for op in _element_ops(base_keys, tracked_keys) if op not in ours]
-    if any(_element_ops_collide(left, right) for left in ours for right in theirs):
+    edits = _independent_edits(base_keys, live_keys, tracked_keys)
+    if edits is None:
         return None
-    merged = list(base_keys)
-    for i1, i2, elements in sorted([*ours, *theirs], reverse=True):
-        merged[i1:i2] = elements
-    return [json.loads(key) for key in merged]
-
-
-def _render(
-    sides: tuple[bytes, bytes, bytes],
-    model: object,
-    fmt: StructuredFormat,
-    *,
-    dump: bool,
-) -> bytes | None:
-    """The merged ``model`` as text, in the most byte-preserving form available.
-
-    In order: the line 3-way when it is clean and holds ``model``'s values;
-    live with the tracked line regions that realise them; tracked with live's
-    regions (live's text-only edits winning), which also covers edits that only
-    work together; with ``dump`` the re-serialised model. Whatever is not the
-    line 3-way gets the lines only live had put back where the values allow.
-    """
-    base, live, tracked = sides
-    text = _line_merge_agreeing(base, live, tracked, model, fmt)
-    if text is not None and not _loses_strictness(text, live, tracked, fmt):
-        return text
-    candidates = [
-        lambda: splice_lines_toward(live, tracked, model, fmt),
-        lambda: splice_lines_toward(tracked, live, model, fmt, keep_neutral=True),
-    ]
-    if dump:
-        candidates.append(lambda: _dump_model(model, fmt, like=live))
-    for candidate in candidates:
-        text = candidate()
-        if text is None:
-            continue
-        text = restore_start_only_lines(text, live, base, model, fmt)
-        if not _loses_strictness(text, live, tracked, fmt):
-            return text
-    return None
+    ours, theirs = edits
+    if any(
+        mine[0] == mine[1] == other[0] == other[1] for mine in ours for other in theirs
+    ):
+        return None  # both inserted at one point: the order of elements matters
+    live_values = cast("JSONArray", arrays[1]).values
+    tracked_values = cast("JSONArray", arrays[2]).values
+    for i1, i2, j1, j2 in theirs:
+        if i2 - i1 != j2 - j1 or i1 == i2:
+            return None
+        shift = sum((b - a) - (i2_ - i1_) for i1_, i2_, a, b in ours if i2_ <= i1)
+        for offset in range(i2 - i1):
+            old = live_values[i1 + shift + offset]
+            new = tracked_values[j1 + offset]
+            new.wsc_before, new.wsc_after = old.wsc_before, old.wsc_after
+            live_values[i1 + shift + offset] = new
+    return live
 
 
 def _key_merge(
@@ -510,35 +571,44 @@ def _key_merge(
     ``None`` on a same-key conflict and for a side the key engine cannot model
     (unparseable, multi-document, duplicate or non-string keys, a non-mapping
     YAML root) — the caller line-merges those. Each side is parsed FRESH because
-    ``merge_structural`` mutates ``ours`` (live) in place.
+    the merge mutates the live model in place.
+
+    The key merge decides the VALUES. The bytes are, in order: the line 3-way
+    when it is clean; for YAML that line 3-way with the conflict hunks whose
+    edits do not collide resolved (:func:`_resolve_hunk`); the re-serialised
+    merged model. A line
+    result counts only when it parses to exactly the merged values (and, for
+    JSON, has no trailing comma neither side uses). There is no search: at most
+    one candidate text is parsed.
 
     A YAML with aliases / merge keys shares one node between several keys, so
     its text is the truth: a clean line 3-way that parses is the result. Only
     when the lines conflict are the resolved values merged — on de-aliased plain
     copies, because merging in place would edit every key that shares a node —
-    and the result is never re-serialised (the dump would inline the shared
-    nodes and invent anchors): without a rendering from the source lines it is
-    ``None`` too. A JSON array root has no re-serialisation either.
+    and the model is never re-serialised (the dump would inline the shared
+    nodes and invent anchors).
     """
+    yaml = fmt is StructuredFormat.YAML
     sides = (base, live, tracked)
     try:
-        aliased = fmt is StructuredFormat.YAML and any(
-            uses_aliases(side) for side in sides
-        )
-        models = [_load_model(side, fmt) for side in sides]
+        aliased = yaml and any(uses_aliases(side) for side in sides)
+        models = [load_quietly(side, fmt) for side in sides]
         if aliased:
-            text = _clean_line_merge(*sides)
+            text = _line_merge(*sides, refine=False)
             if text is not None and _parses(text, fmt):
                 return text
             models = [get_at_path(model, "") for model in models]
-        if fmt is StructuredFormat.JSONC:
-            target = _array_root_target(*models)
-            if target is not None:
-                return _render(sides, target, fmt, dump=False)
-        result = merge_structural(*models)
-        if not result.clean:
-            return None
-        return _render(sides, result.merged_model, fmt, dump=not aliased)
+        commas = yaml or any(_has_trailing_comma(model) for model in models[1:])
+        merged = None if yaml else _merge_array_root(*models)
+        if merged is None:
+            result = merge_structural(*models)
+            if not result.clean:
+                return None
+            merged = result.merged_model
+        text = _line_merge(*sides, refine=yaml)
+        if text is not None and _holds_merge(text, merged, fmt, commas=commas):
+            return text
+        return None if aliased else _dump_model(merged, fmt, like=live)
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
 
@@ -562,10 +632,10 @@ def reconcile_structured_file(
     upstream change merges CLEAN against a host edit where the line 3-way would
     false-conflict, via :func:`~setforge.structural_merge.merge_structural` over
     comment-preserving models. The key merge decides the VALUES; the bytes are the
-    line 3-way's whenever that is clean and holds the same values, else live with
-    the tracked line regions that realise those values (untouched lines stay
-    byte-identical either way), else the re-serialised model. When one side did
-    not move, the other side's bytes are used verbatim. The base-absent seed is
+    line 3-way's whenever that holds the same values (see :func:`_key_merge` for
+    how its conflict hunks are settled), else the re-serialised model. When one
+    side did not move, the other side's bytes are used verbatim. The base-absent
+    seed is
     byte-identical to the plain path. A GENUINE same-key collision
     (``merge_structural`` reports conflicts) is delegated to
     :func:`reconcile_plain_file`, so the one proven wizard / ``--auto`` / DEFERRED
