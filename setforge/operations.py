@@ -838,13 +838,19 @@ def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 
             if protected
             else snapshot
         )
+        if recovering.command == "install":
+            anchored = protected
+        elif recovering.command == "revert" and guard_identities is not None:
+            # Revert guards only the paths it rewrites through descriptors;
+            # the files it patches by pathname are restored the same way.
+            anchored = all(
+                parent in guard_identities for parent in snapshot.path.parents[:-1]
+            )
+        else:
+            anchored = True
         restored = _restore_path(
             target,
-            guard_identities=(
-                guard_identities
-                if protected or recovering.command != "install"
-                else None
-            ),
+            guard_identities=guard_identities if anchored else None,
             permit_existing_absent=True,
             require_leaf_absent=recovering.command == "cleanup-orphans",
         )

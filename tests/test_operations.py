@@ -580,6 +580,72 @@ def test_recovery_accepts_permission_change_on_plain_ancestor(
     assert path.read_text(encoding="utf-8") == "before"
 
 
+def _partially_guarded_journal(tmp_path: Path, command: str) -> tuple[Path, Path]:
+    guarded = tmp_path / "guarded" / "item"
+    plain = tmp_path / "plain" / "note.txt"
+    for path in (guarded, plain):
+        path.parent.mkdir()
+        path.write_text("before", encoding="utf-8")
+    operations.begin_checkpoint(
+        operations.prepare(
+            command=command,
+            profile="p",
+            config_dir=tmp_path,
+            resources_lock=False,
+            command_line=(command,),
+            paths=(guarded, plain),
+            path_guards=orphan_scan.capture_parent_path_guards((guarded,)),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.COMPENSATABLE,
+        recovery="restore files",
+    )
+    for path in (guarded, plain):
+        path.write_text("after", encoding="utf-8")
+    return guarded, plain
+
+
+def test_revert_recovery_restores_paths_it_never_guarded(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    guarded, plain = _partially_guarded_journal(tmp_path, "revert")
+
+    operations.recover_files(operations.load("p"))
+
+    assert guarded.read_text(encoding="utf-8") == "before"
+    assert plain.read_text(encoding="utf-8") == "before"
+
+
+def test_revert_recovery_keeps_guarded_restore_for_guarded_paths(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guarded, plain = _partially_guarded_journal(tmp_path, "revert")
+    restore = operations._restore_path
+    anchored: dict[Path, bool] = {}
+
+    def record(snapshot: operations.PathSnapshot, **kwargs: object) -> bool:
+        anchored[snapshot.path] = kwargs["guard_identities"] is not None
+        return restore(snapshot, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(operations, "_restore_path", record)
+
+    operations.recover_files(operations.load("p"))
+
+    assert anchored == {guarded: True, plain: False}
+
+
+def test_other_recovery_still_refuses_a_path_without_guards(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    _, plain = _partially_guarded_journal(tmp_path, "sync")
+
+    with pytest.raises(SetforgeError, match="lacks an identity guard"):
+        operations.recover_files(operations.load("p"))
+
+    assert plain.read_text(encoding="utf-8") == "after"
+    assert operations.active("p") is not None
+
+
 def test_recovery_refuses_unscoped_parent_removed_after_preflight(
     tmp_path: Path,
     operation_state: Path,

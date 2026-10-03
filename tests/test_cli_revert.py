@@ -321,6 +321,58 @@ def test_revert_refuses_when_target_drifted(
     assert dst.read_text() == drifted_content
 
 
+_TREE_FIXTURE_YAML = """\
+schema_version: '6.2'
+minimum_version: '6.2'
+version: 1
+tracked_files:
+  greeting:
+    src: greeting.md
+    dst: {dst}
+  bundle:
+    src: bundle
+    dst: {tree}
+    tree: {{}}
+profiles:
+  vmh:
+    tracked_files: [greeting, bundle]
+"""
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_refused_revert_of_guarded_transition_leaves_no_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import operations
+    from setforge.errors import RevertFailed
+
+    cfg, dst = _setup_repo(tmp_path)
+    bundle = cfg.parent / "tracked" / "bundle"
+    bundle.mkdir()
+    (bundle / "item.txt").write_text("item\n", encoding="utf-8")
+    cfg.write_text(
+        _TREE_FIXTURE_YAML.format(dst=dst, tree=tmp_path / "trees" / "bundle"),
+        encoding="utf-8",
+    )
+    (tmp_path / "trees").mkdir()
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    args = ["--profile=vmh", f"--config={cfg}"]
+    installed = runner.invoke(app, ["install", *args, "--yes"])
+    assert installed.exit_code == 0, installed.output
+    dst.write_text("manually edited content\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["revert", *args, "--yes"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, RevertFailed)
+    assert not getattr(result.exception, "__notes__", ())
+    assert dst.read_text(encoding="utf-8") == "manually edited content\n"
+    assert operations.active("vmh") is None
+    operations.refuse_active("vmh")
+
+
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_install_revert_revert_restores_install_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
