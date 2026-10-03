@@ -828,9 +828,11 @@ reconcile needs `code` on PATH.)
 A snapshot is a directory-copy of a profile's live state you can restore later —
 a coarse, whole-tree safety net distinct from per-transition revert. Restore is
 profile-scoped: SetForge refuses snapshots from another profile or destinations
-that the requested effective profile no longer manages. Destination parents
-must be real directories rather than symlinks, preventing restore or recovery
-from being redirected outside the journaled path tree. A restore is journaled,
+that the requested effective profile no longer manages. Symlinks in a
+destination's parent path (a symlinked home or `~/.claude`) are resolved once
+when the restore is planned; restore and recovery stay bound to those resolved
+directories and refuse a parent that is replaced or re-pointed afterwards
+instead of being redirected outside the journaled path tree. A restore is journaled,
 so a partial failure rolls file type, bytes, mode, and mtime back automatically;
 an interrupted process reserves its profile, source repository, and captured
 host-local config namespaces until it is finished with `setforge recover`.

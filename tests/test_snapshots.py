@@ -1055,16 +1055,96 @@ def test_restore_rejects_resolved_control_path_alias(
         snap_mod._require_safe_restore_destinations(meta)
 
 
-def test_restore_plan_rejects_live_symlink_parent(fake_home: Path) -> None:
-    target_parent = fake_home / "target-parent"
-    target_parent.mkdir()
-    linked_parent = fake_home / "linked-parent"
-    linked_parent.symlink_to(target_parent, target_is_directory=True)
-    ctx, _, dst = _build_ctx(fake_home, dst_template=str(linked_parent / "text.txt"))
+def _symlinked_destination(home: Path, layout: str) -> tuple[Path, Path]:
+    """Return ``(lexical, physical)`` destinations for one symlink layout."""
+    volume = home / "volume"
+    (volume / "live").mkdir(parents=True)
+    if layout == "parent":
+        linked = home / "linked-parent"
+        linked.symlink_to(volume / "live", target_is_directory=True)
+        return linked / "text.txt", volume / "live" / "text.txt"
+    linked = home / "linked-home"
+    linked.symlink_to(volume, target_is_directory=True)
+    return linked / "live" / "text.txt", volume / "live" / "text.txt"
+
+
+@pytest.mark.parametrize("layout", ["parent", "ancestor"])
+def test_restore_follows_destination_symlinks_present_at_planning(
+    fake_home: Path, layout: str
+) -> None:
+    lexical, physical = _symlinked_destination(fake_home, layout)
+    ctx, _, dst = _build_ctx(fake_home, dst_template=str(lexical))
     dst.write_text("snapshot body\n")
     meta = _create(ctx, "linked-live-parent")
+    dst.write_text("drifted body\n")
 
-    with pytest.raises(SetforgeError, match="symlinked destination parent"):
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    snap_mod._apply_restore_plan(plan)
+
+    assert physical.read_text() == "snapshot body\n"
+    assert [file.path for file in plan.files] == [physical]
+    guarded = {guard.path for guard in plan.destination_ancestors}
+    assert guarded == set(physical.parents) - {Path("/")}
+    assert all(not path.is_symlink() for path in guarded)
+
+
+def test_restore_plan_refuses_destination_symlink_retarget_after_planning(
+    fake_home: Path,
+) -> None:
+    lexical, physical = _symlinked_destination(fake_home, "parent")
+    ctx, _, dst = _build_ctx(fake_home, dst_template=str(lexical))
+    dst.write_text("snapshot body\n")
+    meta = _create(ctx, "linked-retarget")
+    dst.write_text("pre-restore body\n")
+    plan = snap_mod._plan_restore_snapshot(
+        meta.snapshot_id,
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
+    external_parent = fake_home / "external-live"
+    external_parent.mkdir()
+    lexical.parent.unlink()
+    lexical.parent.symlink_to(external_parent, target_is_directory=True)
+
+    with pytest.raises(SetforgeError) as exc:
+        snap_mod._apply_restore_plan(plan)
+
+    assert str(exc.value) == (
+        "snapshot restore: destination parent topology changed after planning; retry"
+    )
+    assert not tuple(external_parent.iterdir())
+    assert physical.read_text() == "pre-restore body\n"
+
+
+def test_restore_plan_refuses_destinations_aliased_through_a_symlink(
+    fake_home: Path,
+) -> None:
+    lexical, physical = _symlinked_destination(fake_home, "parent")
+    ctx, _, _ = _build_ctx(fake_home, dst_template=str(physical))
+    alias = TrackedFile.model_validate(
+        {"src": "minimal/alias.txt", "dst": str(lexical), "template": False}
+    )
+    cfg = ctx.cfg.model_copy(
+        update={
+            "tracked_files": {**ctx.cfg.tracked_files, "alias": alias},
+            "profiles": {ctx.profile: Profile(tracked_files=["minimal_text", "alias"])},
+        }
+    )
+    ctx = replace(
+        ctx, cfg=cfg, resolved=ResolvedProfile(tracked_files=["minimal_text", "alias"])
+    )
+    physical.write_text("snapshot body\n")
+    meta = _create(ctx, "aliased")
+
+    with pytest.raises(SetforgeError, match="resolve to the same file"):
         snap_mod._plan_restore_snapshot(
             meta.snapshot_id,
             cfg=ctx.cfg,

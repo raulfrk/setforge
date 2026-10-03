@@ -655,10 +655,28 @@ def _require_safe_mirror(snapshot_dir: Path, live_path: Path) -> Path:
     return mirror
 
 
+def _physical_destinations(target: SnapshotMeta) -> tuple[Path, ...]:
+    """Resolve symlinked parents so guards, writes and recovery share one tree."""
+    try:
+        destinations = tuple(
+            path.parent.resolve(strict=False) / path.name for path in target.files
+        )
+    except (OSError, RuntimeError) as exc:
+        raise SetforgeError(
+            "snapshot restore: destination parent changed; retry"
+        ) from exc
+    if len(set(destinations)) != len(destinations):
+        raise SetforgeError(
+            f"snapshot {target.snapshot_id}: several destinations resolve to the "
+            "same file through a symlink"
+        )
+    return destinations
+
+
 def _snapshot_destination_ancestors(
     paths: Sequence[Path],
 ) -> tuple[operations.PathGuard, ...]:
-    """Freeze every lexical destination parent without following symlinks."""
+    """Freeze every parent of resolved destinations without following symlinks."""
     ancestors: dict[Path, operations.PathGuard] = {}
     for live_path in paths:
         relative_parts = live_path.relative_to("/").parts[:-1]
@@ -779,8 +797,9 @@ def _plan_restore_snapshot(
         raise SetforgeError(
             f"snapshot {target.snapshot_id}: metadata changed before planning; retry"
         )
+    destinations = _physical_destinations(target)
     files: list[_FrozenSnapshotFile] = []
-    for live_path in target.files:
+    for live_path, destination in zip(target.files, destinations, strict=True):
         mirror = _require_safe_mirror(snapshot_dir, live_path)
         frozen = _freeze_file(mirror)
         if frozen is None:
@@ -790,7 +809,7 @@ def _plan_restore_snapshot(
             )
         files.append(
             _FrozenSnapshotFile(
-                path=live_path,
+                path=destination,
                 kind=frozen.kind,
                 mode=frozen.mode,
                 payload=frozen.payload,
@@ -819,7 +838,7 @@ def _plan_restore_snapshot(
     return _RestorePlan(
         target=target,
         files=tuple(files),
-        destination_ancestors=_snapshot_destination_ancestors(target.files),
+        destination_ancestors=_snapshot_destination_ancestors(destinations),
         owner_id=owner_id,
     )
 
@@ -829,9 +848,10 @@ def _validate_restore_plan(plan: _RestorePlan) -> None:
     refuse_active_file_claims(
         (file.path for file in plan.files), allowed_owner=plan.owner_id
     )
+    destinations = tuple(file.path for file in plan.files)
     if (
-        _snapshot_destination_ancestors(tuple(file.path for file in plan.files))
-        != plan.destination_ancestors
+        _snapshot_destination_ancestors(destinations) != plan.destination_ancestors
+        or _physical_destinations(plan.target) != destinations
     ):
         raise SetforgeError(
             "snapshot restore: destination parent topology changed after "

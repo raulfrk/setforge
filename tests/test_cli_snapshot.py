@@ -259,6 +259,70 @@ def test_snapshot_restore_recreates_deleted_destination_tree(
     assert dst.read_text() == "live body\n"
 
 
+@pytest.mark.parametrize("fail_second_write", [False, True])
+def test_snapshot_restore_through_symlinked_destination_directory(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_second_write: bool,
+) -> None:
+    physical = fake_home / "volume" / "live"
+    physical.mkdir(parents=True)
+    (fake_home / "live").symlink_to(physical, target_is_directory=True)
+    first = _seed_live_file(fake_home)
+    second = _seed_second_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "linked",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0, _outerr(create)
+    first.write_text("first drifted\n")
+    second.write_text("second drifted\n")
+    real_write = snap_mod._write_restored_file
+    live_writes = 0
+
+    def write(
+        source: snap_mod._FrozenSnapshotFile,
+        guard_identities: dict[Path, tuple[int, int, int] | None],
+    ) -> None:
+        nonlocal live_writes
+        live_writes += 1
+        if fail_second_write and live_writes == 2:
+            raise OSError("simulated second restore write failure")
+        real_write(source, guard_identities)
+
+    monkeypatch.setattr(snap_mod, "_write_restored_file", write)
+
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "linked",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+            "--yes",
+        ]
+    )
+
+    assert live_writes == 2
+    assert (fake_home / "live").is_symlink()
+    assert operations.active("test-profile") is None
+    if fail_second_write:
+        assert isinstance(result.exception, OSError)
+        assert (physical / first.name).read_text() == "first drifted\n"
+        assert (physical / second.name).read_text() == "second drifted\n"
+    else:
+        assert result.exit_code == 0, _outerr(result)
+        assert (physical / first.name).read_text() == "live body\n"
+        assert (physical / second.name).read_text() == "second live body\n"
+
+
 def test_snapshot_restore_rejects_snapshot_from_another_profile(
     fake_home: Path, config_repo: Path
 ) -> None:
