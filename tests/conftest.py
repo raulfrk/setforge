@@ -24,6 +24,7 @@ import ctypes
 import errno
 import json
 import os
+import resource
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -234,6 +235,31 @@ def pytest_collection_modifyitems(
         "markers",
         "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
     )
+
+
+_MUTANT_MEMORY_HEADROOM = 1 << 30
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Cap the address space of a mutation-test worker.
+
+    mutmut forks one worker per mutant and bounds it only by time, so a mutant
+    that turns a loop into an endless allocation grows until its timeout and
+    several of them exhaust the host. With the cap that mutant hits
+    ``MemoryError`` at once and is counted as killed.
+    """
+    del session
+    if "__mutmut_" not in os.environ.get("MUTANT_UNDER_TEST", ""):
+        return
+    try:
+        pages = int(Path("/proc/self/statm").read_text().split()[0])
+    except (OSError, ValueError):
+        return
+    limit = pages * resource.getpagesize() + _MUTANT_MEMORY_HEADROOM
+    _, hard = resource.getrlimit(resource.RLIMIT_AS)
+    if hard != resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
 
 
 @pytest.fixture
