@@ -802,21 +802,22 @@ def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 
     guard_identities = (
         _guard_identities(recovering.path_guards) if recovering.path_guards else None
     )
-    if recovering.command == "install" and guard_identities is not None:
+    if guard_identities is not None:
+        changed = (
+            "install parent changed during recovery"
+            if recovering.command == "install"
+            else "journaled path parent changed before write"
+        )
         for guard in recovering.path_guards:
             if not guard.exists:
                 continue
             try:
-                info = guard.path.lstat()
+                live = _restarted_guard_identity(guard, guard.path.lstat())
             except OSError as exc:
-                raise SetforgeError(
-                    f"install parent changed during recovery: {guard.path}"
-                ) from exc
-            if (info.st_dev, info.st_ino) != (guard.device, guard.inode):
-                raise SetforgeError(
-                    f"install parent changed during recovery: {guard.path}"
-                )
-            guard_identities[guard.path] = (info.st_dev, info.st_ino, info.st_mode)
+                raise SetforgeError(f"{changed}: {guard.path}") from exc
+            if live is None:
+                raise SetforgeError(f"{changed}: {guard.path}")
+            guard_identities[guard.path] = live
     roots = _install_root_paths(recovering)
     aliases = _install_aliases(recovering)
     for snapshot in sorted(
@@ -1436,24 +1437,43 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
                     f"journaled absent parent changed before recovery: {guard.path}"
                 )
             continue
-        current = (info.st_dev, info.st_ino, info.st_mode)
-        expected = (guard.device, guard.inode, guard.mode)
-        if guard.mode is not None and stat.S_ISLNK(guard.mode):
-            try:
-                info = guard.path.stat()
-            except OSError as exc:
-                raise SetforgeError(
-                    f"journaled path parent changed before recovery: {guard.path}"
-                ) from exc
-            current = (info.st_dev, info.st_ino, alias_guard_mode(info.st_mode))
-        if (
-            (current[:2] != expected[:2] or not stat.S_ISDIR(info.st_mode))
-            if journal.command == "install"
-            else current != expected
-        ):
+        try:
+            live = _restarted_guard_identity(
+                guard,
+                info,
+                exact_mode=journal.command != "install"
+                and guard.path in directory_paths,
+            )
+        except OSError as exc:
+            raise SetforgeError(
+                f"journaled path parent changed before recovery: {guard.path}"
+            ) from exc
+        if live is None:
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
             )
+
+
+def _restarted_guard_identity(
+    guard: PathGuard, info: os.stat_result, *, exact_mode: bool = False
+) -> tuple[int, int, int] | None:
+    """Match a persisted guard against ``lstat`` output from a later process.
+
+    Device numbers change across remounts and hosts, and an operator may fix
+    an ancestor's permissions before recovering, so the inode and directory
+    type decide and the observed device and mode are adopted. ``exact_mode``
+    keeps the full mode for a directory the journal itself may recreate.
+    """
+    assert guard.mode is not None
+    alias = stat.S_ISLNK(guard.mode)
+    if alias:
+        info = guard.path.stat()
+    if info.st_ino != guard.inode or not stat.S_ISDIR(info.st_mode):
+        return None
+    mode = alias_guard_mode(info.st_mode) if alias else info.st_mode
+    if exact_mode and mode != guard.mode:
+        return None
+    return (info.st_dev, info.st_ino, mode)
 
 
 def mark_manual(journal: OperationJournal) -> OperationJournal:

@@ -529,6 +529,57 @@ def test_anchored_restore_refuses_directory_replaced_by_symlink_to_itself(
     assert not (moved / "file").exists()
 
 
+def _journal_plain_file(tmp_path: Path, command: str) -> Path:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    path.write_text("before", encoding="utf-8")
+    operations.begin_checkpoint(
+        operations.prepare(
+            command=command,
+            profile="p",
+            config_dir=tmp_path,
+            resources_lock=False,
+            command_line=(command,),
+            paths=(path,),
+            path_guards=_path_guards(path),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("command", ["sync", "snapshot restore", "install"])
+def test_recovery_accepts_guards_journaled_under_another_device_number(
+    tmp_path: Path, operation_state: Path, command: str
+) -> None:
+    path = _journal_plain_file(tmp_path, command)
+    journal_file = operations.journal_path("p")
+    raw = json.loads(journal_file.read_text(encoding="utf-8"))
+    for guard in raw["path_guards"]:
+        guard["device"] += 7
+    journal_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    operations.validate_recovery(operations.load("p"))
+    operations.recover_files(operations.load("p"))
+
+    assert path.read_text(encoding="utf-8") == "before"
+
+
+def test_recovery_accepts_permission_change_on_plain_ancestor(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = _journal_plain_file(tmp_path, "sync")
+    path.parent.chmod(0o700)
+
+    operations.recover_files(operations.load("p"))
+
+    assert path.read_text(encoding="utf-8") == "before"
+
+
 def test_recovery_refuses_unscoped_parent_removed_after_preflight(
     tmp_path: Path,
     operation_state: Path,
