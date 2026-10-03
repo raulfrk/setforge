@@ -46,6 +46,7 @@ from setforge.cli._init_helpers import (
 )
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.locking import mutation_locks
+from setforge.source import CONFIG_FILENAME
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -761,6 +762,19 @@ def init(
         _handle_check_mode(console=console)
         return
 
+    if path_source is not None and git_source is not None:
+        raise typer.BadParameter(
+            "--path-source and --git-source are mutually exclusive"
+        )
+    if (
+        path_source is not None
+        and not (path_source.expanduser() / CONFIG_FILENAME).is_file()
+    ):
+        raise typer.BadParameter(
+            f"{path_source} does not contain {CONFIG_FILENAME}",
+            param_hint="--path-source",
+        )
+
     with mutation_locks(config_dir=LOCAL_CONFIG_PATH.parent):
         _run_init_mutation(
             force=force,
@@ -793,6 +807,13 @@ def _run_init_mutation(
 
     probe = probe_environment()
     if is_initialized(probe) and not force:
+        if path_source is not None or git_source is not None:
+            console.print(
+                f"error: {LOCAL_CONFIG_PATH} already exists, so --path-source / "
+                "--git-source were not applied. Edit its `source:` block, or "
+                "re-run with --force to replace it (a backup is kept)."
+            )
+            sys.exit(1)
         _print_idempotent_reinit_report(probe, console=console)
         return
 

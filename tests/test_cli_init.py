@@ -676,13 +676,65 @@ def test_init_no_prompt_path_source_skips_source_prompt(
     if (cfg / "local.yaml").exists():
         (cfg / "local.yaml").unlink()
     recorder = _patch_init_dialog(monkeypatch, returns=[])
+    source_dir = home / "fake-source"
+    source_dir.mkdir()
+    (source_dir / "setforge.yaml").write_text("version: 1\n", encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["init", "--no-prompt", "--path-source", str(home / "fake-source")],
+        ["init", "--no-prompt", "--path-source", str(source_dir)],
     )
     assert result.exit_code == 0, result.output
     assert recorder.calls == []
+
+
+def test_init_path_source_without_setforge_yaml_is_rejected(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_init_dialog(monkeypatch, returns=[])
+    (home / "empty").mkdir()
+    result = CliRunner().invoke(
+        app, ["init", "--no-prompt", "--path-source", str(home / "empty")]
+    )
+    assert result.exit_code == 2, result.output
+    assert "setforge.yaml" in result.output
+    assert not (home / ".config" / "setforge" / "local.yaml").exists()
+
+
+def test_init_path_and_git_source_together_are_rejected(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_init_dialog(monkeypatch, returns=[])
+    result = CliRunner().invoke(
+        app,
+        ["init", "--no-prompt", "--path-source", str(home), "--git-source", "u"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "mutually exclusive" in result.output
+
+
+def test_init_source_flag_on_initialised_host_says_it_was_not_applied(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = home / ".config" / "setforge"
+    cfg.mkdir(parents=True)
+    original = f"# setforge host-local config\nbinaries:\n  code: {sys.executable}\n"
+    (cfg / "local.yaml").write_text(original, encoding="utf-8")
+    host_local_dir_path().mkdir(parents=True)
+    source_dir = home / "repo"
+    source_dir.mkdir()
+    (source_dir / "setforge.yaml").write_text("version: 1\n", encoding="utf-8")
+    _patch_init_dialog(monkeypatch, returns=[])
+
+    result = CliRunner().invoke(
+        app, ["init", "--no-prompt", f"--path-source={source_dir}"]
+    )
+
+    assert result.exit_code == 1, result.output
+    flattened = " ".join(result.output.split())
+    assert "were not applied" in flattened
+    assert "--force" in flattened
+    assert (cfg / "local.yaml").read_text(encoding="utf-8") == original
 
 
 def test_source_prompt_real_widget_git_then_url(
