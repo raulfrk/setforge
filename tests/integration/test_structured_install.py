@@ -164,3 +164,25 @@ def test_multi_document_yaml_update_installs(
     assert live.read_bytes() == b"---\nkind: A\ndata: 7\n---\nkind: B\ndata: 3\n"
     assert env.run_verb(_INSTALL).exit_code == 0
     assert live.read_bytes() == b"---\nkind: A\ndata: 7\n---\nkind: B\ndata: 3\n"
+
+
+def test_duplicate_key_live_json_does_not_block_install(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+) -> None:
+    base = '{\n  "a": 1,\n  "m": 0,\n  "z": 1\n}\n'
+    env = integration_env(
+        tracked={"settings": ("settings.json", base), "note": ("note.txt", "one\n")}
+    )
+    assert env.run_verb(_INSTALL).exit_code == 0
+    live = env.live(".setforge_it/settings.json")
+    live.write_text(base.replace('"a": 1,', '"a": 1,\n  "a": 5,'), encoding="utf-8")
+    env.tracked("settings.json").write_text(base.replace('"z": 1', '"z": 2'))
+    env.tracked("note.txt").write_text("two\n", encoding="utf-8")
+
+    result = env.run_verb(_INSTALL)
+
+    assert result.exit_code == 0, result.output
+    assert env.live(".setforge_it/note.txt").read_text(encoding="utf-8") == "two\n"
+    assert live.read_bytes() == b'{\n  "a": 1,\n  "a": 5,\n  "m": 0,\n  "z": 2\n}\n'
+    assert env.run_verb(["stage", "--list"]).exit_code == 0

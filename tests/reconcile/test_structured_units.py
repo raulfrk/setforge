@@ -1274,3 +1274,11 @@ def test_reconstruct_fallback_dump_follows_the_base_layout() -> None:
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
     assert out == base.replace(b"x: 1, y: 2", b"x: 5, y: 2")
+
+
+def test_extract_reports_duplicate_json_keys_as_unparseable() -> None:
+    base = b'{\n  "a": 1\n}\n'
+    live = b'{\n  "a": 1,\n  "a": 5\n}\n'
+
+    with pytest.raises(StructuredParseError, match="duplicate key 'a'"):
+        extract_structured_units(base, live, StructuredFormat.JSONC)

@@ -16,6 +16,7 @@ store (the caller wires all I/O).
 
 from __future__ import annotations
 
+import functools
 import io
 import re
 from collections import Counter
@@ -379,9 +380,15 @@ def extract_structured_units(
     intentionally opaque and therefore produces at most one whole-document unit
     at ``path == ""``. Every differing path becomes one PENDING
     :class:`KeyUnit`; an empty result means live equals base (nothing to stage).
+    A side that does not parse, or a JSON object with duplicate keys, raises
+    :class:`~setforge.errors.StructuredParseError`.
     """
-    base_leaves = dict(_walk_leaves(_load_model(base, fmt)))
-    live_leaves = dict(_walk_leaves(_load_model(live, fmt)))
+    try:
+        base_leaves = dict(_walk_leaves(_load_model(base, fmt)))
+        live_leaves = dict(_walk_leaves(_load_model(live, fmt)))
+    except DuplicateKeyInMergeModel as err:
+        # Legal JSON5, but no single value per key to stage: unparseable here.
+        raise StructuredParseError(f"structured input is not parseable: {err}") from err
     units: list[KeyUnit] = []
     for path in sorted(set(base_leaves) | set(live_leaves)):
         base_value = base_leaves.get(path, _MISSING)
@@ -696,6 +703,21 @@ def _plain_leaves(
         yield prefix, plain
 
 
+@functools.lru_cache(maxsize=256)
+def _text_leaves(
+    text: bytes, fmt: StructuredFormat
+) -> Mapping[tuple[object, ...], object] | None:
+    """The leaves of ``text``, or ``None`` when it has no comparable model.
+
+    Cached: staged capture reconstructs the same file several times per run
+    (preflight, preview, write, fidelity check), each trying the same texts.
+    """
+    try:
+        return dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
+    except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
+        return None
+
+
 def _leaf_distance(
     text: bytes, target: Mapping[tuple[object, ...], object], fmt: StructuredFormat
 ) -> int | None:
@@ -703,9 +725,8 @@ def _leaf_distance(
 
     ``None`` when ``text`` does not parse to a comparable model.
     """
-    try:
-        leaves = dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
-    except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
+    leaves = _text_leaves(text, fmt)
+    if leaves is None:
         return None
     return sum(
         not _plain_eq(leaves.get(path, _MISSING), target.get(path, _MISSING))
