@@ -146,7 +146,48 @@ def test_project_list_retains_injections_with_no_members(
     )
 
 
-@pytest.mark.parametrize("path_kind", ["alias", "subdirectory", "unrecorded-worktree"])
+@pytest.mark.parametrize("alias", ["target", "parent"])
+def test_project_commands_accept_symlinked_path_and_use_the_real_target(
+    tmp_path: Path, alias: str
+) -> None:
+    config = _config(tmp_path)
+    (tmp_path / "real").mkdir()
+    target = _git_repo(tmp_path / "real" / "target")
+    if alias == "target":
+        spelled = tmp_path / "alias"
+        spelled.symlink_to(target, target_is_directory=True)
+    else:
+        (tmp_path / "work").symlink_to(tmp_path / "real", target_is_directory=True)
+        spelled = tmp_path / "work" / "target"
+    runner = CliRunner()
+
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(spelled), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    assert f"target: {target}\n" in injected.output
+    assert manifest_path(target, "demo").exists()
+    assert not manifest_path(spelled, "demo").exists()
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == f"{target}  [demo]\n  hidden: AGENTS.md\n"
+    synced = runner.invoke(app, ["project", "sync", str(spelled), "--dry-run"])
+    assert synced.exit_code == 0, synced.output
+    assert f"target: {target}\n" in synced.output
+    visible = runner.invoke(
+        app, ["project", "visibility", str(spelled), "AGENTS.md", "--tracked", "--yes"]
+    )
+    assert visible.exit_code == 0, visible.output
+    removed = runner.invoke(
+        app,
+        ["project", "remove", "demo", str(spelled), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, removed.output
+    assert not (target / "AGENTS.md").exists()
+    assert not manifest_path(target, "demo").exists()
+
+
+@pytest.mark.parametrize("path_kind", ["subdirectory", "unrecorded-worktree"])
 def test_project_commands_refuse_wrong_target_without_touching_recorded_project(
     tmp_path: Path, path_kind: str
 ) -> None:
@@ -158,10 +199,7 @@ def test_project_commands_refuse_wrong_target_without_touching_recorded_project(
         ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
     )
     assert injected.exit_code == 0, injected.output
-    if path_kind == "alias":
-        invalid = tmp_path / "alias"
-        invalid.symlink_to(target, target_is_directory=True)
-    elif path_kind == "subdirectory":
+    if path_kind == "subdirectory":
         invalid = target / "subdirectory"
         invalid.mkdir()
     else:

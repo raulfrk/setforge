@@ -101,6 +101,8 @@ but a required private Git filter keeps only those hunks out of `git diff`.
 Unrelated edits in the same file remain visible. Non-interactive tracked-file
 resolution requires `--auto=keep-live` or `--auto=use-profile`. Both
 commands support `--dry-run`; live non-interactive use requires `--yes`.
+A project path that passes through a symbolic link is resolved first; output
+and records always name the real directory.
 
 After profile sources or membership change, `project sync <path>` reconciles
 every injection recorded for the exact target atomically—even when those

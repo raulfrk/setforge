@@ -201,10 +201,6 @@ def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
         raise SetforgeError(
             f"project target cannot be resolved: {lexical}: {exc}"
         ) from exc
-    if lexical != resolved:
-        raise SetforgeError(
-            f"project target must not use a symlink or alias path: {lexical}"
-        )
     if not resolved.is_dir():
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
@@ -244,10 +240,6 @@ def _verified_project_target(
         raise SetforgeError(
             f"project target cannot be resolved: {lexical}: {exc}"
         ) from exc
-    if lexical != resolved:
-        raise SetforgeError(
-            f"project target must not use a symlink or alias path: {lexical}"
-        )
     if not resolved.is_dir():
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
