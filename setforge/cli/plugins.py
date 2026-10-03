@@ -69,7 +69,7 @@ def plugin_list(
     if product is ProductKind.CODEX:
         _codex_plugin_list(cfg, resolved)
         return
-    declared_ids = set(reconcile_adapter.plugin_bare_names(cfg, resolved))
+    declared_ids = reconcile_adapter.plugin_ids(cfg, resolved)
 
     try:
         installed = claude_plugins_mod.list_installed()

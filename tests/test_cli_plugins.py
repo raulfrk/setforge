@@ -800,3 +800,39 @@ def test_marketplace_update_with_claude_present_succeeds(
     assert result.exit_code == 0, result.output
     assert updated == ["existing"]
     assert "updated marketplace: existing" in result.output
+
+
+_CLAUDE_MARKETPLACE_CONFIG = """\
+version: 1
+schema_version: '6.5'
+minimum_version: '6.5'
+tracked_files: {}
+marketplaces:
+  team: {source: path, path: /srv/team}
+claude_plugins:
+  review: {marketplace: team}
+packages:
+  review-plugin: {type: plugin, plugin: review}
+profiles:
+  default:
+    packages: [review-plugin]
+"""
+
+
+def test_plugin_list_joins_declared_and_installed_by_full_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "setforge.yaml"
+    config.write_text(_CLAUDE_MARKETPLACE_CONFIG)
+    monkeypatch.setattr(
+        claude_plugins_mod, "list_installed", lambda: {"review@team": {"enabled": True}}
+    )
+
+    result = CliRunner().invoke(
+        app, ["plugin", "list", "--profile=default", f"--config={config}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = [line.split() for line in result.output.splitlines()]
+    assert ["review@team", "yes", "enabled"] in rows
+    assert len([row for row in rows if row and row[0].startswith("review")]) == 1
