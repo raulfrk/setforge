@@ -51,6 +51,7 @@ from setforge.errors import BaseStoreError, ConfigError
 from setforge.file_ownership import FileAction, decide_file, observe_file, observe_tree
 from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
+from setforge.operations import journals_root
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
 from setforge.source import (
@@ -58,6 +59,7 @@ from setforge.source import (
     HostLocalSectionName,
     load_local_codex_overlay,
 )
+from setforge.transitions import state_root
 from setforge.tree_management import plan_tree, read_inventory, scan_tree
 
 if TYPE_CHECKING:
@@ -281,6 +283,29 @@ def _host_local_files(config: Config) -> frozenset[Path]:
     for profile in config.profiles.values():
         paths.update(_norm(p) for p in profile.bootstrap)
     return frozenset(paths)
+
+
+def _own_state_roots() -> frozenset[Path]:
+    """Trees that hold setforge's own records, never a tracked deployment.
+
+    Transition records, ownership claims, the reconcile store and receipts
+    (state root), operation journals, locks and caches, and snapshots. Install
+    records the claim files it writes in the transition ledger, and the state
+    root can sit under a managed dst root (a relocated ``SETFORGE_STATE_DIR``,
+    or a tracked dst below ``~/.local/state/setforge``), so these are excluded
+    at tree granularity: reaping one deletes live ownership or recovery state.
+    """
+    from setforge.snapshots import snapshots_root  # imports this module
+
+    return frozenset(
+        _norm(root)
+        for root in (
+            state_root(),
+            journals_root(),
+            Path("~/.cache/setforge"),
+            snapshots_root(),
+        )
+    )
 
 
 def _managed_dst_roots(config: Config, repo_root: Path) -> set[Path]:
@@ -537,18 +562,21 @@ def detect_orphans(
     managed_roots = _managed_dst_roots(config, repo_root)
 
     host_local = _host_local_files(config)
+    own_state = _own_state_roots()
     kept: list[OrphanEntry] = []
     skipped_absent = 0
     skipped_source = 0
     skipped_unmanaged = 0
     skipped_host_local = 0
     for path in sorted(touched_paths - tracked_paths - containing_paths, key=str):
-        if _norm(path) in host_local:
+        if _norm(path) in host_local or any(
+            path.is_relative_to(root) for root in own_state
+        ):
             # setforge-written host-local state (the local.yaml/additional-content
-            # stubs + every profile's bootstrap dst) — never a tracked
-            # deployment, excluded up front so a file that happens to live under
-            # a managed root is never reaped. Data-loss guard; see
-            # _host_local_files.
+            # stubs + every profile's bootstrap dst) and setforge's own state
+            # trees — never a tracked deployment, excluded up front so a file
+            # that happens to live under a managed root is never reaped.
+            # Data-loss guard; see _host_local_files and _own_state_roots.
             skipped_host_local += 1
             continue
         if path.is_relative_to(src_root) or path in src_paths:

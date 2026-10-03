@@ -1845,3 +1845,65 @@ def _claimed_candidate(
             expected_generation=None,
         )
     return candidate, config
+
+
+def test_cleanup_never_reaps_setforge_state_under_managed_root(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge.ownership import OwnershipStore
+
+    scanner = tmp_path / "gitleaks"
+    scanner.write_text("#!/bin/sh\nexit 0\n")
+    scanner.chmod(0o755)
+    monkeypatch.setenv("SETFORGE_GITLEAKS_BIN", str(scanner))
+    repo = tmp_path / "repo"
+    cfg = _write_minimal_yaml(repo)
+    (repo / "tracked").mkdir()
+    (repo / "tracked/kept.txt").write_bytes(b"kept\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    live = repo / "live/kept.txt"
+    assert isolated_state_dir.is_relative_to(tmp_path)
+    assert live.is_relative_to(tmp_path)
+
+    installed = runner.invoke(
+        app,
+        [
+            "--source",
+            str(repo),
+            "install",
+            "--profile=p",
+            f"--config={cfg}",
+            "--yes",
+            "--no-fetch",
+            "--no-git-check",
+        ],
+    )
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    store = OwnershipStore()
+    claims = store.list_claims()
+    assert [claim.locator for claim in claims] == [str(live)]
+    state_before = {
+        path: path.read_bytes()
+        for path in sorted(isolated_state_dir.rglob("*"))
+        if path.is_file()
+    }
+    assert store.claim_path(claims[0].resource_id) in state_before
+
+    preview = runner.invoke(app, ["cleanup-orphans", "--profile=p", f"--config={cfg}"])
+    assert preview.exit_code == 0, (preview.output, preview.exception)
+    assert "WOULD delete" not in preview.output
+
+    cleaned = runner.invoke(
+        app, ["cleanup-orphans", "--profile=p", f"--config={cfg}", "--apply", "--yes"]
+    )
+    assert cleaned.exit_code == 0, (cleaned.output, cleaned.exception)
+    assert store.list_claims() == claims
+    assert {
+        path: path.read_bytes()
+        for path in sorted(isolated_state_dir.rglob("*"))
+        if path.is_file()
+    } == state_before
+    assert live.read_bytes() == b"kept\n"
