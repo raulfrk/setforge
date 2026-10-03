@@ -116,7 +116,15 @@ class TreeActionKind(StrEnum):
     CHMOD = "chmod"
     REMOVE = "remove"
     KEEP = "keep"
+    RELEASE = "release"
     HOLD = "hold"
+
+
+class TreeHoldResolution(StrEnum):
+    """Operator choice for entries a plan would otherwise hold for review."""
+
+    KEEP_LIVE = "keep-live"
+    USE_TRACKED = "use-tracked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +158,7 @@ class TreePlan:
                 TreeActionKind.UPDATE,
                 TreeActionKind.CHMOD,
                 TreeActionKind.REMOVE,
+                TreeActionKind.RELEASE,
             }
             for action in self.actions
         )
@@ -411,8 +420,15 @@ def plan_tree(
     live: TreeInventory,
     prior: TreeInventory | None,
     policy: TreePolicy,
+    held: TreeHoldResolution | None = None,
 ) -> TreePlan:
-    """Plan desired/live/prior entry effects without granting authority."""
+    """Plan desired/live/prior entry effects without granting authority.
+
+    ``held`` resolves entries that would otherwise block the plan: keep-live
+    leaves the live entry and releases it from the owned inventory; use-tracked
+    removes drifted owned orphans and replaces file/symlink kind conflicts. A
+    kind conflict involving a directory is never replaced.
+    """
     desired_by = {entry.path: entry for entry in desired.inventory.entries}
     live_by = {entry.path: entry for entry in live.entries}
     prior_by = (
@@ -429,28 +445,52 @@ def plan_tree(
         actions.append(TreeAction(".", TreeActionKind.CREATE, "tree root missing"))
     elif desired.inventory.root_mode != live.root_mode:
         actions.append(TreeAction(".", TreeActionKind.CHMOD, "tree root mode differs"))
-    actions.extend(_plan_desired_entries(desired_by, live_by))
-    actions.extend(_plan_live_extras(desired_by, live_by, prior_by, policy))
+    actions.extend(_plan_desired_entries(desired_by, live_by, held))
+    actions.extend(_plan_live_extras(desired_by, live_by, prior_by, policy, held))
     return TreePlan(
         desired, live, prior, tuple(sorted(actions, key=lambda item: item.path))
     )
 
 
 def _plan_desired_entries(
-    desired_by: dict[str, TreeEntry], live_by: dict[str, TreeEntry]
+    desired_by: dict[str, TreeEntry],
+    live_by: dict[str, TreeEntry],
+    held: TreeHoldResolution | None,
 ) -> list[TreeAction]:
     actions: list[TreeAction] = []
+    released: list[str] = []
     for path, wanted in desired_by.items():
         current = live_by.get(path)
+        if any(path.startswith(f"{parent}/") for parent in released):
+            continue
         if current is None:
             actions.append(
                 TreeAction(path, TreeActionKind.CREATE, "desired entry missing")
             )
         elif not _same_content(wanted, current):
             if wanted.kind is not current.kind:
-                actions.append(
-                    TreeAction(path, TreeActionKind.HOLD, "entry kind conflicts")
+                conflict = (
+                    f"tracked {wanted.kind.value} conflicts with "
+                    f"live {current.kind.value}"
                 )
+                if held is TreeHoldResolution.KEEP_LIVE:
+                    released.append(path)
+                    actions.append(
+                        TreeAction(
+                            path, TreeActionKind.RELEASE, f"{conflict}; live kept"
+                        )
+                    )
+                elif (
+                    held is TreeHoldResolution.USE_TRACKED
+                    and TreeEntryKind.DIRECTORY not in {wanted.kind, current.kind}
+                ):
+                    actions.append(
+                        TreeAction(
+                            path, TreeActionKind.UPDATE, f"{conflict}; tracked applied"
+                        )
+                    )
+                else:
+                    actions.append(TreeAction(path, TreeActionKind.HOLD, conflict))
             else:
                 actions.append(
                     TreeAction(path, TreeActionKind.UPDATE, "content differs")
@@ -465,7 +505,9 @@ def _plan_live_extras(
     live_by: dict[str, TreeEntry],
     prior_by: dict[str, TreeEntry],
     policy: TreePolicy,
+    held: TreeHoldResolution | None,
 ) -> list[TreeAction]:
+    drifted = "removed from tracked but changed live since the last install"
     actions: list[TreeAction] = []
     for path, current in live_by.items():
         if path in desired_by:
@@ -481,14 +523,21 @@ def _plan_live_extras(
             actions.append(
                 TreeAction(path, TreeActionKind.REMOVE, "unchanged owned orphan")
             )
-        else:
+        elif held is TreeHoldResolution.KEEP_LIVE:
             actions.append(
-                TreeAction(path, TreeActionKind.HOLD, "owned orphan drifted")
+                TreeAction(path, TreeActionKind.RELEASE, f"{drifted}; live kept")
             )
+        elif held is TreeHoldResolution.USE_TRACKED:
+            actions.append(
+                TreeAction(path, TreeActionKind.REMOVE, f"{drifted}; tracked applied")
+            )
+        else:
+            actions.append(TreeAction(path, TreeActionKind.HOLD, drifted))
     retained = tuple(
         action.path
         for action in actions
-        if action.kind in {TreeActionKind.KEEP, TreeActionKind.HOLD}
+        if action.kind
+        in {TreeActionKind.KEEP, TreeActionKind.HOLD, TreeActionKind.RELEASE}
     )
     actions = [
         TreeAction(
@@ -807,6 +856,9 @@ def apply_tree(
         else:
             prior_owned = set(plan.prior.owned_paths)
     owned_paths = {entry.path for entry in plan.desired.inventory.entries} | prior_owned
+    owned_paths -= {
+        action.path for action in plan.actions if action.kind is TreeActionKind.RELEASE
+    }
     return TreeInventory(
         result.root_present,
         result.root_mode,

@@ -17,6 +17,7 @@ from setforge.tree_management import (
     TreeActionKind,
     TreeEntry,
     TreeEntryKind,
+    TreeHoldResolution,
     apply_tree,
     dumps_inventory,
     loads_inventory,
@@ -119,6 +120,118 @@ def test_plan_removes_only_unchanged_owned_orphans(tmp_path: Path) -> None:
         "remove": TreeActionKind.REMOVE,
         "unowned": TreeActionKind.KEEP,
     }
+
+
+def _drifted_orphan_trees(tmp_path: Path) -> tuple[Path, Path, Path]:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+        (root / "kept").write_text("kept\n", encoding="utf-8")
+    (live / "drifted").write_text("edited\n", encoding="utf-8")
+    (prior_root / "drifted").write_text("installed\n", encoding="utf-8")
+    return source, live, prior_root
+
+
+def test_keep_live_releases_drifted_owned_orphan(tmp_path: Path) -> None:
+    source, live, prior_root = _drifted_orphan_trees(tmp_path)
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    desired = scan_tree(source, policy, capture_payloads=True)
+    prior = scan_tree(prior_root, policy).inventory
+    current = scan_tree(live, policy).inventory
+
+    held = plan_tree(desired, current, prior, policy)
+    plan = plan_tree(desired, current, prior, policy, TreeHoldResolution.KEEP_LIVE)
+
+    assert held.blocked
+    assert [(action.path, action.kind) for action in plan.actions] == [
+        ("drifted", TreeActionKind.RELEASE)
+    ]
+    applied = apply_tree(plan, live, policy)
+    assert (live / "drifted").read_text(encoding="utf-8") == "edited\n"
+    assert applied.owned_paths == ("kept",)
+    repeated = plan_tree(desired, scan_tree(live, policy).inventory, applied, policy)
+    assert [(action.path, action.kind) for action in repeated.actions] == [
+        ("drifted", TreeActionKind.KEEP)
+    ]
+
+
+def test_use_tracked_removes_drifted_owned_orphan(tmp_path: Path) -> None:
+    source, live, prior_root = _drifted_orphan_trees(tmp_path)
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+        TreeHoldResolution.USE_TRACKED,
+    )
+
+    assert [(action.path, action.kind) for action in plan.actions] == [
+        ("drifted", TreeActionKind.REMOVE)
+    ]
+    applied = apply_tree(plan, live, policy)
+    assert not (live / "drifted").exists()
+    assert [entry.path for entry in applied.entries] == ["kept"]
+
+
+def test_keep_live_leaves_kind_conflict_and_its_tracked_children(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    (source / "entry").mkdir(parents=True)
+    (source / "entry" / "child").write_text("child\n", encoding="utf-8")
+    (source / "other").write_text("other\n", encoding="utf-8")
+    live.mkdir()
+    (live / "entry").write_text("host file\n", encoding="utf-8")
+    policy = TreePolicy()
+    desired = scan_tree(source, policy, capture_payloads=True)
+    current = scan_tree(live, policy).inventory
+
+    for resolution in (None, TreeHoldResolution.USE_TRACKED):
+        held = plan_tree(desired, current, None, policy, resolution)
+        assert held.blocked
+        assert {a.path for a in held.actions if a.kind is TreeActionKind.HOLD} == {
+            "entry"
+        }
+    plan = plan_tree(desired, current, None, policy, TreeHoldResolution.KEEP_LIVE)
+
+    assert {action.path: action.kind for action in plan.actions} == {
+        "entry": TreeActionKind.RELEASE,
+        "other": TreeActionKind.CREATE,
+    }
+    applied = apply_tree(plan, live, policy)
+    assert (live / "entry").read_text(encoding="utf-8") == "host file\n"
+    assert (live / "other").read_text(encoding="utf-8") == "other\n"
+    assert applied.owned_paths == ("other",)
+
+
+def test_use_tracked_replaces_symlink_kind_conflict(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    source.mkdir()
+    live.mkdir()
+    (source / "entry").write_text("tracked\n", encoding="utf-8")
+    (live / "entry").symlink_to("elsewhere")
+    policy = TreePolicy()
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(
+            live, policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
+        ).inventory,
+        None,
+        policy,
+        TreeHoldResolution.USE_TRACKED,
+    )
+
+    assert [(action.path, action.kind) for action in plan.actions] == [
+        ("entry", TreeActionKind.UPDATE)
+    ]
+    apply_tree(plan, live, policy)
+    assert not (live / "entry").is_symlink()
+    assert (live / "entry").read_text(encoding="utf-8") == "tracked\n"
 
 
 def test_remove_owned_preserves_parent_of_unowned_descendant(tmp_path: Path) -> None:

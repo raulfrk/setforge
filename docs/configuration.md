@@ -413,6 +413,15 @@ unchanged; unowned or drifted entries are preserved or held for review. Tree
 roots cannot overlap another tracked destination. `capture` and `stage` refuse
 managed trees; edit the tracked source tree instead.
 
+An entry is held when it was removed from the tracked tree but its live copy
+changed since the last install, or when the tracked and live entries have
+different kinds (file, directory, symlink). `install` then stops before any
+write and lists each held path with its reason. Resolve the entry by hand, or
+rerun with `--auto=keep-live` to leave the live entry in place and stop managing
+it, or with `--auto=use-tracked` to apply the tracked tree: the drifted entry
+is removed, and a file/symlink kind conflict is replaced. A kind conflict
+involving a directory is never replaced automatically.
+
 Basenames matching `.NAME.setforge-create`, `.NAME.setforge-update`, or
 `.NAME.setforge-remove` are reserved for journaled atomic publication and are
 rejected in both tracked sources and live managed trees.

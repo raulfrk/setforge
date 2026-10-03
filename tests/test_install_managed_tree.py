@@ -513,6 +513,107 @@ def test_mixed_file_tree_inventory_accepts_profile_order(
         assert (live / "tree/item").read_bytes() == b"tree\n"
 
 
+def _install_then_hold_tree_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], Path, Path]:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("tree", "one", "two"))
+    document = YAML().load(config.read_text())
+    document["tracked_files"]["tree"]["tree"] = {"orphans": "remove-owned"}
+    YAML().dump(document, config)
+    tracked = config.parent / "tracked"
+    (tracked / "tree/kept").write_text("kept\n")
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    initial = CliRunner().invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    (tracked / "tree/item").unlink()
+    (live / "tree/item").write_text("edited live\n")
+    (tracked / "one").write_text("one updated\n")
+    return args, config, live
+
+
+def test_held_tree_entry_error_names_path_reason_and_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _config, live = _install_then_hold_tree_entry(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 1
+    message = str(result.exception)
+    assert isinstance(result.exception, SetforgeError)
+    assert f"tree: {live / 'tree/item'}" in message
+    assert "changed live since the last install" in message
+    assert "--auto=keep-live" in message
+    assert "--auto=use-tracked" in message
+    assert (live / "tree/item").read_bytes() == b"edited live\n"
+    assert (live / "one").read_bytes() == b"one\n"
+
+
+def test_auto_keep_live_leaves_held_tree_entry_and_installs_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _config, live = _install_then_hold_tree_entry(tmp_path, monkeypatch)
+    runner = CliRunner()
+
+    kept = runner.invoke(app, [*args, "--auto=keep-live"])
+    assert kept.exit_code == 0, (kept.output, kept.exception)
+    assert (live / "tree/item").read_bytes() == b"edited live\n"
+    assert (live / "one").read_bytes() == b"one updated\n"
+
+    repeated = runner.invoke(app, args)
+    assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+    assert (live / "tree/item").read_bytes() == b"edited live\n"
+    assert operations.active("p") is None
+
+
+def test_auto_keep_live_leaves_file_where_tracked_has_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, config, live = _install_then_hold_tree_entry(tmp_path, monkeypatch)
+    tracked = config.parent / "tracked"
+    (tracked / "tree/item").mkdir()
+    (tracked / "tree/item/child").write_text("child\n")
+    runner = CliRunner()
+
+    refused = runner.invoke(app, [*args, "--auto=use-tracked"])
+    assert refused.exit_code == 1
+    assert "tracked directory conflicts with live file" in str(refused.exception)
+    assert (live / "one").read_bytes() == b"one\n"
+
+    kept = runner.invoke(app, [*args, "--auto=keep-live"])
+    assert kept.exit_code == 0, (kept.output, kept.exception)
+    assert (live / "tree/item").read_bytes() == b"edited live\n"
+    assert (live / "one").read_bytes() == b"one updated\n"
+    assert operations.active("p") is None
+
+
+def test_auto_use_tracked_applies_held_tree_entry_reversibly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, config, live = _install_then_hold_tree_entry(tmp_path, monkeypatch)
+    runner = CliRunner()
+
+    applied = runner.invoke(app, [*args, "--auto=use-tracked"])
+    assert applied.exit_code == 0, (applied.output, applied.exception)
+    assert not (live / "tree/item").exists()
+    assert (live / "tree/kept").read_bytes() == b"kept\n"
+    assert (live / "one").read_bytes() == b"one updated\n"
+
+    reverted = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+    assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+    assert (live / "tree/item").read_bytes() == b"edited live\n"
+    assert operations.active("p") is None
+
+
 def test_first_install_creates_tree_beside_absent_state_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

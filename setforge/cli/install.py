@@ -159,6 +159,9 @@ from setforge.transitions import (
     load_reconcile_outcomes,
 )
 from setforge.tree_management import (
+    TreeActionKind,
+    TreeEntryKind,
+    TreeHoldResolution,
     TreePlan,
     apply_tree,
     inventory_path,
@@ -203,6 +206,7 @@ class InstallPlan:
     codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
     codex_trusted_projects: tuple[Path, ...] = ()
     preserved_store_ids: frozenset[FileId] = frozenset()
+    tree_held: TreeHoldResolution | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,12 +594,13 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     source_map = dict(source_bytes)
     if any(source_map.get(path) != payload for path, payload in input_baseline):
         raise SetforgeError("install configuration changed before planning; retry")
-    trees = _plan_trees(tree_entries, profile=ctx.profile, owner_id=package_owner_id)
-    blocked_trees = tuple(tree.name for tree in trees if tree.plan.blocked)
-    if blocked_trees:
-        raise SetforgeError(
-            "managed tree conflicts require review: " + ", ".join(blocked_trees)
-        )
+    tree_held = (
+        TreeHoldResolution(section_auto.value) if section_auto is not None else None
+    )
+    trees = _plan_trees(
+        tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=tree_held
+    )
+    _refuse_held_tree_entries(trees)
     dst_paths = tuple(
         [
             deploy.resolve_symlink_target(sub_dst, tf.symlink)
@@ -785,6 +790,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         codex_configs=codex_configs,
         codex_trusted_projects=codex_trusted_projects,
         preserved_store_ids=preserved_store_ids,
+        tree_held=tree_held,
     )
 
 
@@ -871,6 +877,7 @@ def _plan_trees(
     *,
     profile: str,
     owner_id: UUID | None,
+    held: TreeHoldResolution | None = None,
 ) -> tuple[PlannedTree, ...]:
     """Freeze desired/live/prior inventories and root authority decisions."""
     store = OwnershipStore()
@@ -886,7 +893,7 @@ def _plan_trees(
         live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
         live = scan_tree(destination, live_policy).inventory
         prior = read_inventory(profile, name)
-        tree_plan = plan_tree(desired, live, prior, policy)
+        tree_plan = plan_tree(desired, live, prior, policy, held)
         observation = observe_tree(destination, live.fingerprint)
         decision = decide_file(
             observation,
@@ -914,6 +921,25 @@ def _plan_trees(
     return tuple(planned)
 
 
+def _refuse_held_tree_entries(trees: tuple[PlannedTree, ...]) -> None:
+    """Refuse before any write, naming every held entry and its resolution."""
+    held = [
+        f"  {tree.name}: {tree.destination / action.path} ({action.detail})"
+        for tree in trees
+        for action in tree.plan.actions
+        if action.kind is TreeActionKind.HOLD
+    ]
+    if held:
+        raise SetforgeError(
+            "managed tree conflicts require review:\n"
+            + "\n".join(held)
+            + "\nResolve each entry by hand, or rerun with --auto=keep-live to "
+            "leave these live entries in place and stop managing them, or "
+            "--auto=use-tracked to apply the tracked tree over them. A conflict "
+            "involving a directory is never replaced automatically."
+        )
+
+
 def _ownership_destinations(
     tracked: TrackedFile, destination: Path
 ) -> tuple[Path, ...]:
@@ -926,6 +952,13 @@ def _ownership_destinations(
 
 def _tree_checkpoint_paths(tree: PlannedTree, profile: str) -> tuple[Path, ...]:
     """Return every entry that the frozen tree plan may mutate."""
+    # Nothing can exist or be created beneath a live non-directory entry, and
+    # a plan never replaces one with a directory.
+    beneath_live_leaf = tuple(
+        f"{entry.path}/"
+        for entry in tree.plan.live.entries
+        if entry.kind is not TreeEntryKind.DIRECTORY
+    )
     relative = {
         entry.path
         for inventory in (
@@ -935,6 +968,7 @@ def _tree_checkpoint_paths(tree: PlannedTree, profile: str) -> tuple[Path, ...]:
         )
         if inventory is not None
         for entry in inventory.entries
+        if not entry.path.startswith(beneath_live_leaf)
     }
     lock_target = _tree_lock_target(tree.destination)
     root_prefixes = [lock_target]
@@ -1006,6 +1040,7 @@ def _assert_plan_inputs_unchanged(plan: InstallPlan) -> None:
         tuple(_iter_all_trees(plan.ctx)),
         profile=plan.ctx.profile,
         owner_id=plan.package_owner_id,
+        held=plan.tree_held,
     )
     if current_trees != plan.trees:
         raise SetforgeError("managed tree inputs changed after planning; retry")
@@ -2304,6 +2339,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             "Non-interactive section reconciliation: 'use-tracked' "
             "deploys tracked-side updates into every shared section; "
             "'keep-live' silences shared-drift warnings and keeps live. "
+            "Held managed-tree entries follow the same choice: 'use-tracked' "
+            "applies the tracked tree over them, 'keep-live' leaves them in "
+            "place and stops managing them. "
             "Mutually exclusive with --reconcile-user-sections."
         ),
     ),
