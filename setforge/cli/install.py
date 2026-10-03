@@ -3039,6 +3039,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         operations.complete(journal)
 
         _gate_on_mcp_failures(mcp_failed)
+        _gate_on_reconcile_failures(plugin_outcomes + ext_outcomes)
         if codex_plugin_failed:
             details = "; ".join(
                 f"{item}: {error}" for item, error in codex_plugin_failed
@@ -3184,6 +3185,25 @@ def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
     names = ", ".join(name for name, _err in mcp_failed)
     typer.secho(
         f"install completed with MCP server failures: {names}",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
+
+
+def _gate_on_reconcile_failures(
+    outcomes: tuple[transitions.ReconcileOutcome, ...],
+) -> None:
+    """Exit non-zero when a plugin or extension install failed and was skipped.
+
+    A missing ``claude`` / ``code`` binary produces no outcomes (it is warned
+    and skipped), so only items that were attempted and failed gate.
+    """
+    failed = [o.item_id for o in outcomes if o.status is ReconcileStatus.SKIPPED]
+    if not failed:
+        return
+    typer.secho(
+        f"install completed with plugin/extension failures: {', '.join(failed)}",
         err=True,
         fg=typer.colors.RED,
     )

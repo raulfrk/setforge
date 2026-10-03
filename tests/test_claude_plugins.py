@@ -1529,9 +1529,9 @@ def test_install_records_plugin_delta_with_enable_failure(
             "--yes",
         ],
     )
-    # Install command exits 0 even when a reconcile step fails (warn-
-    # and-continue with default SKIP), so the transition still lands.
-    assert installed.exit_code == 0, installed.output
+    # A failed reconcile step is skipped and everything else still lands, but
+    # the install exits non-zero so scripted runs notice (INV-7).
+    assert installed.exit_code == 1, installed.output
 
     # Plugin landed on disk per fake-claude (install succeeded).
     assert "superpowers@claude-plugins-official" in fc.installed_state()
