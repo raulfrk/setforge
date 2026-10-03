@@ -38,8 +38,11 @@ def _console_calls(tree: ast.AST) -> list[ast.Call]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            if (isinstance(func, ast.Name) and func.id == "Console") or (
-                isinstance(func, ast.Attribute) and func.attr == "Console"
+            if (
+                isinstance(func, ast.Name) and func.id in ("Console", "make_console")
+            ) or (
+                isinstance(func, ast.Attribute)
+                and func.attr in ("Console", "make_console")
             ):
                 calls.append(node)
     return calls

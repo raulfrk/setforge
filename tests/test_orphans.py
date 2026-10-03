@@ -1784,7 +1784,8 @@ def test_cleanup_own_claim_refuses_apply_until_released(
     preview = runner.invoke(app, base)
     assert preview.exit_code == 0, preview.output + str(preview.exception)
     assert str(candidate) in preview.output
-    assert claim_id in preview.output.replace("\n", "")
+    assert claim_id in preview.output
+    assert f"--config={config} --yes" in preview.output
 
     refused = runner.invoke(app, [*base, "--apply", "--yes"])
     assert refused.exit_code != 0
@@ -1811,11 +1812,11 @@ def _claimed_candidate(
     from setforge.locking import mutation_locks
     from setforge.ownership import OwnershipStore, load_or_create_owner_id
 
-    repo = tmp_path / "caller-checkout"
+    repo = tmp_path / ("caller-checkout-" + "long-segment-" * 8)
     config = _write_minimal_yaml(repo)
     (repo / "tracked").mkdir()
     (repo / "tracked/kept.txt").write_text("kept\n")
-    candidate = Path.home() / ".config/example/claimed.txt"
+    candidate = Path.home() / ".config" / ("example-" + "long-dir-" * 8) / "claimed.txt"
     candidate.parent.mkdir(parents=True)
     config.write_text(
         config.read_text().replace(str(repo / "live"), str(candidate.parent))

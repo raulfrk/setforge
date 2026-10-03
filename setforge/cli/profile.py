@@ -28,7 +28,7 @@ from setforge import reconcile_adapter
 from setforge.cli import _CONFIG_OPTION, _require_output_path, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
-from setforge.cli._output import OutputContext, render
+from setforge.cli._output import OutputContext, make_console, render
 from setforge.config import (
     Config,
     HostLocalTrackedFileOverride,
@@ -54,7 +54,7 @@ def _build_console() -> Console:
     enabled Rich treats the brackets as style tags and silently
     strips them.
     """
-    return Console(markup=False, highlight=False)
+    return make_console(markup=False, highlight=False)
 
 
 profile_app: typer.Typer = typer.Typer(

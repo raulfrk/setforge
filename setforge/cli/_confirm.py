@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive
 
 # Lazy PEP 562 import so cold-start commands skip the ~140ms prompt_toolkit cost.
@@ -102,7 +103,7 @@ def prompt_failure_action(
         )
         return default
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     console.print(f"[bold red]=== reconcile failure ===[/bold red]\n{message}")
     from setforge.ui.widgets import CANCEL, Button
 
@@ -240,7 +241,7 @@ def confirm_auto_operation(
             f"setforge {command} with --auto* requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     _render_panel(command=command, profile=profile, plan=plan, console=console)
     from setforge.cli import _confirm as _self  # local alias for monkeypatch path
     from setforge.ui.widgets import CANCEL, Button

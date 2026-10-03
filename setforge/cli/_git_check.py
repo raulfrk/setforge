@@ -25,6 +25,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive, NoSourceConfigured
 from setforge.source import (
     PathSource,
@@ -386,7 +387,7 @@ def prompt_git_check_choice(
             "check (e.g. for CI / cron use)."
         )
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     _render_panel(
         source=source,
         dirty_lines=dirty_lines,
@@ -515,7 +516,7 @@ def run_git_check_or_raise(
     if no_git_check:
         return
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     source_dir = resolve_source_dir(source)
     detached = False
     dirty_lines: list[str] = []

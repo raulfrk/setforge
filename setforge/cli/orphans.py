@@ -45,6 +45,7 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
+from setforge.cli._output import make_console
 from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import (
@@ -740,7 +741,7 @@ def cleanup_orphans(
         raise SetforgeError("--scan and --ignore cannot be combined")
 
     resolved_config = _resolve_config_arg(config)
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
 
     if ignore is not None:
         cfg = load_config(resolved_config)

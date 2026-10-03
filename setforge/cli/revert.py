@@ -40,7 +40,7 @@ from setforge.cli._help_examples import (
 )
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
 from setforge.cli._install_helpers import revert_symlink_deployment
-from setforge.cli._output import render
+from setforge.cli._output import make_console, render
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
     ExtensionOperation,
@@ -1331,7 +1331,7 @@ def _wide_console() -> Console:
     otherwise wrap in ANSI sequences, breaking substring assertions
     in tests and copy-pasteability of the suggested commands.
     """
-    return Console(width=200, soft_wrap=True, highlight=False)
+    return make_console(width=200, highlight=False)
 
 
 def _render_transitions_table(

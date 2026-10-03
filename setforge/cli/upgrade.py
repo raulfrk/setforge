@@ -52,6 +52,7 @@ from setforge._pypi_client import (
 )
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
+from setforge.cli._output import make_console
 from setforge.errors import (
     ConfirmRequiresInteractive,
     PyPIFetchError,
@@ -429,7 +430,7 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     if yes:
         return default_choice
 
-    console = Console()
+    console = make_console()
     _render_confirm_panel(plan, console=console)
 
     from setforge.cli import upgrade as _self  # local alias for monkeypatch
@@ -635,7 +636,7 @@ def _run_migrate_check_subprocess(*, config: Path) -> None:
 
 def _print_check_report(plan: UpgradePlan) -> None:
     """Print the read-only ``--check`` report; no mutation."""
-    console = Console()
+    console = make_console()
     _render_confirm_panel(plan, console=console)
     if plan.target_version == plan.current_version:
         console.print(

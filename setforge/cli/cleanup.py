@@ -20,6 +20,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._output import make_console
 from setforge.config import (
     Config,
     ResolvedProfile,
@@ -617,7 +618,7 @@ def cleanup(
             resources.add(ResourceId.package(provider, coordinate))
         selected = frozenset(resources)
     resolved_config = _resolve_config_arg(config)
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
     store = _receipt_store()
 
     declared = _resolve_declared(resolved_config, profile)

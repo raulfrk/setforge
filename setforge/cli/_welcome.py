@@ -37,6 +37,7 @@ from rich.table import Table
 
 from setforge import reconcile_adapter, transitions
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
+from setforge.cli._output import make_console
 from setforge.config import LocalOverlayResolution
 from setforge.errors import InvalidTransitionRecord, WelcomeRequiresInteractive
 from setforge.overlay_provenance import OverlayOrigin
@@ -462,7 +463,7 @@ def prompt_welcome(
             "is not a TTY (no consent surface available)"
         )
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     _render_panel(inventory, console=console)
     initial = _run_dialog(values=_PROMPT_VALUES_FULL, default=WelcomeChoice.ABORT)
     resolved = _handle_initial_choice(initial, run_dry_run=run_dry_run, console=console)

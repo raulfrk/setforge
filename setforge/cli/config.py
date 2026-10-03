@@ -69,7 +69,7 @@ from setforge.cli._config_helpers import (
     walk_model as _walk_model,
 )
 from setforge.cli._git_check import run_git_check_or_raise
-from setforge.cli._output import OutputContext
+from setforge.cli._output import OutputContext, make_console
 from setforge.config import (
     Config,
     MarketplaceSource,
@@ -676,7 +676,7 @@ def _preview_and_write(
     """
     after_text = render_yaml(doc, before_text or None)
     diff_text = _render_diff(before_text, after_text, yaml_path)
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
     if not _prompt_confirm(
         yaml_path=yaml_path, diff_text=diff_text, console=console, yes=yes
     ):

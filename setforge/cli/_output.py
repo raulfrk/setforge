@@ -74,7 +74,13 @@ class OutputContext:
     quiet: bool = False
 
 
-def make_console(*, stderr: bool = False) -> Console:
+def make_console(
+    *,
+    stderr: bool = False,
+    markup: bool = True,
+    highlight: bool = True,
+    width: int | None = None,
+) -> Console:
     """Build a human-output console that never crops or re-wraps lines.
 
     Rich falls back to 80 columns when the stream is not a terminal, which
@@ -82,7 +88,13 @@ def make_console(*, stderr: bool = False) -> Console:
     leaves wrapping to the terminal (or to nothing, for a pipe); an explicit
     ``COLUMNS`` still sets the console width for tables and panels.
     """
-    return Console(stderr=stderr, soft_wrap=True)
+    return Console(
+        stderr=stderr,
+        soft_wrap=True,
+        markup=markup,
+        highlight=highlight,
+        width=width,
+    )
 
 
 def wrap_json(

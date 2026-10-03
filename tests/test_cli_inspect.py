@@ -424,3 +424,20 @@ def test_inspect_reports_unparseable_structured_file(
     assert "not parseable" in result.output
     assert "merge clean" not in result.output
     assert "merge is clean" not in result.output
+
+
+def test_inspect_header_keeps_long_path_unbroken_when_piped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("COLUMNS", raising=False)
+    cfg_path, dst = _setup(tmp_path, monkeypatch)
+    long_dst = dst.parent / ("long-directory-name-" * 6) / "CLAUDE.md"
+    _write(long_dst, _LIVE)
+    cfg_path.write_text(_config(long_dst), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["inspect", "CLAUDE.md", "--profile=p", f"--config={cfg_path}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"inspect {long_dst}" in result.output

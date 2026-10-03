@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
 import typer
-from rich.console import Console
 
 from setforge import atomicio, operations, transitions
 from setforge.cli import (
@@ -35,7 +34,7 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import STAGE_EXAMPLES
-from setforge.cli._output import OutputContext, render
+from setforge.cli._output import OutputContext, make_console, render
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import (
     Config,
@@ -1346,7 +1345,7 @@ def stage(
         )
         raise typer.Exit(code=0)
 
-    console = Console()
+    console = make_console()
     for stage_item in stages:
         if not stage_item.hunks:
             continue
@@ -1517,7 +1516,7 @@ def _render_list(
     data = [summary.to_dict() for summary in summaries]
 
     def _human() -> None:
-        console = Console()
+        console = make_console()
         if not data:
             console.print("no staged-eligible files with local changes")
             return

@@ -19,6 +19,7 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 
+from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive
 
 
@@ -310,7 +311,7 @@ def confirm_revert_operation(
             "setforge revert requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     _render_panel(plan, console)
     choice = _prompt_choice(plan)
     if choice is RevertChoice.ABORT:
@@ -417,7 +418,7 @@ def confirm_multi_step_revert_operation(
             "setforge revert --to-before requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console(stderr=True)
+        console = make_console(stderr=True)
     _render_multi_step_panel(plan, console)
     choice = _prompt_multi_step_choice(plan)
     if choice is RevertChoice.ABORT:

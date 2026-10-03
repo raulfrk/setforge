@@ -25,6 +25,7 @@ from rich.console import Console
 
 from setforge.cli import app
 from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
+from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -548,7 +549,7 @@ def completion_install(
     then optionally appends a sentinel-bracketed wiring block to the
     user's shell rc file behind an arrow-key confirm.
     """
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
     script_path = _script_path(shell)
     rc = rc_file.expanduser() if rc_file is not None else _rc_path(shell)
     content = _render_completion_script(shell)

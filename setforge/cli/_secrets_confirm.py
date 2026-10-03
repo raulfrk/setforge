@@ -16,6 +16,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from setforge.cli._output import make_console
 from setforge.secrets import SecretAction, SecretFinding
 from setforge.ui import box, theme
 
@@ -85,7 +86,7 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
             fg=typer.colors.YELLOW,
         )
         return SecretAction.ABORT
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
     _render_panel(finding, console)
     from setforge.cli import _secrets_confirm as _self  # monkeypatch seam
     from setforge.ui.widgets import CANCEL, Button
