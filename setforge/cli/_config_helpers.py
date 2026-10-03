@@ -33,8 +33,9 @@ from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.error import CommentMark, YAMLError
 from ruamel.yaml.scalarint import OctalInt
+from ruamel.yaml.tokens import CommentToken
 
 from setforge.errors import SetforgeError
 from setforge.migrations._yaml_ops import yaml_rt
@@ -387,9 +388,50 @@ def apply_remove(
         existing.remove(value)
     else:
         # Scalar unset: pop the key (and its comment-association entry).
+        tail = _following_comment(parent, leaf)
+        keys = list(parent)
+        index = keys.index(leaf)
         del parent[leaf]
         parent.ca.items.pop(leaf, None)
+        if tail:
+            _keep_following_comment(parent, keys, index, tail)
     return doc
+
+
+def _following_comment(node: CommentedMap, key: str) -> str:
+    """Comment and blank lines after ``key``'s line that belong to what follows.
+
+    ruamel stores them in the same token as the key's end-of-line comment.
+    """
+    value = node[key]
+    if isinstance(value, CommentedMap) and value:
+        return _following_comment(value, list(value)[-1])
+    entry = node.ca.items.get(key)
+    token = entry[2] if entry else None
+    if token is None or "\n" not in token.value:
+        return ""
+    return token.value.split("\n", 1)[1]
+
+
+def _keep_following_comment(
+    node: CommentedMap, keys: list[str], index: int, tail: str
+) -> None:
+    """Re-attach ``tail`` of the removed ``keys[index]`` to its neighbour."""
+    if index > 0:
+        prev = keys[index - 1]
+        entry = node.ca.items.setdefault(prev, [None, None, None, None])
+        if entry[2] is None:
+            entry[2] = CommentToken("\n" + tail, CommentMark(0))
+        else:
+            entry[2].value += tail
+    elif index + 1 < len(keys):
+        following = keys[index + 1]
+        lines = [line.strip().removeprefix("#").strip() for line in tail.split("\n")]
+        node.yaml_set_comment_before_after_key(
+            following,
+            before="\n".join(lines).strip("\n"),
+            indent=node.lc.data[following][1],
+        )
 
 
 def to_plain(obj: Any) -> Any:  # noqa: ANN401 — recursive YAML coercion

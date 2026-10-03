@@ -170,3 +170,44 @@ def test_config_add_then_remove_restores_original_bytes(
     )
     assert removed.exit_code == 0, removed.stdout + removed.stderr
     assert local.read_bytes() == before
+
+
+_BEFORE_NEXT = """\
+binaries:
+  code: /a
+  claude: /b  # gone
+
+  # patch is special
+  patch: /usr/bin/patch
+"""
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            _BEFORE_NEXT,
+            "binaries:\n  code: /a\n\n  # patch is special\n  patch: /usr/bin/patch\n",
+        ),
+        (
+            _BEFORE_NEXT.replace("  code: /a\n", ""),
+            "binaries:\n  # patch is special\n  patch: /usr/bin/patch\n",
+        ),
+    ],
+    ids=["middle", "first"],
+)
+def test_config_remove_keeps_comment_of_next_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, expected: str
+) -> None:
+    local = tmp_path / "local.yaml"
+    local.write_text(text, encoding="utf-8")
+    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
+    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
+
+    result = CliRunner().invoke(
+        app, ["config", "remove", "--local", "binaries.claude", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert local.read_text(encoding="utf-8") == expected
