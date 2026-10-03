@@ -17,7 +17,7 @@ from hypothesis import strategies as st
 
 from setforge import codex_plugins, operations, orphan_scan, transitions
 from setforge.errors import SetforgeError
-from setforge.locking import install_resources_lock
+from setforge.locking import install_resources_lock, profile_lock
 from setforge.ownership import (
     OwnershipClaim,
     OwnershipStore,
@@ -1151,6 +1151,57 @@ def test_recovery_refuses_nonempty_created_directory(
 
     with pytest.raises(SetforgeError, match="non-empty recovery directory"):
         operations.recover_files(journal)
+    assert operations.active("p") is not None
+
+
+def _journal_creating_state_root(
+    operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(operation_state))
+    store_file = operation_state / "scalar-bases" / "p.json"
+    operations.begin_checkpoint(
+        operations.prepare(
+            command="migrate",
+            profile="p",
+            config_dir=operation_state.parent,
+            resources_lock=False,
+            command_line=("migrate", "--apply"),
+            paths=(store_file,),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    return store_file
+
+
+def test_recovery_keeps_created_state_root_that_holds_only_its_locks(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_file = _journal_creating_state_root(operation_state, monkeypatch)
+
+    with profile_lock("p"):
+        store_file.parent.mkdir(parents=True)
+        store_file.write_text("{}", encoding="utf-8")
+        operations.complete(operations.recover_files(operations.load("p")))
+
+    assert not store_file.parent.exists()
+    assert [path.name for path in operation_state.iterdir()] == ["locks"]
+    assert operations.active("p") is None
+
+
+def test_recovery_refuses_created_state_root_with_foreign_content(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _journal_creating_state_root(operation_state, monkeypatch)
+
+    with (
+        profile_lock("p"),
+        profile_lock("q"),
+        pytest.raises(SetforgeError, match="non-empty recovery directory"),
+    ):
+        operations.recover_files(operations.load("p"))
+
     assert operations.active("p") is not None
 
 

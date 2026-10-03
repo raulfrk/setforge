@@ -820,11 +820,16 @@ def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 
             guard_identities[guard.path] = live
     roots = _install_root_paths(recovering)
     aliases = _install_aliases(recovering)
+    lock_files = _operation_lock_files(recovering)
     for snapshot in sorted(
         (item for item in recovering.paths if str(item.path) in scoped_paths),
         key=lambda item: len(item.path.parts),
         reverse=True,
     ):
+        if snapshot.kind is SnapshotKind.ABSENT and _holds_only_lock_files(
+            snapshot.path, lock_files
+        ):
+            continue
         protected = any(
             snapshot.path == root or snapshot.path.is_relative_to(root)
             for root in roots
@@ -867,6 +872,37 @@ def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 
     if any(item.restore_transitions for item in recovering.checkpoints):
         _remove_uncommitted_transition_records(recovering)
     return recovering
+
+
+def _operation_lock_files(journal: OperationJournal) -> frozenset[Path]:
+    """Return the profile lock files held while ``journal`` is recovered."""
+    from setforge.locking import _profile_lock_path
+
+    return frozenset(
+        _profile_lock_path(profile).expanduser().absolute()
+        for profile in locked_profiles(journal)
+    )
+
+
+def _holds_only_lock_files(path: Path, lock_files: frozenset[Path]) -> bool:
+    """Return whether a created directory holds nothing but those lock files.
+
+    Lock files are never unlinked, so a state directory that was absent before
+    the operation cannot be removed again once its own locks live inside it.
+    """
+    if path.is_symlink() or not path.is_dir():
+        return False
+    found = False
+    for item in path.rglob("*"):
+        found = True
+        if item.is_symlink():
+            return False
+        if item.is_dir():
+            if not any(item in lock.parents for lock in lock_files):
+                return False
+        elif item not in lock_files:
+            return False
+    return found
 
 
 def _recovery_paths(journal: OperationJournal) -> tuple[set[str], set[str]]:
