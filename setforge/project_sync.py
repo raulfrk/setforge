@@ -22,7 +22,13 @@ from setforge.git_overlay import (
     overlay_claim_id,
     plan_overlay_git,
 )
-from setforge.git_visibility import VisibilityClaim, apply_claims, claim_id, plan_claims
+from setforge.git_visibility import (
+    VisibilityClaim,
+    apply_claims,
+    claim_id,
+    plan_claims,
+    read_claims,
+)
 from setforge.locking import mutation_locks
 from setforge.orphan_scan import capture_parent_path_guards
 from setforge.ownership import (
@@ -147,6 +153,7 @@ class ProjectSyncFilePlan:
     stored: StoredProjectFile | None = None
     addition: ProjectFilePlan | None = None
     overlay_base: bytes | None = None
+    restore_hidden_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +517,11 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
             item.destination: item for item in _stored_files(injection)
         }
         current_by_destination = {item.dst: item for item in resolved.files}
+        hidden_claim_ids = (
+            {claim.claim_id for claim in read_claims(injection.target)[3]}
+            if injection.git_dir is not None
+            else set()
+        )
         additions = current_by_destination.keys() - stored_by_destination.keys()
         if injection.git_dir is not None and additions:
             raw = json.loads(injection.manifest_payload)
@@ -697,6 +709,17 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                     stored=stored,
                     addition=addition,
                     overlay_base=overlay_base,
+                    restore_hidden_claim=(
+                        injection.git_dir is not None
+                        and stored.action is not ProjectFileAction.OVERLAY
+                        and stored.visibility is ProjectVisibility.HIDDEN
+                        and claim_id(
+                            target_git_dir=injection.git_dir,
+                            profile=injection.profile,
+                            relative_path=relative.as_posix(),
+                        )
+                        not in hidden_claim_ids
+                    ),
                 )
             )
     return ProjectSyncPlan(
@@ -771,7 +794,17 @@ def resolve_automatically(result: MergeResult, policy: AutoResolution) -> MergeR
     return MergeResult(tuple(resolved), absent=result.absent)
 
 
-def resolve_sync_plan(
+def missing_locally(item: ProjectSyncFilePlan) -> bool:
+    """Return whether sync would keep a current member's local deletion."""
+    return (
+        item.kind is SyncFileKind.UPDATE
+        and item.live is ABSENT
+        and item.result.clean
+        and item.result.absent
+    )
+
+
+def resolve_sync_plan(  # noqa: C901 - one resolution policy per file
     plan: ProjectSyncPlan,
     *,
     auto: AutoResolution | None = None,
@@ -781,6 +814,15 @@ def resolve_sync_plan(
     resolved_files: list[ProjectSyncFilePlan] = []
     for item in plan.files:
         interactive_chose_absent = False
+        if auto is AutoResolution.USE_PROFILE and missing_locally(item):
+            resolved_files.append(
+                replace(
+                    item,
+                    result=_clean_result(item.desired_upstream),
+                    result_mode=item.desired_mode,
+                )
+            )
+            continue
         if item.result.clean and not item.mode_conflict:
             resolved_files.append(item)
             continue
@@ -833,7 +875,12 @@ def resolve_sync_plan(
             replace(
                 item,
                 result=result,
-                result_mode=result_mode,
+                # Content restored over an absent live file takes the profile mode.
+                result_mode=(
+                    item.desired_mode
+                    if result_mode is None and not result.absent
+                    else result_mode
+                ),
                 mode_conflict=False,
             )
         )
@@ -1192,7 +1239,7 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 ),
                 relative_path=item.relative_destination.as_posix(),
             )
-            if item.kind is SyncFileKind.ADD:
+            if item.kind is SyncFileKind.ADD or item.restore_hidden_claim:
                 visibility_add.append(visibility_claim)
             elif item.kind is SyncFileKind.REMOVE:
                 visibility_remove.append(visibility_claim)

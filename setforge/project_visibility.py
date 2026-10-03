@@ -55,6 +55,7 @@ class ProjectFileVisibility(StrEnum):
     TRACKED = "tracked"
     TRACKED_OVERLAY = "tracked-overlay"
     NOT_APPLICABLE = "not-applicable"
+    DELETED_LOCALLY = "deleted-locally"
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,13 +350,18 @@ def list_projects() -> tuple[ProjectListFile, ...]:
                     raise SetforgeError("project injection state has an invalid file")
                 relative = Path(str(entry["destination"]))
                 try:
-                    visibility = _actual_visibility(
-                        raw=raw,
-                        entry=entry,
-                        target=target,
-                        profile=profile,
-                        git_dir=git_dir,
-                        stored=stored,
+                    visibility = (
+                        ProjectFileVisibility.DELETED_LOCALLY
+                        if stored.applied_digest is None
+                        and not os.path.lexists(target / stored.destination)
+                        else _actual_visibility(
+                            raw=raw,
+                            entry=entry,
+                            target=target,
+                            profile=profile,
+                            git_dir=git_dir,
+                            stored=stored,
+                        )
                     )
                     error = None
                 except (OSError, SetforgeError) as exc:

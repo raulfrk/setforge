@@ -109,7 +109,8 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 
 `setforge project list` inventories every recorded project injection, grouped
 by target and profile, and reports each destination's actual state as `hidden`,
-`tracked`, `tracked-overlay`, or `not-applicable`. Stale, corrupt, drifted, or
+`tracked`, `tracked-overlay`, `not-applicable`, or `deleted-locally` (a local
+deletion that a sync kept). Stale, corrupt, drifted, or
 otherwise inconsistent records stay visible as errors and make the command
 exit nonzero. A record whose project directory was moved, deleted, or replaced
 names the command that drops it: `setforge project remove <profile> <path>`
@@ -144,7 +145,10 @@ deferred region also leaves the whole target batch unchanged.
 Membership additions that collide with differing local files follow the same
 conflict policy. For conflicts involving an absent file, the wizard records
 whether Ours or Theirs was selected so deletion remains distinct from choosing
-an intentionally empty file.
+an intentionally empty file. A current member that is missing from the project
+is reported as `missing locally`, never `unchanged`: sync keeps the deletion,
+and `--auto=use-profile` restores the file with the profile mode. Sync also
+restores a hidden file's private exclude claim when it was removed by hand.
 
 ```console
 $ setforge project sync /path/to/worktree --dry-run

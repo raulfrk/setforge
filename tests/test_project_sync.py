@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -1520,6 +1521,106 @@ def test_apply_sync_refuses_addition_with_surviving_project_claim(
     assert {path: path.read_bytes() for path in state.rglob("*.json")} == before_state
 
 
+@pytest.mark.parametrize("restore", [False, True])
+def test_sync_reports_a_missing_member_and_keeps_or_restores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restore: bool
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    (config.parent / "project/demo/AGENTS.md").chmod(0o755)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    live = target / "AGENTS.md"
+    live.unlink()
+    reported = (
+        "  demo: missing locally (kept; --auto=use-profile restores it): AGENTS.md\n"
+    )
+
+    plan = plan_sync(target)
+    assert plan.conflicts == 0
+    assert plan.files[0].result == MergeResult((), absent=True)
+    preview = runner.invoke(app, ["project", "sync", str(target), "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert reported in preview.output
+    assert not live.exists()
+
+    synced = runner.invoke(
+        app,
+        [
+            "project",
+            "sync",
+            str(target),
+            *(["--auto=use-profile"] if restore else []),
+            "--yes",
+        ],
+    )
+    assert synced.exit_code == 0, synced.output
+    assert "\nsync complete\n" in synced.output
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 0, listed.output
+    again = runner.invoke(app, ["project", "sync", str(target), "--dry-run"])
+    if restore:
+        assert live.read_bytes() == b"managed\n"
+        assert stat.S_IMODE(live.stat().st_mode) == 0o755
+        assert listed.output == f"{target}  [demo]\n  hidden: AGENTS.md\n"
+        assert "  demo: unchanged: AGENTS.md\n" in again.output
+    else:
+        assert not live.exists()
+        assert listed.output == f"{target}  [demo]\n  deleted-locally: AGENTS.md\n"
+        assert reported in again.output
+    assert not apply_sync(plan_sync(target))
+    removed = runner.invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert removed.exit_code == 0, removed.output
+    assert not live.exists()
+
+
+def test_sync_restores_a_missing_private_exclude_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    exclude = target / ".git" / "info" / "exclude"
+    pristine = exclude.read_bytes()
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    claimed = exclude.read_bytes()
+    assert claimed != pristine
+    intact = runner.invoke(app, ["project", "sync", str(target), "--dry-run"])
+    assert "  demo: unchanged: AGENTS.md\n" in intact.output
+    exclude.write_bytes(pristine)
+    assert runner.invoke(app, ["project", "list"]).exit_code == 1
+
+    assert plan_sync(target).files[0].restore_hidden_claim
+    preview = runner.invoke(app, ["project", "sync", str(target), "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert (
+        "  demo: update (restore private exclude claim): AGENTS.md\n" in preview.output
+    )
+    assert exclude.read_bytes() == pristine
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert synced.exit_code == 0, synced.output
+    assert "\nsync complete\n" in synced.output
+    assert exclude.read_bytes() == claimed
+    assert runner.invoke(app, ["project", "list"]).exit_code == 0
+    assert not plan_sync(target).files[0].restore_hidden_claim
+    again = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert "\nno changes: project is already current\n" in again.output
+
+
 def test_sync_refuses_resolved_content_without_a_file_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1537,6 +1638,8 @@ def test_sync_refuses_resolved_content_without_a_file_mode(
     resolved = resolve_sync_plan(plan_sync(target), auto=AutoResolution.USE_PROFILE)
     assert resolved is not None
     assert resolved.conflicts == 0
+    assert resolved.files[0].result_mode == 0o644
+    resolved = replace(resolved, files=(replace(resolved.files[0], result_mode=None),))
     before_state = {path: path.read_bytes() for path in state.rglob("*.json")}
 
     with pytest.raises(SetforgeError) as failure:

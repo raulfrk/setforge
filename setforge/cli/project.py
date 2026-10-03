@@ -34,6 +34,7 @@ from setforge.project_sync import (
     AutoResolution,
     ProjectSyncPlan,
     apply_sync,
+    missing_locally,
     plan_sync,
     resolve_sync_plan,
 )
@@ -128,8 +129,13 @@ def _render_sync(plan: ProjectSyncPlan) -> None:
             and item.result_mode == item.live_mode
             and item.desired_upstream == item.stored.upstream_payload
             and item.desired_mode == item.stored.upstream_mode
+            and not item.restore_hidden_claim
         ):
             status = "unchanged"
+        if item.restore_hidden_claim:
+            status += " (restore private exclude claim)"
+        if missing_locally(item):
+            status = "missing locally (kept; --auto=use-profile restores it)"
         if not item.result.clean:
             conflicts = sum(
                 isinstance(segment, Conflict) for segment in item.result.segments
