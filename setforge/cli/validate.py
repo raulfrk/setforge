@@ -322,6 +322,11 @@ def _check_no_markers_remain(
         text = src.read_text(encoding="utf-8")
     except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError):
         return
+    except OSError as exc:
+        failures.append(
+            f"{dot_ctx}: cannot read tracked src {src}: {exc.strerror or exc}"
+        )
+        return
     if contains_user_section_marker(text):
         failures.append(
             f"{dot_ctx}: tracked src {tracked_file.src} still contains "

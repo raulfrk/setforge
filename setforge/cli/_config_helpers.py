@@ -285,9 +285,15 @@ def _walk_paths(tree: dict[str, FieldNode], prefix: str, out: list[str]) -> None
 def load_doc(yaml_path: Path) -> CommentedMap:
     """Round-trip parse ``yaml_path``; return an empty map if absent."""
     yaml = yaml_rt()
-    if not yaml_path.exists() or not yaml_path.read_text(encoding="utf-8").strip():
+    if not yaml_path.exists():
         return CommentedMap()
-    data = yaml.load(yaml_path.read_text(encoding="utf-8"))
+    try:
+        text = yaml_path.read_text(encoding="utf-8")
+        data = yaml.load(text) if text.strip() else None
+    except (YAMLError, UnicodeDecodeError) as exc:
+        raise SetforgeError(f"malformed YAML in {yaml_path}: {exc}") from exc
+    except OSError as exc:
+        raise SetforgeError(f"cannot read {yaml_path}: {exc.strerror or exc}") from exc
     if data is None:
         return CommentedMap()
     if not isinstance(data, CommentedMap):

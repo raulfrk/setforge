@@ -112,6 +112,11 @@ def _resolve_config_arg(config: Path | None) -> Path:
     ``setforge.yaml`` still works without ``--config``.
     """
     if config is not None:
+        if config.is_dir():
+            raise SetforgeError(
+                f"--config {config} is a directory; "
+                f"pass the setforge.yaml file inside it"
+            )
         return config
     resolved_source = source_mod.get_resolved_source()
     return source_mod.validate_source_dir(resolved_source)
