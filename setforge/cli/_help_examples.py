@@ -553,4 +553,8 @@ Examples:
 \b
   # Restore the pre-injection state non-interactively
   setforge project remove <profile> /path/to/worktree --yes
+
+\b
+  # Drop the leftover record of a project that was moved, deleted, or replaced
+  setforge project remove <profile> /old/path/to/worktree --yes
 """

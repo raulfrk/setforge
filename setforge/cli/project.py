@@ -20,10 +20,13 @@ from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.project_injection import (
     ProjectInjectionPlan,
     ProjectRemovePlan,
+    ProjectStaleRemovalPlan,
     apply_injection,
     apply_removal,
+    apply_stale_removal,
     plan_injection,
     plan_removal,
+    plan_stale_removal,
     resolve_injection_plan,
 )
 from setforge.project_overlay import process_filter
@@ -89,6 +92,23 @@ def _render_removal(plan: ProjectRemovePlan) -> None:
     for item in plan.files:
         typer.echo(f"  restore {item.action.value}: {item.relative_destination}")
     typer.echo("worktree auto-carry hook: unchanged")
+
+
+def _render_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
+    typer.echo(f"project profile: {plan.profile}")
+    typer.echo(f"target: {plan.target}")
+    typer.echo(f"stale injection: {plan.reason}")
+    for claim in plan.claims:
+        typer.echo(f"  release ownership: {claim.resource_id.coordinate}")
+    if plan.visibility_plan is not None:
+        typer.echo(
+            f"  release private exclude claims: {plan.visibility_plan.exclude_path}"
+        )
+    if plan.overlay_git_plan is not None:
+        typer.echo(
+            f"  release private filter claims: {plan.overlay_git_plan.attributes_path}"
+        )
+    typer.echo("project files are left unchanged")
 
 
 def _render_sync(plan: ProjectSyncPlan) -> None:
@@ -317,8 +337,25 @@ def project_remove(
         False, "--yes", "-y", help="Apply without an interactive prompt."
     ),
 ) -> None:
-    """Restore the exact state that preceded one injection."""
+    """Restore the exact state that preceded one injection.
+
+    When the project directory was moved, deleted, or replaced, or the
+    injection record was lost, this drops the leftover record, ownership
+    claims, and private Git entries instead and leaves project files alone.
+    """
     config = _resolve_config_arg(config)
+    stale = plan_stale_removal(profile=profile, target=path, config_path=config)
+    if stale is not None:
+        _render_stale_removal(stale)
+        if dry_run:
+            typer.echo("dry run: no changes applied")
+            return
+        if not _confirm("remove", yes=yes):
+            typer.echo("aborted: no changes applied")
+            return
+        apply_stale_removal(stale)
+        typer.echo("stale injection dropped")
+        return
     plan = plan_removal(profile=profile, target=path, config_path=config)
     _render_removal(plan)
     if dry_run:

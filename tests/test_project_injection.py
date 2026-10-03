@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import uuid
@@ -994,7 +995,7 @@ def test_tracked_overlay_injection_survives_a_changed_device_number(
     assert destination.read_text() == "team instructions\n"
 
 
-@pytest.mark.parametrize("command", ["list", "sync", "inject", "remove"])
+@pytest.mark.parametrize("command", ["list", "sync", "inject", "visibility"])
 def test_recorded_injection_still_refuses_a_different_directory_inode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
 ) -> None:
@@ -1012,13 +1013,12 @@ def test_recorded_injection_still_refuses_a_different_directory_inode(
         "list": ["project", "list"],
         "sync": ["project", "sync", str(target), "--dry-run"],
         "inject": inject,
-        "remove": [
+        "visibility": [
             "project",
-            "remove",
-            "demo",
+            "visibility",
             str(target),
-            "--config",
-            str(config),
+            "AGENTS.md",
+            "--tracked",
             "--yes",
         ],
     }[command]
@@ -1026,6 +1026,11 @@ def test_recorded_injection_still_refuses_a_different_directory_inode(
     refused = runner.invoke(app, arguments)
 
     assert refused.exit_code == 1
+    if command == "sync":
+        assert str(refused.exception) == (
+            f"project injection state does not match target identity: {state}; "
+            f"run `setforge project remove demo {target}` to drop the stale record"
+        )
     assert (target / "AGENTS.md").read_text() == "managed instructions\n"
     assert json.loads(state.read_bytes()) == record
 
@@ -1054,6 +1059,190 @@ def test_manifest_with_non_integer_target_identity_fails_closed(
         f"project injection state has invalid fields: {state}"
     )
     assert (target / "AGENTS.md").exists()
+
+
+def _claim_lifecycles() -> list[ClaimLifecycle]:
+    return [claim.lifecycle for claim in OwnershipStore().list_claims()]
+
+
+def _replace_directory_keeping_contents(target: Path) -> None:
+    """Give TARGET a new inode, as a restore from backup or a re-clone does."""
+    replaced_inode = target.stat().st_ino
+    moved = target.with_name(target.name + ".old")
+    target.rename(moved)
+    shutil.copytree(moved, target, symlinks=True)
+    shutil.rmtree(moved)
+    assert target.stat().st_ino != replaced_inode
+
+
+def test_moved_project_record_is_reported_and_dropped_without_blocking_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    moved = tmp_path / "moved"
+    runner = CliRunner()
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert injected.exit_code == 0, injected.output
+    stale_record = manifest_path(target, "demo")
+    target.rename(moved)
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert listed.output == (
+        f"{target}  [demo]\n"
+        "  error: project directory no longer exists; run "
+        f"`setforge project remove demo {target}` to drop the stale record "
+        f"({stale_record.name})\n"
+    )
+    other = _git_repo(tmp_path / "other")
+    unrelated = runner.invoke(
+        app, ["project", "inject", "demo", str(other), "--config", str(config), "-y"]
+    )
+    assert unrelated.exit_code == 0, unrelated.output
+
+    remove = ["project", "remove", "demo", str(target), "--config", str(config)]
+    preview = runner.invoke(app, [*remove, "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert preview.output == (
+        "project profile: demo\n"
+        f"target: {target}\n"
+        "stale injection: project directory no longer exists\n"
+        "  release ownership: AGENTS.md\n"
+        "project files are left unchanged\n"
+        "dry run: no changes applied\n"
+    )
+    assert stale_record.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.CLAIMED, ClaimLifecycle.CLAIMED]
+
+    dropped = runner.invoke(app, [*remove, "--yes"])
+    assert dropped.exit_code == 0, dropped.output
+    assert dropped.output.endswith("stale injection dropped\n")
+    assert not stale_record.exists()
+    assert sorted(_claim_lifecycles()) == [
+        ClaimLifecycle.CLAIMED,
+        ClaimLifecycle.RELEASED,
+    ]
+    assert (moved / "AGENTS.md").read_text() == "managed instructions\n"
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 0, listed.output
+    assert listed.output == f"{other}  [demo]\n  hidden: AGENTS.md\n"
+
+
+def test_replaced_project_directory_drops_record_claims_and_exclude_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    exclude = target / ".git" / "info" / "exclude"
+    pristine_exclude = exclude.read_bytes()
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    remove = ["project", "remove", "demo", str(target), "--config", str(config)]
+    assert runner.invoke(app, inject).exit_code == 0
+    state = manifest_path(target, "demo")
+    _replace_directory_keeping_contents(target)
+
+    refused = runner.invoke(app, inject)
+    assert refused.exit_code == 1
+    assert str(refused.exception) == (
+        f"a stale injection record exists for {target}; run "
+        f"`setforge project remove demo {target}` to drop it, then inject again"
+    )
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert (
+        "  error: project target identity does not match the record; run "
+        f"`setforge project remove demo {target}` to drop the stale record"
+    ) in listed.output
+
+    dropped = runner.invoke(app, [*remove, "--yes"])
+    assert dropped.exit_code == 0, dropped.output
+    assert dropped.output == (
+        "project profile: demo\n"
+        f"target: {target}\n"
+        "stale injection: project directory no longer matches the injection "
+        "record\n"
+        "  release ownership: AGENTS.md\n"
+        f"  release private exclude claims: {exclude}\n"
+        "project files are left unchanged\n"
+        "stale injection dropped\n"
+    )
+    assert not state.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    assert exclude.read_bytes() == pristine_exclude
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+
+    reinjected = runner.invoke(app, inject)
+    assert reinjected.exit_code == 0, reinjected.output
+    assert "retain-identical: AGENTS.md" in reinjected.output
+
+
+def test_remove_drops_claims_and_exclude_entries_left_by_a_lost_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    exclude = target / ".git" / "info" / "exclude"
+    pristine_exclude = exclude.read_bytes()
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    remove = ["project", "remove", "demo", str(target), "--config", str(config)]
+    assert runner.invoke(app, inject).exit_code == 0
+    manifest_path(target, "demo").unlink()
+    assert runner.invoke(app, inject).exit_code == 1
+
+    dropped = runner.invoke(app, [*remove, "--yes"])
+    assert dropped.exit_code == 0, dropped.output
+    assert "stale injection: the injection record is missing\n" in dropped.output
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    assert exclude.read_bytes() == pristine_exclude
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+
+    again = runner.invoke(app, [*remove, "--yes"])
+    assert again.exit_code == 1
+    assert "project injection is not recorded" in str(again.exception)
+    assert runner.invoke(app, inject).exit_code == 0
+
+
+def test_stale_removal_failure_restores_record_claims_and_exclude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    exclude = target / ".git" / "info" / "exclude"
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    assert runner.invoke(app, inject).exit_code == 0
+    _replace_directory_keeping_contents(target)
+    before = (
+        {path: path.read_bytes() for path in state_root.rglob("*.json")},
+        exclude.read_bytes(),
+    )
+    from setforge import operations
+
+    def fail(_journal: object) -> None:
+        raise RuntimeError("forced failure after stale effects")
+
+    monkeypatch.setattr(operations, "finish_checkpoint", fail)
+    failed = runner.invoke(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "-y"],
+    )
+
+    assert isinstance(failed.exception, RuntimeError)
+    assert (
+        {path: path.read_bytes() for path in state_root.rglob("*.json")},
+        exclude.read_bytes(),
+    ) == before
+    assert not list(operations.journals_root().glob("*.json"))
 
 
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(

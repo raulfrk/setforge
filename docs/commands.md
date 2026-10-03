@@ -111,7 +111,11 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 by target and profile, and reports each destination's actual state as `hidden`,
 `tracked`, `tracked-overlay`, or `not-applicable`. Stale, corrupt, drifted, or
 otherwise inconsistent records stay visible as errors and make the command
-exit nonzero.
+exit nonzero. A record whose project directory was moved, deleted, or replaced
+names the command that drops it: `setforge project remove <profile> <path>`
+releases that record's ownership claims and private Git entries without
+touching project files. The same command clears claims left behind when the
+record itself was lost. A stale record never blocks injecting other projects.
 
 `setforge project visibility <path> <file>` changes one normalized,
 target-relative destination. `--tracked` exposes an injected hunk as an

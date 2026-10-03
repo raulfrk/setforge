@@ -144,7 +144,10 @@ exclude text and claims still used by sibling linked worktrees.
 than merely repeating its configured default. It distinguishes ordinary hidden
 and tracked files, filtered hunks in already-tracked files (`tracked-overlay`),
 and plain-directory files (`not-applicable`); invalid or drifted records are
-shown as errors. `project visibility <path> <file> --tracked|--hidden` changes
+shown as errors. When the recorded directory was moved, deleted, or replaced,
+`project remove <profile> <path>` drops the stale record, its ownership claims,
+and its private Git entries and leaves project files unchanged.
+`project visibility <path> <file> --tracked|--hidden` changes
 one normalized target-relative destination. For an overlay, tracked mode makes
 the injected hunk visible in the ordinary Git diff and hidden mode restores the
 private filter. Older injection-wide visibility records are expanded to

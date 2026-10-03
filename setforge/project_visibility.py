@@ -279,6 +279,12 @@ def _validated_record(
     record: Path, raw: dict[str, object], payload: bytes
 ) -> tuple[RecordedProjectInjection, tuple[StoredProjectFile, ...]]:
     target = Path(str(raw["target"]))
+    remedy = (
+        f"run `setforge project remove {raw['profile']} {target}` "
+        "to drop the stale record"
+    )
+    if not target.is_dir():
+        raise SetforgeError(f"project directory no longer exists; {remedy}")
     root, git_dir, target_info = _verified_project_target(target)
     target_device = raw["target_device"]
     assert isinstance(target_device, int)
@@ -287,7 +293,9 @@ def _validated_record(
         or raw["target_inode"] != target_info.st_ino
         or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
     ):
-        raise SetforgeError("project target identity does not match the record")
+        raise SetforgeError(
+            f"project target identity does not match the record; {remedy}"
+        )
     config_root = Path(str(raw["config_root"])).resolve(strict=True)
     config_path = (
         Path(str(raw["config_path"])).resolve(strict=True)
@@ -318,6 +326,8 @@ def list_projects() -> tuple[ProjectListFile, ...]:
         profile: str | None = None
         try:
             raw, payload = _load_manifest_payload(record)
+            target = Path(str(raw["target"]))
+            profile = str(raw["profile"])
             injection, stored_files = _validated_record(record, raw, payload)
             target = injection.target
             profile = injection.profile

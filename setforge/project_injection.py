@@ -26,6 +26,7 @@ from setforge.file_ownership import file_resource_id, refuse_active_file_claims
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
+    _parse_attributes,
     apply_overlay_git,
     overlay_claim_id,
     plan_overlay_git,
@@ -52,6 +53,7 @@ from setforge.ownership import (
     ResourceScope,
     ScopeKind,
     load_or_create_owner_id_locked,
+    read_owner_id,
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
@@ -131,6 +133,22 @@ class ProjectRemovePlan:
     owner_id: uuid.UUID
     files: tuple[ProjectFilePlan, ...]
     created_parents: tuple[Path, ...]
+    visibility_plan: VisibilityPlan | None
+    overlay_git_plan: OverlayGitPlan | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStaleRemovalPlan:
+    """Private state left behind by an injection that can no longer be removed."""
+
+    profile: str
+    target: Path
+    reason: str
+    config_path: Path
+    manifest_path: Path | None
+    owner_id: uuid.UUID
+    claims: tuple[OwnershipClaim, ...]
+    overlay_paths: tuple[Path, ...]
     visibility_plan: VisibilityPlan | None
     overlay_git_plan: OverlayGitPlan | None
 
@@ -563,7 +581,7 @@ def _plan_injection_visibility(
     )
 
 
-def _require_compatible_visibility(
+def _require_compatible_visibility(  # noqa: C901 - one fail-closed sibling scan
     *,
     target: Path,
     manifest: Path,
@@ -592,6 +610,10 @@ def _require_compatible_visibility(
         try:
             raw = _load_manifest(path)
             other_target = Path(str(raw["target"]))
+            if not other_target.is_dir():
+                # A vanished worktree keeps no intent; its exclude claims, if
+                # the repository survives, were already read above.
+                continue
             if raw["git_dir"] is None:
                 _, other_git_dir, _ = _verified_project_target(other_target)
                 if other_git_dir is None:
@@ -818,11 +840,17 @@ def _validate_existing_injection(
     plan: ProjectInjectionPlan,
 ) -> dict[str, object]:
     raw = _load_manifest(plan.manifest_path)
+    if raw["target_inode"] != plan.target_inode or raw["git_dir"] != (
+        str(plan.git_dir) if plan.git_dir is not None else None
+    ):
+        raise SetforgeError(
+            f"a stale injection record exists for {plan.target}; run "
+            f"`setforge project remove {plan.profile} {plan.target}` to drop it, "
+            "then inject again"
+        )
     if (
         raw["profile"] != plan.profile
         or raw["target"] != str(plan.target)
-        or raw["target_inode"] != plan.target_inode
-        or raw["git_dir"] != (str(plan.git_dir) if plan.git_dir is not None else None)
         or raw["config_root"] != str(plan.config_root)
         or (
             raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
@@ -1751,5 +1779,256 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
                     guards.targets[0], parent.relative_to(plan.target)
                 )
             plan.manifest_path.unlink()
+            journal = operations.finish_checkpoint(journal)
+            operations.complete(journal)
+
+
+def _stale_record_claims(
+    raw: dict[str, object], live: os.stat_result | None, git_dir: str | None
+) -> tuple[str, tuple[ResourceId, ...]] | None:
+    """Return why a record no longer matches its directory, and its claim keys."""
+    if live is None:
+        reason = "project directory no longer exists"
+    elif raw["target_inode"] != live.st_ino or raw["git_dir"] != git_dir:
+        reason = "project directory no longer matches the injection record"
+    else:
+        return None
+    device, inode, raw_files = raw["target_device"], raw["target_inode"], raw["files"]
+    assert isinstance(device, int)
+    assert isinstance(inode, int)
+    assert isinstance(raw_files, list)
+    resources: list[ResourceId] = []
+    for entry in raw_files:
+        relative = Path(
+            str(entry.get("destination", "")) if isinstance(entry, dict) else ""
+        )
+        if relative.is_absolute() or relative == Path() or ".." in relative.parts:
+            raise SetforgeError("project injection state has an invalid file record")
+        resources.append(_resource_id(device, inode, relative))
+    return reason, tuple(resources)
+
+
+def _stale_git_plans(
+    root: Path, recorded_git_dir: Path, profile: str, relatives: tuple[str, ...]
+) -> tuple[VisibilityPlan | None, OverlayGitPlan | None]:
+    """Plan releasing only the private Git entries this injection still holds."""
+    hidden = set(read_claims(root)[3])
+    filtered = set(_parse_attributes(plan_overlay_git(root).attributes_before)[1])
+    hidden_to_remove = tuple(
+        claim
+        for claim in (
+            VisibilityClaim(
+                claim_id(
+                    target_git_dir=recorded_git_dir,
+                    profile=profile,
+                    relative_path=relative,
+                ),
+                relative,
+            )
+            for relative in relatives
+        )
+        if claim in hidden
+    )
+    overlay_to_remove = tuple(
+        claim
+        for claim in (
+            OverlayClaim(
+                overlay_claim_id(
+                    git_dir=recorded_git_dir, profile=profile, relative_path=relative
+                ),
+                relative,
+            )
+            for relative in relatives
+        )
+        if claim in filtered
+    )
+    return (
+        plan_claims(root, remove=hidden_to_remove) if hidden_to_remove else None,
+        plan_overlay_git(root, remove=overlay_to_remove) if overlay_to_remove else None,
+    )
+
+
+def plan_stale_removal(  # noqa: C901 - record-backed and record-less leftovers
+    *,
+    profile: str,
+    target: Path,
+    config_path: Path,
+    owner_id: uuid.UUID | None = None,
+) -> ProjectStaleRemovalPlan | None:
+    """Plan dropping private state whose injection can no longer be removed.
+
+    Covers a record whose directory vanished or was replaced, and claims whose
+    record was lost. Returns ``None`` for an intact injection or when nothing
+    is left. Project files are never touched: their identity is unverifiable.
+    A caller that already holds the config identity lock passes ``owner_id``.
+    """
+    root = target.expanduser().resolve()
+    canonical_config_path = config_path.resolve(strict=True)
+    git_dir: Path | None = None
+    live: os.stat_result | None = None
+    if root.is_dir():
+        root, git_dir, live = _verified_project_target(root)
+    claim_git_dir = str(git_dir) if git_dir is not None else None
+    state_path = manifest_path(root, profile)
+    store = OwnershipStore()
+    if state_path.exists():
+        raw = _load_manifest(state_path)
+        if raw["profile"] != profile or raw["target"] != str(root):
+            return None
+        stale = _stale_record_claims(raw, live, claim_git_dir)
+        if stale is None:
+            return None
+        if raw["config_root"] != str(canonical_config_path.parent) or (
+            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
+            and raw["config_path"] != str(canonical_config_path)
+        ):
+            raise SetforgeError(
+                "project injection state belongs to a different config manifest"
+            )
+        try:
+            owner_id = uuid.UUID(str(raw["config_owner_id"]))
+        except ValueError as exc:
+            raise SetforgeError(
+                "project injection state has an invalid owner identity"
+            ) from exc
+        reason, resources = stale
+        candidates = tuple(store.read(resource) for resource in resources)
+        relatives = tuple(resource.coordinate for resource in resources)
+        recorded_git_dir = raw["git_dir"]
+        claim_git_dir = recorded_git_dir if isinstance(recorded_git_dir, str) else None
+        manifest: Path | None = state_path
+    else:
+        if live is None:
+            return None
+        if owner_id is None:
+            try:
+                owner_id = read_owner_id(canonical_config_path.parent)
+            except SetforgeError:
+                return None
+        reason = "the injection record is missing"
+        scope = _resource_id(live.st_dev, live.st_ino, Path("scope")).scope
+        candidates = tuple(
+            claim
+            for claim in store.list_claims()
+            if claim.resource_id.provider == "project-profile"
+            and claim.resource_id.scope == scope
+        )
+        manifest = None
+    claims = tuple(
+        claim
+        for claim in candidates
+        if claim is not None
+        and claim.lifecycle is ClaimLifecycle.CLAIMED
+        and claim.owner_id == owner_id
+        and len(claim.declaration_refs) == 1
+        and claim.declaration_refs[0].startswith(f"project-profile:{profile}:")
+        and claim.locator == str(root / claim.resource_id.coordinate)
+    )
+    if manifest is None:
+        if not claims:
+            return None
+        relatives = tuple(claim.resource_id.coordinate for claim in claims)
+    visibility_plan, overlay_git_plan = (
+        _stale_git_plans(root, Path(claim_git_dir), profile, relatives)
+        if git_dir is not None and claim_git_dir is not None
+        else (None, None)
+    )
+    return ProjectStaleRemovalPlan(
+        profile=profile,
+        target=root,
+        reason=reason,
+        config_path=canonical_config_path,
+        manifest_path=manifest,
+        owner_id=owner_id,
+        claims=claims,
+        overlay_paths=tuple(
+            path
+            for relative in relatives
+            if (path := overlay_path(root, Path(relative))).exists()
+        ),
+        visibility_plan=visibility_plan,
+        overlay_git_plan=overlay_git_plan,
+    )
+
+
+def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
+    """Release the claims and retire the private state of one stale injection."""
+    operation_profile = f"project-{_injection_key(plan.target, plan.profile)}"
+    config_root = plan.config_path.parent
+    with mutation_locks(
+        resources=True,
+        config_identity_dir=resolve_owner_common_dir(config_root),
+        config_dir=config_root,
+        target_roots=(plan.target,) if plan.target.is_dir() else (),
+        profile=operation_profile,
+    ) as guards:
+        identity = guards.config_identity
+        if identity is None:
+            raise SetforgeError("project config identity lock is missing")
+        actual_owner = read_owner_id_locked(config_root, identity.directory_fd)
+        if actual_owner != plan.owner_id:
+            raise SetforgeError(
+                "project injection belongs to a different config checkout"
+            )
+        fresh = plan_stale_removal(
+            profile=plan.profile,
+            target=plan.target,
+            config_path=plan.config_path,
+            owner_id=actual_owner,
+        )
+        if fresh != plan:
+            raise SetforgeError("project removal plan changed before apply; retry")
+        store = OwnershipStore()
+        paths = (
+            *((plan.manifest_path,) if plan.manifest_path is not None else ()),
+            *plan.overlay_paths,
+            *(store.claim_path(claim.resource_id) for claim in plan.claims),
+            *(
+                (plan.visibility_plan.exclude_path,)
+                if plan.visibility_plan is not None
+                else ()
+            ),
+            *(
+                (
+                    plan.overlay_git_plan.config_path,
+                    plan.overlay_git_plan.attributes_path,
+                )
+                if plan.overlay_git_plan is not None
+                else ()
+            ),
+        )
+        journal = operations.prepare(
+            command="project-remove",
+            profile=operation_profile,
+            config_dir=config_root,
+            resources_lock=True,
+            command_line=("project", "remove", plan.profile, str(plan.target)),
+            paths=paths,
+            path_guards=capture_parent_path_guards(paths),
+        )
+        with operations.recover_on_error(operation_profile, "project-remove"):
+            journal = operations.begin_checkpoint(
+                journal,
+                name="retire-stale-project-state",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery="restore the manifest, ownership claims, and Git state",
+                paths=paths,
+                restore_state=False,
+                restore_transitions=False,
+            )
+            for claim in plan.claims:
+                store.release_locked(
+                    claim.resource_id,
+                    expected_owner=plan.owner_id,
+                    expected_generation=claim.generation,
+                )
+            if plan.visibility_plan is not None:
+                apply_claims(plan.visibility_plan)
+            if plan.overlay_git_plan is not None:
+                apply_overlay_git(plan.overlay_git_plan)
+            for overlay_state in plan.overlay_paths:
+                overlay_state.unlink()
+            if plan.manifest_path is not None:
+                plan.manifest_path.unlink()
             journal = operations.finish_checkpoint(journal)
             operations.complete(journal)

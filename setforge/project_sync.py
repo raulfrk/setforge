@@ -186,7 +186,9 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
             str(git_dir) if git_dir is not None else None
         ):
             raise SetforgeError(
-                f"project injection state does not match target identity: {path}"
+                f"project injection state does not match target identity: {path}; "
+                f"run `setforge project remove {raw['profile']} {root}` to drop "
+                "the stale record"
             )
         profile = raw["profile"]
         if not isinstance(profile, str) or not profile or profile in profiles:
