@@ -24,7 +24,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deployed, and host edits are left alone when the tracked file is unchanged.
   Merges keep untouched lines, anchors, merge keys, BOM and line endings. Files
   the key-aware engine cannot parse are merged line by line instead of
-  aborting the install, and top-level JSON arrays merge independent edits.
+  aborting the install, and top-level JSON arrays merge element edits made at
+  different positions.
 - Sync shares only the classified values of a YAML file, never host comment
   text, and refuses to promote a JSON or YAML file that no longer parses.
 - Install, compare, sync and revert handle CRLF and non-UTF-8 files with exact
