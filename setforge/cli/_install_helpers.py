@@ -65,7 +65,6 @@ from setforge.cli._mcp_helpers import MCPInstallPlan
 from setforge.cli._provision_helpers import dry_run_packages
 from setforge.compare import (
     CompareStatus,
-    DriftClass,
     expand_tracked_file,
     resolve_dst,
     resolve_src,
@@ -136,6 +135,15 @@ def _load_validated_host_local_sections(
     return result
 
 
+def _gated_drift_count(drift_report: compare_mod.CompareReport) -> int:
+    """Count the files the install drift gate rejects: permission-mode drift."""
+    return sum(
+        1
+        for e in drift_report.entries
+        if e.status == CompareStatus.DRIFTED and e.mode_drift
+    )
+
+
 def _check_unexpected_drift(
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
@@ -152,17 +160,9 @@ def _check_unexpected_drift(
     confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
     run, so this is a no-op. No-op when nothing carries unexpected drift.
     """
-    has_real_unexpected = any(
-        e.status == CompareStatus.DRIFTED and e.mode_drift for e in drift_report.entries
-    )
-    if not has_real_unexpected:
+    unexpected_count = _gated_drift_count(drift_report)
+    if not unexpected_count:
         return
-
-    unexpected_count = sum(
-        1
-        for e in drift_report.entries
-        if e.status == CompareStatus.DRIFTED and e.mode_drift
-    )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
             f"permission-mode drift in {unexpected_count} file(s) "
@@ -1429,20 +1429,14 @@ def _dry_run_emit_drift_gate(
 
     The drift gate is a READ in the real pipeline too (it computes
     unexpected drift over the existing live tree) — counts stay
-    unprefixed. The count reports files whose drift is CLASSIFIED
-    unexpected or conflicted (the compare-level
-    :class:`~setforge.compare.DriftClass`); the live install gate
-    (:func:`_check_unexpected_drift`) trips only on permission-mode
-    drift (``mode_drift``), so this count can include diff-only drift
-    that a real install does not reject. The dry-run path never invokes
-    the auto-confirm wizard (short-circuiting before the confirm is a
-    hard requirement per spec).
+    unprefixed. The count is the number of files the real gate
+    (:func:`_check_unexpected_drift`) rejects, so content drift that
+    install reconciles without a gate is not counted. The dry-run path
+    never invokes the auto-confirm wizard (short-circuiting before the
+    confirm is a hard requirement per spec).
     """
     typer.echo("=== would-be drift gate ===")
-    unexpected = sum(
-        1 for e in drift_report.entries if e.drift_class is DriftClass.UNEXPECTED
-    )
-    typer.echo(f"unexpected drift in {unexpected} file(s)")
+    typer.echo(f"unexpected drift in {_gated_drift_count(drift_report)} file(s)")
 
 
 def _planned_line(record: _PendingDeploy, sub_dst: Path) -> str:

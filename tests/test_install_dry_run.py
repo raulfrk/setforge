@@ -249,6 +249,34 @@ def test_preview_uses_planned_keep_live_action(
     assert f"WOULD update    {live}" not in result.output
 
 
+def test_drift_gate_preview_matches_the_real_gate_for_content_drift(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """Content drift is reconciled, not gated, so the preview reports no gate hit."""
+    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
+    live.parent.mkdir(parents=True)
+    live.write_text("host-owned first-install content\n", encoding="utf-8")
+    tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
+    shutil.copymode(tracked, live)
+    args = [
+        "install",
+        "--profile=test-minimal",
+        f"--config={fixture_repo}",
+        "--no-git-check",
+        "--no-secrets-scan",
+    ]
+
+    preview = CliRunner().invoke(app, [*args, "--dry-run"])
+    applied = CliRunner().invoke(app, args)
+
+    assert preview.exit_code == 0, preview.output
+    assert "unexpected drift in 0 file(s)" in preview.output
+    assert applied.exit_code == 0, applied.output
+    assert live.read_text(encoding="utf-8") == "host-owned first-install content\n"
+
+
 # ---------------------------------------------------------------------------
 # Tripwire tests — each asserts a specific mutating leaf is unreachable.
 # ---------------------------------------------------------------------------

@@ -10,9 +10,11 @@ explicitly.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import typer
 
 from setforge.cli import _install_helpers
 from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
@@ -91,17 +93,15 @@ def test_check_unexpected_drift_no_entries_is_noop(
     assert captured.err == ""
 
 
-def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(("mode_drift", "gated"), [(False, 0), (True, 1)])
+def test_dry_run_drift_gate_counts_what_the_install_gate_rejects(
+    capsys: pytest.CaptureFixture[str], mode_drift: bool, gated: int
 ) -> None:
-    """A diff-only ``UNEXPECTED`` entry counts toward the dry-run gate line.
+    """The dry-run gate line counts exactly the files a real install refuses.
 
-    The dry-run count keys off the compare-level classification
-    (``drift_class``), not ``mode_drift`` — so a DRIFTED entry with
-    ``mode_drift=False`` still renders ``unexpected drift in 1 file(s)``
-    even though the live install gate (:func:`_check_unexpected_drift`)
-    would not reject it. Pins the wider-than-the-live-gate semantics the
-    helper's docstring documents.
+    The install gate (:func:`_check_unexpected_drift`) trips only on
+    permission-mode drift, so content-only drift — which install reconciles
+    without a gate — must not be counted by the preview.
     """
     report = CompareReport(
         entries=[
@@ -109,15 +109,26 @@ def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
                 name="claude/CLAUDE.md",
                 status=CompareStatus.DRIFTED,
                 diff="--- a\n+++ b\n",
-                mode_drift=False,
+                mode_drift=mode_drift,
                 drift_class=DriftClass.UNEXPECTED,
             ),
         ],
         has_unexpected_drift=True,
     )
+    ctx = cast(ProfileContext, SimpleNamespace(profile="p"))
+
     _install_helpers._dry_run_emit_drift_gate(report)
-    out = capsys.readouterr().out
-    assert "unexpected drift in 1 file(s)" in out
+    assert f"unexpected drift in {gated} file(s)" in capsys.readouterr().out
+
+    if gated:
+        with pytest.raises(typer.Exit):
+            _install_helpers._check_unexpected_drift(
+                report, ctx, auto_accept_tracked=False, auto_accept_live=False
+            )
+    else:
+        _install_helpers._check_unexpected_drift(
+            report, ctx, auto_accept_tracked=False, auto_accept_live=False
+        )
 
 
 def test_resolve_drift_paths_directory_subfiles_do_not_collide(

@@ -356,14 +356,15 @@ def test_dry_run_fresh_host_no_state_dir_created(
 def test_dry_run_drift_gate_reports_no_apply(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Live file drifted from tracked; dry-run reports the drift; ZERO mutation.
+    """Live file drifted from tracked; dry-run previews the outcome; ZERO mutation.
 
     Pre-installs the minimal profile (real install) so the live file
     exists, then mutates the live file in-place to introduce drift,
-    then runs the dry-run. The dry-run output MUST reflect the
-    drifted state at the gate, then reports the already-planned reconcile
-    outcome (bare install keeps the live edit → ``WOULD noop``), and leaves
-    the mutated live file byte-identical post-dry-run.
+    then runs the dry-run. Content drift is reconciled, not gated, so the
+    gate line counts no file (it counts only what a real install refuses);
+    the preview then reports the already-planned reconcile outcome (bare
+    install keeps the live edit → ``WOULD noop``), and leaves the mutated
+    live file byte-identical post-dry-run.
     """
     c = docker_container()
     live = "/home/tester/.setforge_e2e/minimal/text.txt"
@@ -390,7 +391,7 @@ def test_dry_run_drift_gate_reports_no_apply(
     assert result.returncode == 0, result.stderr or result.stdout
     post = _snapshot_home(c)
     assert pre == post, "filesystem mutated under --dry-run with drifted live file"
-    assert "unexpected drift in 1 file(s)" in result.stdout
+    assert "unexpected drift in 0 file(s)" in result.stdout
     # Preview renders the immutable reconcile decision, not a second action
     # guessed from the raw compare status.
     assert "WOULD noop" in result.stdout, (
