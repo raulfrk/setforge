@@ -2368,6 +2368,7 @@ def apply_patch_reverse(
         "-p0",
         "-R",
         "--binary",
+        "--no-backup-if-mismatch",
         "-d",
         "/",
         "--reject-file=-",
