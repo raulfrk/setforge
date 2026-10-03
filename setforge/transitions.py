@@ -393,7 +393,7 @@ def _write_text_durable(path: Path, text: str) -> None:
     data fsync (e.g. ``ENOSPC``) propagates — a swallowed data-fsync
     error would report durable when it isn't.
     """
-    with path.open("w", encoding="utf-8") as fh:
+    with path.open("w", encoding="utf-8", newline="") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
@@ -448,13 +448,15 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     """Read every path in ``paths``. Missing files map to ``None``.
 
     Returns a dict so callers can pass it directly to :func:`compute_patch`.
-    Reads as text/UTF-8; binary file deploys are out of scope for v1
-    (the deploy primitive itself only handles text tracked_files today).
+    Decodes the raw bytes as UTF-8 without newline translation so CRLF and
+    lone CR survive into the recorded diff. Binary file deploys are out of
+    scope for v1 (the deploy primitive itself only handles text tracked_files
+    today).
     """
     out: dict[Path, str | None] = {}
     for p in paths:
         try:
-            out[p] = p.read_text(encoding="utf-8")
+            out[p] = p.read_bytes().decode("utf-8")
         except FileNotFoundError:
             out[p] = None
         except UnicodeDecodeError as exc:
@@ -579,8 +581,8 @@ def compute_patch(
         after = post.get(path)
         if before == after:
             continue
-        before_lines = (before or "").splitlines(keepends=True)
-        after_lines = (after or "").splitlines(keepends=True)
+        before_lines = _split_lines(before or "")
+        after_lines = _split_lines(after or "")
         diff_path = _diff_path(path)
         from_path = "/dev/null" if before is None else diff_path
         to_path = "/dev/null" if after is None else diff_path
@@ -602,6 +604,20 @@ def compute_patch(
 
 
 _NO_NEWLINE_MARKER = "\\ No newline at end of file\n"
+
+
+def _split_lines(text: str) -> list[str]:
+    """Split ``text`` at ``\\n`` only, keeping the terminators.
+
+    ``str.splitlines`` also breaks at ``\\r``, form feed, ``\\x1c``-``\\x1e``,
+    ``\\x85`` and U+2028/2029, none of which GNU ``patch`` treats as a line
+    end, so the recorded diff would not match the file it describes.
+    """
+    lines = text.split("\n")
+    out = [line + "\n" for line in lines[:-1]]
+    if lines[-1]:
+        out.append(lines[-1])
+    return out
 
 
 def _annotate_no_newline(diff_lines: list[str]) -> str:
@@ -2351,6 +2367,7 @@ def apply_patch_reverse(
         str(patch_bin),
         "-p0",
         "-R",
+        "--binary",
         "-d",
         "/",
         "--reject-file=-",
@@ -2604,8 +2621,7 @@ def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
     patch_file = transition_dir / "changes.patch"
     if not patch_file.exists():
         return {}
-    text = patch_file.read_text(encoding="utf-8")
-    lines = text.splitlines()
+    lines = patch_file.read_bytes().decode("utf-8", "surrogateescape").split("\n")
     out: dict[str, str] = {}
     i = 0
     while i < len(lines) - 1:
