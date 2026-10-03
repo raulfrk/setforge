@@ -82,7 +82,6 @@ Part 2(b)).
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
 | SAFE-1 | No `shell=True` in subprocess calls; pass argv lists. | DETERMINISTIC | `shell=True`-ban lint (AST) — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (repo-wide) |
-| SAFE-2 | No legacy/deprecated internal APIs — the four old mechanisms (disposition / sections / spans / overlays) are not reached for in new code. | DETERMINISTIC | `legacy-API-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (namespace-scoped: new-engine packages must not import the legacy subsystem) |
 | SAFE-3 | Config schema evolves **additive-first**: a shipped field's name/type/meaning is fixed; new capability ⇒ new field. | ADVISORY | `python-spec-reviewer` + human gate ([`COMPATIBILITY.md`](../COMPATIBILITY.md)) |
 | SAFE-4 | Breaking schema changes go **expand → contract** — old field stays readable through the expand window; removed only at contract. | ADVISORY | human gate (COMPATIBILITY.md); schema review |
 | SAFE-5 | Every `schema_version` bump ships **both** an up and a down migration (cross-major downgrade = one command). | DETERMINISTIC | migration-pair check (registry has up + down per bump) |
@@ -120,7 +119,7 @@ Part 2(b)).
 | PROV-3 | `REPORT` / dry-run performs **no writes** (pure diff). | DETERMINISTIC | provisioner-protocol tests (no-write assertion) |
 | PROV-4 | Idempotent skip: a component whose key already matches installed state is a **no-op**. | DETERMINISTIC | provisioner-protocol tests + `@invariant` (INV-7) |
 | PROV-5 | User-scope by default; system (apt) needs `allow_system: true` **and** runtime root/sudo capability, else **soft-fail** (warn + skip, never hang). | DETERMINISTIC | `test_provision_no_system_scope` (user-scope-by-construction: no apt/apt-get/dpkg/sudo shell-out) + `design-invariant-reviewer`; the e2e soft-fail path becomes required + authorable once a genuine system(apt) provisioner exists |
-| PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | `legacy-API-ban` lint + e2e |
+| PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | e2e |
 
 > **PROV-1 scope — `file:` components are not provisioner-gated.** A bundle
 > `file:` component is deploy-only: it is expanded into a synthetic tracked_file

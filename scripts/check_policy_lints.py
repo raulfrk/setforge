@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Deterministic policy/AST lint gates for setforge (RULES.md SAFE-1/2, UX-1/3).
+"""Deterministic policy/AST lint gates for setforge (RULES.md SAFE-1, UX-1/3/4).
 
 A STANDALONE script (NOT a pytest test — pytest is skippable via markers and
 ``addopts``, which would silently disarm the contract; same reasoning as
 :mod:`scripts.check_schema_gates`). It walks every tracked ``.py`` file
-(``git ls-files``) and runs five AST-anchored lints:
+(``git ls-files``) and runs four AST-anchored lints:
 
 ============  ======  =======================================================
 Rule          ID      What it bans
 ============  ======  =======================================================
 shell=True    SAFE-1  ``subprocess(..., shell=True)`` — pass an argv list
-legacy-API    SAFE-2  new-engine code importing the legacy disposition /
-                      sections / spans / overlay subsystem
 wizard-letter UX-1    ``read_one_choice``-style letter menus
 theme-hardcode UX-3   raw ANSI escapes / hex colours outside the theme
 theme-256     UX-4    a theme role with no valid curated 256-colour index
@@ -21,11 +19,6 @@ Scoping (RFC §5 — a DETERMINISTIC rule must BLOCK, but stay ~zero false
 positive, else hard-blocking breeds fatigue):
 
 * **shell=True** — every tracked ``.py`` (the repo is clean today).
-* **legacy-API** — *namespace-scoped*: only files under :data:`ENFORCED_PKGS`
-  (the fresh A/B engine packages) are checked. The legacy subsystem pervades
-  the *current* code, so it is NOT grandfathered by a flat allowlist; the ban
-  instead guards the new engine the moment it lands. Removing the legacy code
-  is tracked as its own follow-up.
 * **wizard-letter / theme-hardcode** — all of ``setforge/**`` except the small
   pinned :data:`LEGACY_MODULES` allowlist (the handful of pre-existing
   violators). The allowlist may only SHRINK (SAFE-10 ratchet, pinned by a
@@ -34,7 +27,7 @@ positive, else hard-blocking breeds fatigue):
 * **theme-256** — *single-file scoped*: only :data:`THEME_MODULE` itself is
   checked (no allowlist, no ratchet), since it is the sole owner of the palette.
 
-All five lints are AST-anchored — they inspect :class:`ast.Constant` /
+All four lints are AST-anchored — they inspect :class:`ast.Constant` /
 :class:`ast.Call` / import nodes, never raw source text. Comments and
 docstrings are therefore invisible to them, so doc mentions like
 ``"never shell=True"`` and issue numbers like ``#142916`` in prose cannot
@@ -61,20 +54,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# --- legacy subsystem (SAFE-2) -------------------------------------------------
-# The four old mechanisms: disposition / sections / spans / overlays. A new-engine
-# module importing any of these (by leaf module name) is a violation. EMPTY today:
-# the last legacy leaf (``section_mode``) was retired at schema 5.0, so the ban
-# list is drained and the SAFE-2 guard sits DORMANT — it fires nothing until a
-# future legacy leaf is re-listed. The lint mechanism is kept live (tested against
-# a synthetic banned name) so re-arming is a one-line change.
-LEGACY_MODULES_BANNED: frozenset[str] = frozenset()
-
-# New-engine packages whose code must NOT reach back into the legacy subsystem.
-# Empty of files today (the new engine lands here later); the ban activates
-# automatically the moment a file appears under one of these prefixes.
-ENFORCED_PKGS: tuple[str, ...] = ("setforge/reconcile/", "setforge/provision/")
 
 # --- UX allowlist (UX-1 / UX-3) ------------------------------------------------
 # Pre-existing violators grandfathered for the UX lints ONLY. RATCHET: this set
@@ -148,43 +127,6 @@ def lint_shell_true(tree: ast.AST, path: str) -> list[Violation]:
                         "subprocess called with shell=True — pass an argv list instead",
                     )
                 )
-    return out
-
-
-def _imported_modules(node: ast.AST) -> list[str]:
-    """Dotted module name(s) an import node pulls in (real names, not aliases)."""
-    if isinstance(node, ast.Import):
-        return [a.name for a in node.names]  # `import setforge.sections [as s]`
-    if isinstance(node, ast.ImportFrom):
-        mod = node.module or ""  # None for `from . import x`
-        names = [mod] if mod else []
-        # `from setforge import sections` → submodule name is the legacy target
-        names += [f"{mod}.{a.name}" if mod else a.name for a in node.names]
-        return names
-    return []
-
-
-def lint_legacy_api(tree: ast.AST, path: str) -> list[Violation]:
-    """SAFE-2, namespace-scoped: new-engine code must not import legacy modules."""
-    if not path.startswith(ENFORCED_PKGS):
-        return []
-    out: list[Violation] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Import, ast.ImportFrom)):
-            continue
-        for name in _imported_modules(node):
-            leaf = name.rsplit(".", 1)[-1]
-            if leaf in LEGACY_MODULES_BANNED:
-                out.append(
-                    Violation(
-                        "SAFE-2",
-                        path,
-                        node.lineno,
-                        f"new-engine code must not import the legacy module "
-                        f"'{leaf}' (disposition/sections/spans/overlay subsystem)",
-                    )
-                )
-                break
     return out
 
 
@@ -418,7 +360,6 @@ def lint_theme_256(tree: ast.AST, path: str) -> list[Violation]:
 
 _LINTS = (
     lint_shell_true,
-    lint_legacy_api,
     lint_wizard_letter,
     lint_theme_hardcode,
     lint_theme_256,
@@ -426,7 +367,7 @@ _LINTS = (
 
 
 def check_source(source: str, path: str) -> list[Violation]:
-    """Run all five lints over one already-read file. Unparseable → a PARSE
+    """Run all four lints over one already-read file. Unparseable → a PARSE
     violation (fail-closed: a file that won't parse cannot silently skip the gate)."""
     try:
         tree = ast.parse(source, filename=path)

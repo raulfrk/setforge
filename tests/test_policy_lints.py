@@ -1,8 +1,8 @@
 """Unit tests for the deterministic policy/AST lint gates (check_policy_lints.py).
 
 Covers, per the F2a acceptance contract: each lint FIRES on a seeded violation
-(SAFE-1/2, UX-1/3) and stays CLEAN on the look-alike false positives; f-string +
-bytes ANSI; import variants; the legacy-API namespace scope; the allowlist
+(SAFE-1, UX-1/3) and stays CLEAN on the look-alike false positives; f-string +
+bytes ANSI; the allowlist
 exact-match boundary; the SAFE-10 ratchet (pinned set) + stale-entry self-check;
 fail-closed on an unparseable file; and the PreToolUse hook's exit-code mapping.
 """
@@ -13,12 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
-import scripts.check_policy_lints as policy_lints
 from scripts.check_policy_lints import (
     LEGACY_MODULES,
-    LEGACY_MODULES_BANNED,
     Violation,
     allowlist_self_check,
     check_source,
@@ -59,63 +55,6 @@ def test_shell_true_is_repo_wide_even_in_allowlisted_file() -> None:
     # config.py is grandfathered for the UX lints, but shell=True is repo-wide.
     vs = check_source("subprocess.run(c, shell=True)\n", "setforge/config.py")
     assert len(_ids(vs, "SAFE-1")) == 1
-
-
-# --------------------------------------------------------------------------- #
-# SAFE-2  legacy-API-ban  (namespace-scoped to the new-engine packages)
-#
-# The ban list is DORMANT (drained to frozenset() at schema 5.0), so the lint
-# fires on nothing in the live tree. The positive cases below re-arm it with a
-# SYNTHETIC banned leaf via monkeypatch, proving the mechanism still bites — an
-# empty set would make any "fires" assertion a tautology.
-# --------------------------------------------------------------------------- #
-def test_legacy_api_ban_list_is_empty_and_dormant() -> None:
-    # Pinned: the ban list is drained at schema 5.0. Re-arm deliberately (add a
-    # leaf) only when a new legacy module must be guarded.
-    assert not LEGACY_MODULES_BANNED
-    assert isinstance(LEGACY_MODULES_BANNED, frozenset)
-    # A dormant guard fires on nothing, even inside an enforced package.
-    vs = check_source(
-        "from setforge.section_mode import run\n", "setforge/reconcile/merge.py"
-    )
-    assert _ids(vs, "SAFE-2") == []
-
-
-def test_legacy_api_fires_in_enforced_pkg(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        policy_lints, "LEGACY_MODULES_BANNED", frozenset({"fake_legacy"})
-    )
-    vs = check_source(
-        "from setforge.fake_legacy import run\n", "setforge/reconcile/merge.py"
-    )
-    assert len(_ids(vs, "SAFE-2")) == 1
-
-
-def test_legacy_api_not_enforced_outside_enforced_pkgs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Even with the ban armed, a consumer OUTSIDE the new-engine packages is not
-    # flagged — the namespace scope, not the empty list, is what suppresses it.
-    monkeypatch.setattr(
-        policy_lints, "LEGACY_MODULES_BANNED", frozenset({"fake_legacy"})
-    )
-    vs = check_source(
-        "from setforge.fake_legacy import run\n", "setforge/cli/install.py"
-    )
-    assert _ids(vs, "SAFE-2") == []
-
-
-def test_legacy_api_import_variants(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        policy_lints, "LEGACY_MODULES_BANNED", frozenset({"fake_legacy"})
-    )
-    for src in (
-        "import setforge.fake_legacy as s\n",
-        "from setforge import fake_legacy\n",
-        "from setforge.fake_legacy import run\n",
-    ):
-        vs = check_source(src, "setforge/provision/x.py")
-        assert _ids(vs, "SAFE-2"), f"expected SAFE-2 for: {src!r}"
 
 
 # --------------------------------------------------------------------------- #
