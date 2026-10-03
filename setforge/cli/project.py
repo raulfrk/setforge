@@ -276,6 +276,12 @@ def project_inject(
         return
     _render_injection(plan)
     if dry_run:
+        if not sys.stdin.isatty():
+            # Without a TTY the apply cannot ask, so the preview must fail on
+            # the same unresolved tracked-file conflict.
+            resolve_injection_plan(
+                plan, auto=auto.value if auto is not None else None, interactive=False
+            )
         typer.echo("dry run: no changes applied")
         return
     if not _confirm("inject", yes=yes):

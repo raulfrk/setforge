@@ -1284,6 +1284,88 @@ def test_ownership_release_refuses_project_claim_and_names_project_remove(
     assert not (target / "AGENTS.md").exists()
 
 
+def _two_profiles_one_destination(tmp_path: Path) -> Path:
+    config = _config(tmp_path)
+    config.write_text(
+        config.read_text() + "  other:\n    files:\n      rules:\n"
+        "        src: AGENTS.md\n        dst: AGENTS.md\n"
+    )
+    source = config.parent / "project" / "other" / "AGENTS.md"
+    source.parent.mkdir()
+    source.write_text("other instructions\n")
+    return config
+
+
+def _private_state(root: Path) -> dict[Path, bytes]:
+    return {
+        path: path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and "locks" not in path.parts
+    }
+
+
+@pytest.mark.parametrize("remounted", [False, True])
+def test_overlapping_profile_is_refused_in_dry_run_and_apply_with_owner_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remounted: bool
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _two_profiles_one_destination(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    first = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert first.exit_code == 0, first.output
+    before = _private_state(state)
+    if remounted:
+        _remount_with_new_device_number(monkeypatch)
+
+    for mode in ("--dry-run", "--yes"):
+        refused = runner.invoke(
+            app,
+            ["project", "inject", "other", str(target), "--config", str(config), mode],
+        )
+        assert refused.exit_code == 1, refused.output
+        assert str(refused.exception) == (
+            "a project destination already has an active ownership claim: "
+            f"AGENTS.md is injected by project profile 'demo' at {target}; "
+            f"run `setforge project remove demo {target}` first"
+        )
+        assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+        assert _private_state(state) == before
+
+
+def test_tracked_conflict_without_resolution_fails_dry_run_like_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config)]
+
+    outcomes = [runner.invoke(app, [*inject, mode]) for mode in ("--dry-run", "--yes")]
+
+    for outcome in outcomes:
+        assert outcome.exit_code == 1
+        assert str(outcome.exception) == (
+            "project injection has 1 unresolved tracked-file conflict(s) in "
+            "AGENTS.md; use a TTY or --auto"
+        )
+    assert destination.read_text() == "team instructions\n"
+    assert _private_state(state) == {}
+    resolved = runner.invoke(app, [*inject, "--auto=use-profile", "--dry-run"])
+    assert resolved.exit_code == 0, resolved.output
+    assert "overlay-tracked: AGENTS.md" in resolved.output
+    assert destination.read_text() == "team instructions\n"
+    assert _private_state(state) == {}
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:

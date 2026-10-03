@@ -451,7 +451,73 @@ def plan_injection(
             overlay_git_plan=overlay_git_plan,
             no_op=True,
         )
+    _refuse_claimed_destinations(plan)
     return plan
+
+
+def _sibling_destinations(plan: ProjectInjectionPlan) -> dict[str, tuple[str, str]]:
+    """Map destinations recorded by other profiles at this target to their owner."""
+    owners: dict[str, tuple[str, str]] = {}
+    records = state_root() / "project-injections"
+    for path in sorted(records.glob("*.json")) if records.is_dir() else ():
+        if path == plan.manifest_path:
+            continue
+        try:
+            raw = _load_manifest(path)
+        except SetforgeError:
+            continue
+        raw_files = raw["files"]
+        assert isinstance(raw_files, list)
+        if raw["target"] != str(plan.target):
+            continue
+        for entry in raw_files:
+            if isinstance(entry, dict):
+                owners.setdefault(
+                    str(entry.get("destination")),
+                    (str(raw["profile"]), str(raw["target"])),
+                )
+    return owners
+
+
+def _refuse_claimed_destinations(plan: ProjectInjectionPlan) -> None:
+    """Refuse, already in the preview, a destination that something else manages.
+
+    Records are consulted besides the ledger because a claim written under an
+    earlier device number is not found under the live one.
+    """
+    store = OwnershipStore()
+    siblings = _sibling_destinations(plan)
+    for item in plan.files:
+        relative = item.relative_destination.as_posix()
+        tracked = store.read(file_resource_id(item.destination))
+        if (
+            tracked is not None
+            and tracked.authority is Authority.MANAGE
+            and tracked.lifecycle is ClaimLifecycle.CLAIMED
+        ):
+            raise SetforgeError(
+                "a project destination already has an active tracked-file "
+                f"ownership claim: {item.destination} is managed by "
+                f"{', '.join(tracked.declaration_refs)}"
+            )
+        claim = store.read(
+            _resource_id(
+                plan.target_device, plan.target_inode, item.relative_destination
+            )
+        )
+        owner = siblings.get(relative)
+        if claim is not None and claim.lifecycle is ClaimLifecycle.CLAIMED:
+            owner = (
+                claim.declaration_refs[0].split(":")[1],
+                claim.locator.removesuffix(f"/{relative}"),
+            )
+        if owner is not None:
+            raise SetforgeError(
+                "a project destination already has an active ownership claim: "
+                f"{relative} is injected by project profile {owner[0]!r} at "
+                f"{owner[1]}; run `setforge project remove {owner[0]} {owner[1]}` "
+                "first"
+            )
 
 
 def resolve_injection_plan(
