@@ -125,7 +125,7 @@ def snapshot_create(
     keep: int = typer.Option(
         snap_mod.DEFAULT_KEEP,
         "--keep",
-        help="Retain at most this many snapshots after create "
+        help="Retain at most this many snapshots of this profile after create "
         "(0 = remove all; negative is rejected).",
         show_default=True,
     ),

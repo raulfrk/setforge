@@ -1546,7 +1546,7 @@ def test_create_reports_success_when_post_commit_pruning_fails(
     dst.parent.mkdir(parents=True)
     dst.write_text("committed body\n")
 
-    def fail_prune(_keep: int) -> int:
+    def fail_prune(_keep: int, *, profile: str) -> int:
         raise OSError("retention filesystem unavailable")
 
     monkeypatch.setattr(snap_mod, "prune_snapshots", fail_prune)
@@ -1566,7 +1566,7 @@ def test_create_success_survives_diagnostic_logger_failure(
     monkeypatch.setattr(
         snap_mod,
         "prune_snapshots",
-        lambda _keep: (_ for _ in ()).throw(OSError("prune failed")),
+        lambda _keep, **_kwargs: (_ for _ in ()).throw(OSError("prune failed")),
     )
     monkeypatch.setattr(
         snap_mod._LOGGER,
@@ -1577,6 +1577,26 @@ def test_create_success_survives_diagnostic_logger_failure(
     meta = _create(ctx, "committed")
 
     assert snap_mod.resolve_snapshot(meta.snapshot_id) == meta
+
+
+def test_auto_prune_on_create_leaves_other_profiles_snapshots(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx, _, dst = _build_ctx(fake_home)
+    other_ctx, _, _ = _build_ctx(fake_home, profile="other")
+    dst.parent.mkdir(parents=True)
+    dst.write_text("body\n")
+    times = iter(datetime(2026, 1, d, 0, 0, 0, tzinfo=UTC) for d in range(1, 5))
+    monkeypatch.setattr(snap_mod, "now_utc", lambda: next(times))
+    _create(other_ctx, "other-only")
+    _create(ctx, "s0", keep=1)
+    _create(ctx, "s1", keep=1)
+    _create(ctx, "s2", keep=0)
+
+    assert [(s.profile, s.label) for s in snap_mod.list_snapshots()] == [
+        ("other", "other-only")
+    ]
 
 
 def test_auto_prune_on_create_keeps_keep_value(

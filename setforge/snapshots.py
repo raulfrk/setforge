@@ -515,7 +515,7 @@ def _finalize(
     partial_dir.replace(final_dir)
     atomicio.fsync_dir(final_dir.parent)
     try:
-        prune_snapshots(keep)
+        prune_snapshots(keep, profile=meta.profile)
     except OSError as exc:
         with suppress(Exception):  # diagnostics cannot undo publication
             _LOGGER.warning(
@@ -957,7 +957,7 @@ def restore_snapshot(
         return _apply_restore_plan(plan)
 
 
-def prune_snapshots(keep: int) -> int:
+def prune_snapshots(keep: int, *, profile: str | None = None) -> int:
     """Delete oldest snapshots until at most ``keep`` remain. Returns count removed.
 
     ``keep=0`` removes every snapshot (explicit "no retention"); ``keep
@@ -965,10 +965,13 @@ def prune_snapshots(keep: int) -> int:
     "unlimited" (borg's footgun). Only finalized snapshots are counted
     against the limit; ``.partial`` dirs are ignored (they're cleanup
     candidates handled by failed-create logic, not by retention).
+    With ``profile``, only that profile's snapshots are counted and removed.
     """
     if keep < 0:
         raise SetforgeError(f"snapshot prune: keep must be non-negative, got {keep}")
-    snapshots = list_snapshots()
+    snapshots = [
+        snap for snap in list_snapshots() if profile is None or snap.profile == profile
+    ]
     excess = snapshots[keep:]
     removed = 0
     root = snapshots_root()
