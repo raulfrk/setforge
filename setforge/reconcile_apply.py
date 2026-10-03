@@ -30,6 +30,7 @@ Outcomes encode the A0 guards directly:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -371,6 +372,30 @@ def _line_merge_agreeing(
     return text if agrees else None
 
 
+def _is_strict_json(data: bytes) -> bool:
+    try:
+        json.loads(data)
+    except ValueError:
+        return False
+    return True
+
+
+def _loses_strictness(
+    text: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
+) -> bool:
+    """Whether ``text`` needs JSON5 syntax neither strict-JSON source uses.
+
+    Lines joined from two strict JSON files can leave a trailing comma, which
+    the json5 loader accepts but a strict consumer of the file rejects.
+    """
+    return (
+        fmt is StructuredFormat.JSONC
+        and _is_strict_json(live)
+        and _is_strict_json(tracked)
+        and not _is_strict_json(text)
+    )
+
+
 def _key_merge(
     base: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
 ) -> bytes | None:
@@ -392,11 +417,11 @@ def _key_merge(
         if not result.clean:
             return None
         model = result.merged_model
-        merged = (
-            _line_merge_agreeing(base, live, tracked, model, fmt)
-            or splice_lines_toward(live, tracked, model, fmt)
-            or _dump_model(model, fmt)
-        )
+        merged = _line_merge_agreeing(base, live, tracked, model, fmt)
+        if merged is None or _loses_strictness(merged, live, tracked, fmt):
+            merged = splice_lines_toward(live, tracked, model, fmt)
+        if merged is None or _loses_strictness(merged, live, tracked, fmt):
+            merged = _dump_model(model, fmt)
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
     return merged

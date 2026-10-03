@@ -652,3 +652,32 @@ def test_alias_bearing_yaml_conflict_auto_takes_exact_side(
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == (host if side is AutoSide.OURS else upstream)
+
+
+def test_merged_strict_json_stays_strict_json() -> None:
+    import json
+
+    fid = file_id("strict-json")
+    base = b'{\n  "a": 1,\n  "b": 2\n}\n'
+    host = b'{\n  "a": 5,\n  "b": 2\n}\n'
+    upstream = b'{\n  "a": 1\n}\n'
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert isinstance(out.content, bytes)
+    assert json.loads(out.content) == {"a": 5}
+
+
+def test_json5_syntax_already_in_use_may_stay_in_the_merge() -> None:
+    fid = file_id("json5-in-use")
+    base = b'{\n  "a": 1,\n  "b": 2,\n}\n'
+    host = b'{\n  "a": 5,\n  "b": 2,\n}\n'
+    upstream = b'{\n  "a": 1,\n}\n'
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b'{\n  "a": 5,\n}\n'
