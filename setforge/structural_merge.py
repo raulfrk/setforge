@@ -513,6 +513,7 @@ class _Json5Backend:
             self._sides["theirs"] = theirs
         for side in self._sides.values():
             _json5_settle_cr(side)
+        self._positions: dict[int, dict[str, int]] = {}
         # Read before any edit: a taken value brings theirs' runs along.
         self._gone_comments = _json5_comment_texts(
             self._sides.get("base")
@@ -614,6 +615,7 @@ class _Json5Backend:
                 ours.trailing_comma.wsc_after = [*trail, *closing]
         ours.keys.append(new_key)
         ours.values.append(new_value)
+        self._positions.pop(id(ours), None)
 
     def delete(self, key: str) -> None:
         ours = self._ours
@@ -632,6 +634,7 @@ class _Json5Backend:
         # follows automatically on next access.
         del ours.keys[idx]
         del ours.values[idx]
+        self._positions.pop(id(ours), None)
         if not ours.keys:
             closing = _json5_from_break(tail)
             leading = list(ours.leading_wsc)
@@ -685,12 +688,19 @@ class _Json5Backend:
         run = ours.keys[-1].wsc_before if len(ours.keys) > 1 else ours.leading_wsc
         return run[-1] if run and isinstance(run[-1], str) else ""
 
-    @staticmethod
-    def _index(node: JSONObject, key: str) -> int | None:
-        for i, k in enumerate(node.keys):
-            if _json5_key_text(k) == key:
-                return i
-        return None
+    def _index(self, node: JSONObject, key: str) -> int | None:
+        """The position of ``key``'s first occurrence in ``node``.
+
+        Looked up in a per-node table instead of scanning: every key of every
+        side is asked for several times, which made a large object quadratic.
+        """
+        positions = self._positions.get(id(node))
+        if positions is None:
+            positions = {}
+            for index, key_node in enumerate(node.keys):
+                positions.setdefault(_json5_key_text(key_node), index)
+            self._positions[id(node)] = positions
+        return positions.get(key)
 
 
 # ---------------------------------------------------------------------------
