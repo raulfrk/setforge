@@ -178,6 +178,7 @@ def _load_capture_preview(
     *,
     verb: str,
     owner_id: UUID | None,
+    auto: capture_mod.CaptureAuto | None = None,
 ) -> tuple[ProfileContext, _CaptureSnapshot]:
     """Reload effective configuration and build an exact read-only capture plan."""
     cfg = load_config(config)
@@ -197,6 +198,7 @@ def _load_capture_preview(
             repo_root,
             resolved=resolved,
             ownership_authorized=authorized,
+            auto=auto,
         )
     )
     codex_plans = codex_resources_mod.plan_config_resources(
@@ -385,7 +387,12 @@ def capture(
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         initial_ctx, initial_snapshot = _load_capture_preview(
-            config, profile, repo_root, verb="capture", owner_id=owner_id
+            config,
+            profile,
+            repo_root,
+            verb="capture",
+            owner_id=owner_id,
+            auto=auto_enum,
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
         _render_keep_tracked(initial_snapshot.preview)
@@ -400,7 +407,12 @@ def capture(
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         locked_ctx, locked_snapshot = _load_capture_preview(
-            config, profile, repo_root, verb="capture", owner_id=owner_id
+            config,
+            profile,
+            repo_root,
+            verb="capture",
+            owner_id=owner_id,
+            auto=auto_enum,
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
         try:
@@ -470,7 +482,12 @@ def sync(
     with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
         operations.refuse_active(profile)
         initial_ctx, initial_snapshot = _load_capture_preview(
-            config, profile, repo_root, verb="sync", owner_id=owner_id
+            config,
+            profile,
+            repo_root,
+            verb="sync",
+            owner_id=owner_id,
+            auto=auto_enum,
         )
     if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
         _render_keep_tracked(initial_snapshot.preview)
@@ -488,7 +505,12 @@ def sync(
     ):
         operations.refuse_active(profile)
         ctx, locked_snapshot = _load_capture_preview(
-            config, profile, repo_root, verb="sync", owner_id=owner_id
+            config,
+            profile,
+            repo_root,
+            verb="sync",
+            owner_id=owner_id,
+            auto=auto_enum,
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
         cfg = ctx.cfg

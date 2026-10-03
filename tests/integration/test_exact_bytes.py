@@ -121,3 +121,27 @@ def test_sync_refuses_live_json_that_does_not_parse(
     assert result.exit_code != 0
     assert "settings.json" in f"{result.output}{result.exception}"
     assert tracked.read_bytes() == before
+
+
+def test_sync_keep_tracked_ignores_live_json_that_does_not_parse(
+    integration_env: Callable[..., IntegrationEnv], integration_subprocess
+) -> None:
+    env = integration_env()
+    assert env.run_verb(["install", "--yes"]).exit_code == 0
+    tracked = env.tracked("json/settings.json")
+    before = tracked.read_bytes()
+    env.live(".setforge_it/json/settings.json").write_bytes(b'{\n  "a": 1,\n  "L')
+    result = env.run_verb(["sync", "--auto=keep-tracked", "--yes"])
+    assert result.exit_code == 0, f"{result.output}{result.exception}"
+    assert tracked.read_bytes() == before
+
+
+def test_sync_preview_reports_the_same_refusal_as_apply(
+    integration_env: Callable[..., IntegrationEnv], integration_subprocess
+) -> None:
+    env = integration_env()
+    assert env.run_verb(["install", "--yes"]).exit_code == 0
+    env.live(".setforge_it/json/settings.json").write_bytes(b"")
+    result = env.run_verb(["sync", "--auto=use-live"])
+    assert result.exit_code != 0
+    assert "not parseable" in f"{result.output}{result.exception}"

@@ -238,6 +238,7 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     *,
     resolved: ResolvedProfile,
     ownership_authorized: Mapping[str, bool] | None = None,
+    auto: "CaptureAuto | None" = None,
 ) -> tuple[CapturePreview, ...]:
     """Return the exact per-file capture projection without writing anything."""
     previews: list[CapturePreview] = []
@@ -362,6 +363,8 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                     )
                 )
                 continue
+            if auto is not CaptureAuto.KEEP_TRACKED:
+                _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
             proposed = sub_dst.read_bytes()
             previews.append(
                 _preview_result(
@@ -760,7 +763,7 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
             participating.add(sub_name)
 
     for sub_name, sub_src, sub_dst, _names, _generated in work:
-        if sub_name not in participating:
+        if sub_name not in participating and auto is not CaptureAuto.KEEP_TRACKED:
             _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
 
     for sub_name, sub_src, sub_dst, host_local_names, _generated in work:
