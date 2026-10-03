@@ -499,3 +499,57 @@ def test_diff_file_undecodable_bytes_do_not_raise(tmp_path: Path) -> None:
     assert diff_file(src, dst) == ""
     dst.write_bytes(b"caf\xe9\n")
     assert "differ" in diff_file(src, dst)
+
+
+def test_cli_compare_full_diff_piped_keeps_long_lines_and_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    repo = tmp_path / "repo"
+    _write(repo / "tracked" / "long-name.txt", "tracked\n")
+    long_line = ("a very long line " * 12).rstrip()
+    dst = tmp_path / "live" / "long-name.txt"
+    _write(dst, long_line + "\n")
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        f"version: 1\ntracked_files:\n  x:\n    src: long-name.txt\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--full-diff"]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert any(
+        line.rstrip() == "+" + long_line.rstrip()
+        or line.rstrip() == "-" + long_line.rstrip()
+        for line in lines
+    )
+    diff_lines = [ln for ln in lines if ln[:1] in "+-"]
+    assert all(line == line.rstrip() for line in diff_lines)
+    assert any(
+        line.startswith(("---", "+++")) and "long-name.txt" in line for line in lines
+    )
+
+
+def test_snapshot_summary_path_is_not_wrapped_when_piped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import io
+
+    from setforge.cli._output import make_console
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    buffer = io.StringIO()
+    console = make_console()
+    console.file = buffer
+    path = "/very/long/" + "directory-name/" * 12 + "end"
+    console.print(f"  storing in: {path}/")
+    assert buffer.getvalue() == f"  storing in: {path}/\n"

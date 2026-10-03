@@ -21,7 +21,7 @@ from setforge.cli._helpers import (
     _refuse_duplicate_section_names,
 )
 from setforge.cli._install_helpers import _load_validated_host_local_sections
-from setforge.cli._output import render
+from setforge.cli._output import make_console, render
 from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
 from setforge.config import (
     Config,
@@ -100,7 +100,7 @@ def compare(
             report, cfg, resolved, repo_root, profile=profile
         )
 
-    console = Console()
+    console = make_console()
 
     def _human() -> None:
         # Render host-local mode/dst/symlink_target
@@ -232,9 +232,17 @@ def _render_compare_report(
         )
 
     if full_diff:
-        for entry in report.entries:
-            if entry.diff:
-                console.print(Syntax(entry.diff, "diff"))
+        _print_full_diffs(report, console)
+
+
+def _print_full_diffs(report: compare_mod.CompareReport, console: Console) -> None:
+    for entry in report.entries:
+        if not entry.diff:
+            continue
+        if console.is_terminal:
+            console.print(Syntax(entry.diff, "diff", word_wrap=True))
+        else:
+            console.print(entry.diff, markup=False, highlight=False)
 
 
 def _classify_section_state(section_name: str, live_names: set[str]) -> tuple[str, str]:

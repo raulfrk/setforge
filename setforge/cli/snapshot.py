@@ -34,6 +34,7 @@ from setforge.cli._help_examples import (
     SNAPSHOT_RESTORE_EXAMPLES,
 )
 from setforge.cli._helpers import ProfileContext
+from setforge.cli._output import make_console
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks
@@ -138,7 +139,7 @@ def snapshot_create(
         meta = snap_mod.create_snapshot(
             ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile, label, keep=keep
         )
-    _emit_create_summary(meta, console=Console())
+    _emit_create_summary(meta, console=make_console())
 
 
 @snapshot_app.command("list", epilog=SNAPSHOT_LIST_EXAMPLES)
@@ -149,7 +150,7 @@ def snapshot_list() -> None:
     snapshot-root prints a single-line "no snapshots yet" hint.
     """
     snaps = snap_mod.list_snapshots()
-    console = Console()
+    console = make_console()
     if not snaps:
         console.print(
             "no snapshots yet — run 'setforge snapshot create <label> --profile=<name>'"
@@ -285,7 +286,7 @@ def snapshot_restore(
     """
     target = snap_mod.resolve_snapshot(snapshot, profile=profile)
     skip_prompt = yes or non_interactive
-    console = Console()
+    console = make_console()
     if skip_prompt:
         choice = RestoreChoice.RESTORE
     else:

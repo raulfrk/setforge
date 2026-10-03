@@ -44,6 +44,7 @@ from setforge.cli._init_helpers import (
     is_initialized,
     probe_environment,
 )
+from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.locking import mutation_locks
 from setforge.source import CONFIG_FILENAME
@@ -756,7 +757,7 @@ def init(
 
     See mockup J for the four scenarios (fresh init / reinit / --force / --check).
     """
-    console = Console(stderr=True)
+    console = make_console(stderr=True)
     console.print("=== setforge init ===")
     if check:
         _handle_check_mode(console=console)

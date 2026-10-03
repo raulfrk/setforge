@@ -15,7 +15,13 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import INSPECT_EXAMPLES
-from setforge.cli._output import OutputContext, OutputFormat, render, wrap_json
+from setforge.cli._output import (
+    OutputContext,
+    OutputFormat,
+    make_console,
+    render,
+    wrap_json,
+)
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import (
     Config,
@@ -196,7 +202,7 @@ def inspect(
     }
 
     def _human() -> None:
-        console = Console()
+        console = make_console()
         layout = (
             RichLayout.SIDE_BY_SIDE
             if console.width >= _WIDE_THRESHOLD
@@ -214,7 +220,10 @@ def inspect(
             stream=console.file,
         )
         console.print(header, markup=False, highlight=False)
-        console.print(Panel(to_rich(model, layout=layout), title="base | live | merge"))
+        body = to_rich(model, layout=layout)
+        if console.is_terminal:
+            body = Panel(body, title="base | live | merge")
+        console.print(body)
         _render_index(console, index)
         _render_staging(console, staging)
 

@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import NotRequired, TypedDict
 
+from rich.console import Console
+
 OUTPUT_SCHEMA_VERSION: int = 1
 """Cross-tool contract version for the JSON envelope.
 
@@ -70,6 +72,17 @@ class OutputContext:
 
     format: OutputFormat
     quiet: bool = False
+
+
+def make_console(*, stderr: bool = False) -> Console:
+    """Build a human-output console that never crops or re-wraps lines.
+
+    Rich falls back to 80 columns when the stream is not a terminal, which
+    wrapped paths and cropped diff lines in pipes and logs. ``soft_wrap``
+    leaves wrapping to the terminal (or to nothing, for a pipe); an explicit
+    ``COLUMNS`` still sets the console width for tables and panels.
+    """
+    return Console(stderr=stderr, soft_wrap=True)
 
 
 def wrap_json(
