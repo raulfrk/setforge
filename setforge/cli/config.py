@@ -497,6 +497,11 @@ def config_add(
         None, "--profile", "-p", help="Required for profile-scoped paths."
     ),
     yes: bool = typer.Option(False, "--yes", help="Skip the arrow-key confirm."),
+    no_git_check: bool = typer.Option(
+        False,
+        "--no-git-check",
+        help="Skip the dirty-repo check on the tracked config (--tracked only).",
+    ),
     # Interactive marketplaces.add sibling flags (non-TTY fallback per A29).
     source: str | None = typer.Option(
         None, "--source", help="Source kind for marketplaces.add (github | path)."
@@ -513,6 +518,7 @@ def config_add(
         tracked=tracked,
         profile=profile,
         yes=yes,
+        no_git_check=no_git_check,
         source=source,
         repo=repo,
     )
@@ -526,6 +532,7 @@ def _run_add(
     tracked: bool,
     profile: str | None,
     yes: bool,
+    no_git_check: bool,
     source: str | None,
     repo: str | None,
 ) -> None:
@@ -547,7 +554,7 @@ def _run_add(
         node = _resolve_path(scope, path)
         if node is None:
             raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
-        yaml_path = _prepare_scope_yaml(scope)
+        yaml_path = _prepare_scope_yaml(scope, no_git_check=no_git_check)
         _mutate_and_write(
             scope=scope,
             yaml_path=yaml_path,
@@ -559,7 +566,7 @@ def _run_add(
         )
 
 
-def _prepare_scope_yaml(scope: ConfigScope) -> Path:
+def _prepare_scope_yaml(scope: ConfigScope, *, no_git_check: bool) -> Path:
     """Return the yaml path for ``scope``, ensuring the per-scope precondition.
 
     LOCAL: stub the file if missing so the mutate-then-write pipeline
@@ -569,7 +576,7 @@ def _prepare_scope_yaml(scope: ConfigScope) -> Path:
     yaml_path = _scope_yaml_path(scope)
     if scope is ConfigScope.LOCAL:
         _ensure_local_yaml(yaml_path)
-    elif scope is ConfigScope.TRACKED:
+    elif scope is ConfigScope.TRACKED and not no_git_check:
         _run_tracked_git_check(yaml_path)
     return yaml_path
 
@@ -596,6 +603,11 @@ def config_remove(
         None, "--profile", "-p", help="Required for profile-scoped paths."
     ),
     yes: bool = typer.Option(False, "--yes", help="Skip the arrow-key confirm."),
+    no_git_check: bool = typer.Option(
+        False,
+        "--no-git-check",
+        help="Skip the dirty-repo check on the tracked config (--tracked only).",
+    ),
 ) -> None:
     """Pop-from-list OR unset-scalar at the dotted path."""
     scope = _resolve_scope(local=local, tracked=tracked)
@@ -609,7 +621,7 @@ def config_remove(
         if scope is ConfigScope.LOCAL and not yaml_path.exists():
             typer.echo("nothing to remove")
             raise typer.Exit(0)
-        if scope is ConfigScope.TRACKED:
+        if scope is ConfigScope.TRACKED and not no_git_check:
             _run_tracked_git_check(yaml_path)
         _mutate_and_write(
             scope=scope,

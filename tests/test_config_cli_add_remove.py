@@ -278,3 +278,31 @@ def test_remove_local_missing_yaml_exits_clean_without_creating(
     assert "nothing to remove" in result.stdout
     # The remove path must not create the file.
     assert not missing.exists()
+
+
+@pytest.fixture
+def git_check_calls(seed_tracked: Path, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    calls: list[bool] = []
+
+    def record(yaml_path: Path) -> None:
+        calls.append(True)
+
+    monkeypatch.setattr("setforge.cli.config._run_tracked_git_check", record)
+    return calls
+
+
+def test_tracked_edit_accepts_no_git_check(
+    runner: CliRunner, seed_tracked: Path, git_check_calls: list[bool]
+) -> None:
+    steps = [
+        (["add", "--no-git-check"], "0o644", 0),
+        (["remove", "--no-git-check"], None, 0),
+        (["add"], "0o644", 1),
+        (["remove"], None, 2),
+    ]
+    for verb_args, value, expected_checks in steps:
+        argv = ["config", *verb_args, "--tracked", "tracked_files.foo.mode"]
+        argv += [value] if value else []
+        result = runner.invoke(app, [*argv, "--yes"])
+        assert result.exit_code == 0, result.output
+        assert len(git_check_calls) == expected_checks
