@@ -473,3 +473,18 @@ def test_host_local_config_both_blocks_malformed_binaries_error_wins() -> None:
     with pytest.raises(ConfigError, match=r"'binaries:'") as excinfo:
         load_host_local_config()
     assert "install_mode" not in str(excinfo.value)
+
+
+def test_tilde_in_binary_override_is_expanded(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    exe = _make_executable(home / "bin" / "code")
+    monkeypatch.setenv("HOME", str(home))
+    binaries.set_cli_overrides(code="~/bin/code")
+    assert binaries.resolve_binary("code") == exe
+    binaries._cli_overrides.clear()
+    monkeypatch.setenv("SETFORGE_CODE_BIN", "~/bin/code")
+    assert binaries.resolve_binary("code") == exe
+    monkeypatch.delenv("SETFORGE_CODE_BIN")
+    binaries.LOCAL_CONFIG_PATH.write_text("binaries:\n  code: ~/bin/code\n")
+    assert binaries.resolve_binary("code") == exe

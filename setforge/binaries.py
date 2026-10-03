@@ -160,6 +160,10 @@ def load_host_local_config() -> HostLocalConfig:
         data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
     except (YAMLError, UnicodeDecodeError) as exc:
         raise ConfigError(f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(
+            f"cannot read {LOCAL_CONFIG_PATH}: {exc.strerror or exc}"
+        ) from exc
     if data is None:
         return HostLocalConfig()
     if not isinstance(data, dict):
@@ -275,7 +279,7 @@ def _validate(name: str, raw_path: str, layer: str) -> Path:
         raise BinaryOverrideInvalid(
             layer=layer, binary=name, path=raw_path, reason="empty path"
         )
-    p = Path(raw_path).absolute()
+    p = Path(raw_path).expanduser().absolute()
     if not p.exists():
         raise BinaryOverrideInvalid(
             layer=layer, binary=name, path=raw_path, reason="not found"
