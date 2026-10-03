@@ -657,6 +657,9 @@ def diff_file(
     if not dst.exists():
         return ""
 
+    if not src.exists():
+        return f"tracked source missing: {src}\n"
+
     spec = tracked_file.generated if tracked_file is not None else None
     if spec is None and src.read_bytes() == dst.read_bytes():
         return ""
@@ -986,6 +989,18 @@ def _compare_one(
             tracked_file=tracked_file,
             probe_stale=False,
             ownership_authorized=ownership_authorized,
+        )
+
+    if not src.exists():
+        return (
+            FileCompare(
+                name=name,
+                status=CompareStatus.DRIFTED,
+                diff=diff_file(src, dst, tracked_file),
+                drift_class=DriftClass.UNEXPECTED,
+                reason="tracked source missing",
+            ),
+            True,
         )
 
     diff = diff_file(src, dst, tracked_file)

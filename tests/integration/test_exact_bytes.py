@@ -90,3 +90,16 @@ def test_undecodable_tracked_file_compare_has_no_traceback(
     drifted = env.run_verb(["compare", "--check"])
     _no_traceback(drifted)
     assert drifted.exit_code == 1, drifted.output
+
+
+def test_compare_reports_tracked_source_missing_from_repo(
+    integration_env: Callable[..., IntegrationEnv], integration_subprocess
+) -> None:
+    env = _env(integration_env, b"a\n")
+    assert env.run_verb(["install", "--yes"]).exit_code == 0
+    env.tracked("text/note.txt").unlink()
+    _commit(env)
+    result = env.run_verb(["compare", "--check"])
+    _no_traceback(result)
+    assert result.exit_code == 1
+    assert "tracked source missing" in result.output
