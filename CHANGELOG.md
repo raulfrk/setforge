@@ -6,6 +6,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Home directories reached through a symlink, such as NFS or automounted homes,
+  work across install, sync, revert, snapshots, orphan cleanup and project
+  commands. Symlinks present when an operation is planned are followed; a
+  directory swapped or re-pointed afterwards is still refused, and SetForge's
+  own ownership state never follows one.
+- Recovery and project injection no longer depend on the filesystem device
+  number, so they survive an NFS remount or reboot. Managed trees install,
+  update and prune on filesystems that reject atomic exchange renames.
+- A refused or failed revert, a failed migration on a fresh host and a failed
+  project sync no longer leave an operation that `recover` cannot clear. Corrupt
+  journals and lock or filesystem errors produce one clear line.
+- YAML and JSON files are byte-exact when there is nothing to merge: a second
+  install is a no-op, comment-only and formatting-only tracked changes are
+  deployed, and host edits are left alone when the tracked file is unchanged.
+  Merges keep untouched lines, anchors, merge keys, BOM and line endings. Files
+  the key-aware engine cannot parse are merged line by line instead of
+  aborting the install, and top-level JSON arrays merge independent edits.
+- Sync shares only the classified values of a YAML file, never host comment
+  text, and refuses to promote a JSON or YAML file that no longer parses.
+- Install, compare, sync and revert handle CRLF and non-UTF-8 files with exact
+  bytes. A line-ending-only difference is reported as drift.
+- Revert restores exact bytes, works through symlinked destinations, refuses a
+  missing or empty patch instead of reporting success, and leaves no `.orig`
+  files. A user-scope MCP change can be reverted from any directory.
+- A deployed file deleted on the host stays absent and no longer fails install;
+  `--auto=use-tracked` restores it.
+- Project removal keeps local edits that a sync merged, restores a directory
+  whose Git directory changed, and can drop records of moved or deleted
+  projects. Re-injecting after a removal works when the profile changed.
+- Configuration edits keep the file's indentation, line endings and comments.
+  `validate` marks the offending line, names missing fields and rejects nested
+  destinations. The `local.yaml` template written by `init` validates.
+- `status` counts missing files and shows an unfinished operation. Piped output
+  is no longer wrapped at 80 columns. `inspect` rejects ambiguous names.
+- Mutation-test workers are capped in memory, so a runaway mutant can no longer
+  exhaust the host running the nightly gate.
+
+### Changed
+
+- `install --auto=use-tracked` requires `--yes` without a terminal before it
+  replaces a live file, as documented.
+- `install` exits non-zero when an extension or plugin install fails.
+- `cleanup-orphans` previews never refuse; applying still requires releasing an
+  active ownership claim first and now prints the exact command.
+- `snapshot create --keep` prunes per profile. `migrate` without an action flag
+  exits 2. Extension ids must have the `publisher.name` form.
+- `--auto=keep-live` and `--auto=use-tracked` resolve held managed-tree entries.
+
 ## [1.3.9] - 2026-09-28
 
 ### Added
