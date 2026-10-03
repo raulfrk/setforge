@@ -9,6 +9,7 @@ the bottom for the side effect.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import stat
@@ -1561,6 +1562,20 @@ def _render_install_plan(
         host_local_sections_map=plan.host_local_sections,
         record_transition=transition and not _install_plan_recorded_nothing(plan),
     )
+    changed_codex = [codex for codex in plan.codex_configs if codex.changed]
+    if changed_codex:
+        typer.echo("=== would-be Codex config changes ===")
+        for codex in changed_codex:
+            verb = "create" if codex.live is None else "update"
+            typer.echo(f"  WOULD {verb}  {codex.destination}")
+            diff = difflib.unified_diff(
+                (codex.live or b"").decode("utf-8", "replace").splitlines(),
+                codex.result.decode("utf-8", "replace").splitlines(),
+                lineterm="",
+                n=0,
+            )
+            for line in list(diff)[2:]:
+                typer.echo(f"    {line}")
     if plan.codex_plugins is not None:
         report = codex_plugins_mod.apply_plan(plan.codex_plugins, dry_run=True)
         typer.echo("=== would-be Codex plugin reconcile ===")

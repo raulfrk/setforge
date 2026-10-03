@@ -76,3 +76,55 @@ def test_mixed_profile_converges_detects_drift_syncs_and_reverts(
     reverted = env.run_verb(["revert", "--yes"])
     assert reverted.exit_code == 0, reverted.output
     assert codex_source.read_text() == 'model = "gpt-5"\n'
+
+
+def test_dry_run_previews_codex_config_changes_without_writing(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = integration_env(
+        tracked={"claude": ("claude/CLAUDE.md", "# Shared Claude instructions\n")}
+    )
+    codex_home = env.home / ".codex"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    native = codex_home / "config.toml"
+    native.write_text('model = "gpt-5"\n', encoding="utf-8")
+    codex_source = env.tracked("codex/effort.toml")
+    codex_source.parent.mkdir(parents=True)
+    codex_source.write_text('model_reasoning_effort = "high"\n', encoding="utf-8")
+    env.config.write_text(
+        "schema_version: '6.5'\n"
+        "minimum_version: '6.4'\n"
+        "version: 1\n"
+        "tracked_files:\n"
+        "  claude:\n"
+        "    src: claude/CLAUDE.md\n"
+        "    dst: ~/.claude/CLAUDE.md\n"
+        "codex:\n"
+        "  config:\n"
+        "    effort: {source: codex/effort.toml}\n"
+        "profiles:\n"
+        "  it:\n"
+        "    tracked_files: [claude]\n"
+        "    codex:\n"
+        "      config: [effort]\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(env.repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(env.repo), "commit", "-qm", "codex dry-run fixture"],
+        check=True,
+    )
+    before = native.read_bytes()
+
+    result = env.run_verb(
+        ["install", "--dry-run", "--yes", "--no-secrets-scan", "--no-git-check"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "would-be Codex config changes" in result.output
+    assert str(native) in result.output
+    assert '+model_reasoning_effort = "high"' in result.output
+    assert native.read_bytes() == before
