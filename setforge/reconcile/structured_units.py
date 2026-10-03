@@ -20,6 +20,7 @@ import difflib
 import functools
 import io
 import re
+import warnings
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -29,6 +30,7 @@ from typing import Final
 
 from patiencediff import PatienceSequenceMatcher
 from ruamel.yaml import YAML
+from ruamel.yaml.error import ReusedAnchorWarning
 from ruamel.yaml.events import AliasEvent, ScalarEvent
 from ruamel.yaml.nodes import ScalarNode
 
@@ -714,7 +716,10 @@ def _text_leaves(
     (preflight, preview, write, fidelity check), each trying the same texts.
     """
     try:
-        return dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
+        with warnings.catch_warnings():
+            # A trial text may define an anchor twice; it is rejected, not news.
+            warnings.simplefilter("ignore", ReusedAnchorWarning)
+            return dict(_plain_leaves(get_at_path(_load_model(text, fmt), "")))
     except (StructuredParseError, DuplicateKeyInMergeModel, MergeTypeMismatch):
         return None
 

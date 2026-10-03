@@ -1059,3 +1059,54 @@ def test_interleaved_edits_keep_every_live_only_line(
     assert out.content == expected
     assert out.new_base == upstream
     _assert_converged(fid, out, upstream, fmt)
+
+
+_D1 = b"defaults: &d {retries: 1, timeout: 5}\n"
+_D3 = b"defaults: &d {retries: 3, timeout: 5}\n"
+_ALIAS = b"prod: *d\n"
+_LITERAL = b"prod: {retries: 1, timeout: 5}\n"
+_DE_ALIASED = [
+    pytest.param(
+        _D1 + _ALIAS + b"name: x\n",
+        _D1 + _ALIAS + b"name: x\nhost_only: 1\n",
+        _D3 + _LITERAL + b"name: x\n",
+        _D3 + _LITERAL + b"name: x\nhost_only: 1\n",
+        id="upstream-de-aliases-and-changes-the-anchor",
+    ),
+    pytest.param(
+        _D1 + _ALIAS + b"name: x\n",
+        _D3 + _LITERAL + b"name: x\n",
+        _D1 + _ALIAS + b"name: x\nupstream_only: 1\n",
+        _D3 + _LITERAL + b"name: x\nupstream_only: 1\n",
+        id="host-de-aliases-and-changes-the-anchor",
+    ),
+    pytest.param(
+        b"name: x\n" + _D1 + _ALIAS,
+        b"name: x\n" + _D1 + _ALIAS + b"host_only: 1\n",
+        b"name: x\n" + _D3 + _LITERAL,
+        b"name: x\n" + _D3 + _LITERAL + b"host_only: 1\n",
+        id="upstream-de-aliases-next-to-a-host-append",
+    ),
+    pytest.param(
+        b"name: x\n" + _D1 + _ALIAS,
+        b"name: x\n" + _D3 + _LITERAL,
+        b"name: x\n" + _D1 + _ALIAS + b"upstream_only: 1\n",
+        b"name: x\n" + _D3 + _LITERAL + b"upstream_only: 1\n",
+        id="host-de-aliases-next-to-an-upstream-append",
+    ),
+]
+
+
+@pytest.mark.parametrize(("base", "host", "upstream", "expected"), _DE_ALIASED)
+def test_de_aliased_key_keeps_the_value_its_side_wrote(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("de-aliased")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+    _assert_converged(fid, out, upstream, _FMT)

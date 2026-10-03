@@ -352,6 +352,13 @@ def _parses(data: bytes, fmt: StructuredFormat) -> bool:
     return True
 
 
+def _clean_line_merge(base: bytes, live: bytes, tracked: bytes) -> bytes | None:
+    """The line 3-way of the three texts, or ``None`` when it conflicts."""
+    lines = merge(base, live, tracked)
+    text = lines.merged() if lines.clean else None
+    return text if isinstance(text, bytes) else None
+
+
 def _line_merge_agreeing(
     base: bytes, live: bytes, tracked: bytes, model: object, fmt: StructuredFormat
 ) -> bytes | None:
@@ -362,11 +369,8 @@ def _line_merge_agreeing(
     to keys: it is trusted only when it is clean AND parses to the same values
     as the clean key-aware merge. ``None`` otherwise.
     """
-    lines = merge(base, live, tracked)
-    if not lines.clean:
-        return None
-    text = lines.merged()
-    if not isinstance(text, bytes):
+    text = _clean_line_merge(base, live, tracked)
+    if text is None:
         return None
     try:
         agrees = models_equal(_load_model(text, fmt), model)
@@ -462,26 +466,24 @@ def _render(
     model: object,
     fmt: StructuredFormat,
     *,
-    from_tracked: bool,
     dump: bool,
 ) -> bytes | None:
     """The merged ``model`` as text, in the most byte-preserving form available.
 
     In order: the line 3-way when it is clean and holds ``model``'s values;
-    live with the tracked line regions that realise them; with ``from_tracked``
-    the same from tracked with live's regions (live's text-only edits winning);
-    with ``dump`` the re-serialised model. Whatever is not the line 3-way gets
-    the lines only live had put back where the values allow.
+    live with the tracked line regions that realise them; tracked with live's
+    regions (live's text-only edits winning), which also covers edits that only
+    work together; with ``dump`` the re-serialised model. Whatever is not the
+    line 3-way gets the lines only live had put back where the values allow.
     """
     base, live, tracked = sides
     text = _line_merge_agreeing(base, live, tracked, model, fmt)
     if text is not None and not _loses_strictness(text, live, tracked, fmt):
         return text
-    candidates = [lambda: splice_lines_toward(live, tracked, model, fmt)]
-    if from_tracked:
-        candidates.append(
-            lambda: splice_lines_toward(tracked, live, model, fmt, keep_neutral=True)
-        )
+    candidates = [
+        lambda: splice_lines_toward(live, tracked, model, fmt),
+        lambda: splice_lines_toward(tracked, live, model, fmt, keep_neutral=True),
+    ]
     if dump:
         candidates.append(lambda: _dump_model(model, fmt, like=live))
     for candidate in candidates:
@@ -504,10 +506,13 @@ def _key_merge(
     YAML root) — the caller line-merges those. Each side is parsed FRESH because
     ``merge_structural`` mutates ``ours`` (live) in place.
 
-    A YAML with aliases / merge keys is merged on its resolved values but never
-    re-serialised: the dump would inline the shared nodes and invent anchors, so
-    without a rendering from the source lines the result is ``None`` too. A JSON
-    array root has no re-serialisation either.
+    A YAML with aliases / merge keys shares one node between several keys, so
+    its text is the truth: a clean line 3-way that parses is the result. Only
+    when the lines conflict are the resolved values merged — on de-aliased plain
+    copies, because merging in place would edit every key that shares a node —
+    and the result is never re-serialised (the dump would inline the shared
+    nodes and invent anchors): without a rendering from the source lines it is
+    ``None`` too. A JSON array root has no re-serialisation either.
     """
     sides = (base, live, tracked)
     try:
@@ -515,16 +520,19 @@ def _key_merge(
             uses_aliases(side) for side in sides
         )
         models = [_load_model(side, fmt) for side in sides]
+        if aliased:
+            text = _clean_line_merge(*sides)
+            if text is not None and _parses(text, fmt):
+                return text
+            models = [get_at_path(model, "") for model in models]
         if fmt is StructuredFormat.JSONC:
             target = _array_root_target(*models)
             if target is not None:
-                return _render(sides, target, fmt, from_tracked=True, dump=False)
+                return _render(sides, target, fmt, dump=False)
         result = merge_structural(*models)
         if not result.clean:
             return None
-        return _render(
-            sides, result.merged_model, fmt, from_tracked=False, dump=not aliased
-        )
+        return _render(sides, result.merged_model, fmt, dump=not aliased)
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
 
