@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 
 from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
@@ -202,7 +203,7 @@ def test_add_to_include_dump_failure_does_not_truncate(
     # already decided to write. Pre-fix (truncating open) this would leave
     # setforge.yaml empty; post-fix (buffer + atomic_write_text) the
     # in-memory dump fails before any on-disk replace.
-    monkeypatch.setattr(vscode_extensions.YAML, "dump", _boom)
+    monkeypatch.setattr(YAML, "dump", _boom)
 
     with pytest.raises(RuntimeError):
         add_to_include(config_path, "main", "new.ext")
@@ -222,7 +223,7 @@ def test_capture_extensions_dump_failure_does_not_truncate(
     def _boom(*_a: object, **_kw: object) -> None:
         raise RuntimeError("serialization exploded mid-dump")
 
-    monkeypatch.setattr(vscode_extensions.YAML, "dump", _boom)
+    monkeypatch.setattr(YAML, "dump", _boom)
 
     with pytest.raises(RuntimeError):
         capture_extensions(config_path, "main")
@@ -240,7 +241,7 @@ def test_remove_from_include_dump_failure_does_not_truncate(
     def _boom(*_a: object, **_kw: object) -> None:
         raise RuntimeError("serialization exploded mid-dump")
 
-    monkeypatch.setattr(vscode_extensions.YAML, "dump", _boom)
+    monkeypatch.setattr(YAML, "dump", _boom)
 
     with pytest.raises(RuntimeError):
         remove_from_include(config_path, "main", "existing.ext")

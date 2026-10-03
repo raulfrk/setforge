@@ -18,6 +18,7 @@ half-rendered YAML document on disk.
 
 from __future__ import annotations
 
+import difflib
 import io
 import stat
 from collections.abc import Mapping, Sequence
@@ -25,12 +26,22 @@ from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.error import YAMLError
 
 from setforge import atomicio
 from setforge.errors import ConfigError
 
-__all__ = ["atomic_write_yaml", "load_yaml_mapping", "rename_key", "yaml_rt"]
+__all__ = [
+    "atomic_write_yaml",
+    "load_yaml_mapping",
+    "rename_key",
+    "render_yaml",
+    "yaml_rt",
+]
+
+_BOM = "\ufeff"
+_DEFAULT_INDENT = (2, 2, 0)
 
 
 def yaml_rt() -> YAML:
@@ -46,6 +57,111 @@ def yaml_rt() -> YAML:
     yaml.preserve_quotes = True
     yaml.width = 4096
     return yaml
+
+
+def _detect_indent(text: str) -> tuple[int, int, int] | None:
+    """Return the first block mapping indent and sequence ``(indent, offset)``.
+
+    Reads the positions ruamel records while parsing, so quoting, comments
+    and block scalars cannot confuse it. Returns ``(mapping, sequence,
+    offset)`` using ruamel's ``indent()`` meaning, with ``None`` entries
+    replaced by the defaults, or ``None`` when the text does not parse.
+    """
+    try:
+        root = yaml_rt().load(text)
+    except YAMLError:
+        return None
+    found: dict[str, int] = {}
+
+    def walk(node: object) -> None:
+        if isinstance(node, CommentedMap):
+            for key, value in node.items():
+                key_col = node.lc.data[key][1]
+                if (
+                    isinstance(value, CommentedMap)
+                    and value
+                    and not value.fa.flow_style()
+                ):
+                    found.setdefault("mapping", value.lc.col - key_col)
+                elif (
+                    isinstance(value, CommentedSeq)
+                    and value
+                    and not value.fa.flow_style()
+                ):
+                    dash = value.lc.col
+                    found.setdefault("offset", dash - key_col)
+                    found.setdefault("sequence", value.lc.data[0][1] - key_col)
+                walk(value)
+        elif isinstance(node, CommentedSeq):
+            for item in node:
+                walk(item)
+
+    walk(root)
+    if not found:
+        return None
+    mapping = found.get("mapping", _DEFAULT_INDENT[0])
+    offset = found.get("offset", _DEFAULT_INDENT[2])
+    sequence = found.get("sequence", offset + 2)
+    return mapping, max(sequence, offset + 2), offset
+
+
+def render_yaml(
+    data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
+    original: str | None,
+    *,
+    fallback: tuple[int, int, int] = _DEFAULT_INDENT,
+) -> str:
+    """Dump ``data`` in the indentation style of the ``original`` document.
+
+    The mapping indent and sequence indent/offset are taken from
+    ``original`` (``fallback`` when it has none to learn from). When the
+    original mixes styles, the lines the edit did not touch are kept
+    byte-for-byte rather than normalised. The original's BOM and CRLF
+    line ends are carried over.
+    """
+    text = (original or "").lstrip(_BOM).replace("\r\n", "\n")
+    rendered = _render_lf(data, text, fallback)
+    if original is not None:
+        if original.count("\r\n") * 2 > original.count("\n"):
+            rendered = rendered.replace("\n", "\r\n")
+        if original.startswith(_BOM):
+            rendered = _BOM + rendered
+    return rendered
+
+
+def _render_lf(
+    data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
+    text: str,
+    fallback: tuple[int, int, int],
+) -> str:
+    indent = (_detect_indent(text) if text.strip() else None) or fallback
+
+    def dump(value: Any) -> str:  # noqa: ANN401
+        yaml = yaml_rt()
+        yaml.indent(mapping=indent[0], sequence=indent[1], offset=indent[2])
+        buf = io.StringIO()
+        yaml.dump(value, buf)
+        return buf.getvalue()
+
+    new = dump(data)
+    if not text.strip():
+        return new
+    try:
+        baseline = dump(yaml_rt().load(text))
+    except YAMLError:
+        return new
+    if baseline == text:
+        return new
+    base_lines = baseline.splitlines(keepends=True)
+    orig_lines = text.splitlines(keepends=True)
+    if len(base_lines) != len(orig_lines):
+        return new
+    new_lines = new.splitlines(keepends=True)
+    out: list[str] = []
+    matcher = difflib.SequenceMatcher(None, base_lines, new_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        out.extend(orig_lines[i1:i2] if tag == "equal" else new_lines[j1:j2])
+    return "".join(out)
 
 
 def load_yaml_mapping(path: Path) -> CommentedMap:
@@ -122,7 +238,12 @@ def rename_key(node: CommentedMap, old: str, new: str) -> None:
         node[key] = value
 
 
-def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — ruamel round-trip data is untyped
+def atomic_write_yaml(
+    yaml_path: Path,
+    data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
+    *,
+    fallback: tuple[int, int, int] = _DEFAULT_INDENT,
+) -> None:
     """Serialize ``data`` to ``yaml_path`` atomically.
 
     Serializes through the round-trip YAML config into a string buffer,
@@ -151,7 +272,7 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
             exists) propagates the same way. The best-effort parent-dir
             fsync, by contrast, swallows ``OSError``.
     """
-    buf = io.StringIO()
-    yaml_rt().dump(data, buf)
+    raw = yaml_path.read_bytes().decode("utf-8") if yaml_path.exists() else None
+    text = render_yaml(data, raw, fallback=fallback)
     dst_mode = stat.S_IMODE(yaml_path.stat().st_mode) if yaml_path.exists() else None
-    atomicio.atomic_write_text(yaml_path, buf.getvalue(), mode=dst_mode)
+    atomicio.atomic_write_text(yaml_path, text, mode=dst_mode)

@@ -79,7 +79,7 @@ from setforge.config import (
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
 from setforge.locking import mutation_locks
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
 from setforge.source import get_resolved_source, validate_source_dir
 
 
@@ -633,7 +633,7 @@ def _mutate_and_write(
     yes: bool,
 ) -> None:
     """Apply mutation, validate, diff-preview, confirm, atomic-write."""
-    before_text = yaml_path.read_text(encoding="utf-8") if yaml_path.exists() else ""
+    before_text = _read_raw(yaml_path)
     doc = _load_doc(yaml_path)
     if op == "add":
         if op_value is None:
@@ -643,6 +643,10 @@ def _mutate_and_write(
         _apply_remove(doc, dotted, op_value, is_list=is_list)
     _validate_candidate(scope, doc, yaml_path=yaml_path)
     _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
+
+
+def _read_raw(yaml_path: Path) -> str:
+    return yaml_path.read_bytes().decode("utf-8") if yaml_path.exists() else ""
 
 
 def _preview_and_write(
@@ -655,7 +659,7 @@ def _preview_and_write(
     silently when the user declines (``_prompt_confirm`` returns
     ``False``); the file is untouched.
     """
-    after_text = _dump_to_str(doc)
+    after_text = render_yaml(doc, before_text or None)
     diff_text = _render_diff(before_text, after_text, yaml_path)
     console = Console(stderr=True)
     if not _prompt_confirm(
@@ -701,7 +705,7 @@ def _add_marketplace(
         }
     )
     doc = _load_doc(yaml_path)
-    before_text = yaml_path.read_text(encoding="utf-8") if yaml_path.exists() else ""
+    before_text = _read_raw(yaml_path)
     if "marketplaces" not in doc:
         doc["marketplaces"] = CommentedMap()
     if name in doc["marketplaces"]:

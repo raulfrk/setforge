@@ -18,7 +18,6 @@ import stat
 import tempfile
 from pathlib import Path
 
-from ruamel.yaml import YAML
 from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
@@ -33,6 +32,7 @@ from setforge.config import (
     validate_registry_name,
 )
 from setforge.errors import ConfigError, ProfileNotFound
+from setforge.migrations._yaml_ops import render_yaml, yaml_rt
 
 __all__ = [
     "yaml_add_codex_marketplace",
@@ -83,15 +83,15 @@ def yaml_add_codex_marketplace(
     _require_codex_contract(cfg, config_path)
     if cfg.codex is not None and name in cfg.codex.marketplaces:
         return False
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     marketplaces = _ensure_top_level_block(_codex_block(doc), "marketplaces")
     marketplaces[name] = source.model_dump(mode="json", exclude_none=True)
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
 def yaml_remove_codex_marketplace(config_path: Path, name: str) -> bool:
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     codex = doc.get("codex")
     marketplaces = (
         codex.get("marketplaces") if isinstance(codex, CommentedMap) else None
@@ -99,7 +99,7 @@ def yaml_remove_codex_marketplace(config_path: Path, name: str) -> bool:
     if not isinstance(marketplaces, CommentedMap) or name not in marketplaces:
         return False
     del marketplaces[name]
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -109,21 +109,21 @@ def yaml_add_codex_plugin(config_path: Path, name: str, marketplace: str) -> boo
     _require_codex_contract(cfg, config_path)
     if cfg.codex is not None and name in cfg.codex.plugins:
         return False
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     plugins = _ensure_top_level_block(_codex_block(doc), "plugins")
     plugins[name] = CommentedMap({"marketplace": marketplace})
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
 def yaml_remove_codex_plugin(config_path: Path, name: str) -> bool:
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     codex = doc.get("codex")
     plugins = codex.get("plugins") if isinstance(codex, CommentedMap) else None
     if not isinstance(plugins, CommentedMap) or name not in plugins:
         return False
     del plugins[name]
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -134,7 +134,7 @@ def yaml_add_codex_plugin_to_profile(
     _require_codex_contract(cfg, config_path)
     if profile not in cfg.profiles:
         raise ProfileNotFound(profile)
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     profiles = doc["profiles"]
     profile_block = profiles[profile]
     codex = _ensure_top_level_block(profile_block, "codex")
@@ -142,7 +142,7 @@ def yaml_add_codex_plugin_to_profile(
     if name in plugins:
         return False
     plugins.append(name)
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -152,34 +152,29 @@ def yaml_remove_codex_plugin_from_profile(
     cfg = load_config(config_path)
     if profile not in cfg.profiles:
         raise ProfileNotFound(profile)
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     profile_block = doc["profiles"][profile]
     codex = profile_block.get("codex")
     plugins = codex.get("plugins") if isinstance(codex, CommentedMap) else None
     if not isinstance(plugins, CommentedSeq) or name not in plugins:
         return False
     plugins.remove(name)
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
-def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:
+def _load_yaml_doc(config_path: Path) -> CommentedMap:
     """Load ``config_path`` in ruamel.yaml round-trip mode.
 
-    Returns ``(yaml_instance, doc)`` so the caller can modify ``doc``
-    and write it back via ``yaml_instance.dump(doc, fh)``.
     Raises :class:`ConfigError` when the file does not exist.
     """
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
-    yaml = YAML(typ="rt")
-    yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.preserve_quotes = True
     with config_path.open("r", encoding="utf-8") as fh:
-        return yaml, yaml.load(fh)
+        return yaml_rt().load(fh)
 
 
-def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
+def _atomic_yaml_dump(doc: CommentedMap, config_path: Path) -> None:
     """Dump ``doc`` to ``config_path`` atomically (temp file + ``os.replace``).
 
     ``open("w")`` truncates in place — a crash mid-dump corrupts the
@@ -198,13 +193,16 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
     # exist — every caller loads it first). fchmod on the temp fd before
     # replace closes the TOCTOU window, matching deploy._atomic_write.
     original_mode = stat.S_IMODE(config_path.stat().st_mode)
+    text = render_yaml(
+        doc, config_path.read_bytes().decode("utf-8"), fallback=(2, 4, 2)
+    )
     fd, tmp_name = tempfile.mkstemp(
         dir=str(config_path.parent), prefix=f".{config_path.name}.", suffix=".tmp"
     )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            yaml.dump(doc, fh)
+            fh.write(text)
             fh.flush()
             os.fchmod(fh.fileno(), original_mode)
         tmp_path.replace(config_path)
@@ -243,7 +241,7 @@ def yaml_add_marketplace(
     if name in cfg.marketplaces:
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     mps = _ensure_top_level_block(doc, "marketplaces")
     entry = CommentedMap()
     entry["source"] = source.source.value
@@ -252,7 +250,7 @@ def yaml_add_marketplace(
     else:
         entry["path"] = str(source.path or "")
     mps[name] = entry
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -265,7 +263,7 @@ def yaml_remove_marketplace(config_path: Path, name: str) -> bool:
     if name not in cfg.marketplaces:
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     mps = doc.get("marketplaces")
     if mps and name in mps:
         del mps[name]
@@ -275,7 +273,7 @@ def yaml_remove_marketplace(config_path: Path, name: str) -> bool:
         # add-then-rollback flows.
         if not mps:
             del doc["marketplaces"]
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -295,12 +293,12 @@ def yaml_add_plugin(
     if plugin_name in cfg.claude_plugins:
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     plugins_block = _ensure_top_level_block(doc, "claude_plugins")
     entry = CommentedMap()
     entry["marketplace"] = marketplace
     plugins_block[plugin_name] = entry
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -338,7 +336,7 @@ def yaml_add_plugin_to_profile(
     if _profile_plugin_refs(cfg, profile_name, plugin_ref):
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     profiles = doc.get("profiles", {})
     if profile_name not in profiles:
         raise ProfileNotFound(f"profile not found: {profile_name}")
@@ -351,7 +349,7 @@ def yaml_add_plugin_to_profile(
     pkg_list = _ensure_list(profiles[profile_name], "packages")
     if plugin_ref not in pkg_list:
         pkg_list.append(plugin_ref)
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True
 
 
@@ -375,7 +373,7 @@ def yaml_remove_plugin_from_profile(
     if not refs:
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     profiles = doc.get("profiles", {})
     if profile_name not in profiles:
         return False
@@ -383,5 +381,5 @@ def yaml_remove_plugin_from_profile(
     for ref in refs:
         if ref in pkg_list:
             pkg_list.remove(ref)
-    _atomic_yaml_dump(yaml, doc, config_path)
+    _atomic_yaml_dump(doc, config_path)
     return True

@@ -17,7 +17,6 @@ profile's ``reconcile.extensions.exclude`` block.
 
 import hashlib
 import hmac
-import io
 import logging
 import os
 import re
@@ -28,7 +27,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ruamel.yaml import YAML
 from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
@@ -52,6 +50,7 @@ from setforge.errors import (
     ProfileNotFound,
     ResolveError,
 )
+from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
 from setforge.overlay_provenance import OverlayOrigin, ResolvedExtension
 from setforge.provision import driver
 from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
@@ -484,32 +483,26 @@ def uninstall_one(ext_id: str) -> None:
         ) from exc
 
 
-def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:
+_EXT_YAML_INDENT = (2, 4, 2)
+
+
+def _load_yaml_doc(config_path: Path) -> CommentedMap:
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
-    yaml = YAML(typ="rt")
-    # Match the indent style used in setforge.yaml so list edits don't
-    # noisy-reformat the rest of the file (lists indented under their key).
-    yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.preserve_quotes = True
     with config_path.open("r", encoding="utf-8") as fh:
-        return yaml, yaml.load(fh)
+        return yaml_rt().load(fh)
 
 
-def _dump_yaml_doc(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
+def _dump_yaml_doc(doc: CommentedMap, config_path: Path) -> None:
     """Atomically serialize ``doc`` back to ``config_path``.
 
-    Dumps to an in-memory buffer first, then writes via
-    :func:`atomicio.atomic_write_text` (write-temp + fsync + os.replace)
-    so a crash, SIGTERM, disk-full, or ruamel serialization error
-    mid-dump can never truncate the live ``setforge.yaml`` — the single
-    source of truth for every profile / tracked-file. The file's
-    permission bits are preserved across the replace.
+    Goes through :func:`atomic_write_yaml` (write-temp + fsync +
+    os.replace) so a crash, SIGTERM, disk-full, or ruamel serialization
+    error mid-dump can never truncate the live ``setforge.yaml`` — the
+    single source of truth for every profile / tracked-file. The file's
+    indentation style, line endings, BOM and permission bits are kept.
     """
-    buf = io.StringIO()
-    yaml.dump(doc, buf)
-    mode = config_path.stat().st_mode & 0o777 if config_path.exists() else None
-    atomic_write_text(config_path, buf.getvalue(), mode=mode)
+    atomic_write_yaml(config_path, doc, fallback=_EXT_YAML_INDENT)
 
 
 def _ensure_list(block: CommentedMap, key: str) -> CommentedSeq:
@@ -643,14 +636,14 @@ def add_to_include(
     ):
         return False
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     if profile not in doc.get("profiles", {}):
         raise ProfileNotFound(f"profile not found: {profile}")
     _mint_extension_package(doc, key, ext_id)
     pkg_list = _ensure_list(doc["profiles"][profile], "packages")
     if key not in pkg_list:
         pkg_list.append(key)
-    _dump_yaml_doc(yaml, doc, config_path)
+    _dump_yaml_doc(doc, config_path)
     return True
 
 
@@ -786,7 +779,7 @@ def preview_capture_extensions(
     if _profile_include_ids(cfg, profile) == set(new_include):
         return None
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     if profile not in doc.get("profiles", {}):
         raise ProfileNotFound(f"profile not found: {profile}")
     profile_block = doc["profiles"][profile]
@@ -809,9 +802,9 @@ def preview_capture_extensions(
         profile_block["packages"] = CommentedSeq(kept)
     elif "packages" in profile_block:
         del profile_block["packages"]
-    buf = io.StringIO()
-    yaml.dump(doc, buf)
-    return buf.getvalue()
+    return render_yaml(
+        doc, config_path.read_bytes().decode("utf-8"), fallback=_EXT_YAML_INDENT
+    )
 
 
 def remove_from_include(
@@ -850,7 +843,7 @@ def remove_from_include(
                 f"inherited declaration via {profile}.reconcile.extensions.exclude"
             )
 
-    yaml, doc = _load_yaml_doc(config_path)
+    doc = _load_yaml_doc(config_path)
     if profile not in doc.get("profiles", {}):
         raise ProfileNotFound(f"profile not found: {profile}")
     profile_block = doc["profiles"][profile]
@@ -867,5 +860,5 @@ def remove_from_include(
             changed = True
     if not changed:
         return False
-    _dump_yaml_doc(yaml, doc, config_path)
+    _dump_yaml_doc(doc, config_path)
     return True
