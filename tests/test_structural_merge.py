@@ -1118,3 +1118,26 @@ def test_identical_added_containers_are_clean_and_retained(
         else result.merged_model
     )
     assert merged == expected
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ("1: a\n", "non-string mapping key 1 (int) cannot be addressed by a key path"),
+        (
+            "~: a\n",
+            "non-string mapping key None (NoneType) cannot be addressed by a key path",
+        ),
+        (
+            "m:\n  true: a\n",
+            "non-string mapping key True (bool) cannot be addressed by a key path",
+        ),
+    ],
+)
+def test_non_string_yaml_key_is_a_type_mismatch(document: str, message: str) -> None:
+    base, ours, theirs = (_yload(document) for _ in range(3))
+
+    with pytest.raises(MergeTypeMismatch) as excinfo:
+        merge_structural(base, ours, theirs)
+
+    assert str(excinfo.value) == message

@@ -685,6 +685,11 @@ def _merge_key(
 
     ``prefix`` is ``None`` at the root (see :func:`append_key_segment`).
     """
+    if not isinstance(key, str):
+        raise MergeTypeMismatch(
+            f"non-string mapping key {key!r} ({type(key).__name__}) "
+            "cannot be addressed by a key path"
+        )
     path = append_key_segment(prefix, key)
     b_present = backend.has("base", key)
     o_present = backend.has("ours", key)

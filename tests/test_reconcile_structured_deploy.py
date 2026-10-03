@@ -275,3 +275,130 @@ def test_live_already_equal_to_new_tracked_only_advances_base() -> None:
     assert out.kind is ReconcileKind.WRITE
     assert out.content == both
     assert out.new_base == both
+
+
+_LINE_MERGED_UNPARSEABLE = [
+    pytest.param(
+        b"---\nkind: A\ndata: 1\n---\nkind: B\ndata: 2\n",
+        b"---\nkind: A\ndata: 7\n---\nkind: B\ndata: 2\n",
+        b"---\nkind: A\ndata: 1\n---\nkind: B\ndata: 3\n",
+        b"---\nkind: A\ndata: 7\n---\nkind: B\ndata: 3\n",
+        id="multi-document",
+    ),
+    pytest.param(
+        b"name: {{ foo }}\nmid: 0\nport: 1\n",
+        b"name: {{ bar }}\nmid: 0\nport: 1\n",
+        b"name: {{ foo }}\nmid: 0\nport: 2\n",
+        b"name: {{ bar }}\nmid: 0\nport: 2\n",
+        id="templated",
+    ),
+    pytest.param(
+        b"a: 1\na: 2\nmid: 0\nport: 1\n",
+        b"a: 1\na: 5\nmid: 0\nport: 1\n",
+        b"a: 1\na: 2\nmid: 0\nport: 2\n",
+        b"a: 1\na: 5\nmid: 0\nport: 2\n",
+        id="duplicate-keys",
+    ),
+    pytest.param(
+        b"1: a\nmid: 0\n2: b\n",
+        b"1: x\nmid: 0\n2: b\n",
+        b"1: a\nmid: 0\n2: y\n",
+        b"1: x\nmid: 0\n2: y\n",
+        id="integer-keys",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("base", "host", "upstream", "expected"), _LINE_MERGED_UNPARSEABLE
+)
+def test_yaml_the_key_engine_cannot_model_is_line_merged(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("unmodelled")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+_JSON_BASE = b'{\n  "a": 1\n}\n'
+_JSON_UPSTREAM = b'{\n  "a": 2\n}\n'
+_BROKEN_JSON = [
+    pytest.param(b"", id="empty"),
+    pytest.param(b'{\n  "a": 1,\n  "L', id="truncated"),
+]
+
+
+@pytest.mark.parametrize("broken", _BROKEN_JSON)
+def test_unparseable_live_json_defers_instead_of_raising(broken: bytes) -> None:
+    fid = file_id("broken-live")
+    _seed(fid, base=_JSON_BASE, local=broken)
+
+    out = reconcile_structured_file(
+        _P, fid, live=broken, tracked=_JSON_UPSTREAM, fmt=_JSON
+    )
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == _JSON_BASE
+
+
+@pytest.mark.parametrize("broken", _BROKEN_JSON)
+@pytest.mark.parametrize("upstream", [_JSON_BASE, _JSON_UPSTREAM])
+def test_use_tracked_replaces_unparseable_live_json(
+    broken: bytes, upstream: bytes
+) -> None:
+    fid = file_id("broken-live-auto")
+    _seed(fid, base=_JSON_BASE, local=broken)
+
+    out = reconcile_structured_file(
+        _P, fid, live=broken, tracked=upstream, fmt=_JSON, auto=AutoSide.THEIRS
+    )
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == upstream
+    assert out.new_base == upstream
+
+
+@pytest.mark.parametrize("auto", [None, AutoSide.OURS])
+def test_unparseable_live_json_is_kept_without_use_tracked(
+    auto: AutoSide | None,
+) -> None:
+    fid = file_id("broken-live-kept")
+    broken = b'{\n  "a": 1,\n  "L'
+    _seed(fid, base=_JSON_BASE, local=broken)
+
+    out = reconcile_structured_file(
+        _P, fid, live=broken, tracked=_JSON_BASE, fmt=_JSON, auto=auto
+    )
+
+    assert out.kind is ReconcileKind.NOOP
+
+
+def test_use_tracked_keeps_host_edit_when_neither_side_parses() -> None:
+    fid = file_id("multidoc-host-edit")
+    base = b"---\nkind: A\n---\nkind: B\n"
+    host = b"---\nkind: A\n---\nkind: MINE\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(
+        _P, fid, live=host, tracked=base, fmt=_FMT, auto=AutoSide.THEIRS
+    )
+
+    assert out.kind is ReconcileKind.NOOP
+
+
+def test_duplicate_key_live_json_is_line_merged() -> None:
+    fid = file_id("dup-live")
+    base = b'{\n  "a": 1,\n  "m": 0,\n  "z": 1\n}\n'
+    host = b'{\n  "a": 1,\n  "a": 5,\n  "m": 0,\n  "z": 1\n}\n'
+    upstream = b'{\n  "a": 1,\n  "m": 0,\n  "z": 2\n}\n'
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b'{\n  "a": 1,\n  "a": 5,\n  "m": 0,\n  "z": 2\n}\n'

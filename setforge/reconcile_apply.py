@@ -35,7 +35,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from setforge.errors import MergeTypeMismatch
+from setforge.errors import (
+    DuplicateKeyInMergeModel,
+    MergeTypeMismatch,
+    StructuredParseError,
+)
 from setforge.reconcile import (
     ABSENT,
     Clean,
@@ -332,6 +336,15 @@ def reconcile_plain_file(
     return ReconcileOutcome(ReconcileKind.DEFERRED)
 
 
+def _parses(data: bytes, fmt: StructuredFormat) -> bool:
+    """Whether ``data`` loads as a single ``fmt`` document."""
+    try:
+        _load_model(data, fmt)
+    except StructuredParseError:
+        return False
+    return True
+
+
 def reconcile_structured_file(
     profile: str,
     fid: FileId,
@@ -374,6 +387,18 @@ def reconcile_structured_file(
         )
 
     if base_raw is not None and isinstance(live, bytes):
+        # A live file the format cannot parse (truncated write, editor crash)
+        # has no keys to merge; --auto=use-tracked restores the tracked file.
+        if (
+            auto is AutoSide.THEIRS
+            and live != tracked
+            and not _parses(live, fmt)
+            and _parses(tracked, fmt)
+        ):
+            return ReconcileOutcome(
+                ReconcileKind.WRITE, content=tracked, new_base=tracked
+            )
+
         # Nothing to merge: one side did not move, or both already agree. The
         # source bytes stand verbatim — a model round-trip would reformat them.
         if live == tracked or tracked == base_raw:
@@ -385,23 +410,22 @@ def reconcile_structured_file(
                 ReconcileKind.WRITE, content=tracked, new_base=tracked
             )
 
-        # Clean-fast-path: a key-aware 3-way over comment-preserving models.
+        # Clean-fast-path: a key-aware 3-way over comment-preserving models. A
+        # side the key engine cannot model (unparseable, multi-document,
+        # duplicate or non-string keys, a non-mapping root) is line-merged.
         try:
             result = merge_structural(
                 _load_model(base_raw, fmt),
                 _load_model(live, fmt),
                 _load_model(tracked, fmt),
             )
-        except MergeTypeMismatch:
-            pass
-        else:
-            if result.clean:
-                merged = _dump_model(result.merged_model, fmt)
-                if merged == live and base_raw == tracked:
-                    return ReconcileOutcome(ReconcileKind.NOOP)
-                return ReconcileOutcome(
-                    ReconcileKind.WRITE, content=merged, new_base=tracked
-                )
+            merged = _dump_model(result.merged_model, fmt) if result.clean else None
+        except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
+            merged = None
+        if merged is not None:
+            return ReconcileOutcome(
+                ReconcileKind.WRITE, content=merged, new_base=tracked
+            )
 
     # A genuine same-key collision (or an absent / edge live) falls back to the
     # proven line path — its wizard / --auto / DEFERRED resolves the conflict.
