@@ -58,7 +58,7 @@ from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
 )
-from setforge.reconcile.merge import split_lines
+from setforge.reconcile.merge import _MaxRecursionDepth, split_lines
 from setforge.reconcile.merge_model import MergeInput
 from setforge.reconcile.structured_units import (
     StructuredFormat,
@@ -353,11 +353,11 @@ def _parses(data: bytes, fmt: StructuredFormat) -> bool:
     return True
 
 
-def _terminated(data: bytes) -> bytes:
-    """``data`` with its last line ended like its other lines are."""
+def _terminated(data: bytes, newline: bytes) -> bytes:
+    """``data`` with ``newline`` ending its last line when nothing does."""
     if not data or data.endswith(b"\n"):
         return data
-    return data + (b"\r\n" if b"\r\n" in data else b"\n")
+    return data + newline
 
 
 #: Largest ours-times-theirs count of edits in one conflict hunk that is
@@ -403,29 +403,55 @@ def _edits_collide(left: _Edit, right: _Edit) -> bool:
     return a1 < b2 and b1 < a2
 
 
+def _repeats[T](
+    edit: _Edit, side: Sequence[T], others: list[_Edit], other_side: Sequence[T]
+) -> bool:
+    """Whether ``edit`` inserts what the other side's edit beside it already has.
+
+    Both sides added the same line at one spot, but one of them also changed
+    the line next to it: its diff is a single replacement that starts (or ends)
+    with that line, the other side's is a pure insertion at the replacement's
+    edge. They do not collide, yet applying both would write the line twice.
+    """
+    at, end, j1, j2 = edit
+    if at != end:
+        return False
+    new = side[j1:j2]
+    return any(
+        a1 != a2
+        and (
+            (a1 == at and other_side[b1:b2][: len(new)] == new)
+            or (a2 == at and other_side[b1:b2][-len(new) :] == new)
+        )
+        for a1, a2, b1, b2 in others
+    )
+
+
 def _independent_edits[T](
     base: Sequence[T], ours: Sequence[T], theirs: Sequence[T]
 ) -> tuple[list[_Edit], list[_Edit]] | None:
     """Both sides' edits of ``base`` when none of them collide, else ``None``.
 
-    An edit both sides made identically is ours alone. The line 3-way calls any
-    two NEIGHBOURING edits a conflict; here only edits of the same place are.
+    An edit both sides made identically is ours alone, and an insertion is
+    dropped when the other side's edit next to it already brings the same
+    elements (:func:`_repeats`). The line 3-way calls any two NEIGHBOURING edits
+    a conflict; here only edits of the same place are. ``None`` as well when the
+    two sides have too many edits to compare, or the differ gives up.
     """
-    mine = _edits(base, ours)
-    other = [
-        edit
-        for edit in _edits(base, theirs)
-        if not any(
-            edit[:2] == same[:2]
-            and theirs[edit[2] : edit[3]] == ours[same[2] : same[3]]
-            for same in mine
-        )
-    ]
+    try:
+        mine, other = _edits(base, ours), _edits(base, theirs)
+    except (RecursionError, _MaxRecursionDepth):
+        return None
     if len(mine) * len(other) > _MAX_EDIT_PAIRS:
         return None
+    made = {edit[:2]: ours[edit[2] : edit[3]] for edit in mine}
+    other = [edit for edit in other if made.get(edit[:2]) != theirs[edit[2] : edit[3]]]
     if any(_edits_collide(left, right) for left in mine for right in other):
         return None
-    return mine, other
+    return (
+        [edit for edit in mine if not _repeats(edit, ours, other, theirs)],
+        [edit for edit in other if not _repeats(edit, theirs, mine, ours)],
+    )
 
 
 def _resolve_hunk(
@@ -470,7 +496,11 @@ def _line_merge(
     A missing final newline is not a difference between the sides: the last line
     gets a terminator for the merge, and the result ends the way live does.
     """
-    result = merge(_terminated(base), _terminated(live), _terminated(tracked))
+    sides = (base, live, tracked)
+    # One terminator for all three: a side cut down to a single unterminated
+    # line does not show which one the document uses.
+    newline = b"\r\n" if any(b"\r\n" in side for side in sides) else b"\n"
+    result = merge(*(_terminated(side, newline) for side in sides))
     parts: list[bytes] = []
     for segment in result.segments:
         if isinstance(segment, Clean):
@@ -608,7 +638,13 @@ def _key_merge(
         text = _line_merge(*sides, refine=yaml)
         if text is not None and _holds_merge(text, merged, fmt, commas=commas):
             return text
-        return None if aliased else _dump_model(merged, fmt, like=live)
+        if aliased:
+            return None
+        text = _dump_model(merged, fmt, like=live)
+        if yaml and b"\n" not in live and any(b"\r\n" in side for side in sides):
+            # A one-line live file shows no line ending for the dump to follow.
+            text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        return text
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
 

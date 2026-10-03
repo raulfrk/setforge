@@ -1338,3 +1338,129 @@ def test_resolve_hunk_gives_up_past_a_fixed_number_of_edit_pairs(
         assert merged == [
             line.replace(b"0", b"1" if n % 2 else b"2") for n, line in enumerate(base)
         ]
+
+
+_TICKET = b"# see ticket 12\n"
+_SAME_LINE_ADDED_TWICE = [
+    pytest.param(
+        b"a: 1\nb: 2\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 20\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 2\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 20\nc: 3\n",
+        id="comment-above-a-line-the-host-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 2\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 20\nc: 3\n",
+        b"a: 1\n" + _TICKET + b"b: 20\nc: 3\n",
+        id="comment-above-a-line-upstream-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 1\n\nb: 20\n",
+        b"a: 1\n\nb: 2\n",
+        b"a: 1\n\nb: 20\n",
+        id="blank-line-above-a-line-the-host-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 1\n\nb: 2\n",
+        b"a: 1\n\nb: 20\n",
+        b"a: 1\n\nb: 20\n",
+        id="blank-line-above-a-line-upstream-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 10\n# end of a\nb: 2\n",
+        b"a: 1\n# end of a\nb: 2\n",
+        b"a: 10\n# end of a\nb: 2\n",
+        id="comment-below-a-line-the-host-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 1\n# end of a\nb: 2\n",
+        b"a: 10\n# end of a\nb: 2\n",
+        b"a: 10\n# end of a\nb: 2\n",
+        id="comment-below-a-line-upstream-also-edits",
+    ),
+    pytest.param(
+        b"a: 1\nb: 2\n",
+        b"a: 1\n# mine\nb: 20\n",
+        b"a: 1\n# theirs\nb: 2\n",
+        b"a: 1\n# theirs\n# mine\nb: 20\n",
+        id="different-lines-at-that-spot-are-both-kept",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("base", "host", "upstream", "expected"), _SAME_LINE_ADDED_TWICE
+)
+def test_a_line_both_sides_added_next_to_an_edit_appears_once(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("added-twice")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    _assert_converged(fid, out, upstream, _FMT)
+
+
+def test_crlf_document_shrunk_to_one_unterminated_line_keeps_crlf() -> None:
+    fid = file_id("crlf-one-line")
+    base = b"a: 1\r\nb: 2\r\n"
+    host = b"a: 1\r\nb: 2\r\n# host note\r\n"
+    upstream = b"b: 2"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"b: 2\r\n# host note\r\n"
+
+
+def test_re_serialised_merge_of_a_one_line_live_file_keeps_crlf() -> None:
+    fid = file_id("crlf-one-line-dump")
+    base = b"a: 1\r\nb: 2\r\n"
+    host = b"b: 2  # mine"
+    upstream = b"a: 1\r\nb: 3\r\nc: 4\r\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"b: 3\r\nc: 4"
+
+
+def test_resolve_hunk_bails_out_before_comparing_edits_of_a_huge_hunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge import reconcile_apply
+
+    base = [b"k%d: %d\n" % (n, n) for n in range(5000)]
+    ours = [line.replace(b"\n", b"  # mine\n") for line in base]
+    theirs = [line.replace(b"\n", b"\r\n") for line in base]
+    compared: list[object] = []
+    monkeypatch.setattr(
+        reconcile_apply, "_edits_collide", lambda *edits: compared.append(edits)
+    )
+
+    assert reconcile_apply._resolve_hunk(base, ours, theirs) is None
+    assert compared == []
+
+
+def test_resolve_hunk_treats_a_matcher_recursion_failure_as_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge import reconcile_apply
+
+    def exploding(*_args: object) -> object:
+        raise RecursionError("matcher recursion")
+
+    monkeypatch.setattr(reconcile_apply, "PatienceSequenceMatcher", exploding)
+
+    assert reconcile_apply._resolve_hunk([b"a\n"], [b"b\n"], [b"a\n", b"c\n"]) is None
