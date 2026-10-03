@@ -168,6 +168,26 @@ def test_command_families_share_host_local_destination(
     assert alternate in metas[0].files
 
 
+def test_install_and_ownership_work_through_symlinked_state_directory(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = integration_env(tracked={"note": ("text/note.txt", "hello\n")})
+    alias = env.state_dir.with_name("state-link")
+    alias.symlink_to(env.state_dir, target_is_directory=True)
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(alias))
+
+    install = env.run_verb(["install", "--yes", "--no-git-check", "--no-secrets-scan"])
+    assert install.exit_code == 0, install.output
+    listing = env.run_verb(
+        ["ownership", "list"], inject_config=False, inject_profile=False
+    )
+    assert listing.exit_code == 0, listing.output
+    assert "text/note.txt" in listing.output.replace("\n", "")
+    assert tuple((env.state_dir / "ownership" / "claims").glob("*.json"))
+
+
 class TestInstall:
     def test_deploys_and_records_transition(
         self,
