@@ -643,6 +643,79 @@ def test_revert_to_before_dry_run_failure_aborts_with_no_live_changes(
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_reports_no_recorded_revert_for_a_rolled_back_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge import operations
+
+    cfg, _dst = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
+    (transition_a / "changes.patch").write_text("garbage\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition_a.name}",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert live.read_text(encoding="utf-8") == "hello world\n"
+    assert [d for d in (state / "transitions").iterdir() if "-revert-" in d.name] == []
+    assert operations.active("vmh") is None
+    assert "transition: " not in result.output
+    assert "to REDO this revert" not in result.output
+    assert "rolled back 1 already reverted step(s) of this chain" in result.output
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_reports_each_recorded_revert_after_the_chain_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, _dst = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    runner = CliRunner()
+    _live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
+
+    result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition_a.name}",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    recorded = sorted(
+        d for d in (state / "transitions").iterdir() if "-revert-" in d.name
+    )
+    lines = result.output.splitlines()
+    reported = [line for line in lines if line.startswith("transition: ")]
+    assert reported == [f"transition: {path}" for path in recorded]
+    last_progress = max(i for i, line in enumerate(lines) if "reverting: " in line)
+    assert lines.index(reported[0]) > last_progress
+
+
+def test_revert_help_describes_an_all_or_nothing_chain() -> None:
+    result = CliRunner().invoke(app, ["revert", "--help"])
+
+    assert result.exit_code == 0
+    assert "partial" not in result.output
+    assert "rolled back" in " ".join(result.output.split())
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_single_target_acts_like_bare_revert(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

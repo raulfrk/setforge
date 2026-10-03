@@ -406,8 +406,11 @@ def _apply_revert(
     *,
     path_guards: tuple[operations.PathGuard, ...] = (),
     config_identity_fd: int | None = None,
-) -> None:
-    """Apply the reverse transition and print the post-success summary.
+) -> Path:
+    """Apply the reverse transition and return the record it wrote.
+
+    The caller reports that record only once its journal has completed, so a
+    step that is later rolled back is never announced as a recorded revert.
 
     Content patches reverse payload bytes; typed filesystem deltas restore
     symlink topology while retaining links that existed before the install.
@@ -519,6 +522,10 @@ def _apply_revert(
         filesystem_deltas=transitions.reverse_filesystem_deltas(filesystem_deltas),
         ownership_transfers=tuple(reverse_ownership),
     )
+    return target
+
+
+def _report_recorded_revert(target: Path, profile: str) -> None:
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
 
@@ -742,9 +749,9 @@ _TO_BEFORE_OPTION = typer.Option(
     "--to-before",
     help=(
         "Revert the named transition AND every newer transition for the "
-        "profile. The newest step is pre-flight dry-run-checked; later "
-        "steps fail-fast on mid-stream drift (partial state surfaced + "
-        "exit 1)."
+        "profile. The newest step is pre-flight dry-run-checked; if a "
+        "later step fails, the steps already applied are rolled back and "
+        "nothing is changed (exit 1)."
     ),
 )
 
@@ -767,9 +774,8 @@ def revert(
     newer transition for the profile (in reverse-chronological order).
     The newest step is pre-flight dry-run-checked before any live
     mutation. Subsequent steps each run their own internal
-    dry-run-then-apply gate and fail-fast on mid-stream drift, leaving
-    the system in a documented partial-state on failure (the applied
-    prefix has reverted, the unapplied suffix has not).
+    dry-run-then-apply gate; when one of them fails, the steps already
+    applied are rolled back, so the chain reverts completely or not at all.
 
     Opens the confirm-explain-redo wizard before applying (mockup A for
     single-step; mockup H summary panel for multi-step). Records its own
@@ -833,7 +839,7 @@ def revert(
         identity_guard = (
             mutation_guards.config_identity if mutation_guards is not None else None
         )
-        _apply_revert(
+        recorded = _apply_revert(
             transition,
             profile,
             config,
@@ -844,6 +850,7 @@ def revert(
         )
         journal = operations.finish_checkpoint(journal)
         operations.complete(journal)
+    _report_recorded_revert(recorded, profile)
 
 
 def _resolve_to_before_chain(
@@ -898,15 +905,14 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
        state produced by reversing its successor. Steps 2..N still run
        their internal dry-run-then-apply (the existing
        ``dry_run=False`` mode) so they refuse cleanly mid-stream on
-       unexpected drift, with the partial-state warning at step N.
+       unexpected drift.
     3. Show the multi-step confirm wizard (one prompt covering all N).
     4. On user confirm: apply each step's reverse via
        ``_apply_revert`` (which calls ``apply_patch_reverse(dry_run=False)``
        — i.e. dry-run-then-real-apply per step — plus plugin / extension
-       reconcile and writes a reverse transition). If a mid-stream
-       failure (rare: ENOSPC, filesystem race, or unexpected drift
-       between steps), surface the partial state and exit 1 with an
-       "inconsistent state" warning.
+       reconcile and writes a reverse transition). One journal covers the
+       whole chain: a mid-stream failure rolls the applied steps back, and
+       the recorded reverts are reported only after the chain commits.
     """
     chain = _resolve_to_before_chain(profile, to_before)
     # Pre-flight the newest step. Only step 1 is checkable against live
@@ -931,49 +937,66 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     # step produced; an interleaving deploy would invalidate that chain).
     transition_dirs = tuple(entry.directory for entry in chain)
     state_profiles = _revert_locked_profiles(transition_dirs, profile)
-    with (
-        mutation_locks(
-            resources=True,
-            config_identity_dir=_ownership_transfer_identity_dir(
-                transition_dirs, config
-            ),
-            config_dir=config.resolve().parent,
-            target_roots=_ownership_transfer_lock_targets(transition_dirs),
-            profiles=state_profiles,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "revert"),
-    ):
-        operations.refuse_active(profile)
-        refreshed = _resolve_to_before_chain(profile, to_before)
-        if tuple(entry.directory for entry in refreshed) != tuple(
-            entry.directory for entry in chain
+    recorded: list[Path] = []
+    try:
+        with (
+            mutation_locks(
+                resources=True,
+                config_identity_dir=_ownership_transfer_identity_dir(
+                    transition_dirs, config
+                ),
+                config_dir=config.resolve().parent,
+                target_roots=_ownership_transfer_lock_targets(transition_dirs),
+                profiles=state_profiles,
+            ) as mutation_guards,
+            operations.recover_on_error(profile, "revert"),
         ):
-            raise SetforgeError(
-                "transition history changed after confirmation; retry revert"
+            operations.refuse_active(profile)
+            refreshed = _resolve_to_before_chain(profile, to_before)
+            if tuple(entry.directory for entry in refreshed) != tuple(
+                entry.directory for entry in chain
+            ):
+                raise SetforgeError(
+                    "transition history changed after confirmation; retry revert"
+                )
+            journal = _prepare_revert_journal(transition_dirs, profile, config)
+            journal = operations.begin_checkpoint(
+                journal,
+                name="revert-chain",
+                kind=operations.CheckpointKind.COMPENSATABLE,
+                recovery=(
+                    "restore pre-chain files, stores, modes, and adapter inventories"
+                ),
             )
-        journal = _prepare_revert_journal(transition_dirs, profile, config)
-        journal = operations.begin_checkpoint(
-            journal,
-            name="revert-chain",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore pre-chain files, stores, modes, and adapter inventories",
-        )
-        identity_guard = (
-            mutation_guards.config_identity if mutation_guards is not None else None
-        )
-        config_identity_fd = (
-            identity_guard.directory_fd if identity_guard is not None else None
-        )
-        for entry in chain:
-            _apply_revert(
-                entry.directory,
-                profile,
-                config,
-                path_guards=journal.path_guards,
-                config_identity_fd=config_identity_fd,
+            identity_guard = (
+                mutation_guards.config_identity if mutation_guards is not None else None
             )
-        journal = operations.finish_checkpoint(journal)
-        operations.complete(journal)
+            config_identity_fd = (
+                identity_guard.directory_fd if identity_guard is not None else None
+            )
+            for entry in chain:
+                recorded.append(
+                    _apply_revert(
+                        entry.directory,
+                        profile,
+                        config,
+                        path_guards=journal.path_guards,
+                        config_identity_fd=config_identity_fd,
+                    )
+                )
+            journal = operations.finish_checkpoint(journal)
+            operations.complete(journal)
+    except BaseException as failure:
+        # recover_on_error attaches a note whenever its rollback was incomplete.
+        if recorded and not getattr(failure, "__notes__", ()):
+            typer.echo(
+                f"rolled back {len(recorded)} already reverted step(s) of this "
+                "chain; nothing was changed",
+                err=True,
+            )
+        raise
+    for target in recorded:
+        _report_recorded_revert(target, profile)
 
 
 def _prepare_revert_journal(
