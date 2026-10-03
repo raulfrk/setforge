@@ -120,6 +120,113 @@ def test_discover_injections_uses_canonical_config_for_legacy_record(
     assert discover_injections(target)[0].config_path == config
 
 
+def _recorded_injection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path, dict[str, Any]]:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    result = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    record = next((tmp_path / "state" / "project-injections").glob("*.json"))
+    return config, target, record, json.loads(record.read_text())
+
+
+@pytest.mark.parametrize("change", ["inode", "git-dir"])
+def test_discover_injections_refuses_changed_identity_with_the_remedy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    _, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    if change == "inode":
+        payload["target_inode"] += 1
+        remedy = f"run `setforge project remove demo {target}` to drop the stale record"
+    else:
+        payload["git_dir"] = None
+        remedy = (
+            "the Git directory changed since injection (recorded none, now "
+            f"{target / '.git'}); run `setforge project remove demo {target}` to "
+            "remove the injection, then inject again"
+        )
+    record.write_text(json.dumps(payload))
+
+    with pytest.raises(SetforgeError) as failure:
+        discover_injections(target)
+
+    assert str(failure.value) == (
+        f"project injection state does not match target identity: {record}; {remedy}"
+    )
+
+
+@pytest.mark.parametrize("problem", ["empty", "non-string", "duplicate"])
+def test_discover_injections_refuses_unusable_or_repeated_profile_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    _, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    rejected = record
+    if problem == "duplicate":
+        rejected = record.with_name("zz-second-record.json")
+        rejected.write_bytes(record.read_bytes())
+    else:
+        payload["profile"] = "" if problem == "empty" else 123
+        record.write_text(json.dumps(payload))
+
+    with pytest.raises(SetforgeError) as failure:
+        discover_injections(target)
+
+    assert str(failure.value) == (
+        f"project injection state has duplicate profile: {rejected}"
+    )
+
+
+@pytest.mark.parametrize(
+    "problem", ["root-through-missing-directory", "config-missing", "legacy-missing"]
+)
+def test_discover_injections_refuses_config_paths_that_do_not_resolve_strictly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    config, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    if problem == "root-through-missing-directory":
+        payload["config_root"] = str(
+            config.parent.parent / "missing" / ".." / config.parent.name
+        )
+    elif problem == "config-missing":
+        payload["config_path"] = str(config.parent / "gone.yaml")
+    else:
+        payload["schema"] = 1
+        del payload["config_path"]
+        for file_record in payload["files"]:
+            for field in ("visibility", "applied_payload", "upstream_mode"):
+                del file_record[field]
+            del file_record["upstream_payload"]
+        config.rename(config.with_name("moved.yaml"))
+    record.write_text(json.dumps(payload))
+
+    with pytest.raises(SetforgeError) as failure:
+        discover_injections(target)
+
+    assert str(failure.value) == (
+        f"project injection config cannot be resolved safely: {record}"
+    )
+
+
+def test_discover_injections_refuses_config_path_that_is_not_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    payload["config_path"] = str(config.parent / "project")
+    record.write_text(json.dumps(payload))
+
+    with pytest.raises(SetforgeError) as failure:
+        discover_injections(target)
+
+    assert str(failure.value) == (
+        f"project injection config is not a regular file: {config.parent / 'project'}"
+    )
+
+
 def test_discover_injections_rejects_non_mapping_file_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
