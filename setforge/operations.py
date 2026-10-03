@@ -829,11 +829,12 @@ def recover_files(journal: OperationJournal) -> OperationJournal:  # noqa: C901 
             if recovering.command == "install"
             else "journaled path parent changed before write"
         )
+        devices: dict[int, int] = {}
         for guard in recovering.path_guards:
             if not guard.exists:
                 continue
             try:
-                live = _restarted_guard_identity(guard, guard.path.lstat())
+                live = _restarted_guard_identity(guard, guard.path.lstat(), devices)
             except OSError as exc:
                 raise SetforgeError(f"{changed}: {guard.path}") from exc
             if live is None:
@@ -1459,6 +1460,7 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
         if preparing_roots is not None and journal.command == "install"
         else set()
     )
+    devices: dict[int, int] = {}
     for guard in journal.path_guards:
         try:
             info = guard.path.lstat()
@@ -1511,7 +1513,7 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
                 )
             continue
         try:
-            live = _restarted_guard_identity(guard, info)
+            live = _restarted_guard_identity(guard, info, devices)
         except OSError as exc:
             raise SetforgeError(
                 f"journaled path parent changed before recovery: {guard.path}"
@@ -1523,20 +1525,26 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
 
 
 def _restarted_guard_identity(
-    guard: PathGuard, info: os.stat_result
+    guard: PathGuard, info: os.stat_result, devices: dict[int, int]
 ) -> tuple[int, int, int] | None:
     """Match a persisted guard against ``lstat`` output from a later process.
 
     Device numbers change across remounts and hosts, and permission bits change
     when the operation itself rewrote a directory's mode or an operator fixed
     an ancestor before recovering. The inode and directory type decide; the
-    observed device and mode are adopted.
+    observed device and mode are adopted. ``devices`` maps each journaled
+    device to the one it is observed as now: guards that shared a filesystem
+    must still share one, so a single guard cannot move to another filesystem
+    that happens to reuse its inode number.
     """
+    assert guard.device is not None
     assert guard.mode is not None
     alias = stat.S_ISLNK(guard.mode)
     if alias:
         info = guard.path.stat()
     if info.st_ino != guard.inode or not stat.S_ISDIR(info.st_mode):
+        return None
+    if devices.setdefault(guard.device, info.st_dev) != info.st_dev:
         return None
     mode = alias_guard_mode(info.st_mode) if alias else info.st_mode
     return (info.st_dev, info.st_ino, mode)

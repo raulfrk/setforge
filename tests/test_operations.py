@@ -567,6 +567,29 @@ def test_recovery_accepts_guards_journaled_under_another_device_number(
     assert path.read_text(encoding="utf-8") == "before"
 
 
+def test_recovery_refuses_one_guard_moved_to_another_filesystem(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _journal_plain_file(tmp_path, "sync")
+    lstat = Path.lstat
+
+    def moved(candidate: Path) -> os.stat_result:
+        info = lstat(candidate)
+        if candidate != path.parent:
+            return info
+        fields = list(info)
+        fields[2] += 7
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(Path, "lstat", moved)
+
+    with pytest.raises(SetforgeError, match="parent changed before recovery"):
+        operations.recover_files(operations.load("p"))
+
+    assert path.read_text(encoding="utf-8") == "after"
+    assert operations.active("p") is not None
+
+
 def test_recovery_accepts_permission_change_on_plain_ancestor(
     tmp_path: Path, operation_state: Path
 ) -> None:
