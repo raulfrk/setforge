@@ -1320,3 +1320,91 @@ def test_restore_puts_a_start_only_line_back_only_when_values_allow() -> None:
     out = restore_start_only_lines(b"a: 1\n", start, base, model, fmt)
 
     assert out == b"a: 1\n# mine\n"
+
+
+_SECRET = b"# host private note: token lives in ~/.secret\n"
+_VALUES_ONLY = [
+    pytest.param(
+        b"a: 1\n",
+        b"a: 1\n" + _SECRET + b"shared_new: 5\n",
+        {"shared_new": HunkClass.SHARED},
+        b"a: 1\nshared_new: 5\n",
+        id="comment-line-above-a-shared-new-key",
+    ),
+    pytest.param(
+        b"a: 1\n",
+        b"a: 9  # host-only remark\n",
+        {"a": HunkClass.SHARED},
+        b"a: 9\n",
+        id="end-of-line-comment-on-a-shared-value",
+    ),
+    pytest.param(
+        b"a: 1  # upstream remark\n",
+        b"a: 9      # host-only remark\n",
+        {"a": HunkClass.SHARED},
+        b"a: 9  # upstream remark\n",
+        id="shared-value-keeps-the-tracked-comment",
+    ),
+    pytest.param(
+        b"host: a\nshared: 1\nl:\n    - x\n",
+        b"host: b  # mine\nshared: 2  # also mine\nl:\n    - x\n",
+        {"host": HunkClass.LOCAL, "shared": HunkClass.SHARED},
+        b"host: a\nshared: 2\nl:\n    - x\n",
+        id="local-key-next-to-a-shared-one",
+    ),
+    pytest.param(
+        b"a: 1\nl:\n    - x\n",
+        b"a: 1\nl:\n    - x\nnew:\n    # secret\n\n    deep: 3  # eol\n# tail\n",
+        {"new.deep": HunkClass.SHARED},
+        b"a: 1\nl:\n    - x\nnew:\n\n    deep: 3\n",
+        id="comments-inside-a-shared-new-block",
+    ),
+    pytest.param(
+        b"a: 1\nl:\n    - x\n",
+        b"a: 1\nl:\n    - x  # mine\n    - y   # also mine\n",
+        {"l": HunkClass.SHARED},
+        b"a: 1\nl:\n    - x\n    - y\n",
+        id="comments-on-shared-list-items",
+    ),
+    pytest.param(
+        b"a: 1\nl:\n    - x\n",
+        b'a: 1\nl:\n    - "#a"  # mine\n    # mine too\n    - y\n',
+        {"l": HunkClass.SHARED},
+        b'a: 1\nl:\n    - "#a"\n    - y\n',
+        id="re-serialised-list-drops-its-comments",
+    ),
+    pytest.param(
+        b"a: 1\n",
+        b'a: 1\nm: {}  # mine\nq: "#"  # mine\n',
+        {"m": HunkClass.SHARED, "q": HunkClass.SHARED},
+        b'a: 1\nm: {}\nq: "#"\n',
+        id="re-serialised-empty-mapping-drops-its-comment",
+    ),
+    pytest.param(
+        b"c: 1\nl:\n    - x\n",
+        b'c: "#fff"  # mine\nl:\n    - x\n',
+        {"c": HunkClass.SHARED},
+        b'c: "#fff"\nl:\n    - x\n',
+        id="hash-inside-a-quoted-value-is-re-serialised",
+    ),
+    pytest.param(
+        b"t: x\nl:\n    - x\n",
+        b't: "a # b"  # mine\nl:\n    - x\n',
+        {"t": HunkClass.SHARED},
+        b't: "a # b"\nl:\n    - x\n',
+        id="spaced-hash-inside-a-quoted-value-is-re-serialised",
+    ),
+]
+
+
+@pytest.mark.parametrize(("base", "live", "classes", "expected"), _VALUES_ONLY)
+def test_reconstruct_never_carries_host_comment_text(
+    base: bytes, live: bytes, classes: dict[str, HunkClass], expected: bytes
+) -> None:
+    units = _classified(base, live, classes)
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == expected
+    assert b"mine" not in out
+    assert b"secret" not in out

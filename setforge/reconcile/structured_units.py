@@ -30,6 +30,7 @@ from typing import Final
 
 from patiencediff import PatienceSequenceMatcher
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import Comment
 from ruamel.yaml.error import ReusedAnchorWarning
 from ruamel.yaml.events import AliasEvent, ScalarEvent
 from ruamel.yaml.nodes import ScalarNode
@@ -812,8 +813,49 @@ def _keep_comma(line: bytes, like: bytes) -> bytes:
     return (body + b"," if wanted else body[:-1]) + line[len(body) :]
 
 
+#: A YAML comment up to the end of a line body, with the blanks before it.
+_YAML_COMMENT_RE: Final = re.compile(rb"(?:^|\s+)#.*$")
+
+
+def _split_comment(line: bytes) -> tuple[bytes, bytes, bytes]:
+    """``line`` as (code, comment with the blanks before it, line ending)."""
+    body = line.rstrip(b"\r\n")
+    match = _YAML_COMMENT_RE.search(body)
+    cut = len(body) if match is None else match.start()
+    return body[:cut], body[cut:], line[len(body) :]
+
+
+def _values_only(old: list[bytes], new: list[bytes]) -> list[bytes] | None:
+    """YAML lines ``new`` reduced to their values: no comment text of their own.
+
+    Comment-only lines go and end-of-line comments are cut; a line that replaces
+    exactly one line of ``old`` keeps THAT line's comment. ``None`` when a ``#``
+    is left over: it may sit inside a quoted value, but from here it cannot be
+    told from comment text, and a comment must not travel with a value.
+    """
+    keep = b""
+    if len(old) == 1 and len(new) == 1:
+        code, comment, _ending = _split_comment(old[0])
+        keep = comment if code.strip() else b""
+    lines: list[bytes] = []
+    for line in new:
+        code, comment, ending = _split_comment(line)
+        if b"#" in code:
+            return None
+        if code.strip():
+            lines.append(code + keep + ending)
+        elif not comment:
+            lines.append(line)
+    return lines
+
+
 def _replacements(
-    old: list[bytes], new: list[bytes], fmt: StructuredFormat, *, source_first: bool
+    old: list[bytes],
+    new: list[bytes],
+    fmt: StructuredFormat,
+    *,
+    source_first: bool,
+    values_only: bool = False,
 ) -> list[list[bytes]]:
     """The texts to try in place of ``old``, most preferred first.
 
@@ -826,8 +868,17 @@ def _replacements(
     A JSON member line carries the separator to the NEXT member, which belongs
     to the position, not to the member: every form is also tried with the
     commas its lines need in their new positions.
+
+    With ``values_only`` the source lines come without their comments (see
+    :func:`_values_only`); nothing is offered when that cannot be done.
     """
-    replace, keep_both = [new], []
+    replace: list[list[bytes]] = [new]
+    keep_both: list[list[bytes]] = []
+    if values_only:
+        bare, fitted = _values_only([], new), _values_only(old, new)
+        if bare is None or fitted is None:
+            return []
+        new, replace = bare, [fitted]
     if len(old) == 1 and len(new) == 1:
         keep_both = [old + new, new + old]
         if fmt is StructuredFormat.JSONC:
@@ -846,6 +897,7 @@ def splice_lines_toward(
     fmt: StructuredFormat,
     *,
     keep_neutral: bool = False,
+    values_only: bool = False,
 ) -> bytes | None:
     """``start`` with exactly the ``source`` line regions that realise ``model``.
 
@@ -855,7 +907,9 @@ def splice_lines_toward(
     values, in the form that gets closest, so a value ``model`` keeps from
     ``start``, a comment-only edit and every untouched line keep their ``start``
     bytes. With ``keep_neutral`` a region that leaves the values as they are is
-    taken too, so ``source``'s text-only edits win instead. ``None`` when no
+    taken too, so ``source``'s text-only edits win instead. With
+    ``values_only`` (YAML) no comment text of ``source`` is taken at all. ``None``
+    when no
     such selection parses to exactly ``model``'s values (a value from neither
     text, or one line carrying both a wanted and an unwanted change).
     """
@@ -877,7 +931,11 @@ def splice_lines_toward(
             limit = remaining + 1 if keep_neutral else remaining
             before = current
             for lines in _replacements(
-                current[i1:i2], source_lines[j1:j2], fmt, source_first=keep_neutral
+                current[i1:i2],
+                source_lines[j1:j2],
+                fmt,
+                source_first=keep_neutral,
+                values_only=values_only,
             ):
                 trial = current[:i1] + lines + current[i2:]
                 distance = _leaf_distance(b"".join(trial), target, fmt)
@@ -922,12 +980,36 @@ def restore_start_only_lines(
     return b"".join(lines)
 
 
+def _drop_yaml_comments(node: object) -> None:
+    """Remove every comment a ruamel container ``node`` carries, in place.
+
+    A promoted list or mapping is a copy of the LIVE node, and ruamel keeps the
+    comments written inside it on the node; only its values are shared.
+    """
+    comments = getattr(node, "ca", None)
+    if isinstance(comments, Comment):
+        comments.comment = None
+        comments.items.clear()
+        comments.end = []
+    if isinstance(node, Mapping):
+        for value in node.values():
+            _drop_yaml_comments(value)
+    elif isinstance(node, list):
+        for value in node:
+            _drop_yaml_comments(value)
+
+
 def _render_reconstruction(
     base: bytes, live: bytes, model: object, fmt: StructuredFormat
 ) -> bytes:
-    """Serialise a reconstructed ``model``, preferring the source lines for YAML."""
+    """Serialise a reconstructed ``model``, preferring the source lines for YAML.
+
+    Tracked is shared, so only the promoted VALUES may leave the host: live
+    lines are taken without their comments, and a line that cannot be taken
+    that way is left to the model dump.
+    """
     if fmt is StructuredFormat.YAML:
-        spliced = splice_lines_toward(base, live, model, fmt)
+        spliced = splice_lines_toward(base, live, model, fmt, values_only=True)
         if spliced is not None:
             return spliced
     return _dump_model(model, fmt, like=base)
@@ -997,6 +1079,7 @@ def reconstruct_structured(
         elif _promotes(unit):
             node = get_node_at_path(live_model, operation_path)
             if node is not ABSENT:
+                _drop_yaml_comments(node)
                 _materialize_yaml_parents(base_model, live_model, operation_path, fmt)
                 set_node_at_path(base_model, operation_path, node)
             elif get_node_at_path(original_base_model, operation_path) is not ABSENT:
