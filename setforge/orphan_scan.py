@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -247,22 +247,32 @@ def _is_excluded(path: Path, controls: tuple[Path, ...]) -> bool:
 
 
 def _safe_root_ancestry(
-    root: Path,
+    root: Path, *, follow_root: bool = False
 ) -> tuple[tuple[Path, PathIdentity], ...] | None:
-    """Capture every lexical root ancestor without accepting symlinks."""
+    """Capture every lexical root ancestor, resolving only symlinks above it.
+
+    A symlinked ancestor is recorded by the directory it resolves to, with a
+    symlink file type so the later walk follows that one component only.
+    """
     ancestry: list[tuple[Path, PathIdentity]] = []
     for current in reversed((root, *root.parents[:-1])):
         try:
             info = current.lstat()
+            alias = stat.S_ISLNK(info.st_mode) and (follow_root or current != root)
+            if alias:
+                info = current.stat()
         except FileNotFoundError:
             return None
         except OSError as exc:
             raise SetforgeError(f"managed scan root changed: {current}") from exc
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        if not stat.S_ISDIR(info.st_mode):
             raise SetforgeError(
                 f"refusing managed scan through non-directory or symlink: {current}"
             )
-        ancestry.append((current, PathIdentity.from_stat(info)))
+        identity = PathIdentity.from_stat(info)
+        if alias:
+            identity = replace(identity, mode=operations.alias_guard_mode(info.st_mode))
+        ancestry.append((current, identity))
     return tuple(ancestry)
 
 
@@ -364,7 +374,12 @@ def _classify_leaf(
 def capture_parent_path_guards(
     paths: tuple[Path, ...],
 ) -> tuple[operations.PathGuard, ...]:
-    """Capture stable lexical directory ancestors for journal recovery."""
+    """Capture stable lexical directory ancestors for journal recovery.
+
+    A symlinked ancestor outside SetForge's own state trees is the operator's
+    environment: it is guarded by the identity of the directory it resolves to.
+    """
+    state_trees = _state_trees()
     guards: dict[Path, operations.PathGuard] = {}
     for path in paths:
         for parent in path.expanduser().absolute().parents:
@@ -377,14 +392,39 @@ def capture_parent_path_guards(
                 continue
             except OSError as exc:
                 raise SetforgeError(f"cleanup parent changed: {parent}") from exc
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            alias = stat.S_ISLNK(info.st_mode) and not any(
+                parent != tree and parent.is_relative_to(tree) for tree in state_trees
+            )
+            if alias:
+                try:
+                    info = parent.stat()
+                except OSError as exc:
+                    raise SetforgeError(
+                        f"refusing cleanup through non-directory or symlink: {parent}"
+                    ) from exc
+            if not stat.S_ISDIR(info.st_mode):
                 raise SetforgeError(
                     f"refusing cleanup through non-directory or symlink: {parent}"
                 )
             guards[parent] = operations.PathGuard(
-                parent, info.st_dev, info.st_ino, info.st_mode
+                parent,
+                info.st_dev,
+                info.st_ino,
+                operations.alias_guard_mode(info.st_mode) if alias else info.st_mode,
             )
     return tuple(guards[path] for path in sorted(guards, key=str))
+
+
+def _state_trees() -> frozenset[Path]:
+    """Return SetForge's state roots, lexical and resolved."""
+    roots = (
+        transitions.state_root(),
+        operations.journals_root(),
+        snapshots.snapshots_root(),
+    )
+    return frozenset(
+        tree for root in roots for tree in (_norm(root), root.expanduser().resolve())
+    )
 
 
 def unlink_approved_entry(entry: ScanEntry) -> None:
@@ -425,7 +465,7 @@ def approval_matches(approved: ScanEntry, refreshed: ScanEntry) -> bool:
 def freeze_candidate(path: Path) -> ScanEntry:
     """Freeze one regular file or symlink and every lexical parent identity."""
     path = _norm(path)
-    ancestry = _safe_root_ancestry(path.parent)
+    ancestry = _safe_root_ancestry(path.parent, follow_root=True)
     if ancestry is None:
         raise SetforgeError(f"cleanup candidate parent is absent: {path.parent}")
     try:
@@ -449,7 +489,8 @@ def freeze_candidate(path: Path) -> ScanEntry:
 def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
     parent = entry.path.parent
     expected = dict(entry.parent_identities)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    follow_flags = os.O_RDONLY | os.O_DIRECTORY
+    flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(Path("/"), flags)
     except OSError as exc:
@@ -463,8 +504,11 @@ def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
                 raise SetforgeError(
                     f"scan candidate has no parent identity: {entry.path}"
                 )
+            alias = stat.S_ISLNK(expected_parent.mode)
             try:
-                next_fd = os.open(component, flags, dir_fd=parent_fd)
+                next_fd = os.open(
+                    component, follow_flags if alias else flags, dir_fd=parent_fd
+                )
             except OSError as exc:
                 raise SetforgeError(
                     f"scan candidate parent changed: {current}"
@@ -475,7 +519,9 @@ def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
             if (
                 actual_parent.device,
                 actual_parent.inode,
-                actual_parent.mode,
+                operations.alias_guard_mode(actual_parent.mode)
+                if alias
+                else actual_parent.mode,
             ) != (
                 expected_parent.device,
                 expected_parent.inode,

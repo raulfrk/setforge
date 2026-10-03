@@ -10,7 +10,7 @@ from typing import cast
 import pytest
 
 from setforge import compare as compare_mod
-from setforge import orphan_scan
+from setforge import operations, orphan_scan
 from setforge.config import (
     BundleComponent,
     BundleSpec,
@@ -439,3 +439,131 @@ def test_descriptor_unlink_removes_link_not_target(tmp_path: Path) -> None:
 
     assert not link.is_symlink()
     assert target.read_text(encoding="utf-8") == "keep"
+
+
+def _symlinked_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    real = tmp_path / "volume" / "user"
+    real.mkdir(parents=True)
+    home = tmp_path / "home"
+    home.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    return home
+
+
+def test_parent_guards_record_symlinked_ancestor_by_resolved_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _symlinked_home(tmp_path, monkeypatch)
+    nested = home / ".managed"
+    nested.mkdir()
+
+    guards = {
+        guard.path: guard
+        for guard in orphan_scan.capture_parent_path_guards((nested / "file",))
+    }
+
+    resolved = home.stat()
+    alias = guards[home]
+    assert (alias.device, alias.inode) == (resolved.st_dev, resolved.st_ino)
+    assert alias.mode == operations.alias_guard_mode(resolved.st_mode)
+    plain = nested.lstat()
+    assert guards[nested] == operations.PathGuard(
+        nested, plain.st_dev, plain.st_ino, plain.st_mode
+    )
+
+
+def test_parent_guards_refuse_dangling_symlinked_ancestor(tmp_path: Path) -> None:
+    link = tmp_path / "gone"
+    link.symlink_to(tmp_path / "missing", target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="refusing cleanup through"):
+        orphan_scan.capture_parent_path_guards((link / "file",))
+
+
+def test_parent_guards_refuse_symlink_inside_state_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    state.mkdir()
+    (state / "ownership").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+
+    with pytest.raises(SetforgeError, match="refusing cleanup through"):
+        orphan_scan.capture_parent_path_guards((state / "ownership" / "claim",))
+
+
+def test_parent_guards_follow_symlinked_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "real-state"
+    (real / "ownership").mkdir(parents=True)
+    state = tmp_path / "state"
+    state.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+
+    guards = {
+        guard.path: guard
+        for guard in orphan_scan.capture_parent_path_guards(
+            (state / "ownership" / "claim",)
+        )
+    }
+
+    assert guards[state].mode == operations.alias_guard_mode(real.stat().st_mode)
+
+
+def test_scan_walks_managed_root_below_symlinked_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _symlinked_home(tmp_path, monkeypatch)
+    repo, config_path = _repo(tmp_path)
+    live = home / ".managed"
+    tool = live / "tool"
+    tool.mkdir(parents=True)
+    candidate = tool / "candidate"
+    candidate.write_text("approved", encoding="utf-8")
+
+    approved = _scan(
+        _config(repo, live), repo, config_path, tmp_path / "state"
+    ).entries[0]
+    orphan_scan.unlink_approved_entry(approved)
+
+    assert approved.path == candidate
+    assert not candidate.exists()
+
+
+def test_frozen_candidate_unlinks_below_symlinked_directory(tmp_path: Path) -> None:
+    real = tmp_path / "data"
+    real.mkdir()
+    link = tmp_path / "live"
+    link.symlink_to(real, target_is_directory=True)
+    candidate = link / "orphan"
+    candidate.write_bytes(b"orphan")
+
+    orphan_scan.unlink_approved_entry(orphan_scan.freeze_candidate(candidate))
+
+    assert not (real / "orphan").exists()
+
+
+def test_frozen_candidate_refuses_retargeted_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "data"
+    other = tmp_path / "other"
+    link = tmp_path / "live"
+    for directory in (real, other):
+        directory.mkdir()
+        (directory / "orphan").write_bytes(b"orphan")
+    link.symlink_to(real, target_is_directory=True)
+    entry = orphan_scan.freeze_candidate(link / "orphan")
+    link.unlink()
+    link.symlink_to(other, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="scan candidate parent changed"):
+        orphan_scan.unlink_approved_entry(entry)
+
+    assert (other / "orphan").read_bytes() == b"orphan"
+    assert (real / "orphan").read_bytes() == b"orphan"

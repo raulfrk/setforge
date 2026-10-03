@@ -89,7 +89,11 @@ class PathSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PathGuard:
-    """Stable identity, or expected absence, above a journaled path."""
+    """Stable identity, or expected absence, above a journaled path.
+
+    An ancestor that was a symlink at capture carries the identity of the
+    directory it resolved to, with ``mode`` rewritten by ``alias_guard_mode``.
+    """
 
     path: Path
     device: int | None
@@ -100,6 +104,11 @@ class PathGuard:
     def exists(self) -> bool:
         """Return whether this guard records an existing directory."""
         return self.device is not None
+
+
+def alias_guard_mode(mode: int) -> int:
+    """Mark a guarded directory mode as reached through a captured symlink."""
+    return stat.S_IFLNK | stat.S_IMODE(mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1284,6 +1293,11 @@ def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
     if journal.command != "snapshot restore":
         return
     scoped_paths = {path for item in journal.checkpoints for path in item.paths}
+    aliases = {
+        guard.path
+        for guard in journal.path_guards
+        if guard.mode is not None and stat.S_ISLNK(guard.mode)
+    }
     checked: set[Path] = set()
     for raw_path in scoped_paths:
         path = Path(raw_path)
@@ -1292,7 +1306,7 @@ def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
                 continue
             checked.add(parent)
             try:
-                info = parent.lstat()
+                info = parent.stat() if parent in aliases else parent.lstat()
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -1424,6 +1438,14 @@ def _validate_path_guards(journal: OperationJournal) -> None:  # noqa: C901 - ty
             continue
         current = (info.st_dev, info.st_ino, info.st_mode)
         expected = (guard.device, guard.inode, guard.mode)
+        if guard.mode is not None and stat.S_ISLNK(guard.mode):
+            try:
+                info = guard.path.stat()
+            except OSError as exc:
+                raise SetforgeError(
+                    f"journaled path parent changed before recovery: {guard.path}"
+                ) from exc
+            current = (info.st_dev, info.st_ino, alias_guard_mode(info.st_mode))
         if (
             (current[:2] != expected[:2] or not stat.S_ISDIR(info.st_mode))
             if journal.command == "install"
@@ -1486,11 +1508,16 @@ def _open_guarded_parent(  # noqa: C901
     create_missing: bool,
     permit_existing_absent: bool,
 ) -> Iterator[int | None]:
-    """Yield ``path.parent`` as a verified, non-symlink directory descriptor."""
+    """Yield ``path.parent`` as a verified directory descriptor.
+
+    Only an ancestor captured as a symlink is followed, and only to the
+    directory identity recorded for it.
+    """
     path = path.expanduser().absolute()
     if not path.is_absolute():  # pragma: no cover - absolute() is defensive
         raise SetforgeError(f"recovery path must be absolute: {path}")
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    follow_flags = os.O_RDONLY | os.O_DIRECTORY
+    flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
     descriptors: list[int] = []
     current_path = Path("/")
     try:
@@ -1503,8 +1530,11 @@ def _open_guarded_parent(  # noqa: C901
                     f"journaled path parent lacks an identity guard: {current_path}"
                 )
             expected = guard_identities[current_path]
+            alias = expected is not None and stat.S_ISLNK(expected[2])
             try:
-                child_fd = os.open(component, flags, dir_fd=current_fd)
+                child_fd = os.open(
+                    component, follow_flags if alias else flags, dir_fd=current_fd
+                )
             except FileNotFoundError:
                 if expected is not None:
                     raise SetforgeError(
@@ -1544,7 +1574,11 @@ def _open_guarded_parent(  # noqa: C901
                 ) from exc
             descriptors.append(child_fd)
             info = os.fstat(child_fd)
-            actual = (info.st_dev, info.st_ino, info.st_mode)
+            actual = (
+                info.st_dev,
+                info.st_ino,
+                alias_guard_mode(info.st_mode) if alias else info.st_mode,
+            )
             if expected is None:
                 if not permit_existing_absent:
                     os.close(child_fd)
@@ -1582,9 +1616,9 @@ def _remove_replaceable_at(parent_fd: int, name: str, path: Path) -> None:
 
 
 def _verify_parent_binding(parent_fd: int, parent: Path) -> None:
-    """Confirm the held descriptor is still the destination's lexical parent."""
+    """Confirm the lexical parent still resolves to the held descriptor."""
     try:
-        lexical = parent.lstat()
+        lexical = parent.stat()
         opened = os.fstat(parent_fd)
     except OSError as exc:
         raise SetforgeError(
@@ -2243,7 +2277,7 @@ def _parse_path_guard(row: dict[object, object]) -> PathGuard:
     assert isinstance(mode, int)
     if device < 0 or inode < 0 or mode < 0:
         raise ValueError("path guard identity fields must be non-negative")
-    if not stat.S_ISDIR(mode):
+    if not (stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
         raise ValueError("path guard must describe a directory")
     return PathGuard(path, device, inode, mode)
 

@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from setforge import codex_plugins, operations, transitions
+from setforge import codex_plugins, operations, orphan_scan, transitions
 from setforge.errors import SetforgeError
 from setforge.locking import install_resources_lock
 from setforge.ownership import (
@@ -417,6 +417,116 @@ def test_snapshot_restore_recovery_refuses_replaced_parent_directory(
         "restored snapshot"
     )
     assert operations.active("p") is not None
+
+
+def _symlinked_live(tmp_path: Path) -> tuple[Path, Path]:
+    real = tmp_path / "volume"
+    (real / "live").mkdir(parents=True)
+    link = tmp_path / "alias"
+    link.symlink_to(real, target_is_directory=True)
+    return link, real
+
+
+def _journal_below_symlink(tmp_path: Path, command: str) -> tuple[Path, Path]:
+    link, real = _symlinked_live(tmp_path)
+    path = link / "live" / "file"
+    path.write_text("before", encoding="utf-8")
+    operations.begin_checkpoint(
+        operations.prepare(
+            command=command,
+            profile="p",
+            config_dir=tmp_path,
+            resources_lock=False,
+            command_line=(command,),
+            paths=(path,),
+            path_guards=orphan_scan.capture_parent_path_guards((path,)),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    return link, real
+
+
+@pytest.mark.parametrize("command", ["sync", "snapshot restore"])
+def test_recovery_restores_below_ancestor_captured_as_symlink(
+    tmp_path: Path, operation_state: Path, command: str
+) -> None:
+    link, real = _journal_below_symlink(tmp_path, command)
+
+    operations.recover_files(operations.load("p"))
+
+    assert (real / "live" / "file").read_text(encoding="utf-8") == "before"
+    assert link.is_symlink()
+
+
+@pytest.mark.parametrize("command", ["sync", "snapshot restore"])
+def test_recovery_refuses_captured_symlink_retargeted_before_recovery(
+    tmp_path: Path, operation_state: Path, command: str
+) -> None:
+    link, real = _journal_below_symlink(tmp_path, command)
+    other = tmp_path / "other"
+    (other / "live").mkdir(parents=True)
+    (other / "live" / "file").write_text("foreign", encoding="utf-8")
+    link.unlink()
+    link.symlink_to(other, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="parent changed before recovery"):
+        operations.recover_files(operations.load("p"))
+
+    assert (other / "live" / "file").read_text(encoding="utf-8") == "foreign"
+    assert (real / "live" / "file").read_text(encoding="utf-8") == "after"
+    assert operations.active("p") is not None
+
+
+def test_anchored_restore_refuses_captured_symlink_retargeted_before_write(
+    tmp_path: Path,
+) -> None:
+    link, real = _symlinked_live(tmp_path)
+    path = link / "live" / "file"
+    identities = operations._guard_identities(
+        orphan_scan.capture_parent_path_guards((path,))
+    )
+    other = tmp_path / "other"
+    (other / "live").mkdir(parents=True)
+    link.unlink()
+    link.symlink_to(other, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            operations.PathSnapshot(
+                path, operations.SnapshotKind.FILE, mode=0o600, payload=b"restored"
+            ),
+            guard_identities=identities,
+        )
+
+    assert not (other / "live" / "file").exists()
+    assert not (real / "live" / "file").exists()
+
+
+def test_anchored_restore_refuses_directory_replaced_by_symlink_to_itself(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "live"
+    parent.mkdir()
+    path = parent / "file"
+    identities = operations._guard_identities(
+        orphan_scan.capture_parent_path_guards((path,))
+    )
+    moved = tmp_path / "moved"
+    parent.rename(moved)
+    parent.symlink_to(moved, target_is_directory=True)
+
+    with pytest.raises(SetforgeError, match="parent changed before write"):
+        operations._restore_path(
+            operations.PathSnapshot(
+                path, operations.SnapshotKind.FILE, mode=0o600, payload=b"restored"
+            ),
+            guard_identities=identities,
+        )
+
+    assert not (moved / "file").exists()
 
 
 def test_recovery_refuses_unscoped_parent_removed_after_preflight(
