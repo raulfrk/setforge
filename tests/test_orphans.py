@@ -1452,43 +1452,6 @@ def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_symlink_orphan_uses_lstat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Symlink orphan: unlink removes the link only, never the target."""
-    target = tmp_path / "real_data" / "important.txt"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("DO NOT DELETE\n", encoding="utf-8")
-
-    link = tmp_path / "live" / "orphan_link"
-    link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(target)
-
-    assert link.is_symlink()
-    orphan_entry = OrphanEntry(path=link)
-
-    orphans_mod._unlink_orphan_path(orphan_entry.path, Console())
-
-    # The link is gone; the target survives.
-    assert not link.exists()
-    assert not link.is_symlink()
-    assert target.exists()
-    assert target.read_text(encoding="utf-8") == "DO NOT DELETE\n"
-
-
-def test_unlink_missing_path_warns_does_not_crash(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A vanished orphan logs a warning, NOT a crash (no missing_ok=True
-    swallow — we want the race surfaced explicitly)."""
-
-    ghost = tmp_path / "vanished.txt"
-    assert not ghost.exists()
-    orphans_mod._unlink_orphan_path(ghost, Console())
-    captured = capsys.readouterr()
-    assert "vanished before delete" in captured.out
-
-
 def test_legacy_cleanup_refuses_same_path_replacement_before_unlink(
     tmp_path: Path, isolated_state_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1596,7 +1559,7 @@ def test_no_shutil_rmtree_or_removedirs() -> None:
 def test_no_resolve_in_orphan_unlink_helpers() -> None:
     """Calling `.resolve()` on a symlink before `.unlink()` torches the
     pointed-to file. None of the per-orphan helpers
-    (`_unlink_orphan_path`, `_execute_cleanup_locked`,
+    (`_execute_cleanup_locked`,
     `_write_orphan_transition`, `_read_orphan_content`,
     `_lstat_safe`, `_orphan_path_identity`) may call `.resolve()`. The
     `_detect_orphans_live` helper is allowed to call
@@ -1604,7 +1567,6 @@ def test_no_resolve_in_orphan_unlink_helpers() -> None:
     path, not an orphan path)."""
     tree = _orphans_module_ast()
     helper_names = {
-        "_unlink_orphan_path",
         "_execute_cleanup_locked",
         "_write_orphan_transition",
         "_read_orphan_content",

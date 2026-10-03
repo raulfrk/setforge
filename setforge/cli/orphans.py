@@ -495,30 +495,6 @@ def _write_scan_transition(
     )
 
 
-def _unlink_orphan_path(path: Path, console: Console) -> None:
-    """Freeze and descriptor-unlink one legacy orphan (file or symlink).
-
-    Symlinks: ``unlink()`` removes the link, never the target. NEVER
-    ``resolve()`` before unlink — that would point at the user's data.
-    Regular files: ``unlink()`` straight. Directories and parent
-    directories are never removed: parent mutation is outside the
-    frozen, journalled cleanup effect.
-
-    Missing path → log warning + return (a race between detection and
-    apply; user re-added the file, removed it manually, or the
-    meta.json snapshot was stale). NEVER use ``unlink(missing_ok=True)``
-    — swallowing the race is the bug.
-    """
-    if _lstat_safe(path) is None:
-        console.print(
-            f"[yellow]warning:[/yellow] orphan vanished before delete: {path}"
-        )
-        return
-    entry = orphan_scan.freeze_candidate(path)
-    orphan_scan.unlink_approved_entry(entry)
-    console.print(f"  deleted  {path}")
-
-
 def _execute_cleanup_locked(
     profile: str,
     orphans: list[OrphanEntry],

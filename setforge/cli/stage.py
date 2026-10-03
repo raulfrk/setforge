@@ -627,25 +627,6 @@ def _prepare_structured_persist(
     )
 
 
-def _persist_structured(
-    profile: str,
-    stage: StructuredFileStage,
-    result: StructuredWalkResult,
-    final_live: bytes,
-    *,
-    observed_live: bytes | None = None,
-) -> None:
-    """Prepare and record a structured walk while the caller holds the lock."""
-    plan = _prepare_structured_persist(
-        profile,
-        stage,
-        result,
-        final_live,
-        observed_live=observed_live,
-    )
-    _commit_persist(profile, stage.fid, stage.base, plan)
-
-
 def counts(hunks: list[Hunk]) -> Counter[HunkClass]:
     """Tally hunks by class (SHARED / LOCAL / PENDING)."""
     return Counter(hunk.cls for hunk in hunks)

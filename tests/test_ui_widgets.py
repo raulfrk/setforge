@@ -4,7 +4,7 @@ The interactive ``button_bar`` is driven via
 :func:`prompt_toolkit.application.create_app_session` wrapping
 :func:`prompt_toolkit.input.create_pipe_input` +
 :class:`prompt_toolkit.output.DummyOutput`, the same headless-driving
-pattern proven in :mod:`tests.test_cli_anchor_picker`. Every test sends a
+pattern. Every test sends a
 terminating key (pipe EOF does NOT auto-exit a prompt_toolkit Application).
 """
 
