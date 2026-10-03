@@ -410,7 +410,7 @@ def config_show(
     yaml_path = _scope_yaml_path(scope)
     doc = _load_doc(yaml_path)
     sliced = _slice_doc(doc, path)
-    typer.echo(_dump_to_str(sliced).rstrip())
+    typer.echo(_dump_to_str(sliced).rstrip().removesuffix("\n..."))
 
 
 def _show_effective(profile: str, *, ctx_obj: OutputContext | None) -> None:

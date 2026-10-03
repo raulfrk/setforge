@@ -69,7 +69,7 @@ def test_show_local_with_dotted_path_slices(
     """``config show --local source.kind`` returns just the scalar."""
     result = runner.invoke(app, ["config", "show", "--local", "source.kind"])
     assert result.exit_code == 0, result.stdout
-    assert "path" in result.stdout
+    assert result.stdout == "path\n"
 
 
 def test_show_local_with_unknown_path_errors(
