@@ -767,3 +767,137 @@ def test_re_serialised_yaml_keeps_the_source_byte_layout(base: bytes) -> None:
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == base.replace(b"x: 1, y: 2", b"x: 5, y: 7")
+
+
+_KEYS = b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"}\n]\n'
+
+
+@pytest.mark.parametrize(
+    ("host", "upstream", "expected"),
+    [
+        pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"L","command":"l"}\n]\n',
+            b'[\n  {"key":"a","command":"x2"},\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"x2"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"L","command":"l"}\n]\n',
+            id="upstream-edits-first-host-appends",
+        ),
+        pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"L","command":"l"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y2"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y2"},\n'
+            b'  {"key":"L","command":"l"}\n]\n',
+            id="upstream-edits-last-host-appends",
+        ),
+        pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"mine"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"T","command":"t"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"mine"},\n'
+            b'  {"key":"T","command":"t"}\n]\n',
+            id="host-edits-last-upstream-appends",
+        ),
+        pytest.param(
+            b'[\n  // mine\n  {"key":"a","command":"x"},\n'
+            b'  {"key":"b","command":"mine"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"T","command":"t"}\n]\n',
+            b'[\n  // mine\n  {"key":"a","command":"x"},\n'
+            b'  {"key":"b","command":"mine"},\n  {"key":"T","command":"t"}\n]\n',
+            id="host-comment-survives-when-upstream-appends",
+        ),
+        pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"M","command":"m"},\n'
+            b'  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"x2"},\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"x2"},\n  {"key":"M","command":"m"},\n'
+            b'  {"key":"b","command":"y"}\n]\n',
+            id="host-inserts-after-the-element-upstream-edits",
+        ),
+        pytest.param(
+            b'[\n  {"key":"M","command":"m"},\n  {"key":"a","command":"x"},\n'
+            b'  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"x2"},\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"M","command":"m"},\n  {"key":"a","command":"x2"},\n'
+            b'  {"key":"b","command":"y"}\n]\n',
+            id="host-inserts-before-the-element-upstream-edits",
+        ),
+    ],
+)
+def test_json_array_root_merges_element_wise(
+    host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("array-root")
+    _seed(fid, base=_KEYS, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+@pytest.mark.parametrize(
+    ("host", "upstream"),
+    [
+        pytest.param(
+            b'[\n  {"key":"a","command":"mine"},\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"theirs"},\n  {"key":"b","command":"y"}\n]\n',
+            id="same-element",
+        ),
+        pytest.param(
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"L","command":"l"}\n]\n',
+            b'[\n  {"key":"a","command":"x"},\n  {"key":"b","command":"y"},\n'
+            b'  {"key":"T","command":"t"}\n]\n',
+            id="both-append",
+        ),
+        pytest.param(
+            b'[\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"a","command":"theirs"},\n  {"key":"b","command":"y"}\n]\n',
+            id="host-deletes-the-element-upstream-edits",
+        ),
+        pytest.param(
+            b'[\n  {"key":"a","command":"theirs"},\n  {"key":"b","command":"y"}\n]\n',
+            b'[\n  {"key":"b","command":"y"}\n]\n',
+            id="upstream-deletes-the-element-host-edits",
+        ),
+    ],
+)
+def test_json_array_root_same_position_edits_still_conflict(
+    host: bytes, upstream: bytes
+) -> None:
+    fid = file_id("array-root-conflict")
+    _seed(fid, base=_KEYS, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == _KEYS
+
+
+def test_json_array_root_insertion_inside_a_replaced_run_conflicts() -> None:
+    fid = file_id("array-root-inside")
+    base = b"[\n  1,\n  2,\n  3,\n  4\n]\n"
+    host = b"[\n  1,\n  2,\n  9,\n  3,\n  4\n]\n"
+    upstream = b"[\n  1,\n  7,\n  8,\n  4\n]\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.DEFERRED
+
+
+def test_json_array_root_identical_edits_on_both_sides_merge() -> None:
+    fid = file_id("array-root-same")
+    base = b"[\n  1,\n  2,\n  3,\n  4\n]\n"
+    host = b"[\n  1,\n  2,\n  3,\n  4,\n  5\n]\n"
+    upstream = b"[\n  0,\n  2,\n  3,\n  4,\n  5\n]\n"
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"[\n  0,\n  2,\n  3,\n  4,\n  5\n]\n"

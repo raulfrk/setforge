@@ -682,10 +682,16 @@ def _materialize_yaml_parents(
 def _plain_leaves(
     plain: object, prefix: tuple[object, ...] = ()
 ) -> Iterator[tuple[tuple[object, ...], object]]:
-    """Yield ``(key path, value)`` for every leaf of an unwrapped plain value."""
+    """Yield ``(path, value)`` for every leaf of an unwrapped plain value.
+
+    Descends mappings by key and lists by index; an empty container is a leaf.
+    """
     if isinstance(plain, dict) and plain:
         for key, value in plain.items():
             yield from _plain_leaves(value, (*prefix, key))
+    elif isinstance(plain, list) and plain:
+        for index, value in enumerate(plain):
+            yield from _plain_leaves(value, (*prefix, index))
     else:
         yield prefix, plain
 
@@ -707,8 +713,67 @@ def _leaf_distance(
     )
 
 
+type _Region = tuple[int, int, int, int]
+type _RegionGroups = list[list[_Region]]
+
+
+def _changed_runs(current: list[bytes], source: list[bytes]) -> list[_RegionGroups]:
+    """Each changed current↔source line run as alternative region groups.
+
+    A replaced run is split into single-line pairs plus its uneven remainder,
+    so a wanted line is not held back by an unwanted neighbour. An uneven run
+    can pair from its head or from its tail; both groups are offered, pairs
+    first (the remainder shifts every line after it).
+    """
+    runs: list[_RegionGroups] = []
+    matcher = PatienceSequenceMatcher(None, current, source)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        paired = min(i2 - i1, j2 - j1)
+        groups = [[(i1 + k, i1 + k + 1, j1 + k, j1 + k + 1) for k in range(paired)]]
+        if i2 - i1 != j2 - j1:
+            groups[0].append((i1 + paired, i2, j1 + paired, j2))
+            if paired:
+                i0, j0 = i2 - paired, j2 - paired
+                tail = [(i0 + k, i0 + k + 1, j0 + k, j0 + k + 1) for k in range(paired)]
+                groups.append([*tail, (i1, i0, j1, j0)])
+        runs.append(groups)
+    return runs
+
+
+def _keep_comma(line: bytes, like: bytes) -> bytes:
+    """``line`` ending in a comma exactly when ``like`` does."""
+    body = line.rstrip()
+    wanted = like.rstrip().endswith(b",")
+    if body.endswith(b",") == wanted:
+        return line
+    return (body + b"," if wanted else body[:-1]) + line[len(body) :]
+
+
+def _replacements(
+    old: list[bytes], new: list[bytes], fmt: StructuredFormat
+) -> list[list[bytes]]:
+    """The texts to try in place of ``old``: ``new``, then its JSON comma fit.
+
+    A JSON member line carries the separator to the NEXT member, which belongs
+    to the position, not to the member: a line taken into a different position
+    is also tried with the comma state of the line it replaces.
+    """
+    if fmt is StructuredFormat.JSONC and len(old) == 1 and len(new) == 1:
+        fitted = [_keep_comma(new[0], old[0])]
+        if fitted != new:
+            return [new, fitted]
+    return [new]
+
+
 def splice_lines_toward(
-    start: bytes, source: bytes, model: object, fmt: StructuredFormat
+    start: bytes,
+    source: bytes,
+    model: object,
+    fmt: StructuredFormat,
+    *,
+    keep_neutral: bool = False,
 ) -> bytes | None:
     """``start`` with exactly the ``source`` line regions that realise ``model``.
 
@@ -716,9 +781,11 @@ def splice_lines_toward(
     values all come from ``start`` or ``source``: each changed start↔source line
     region is taken only when it moves the text strictly closer to ``model``'s
     values, so a value ``model`` keeps from ``start``, a comment-only edit and
-    every untouched line keep their ``start`` bytes. ``None`` when no such
-    selection parses to exactly ``model``'s values (a value from neither text, or
-    one line carrying both a wanted and an unwanted change).
+    every untouched line keep their ``start`` bytes. With ``keep_neutral`` a
+    region that leaves the values as they are is taken too, so ``source``'s
+    text-only edits win instead. ``None`` when no such selection parses to
+    exactly ``model``'s values (a value from neither text, or one line carrying
+    both a wanted and an unwanted change).
     """
     try:
         target = dict(_plain_leaves(get_at_path(model, "")))
@@ -729,24 +796,23 @@ def splice_lines_toward(
         return None
     current = split_lines(start)
     source_lines = split_lines(source)
-    regions: list[tuple[int, int, int, int]] = []
-    matcher = PatienceSequenceMatcher(None, current, source_lines)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            continue
-        # A replaced run is tried line by line (then its uneven tail), so a
-        # wanted line is not held back by an unwanted neighbour.
-        paired = min(i2 - i1, j2 - j1)
-        regions.extend((i1 + k, i1 + k + 1, j1 + k, j1 + k + 1) for k in range(paired))
-        if i1 + paired < i2 or j1 + paired < j2:
-            regions.append((i1 + paired, i2, j1 + paired, j2))
-    if len(regions) > _MAX_SPLICE_TRIALS:
+    runs = _changed_runs(current, source_lines)
+    if sum(len(alternatives[0]) for alternatives in runs) > _MAX_SPLICE_TRIALS:
         return None
-    for i1, i2, j1, j2 in reversed(regions):
-        trial = current[:i1] + source_lines[j1:j2] + current[i2:]
-        distance = _leaf_distance(b"".join(trial), target, fmt)
-        if distance is not None and distance < remaining:
-            current, remaining = trial, distance
+    for alternatives in reversed(runs):
+        for group in alternatives:
+            before = current
+            for i1, i2, j1, j2 in group:
+                for lines in _replacements(current[i1:i2], source_lines[j1:j2], fmt):
+                    trial = current[:i1] + lines + current[i2:]
+                    distance = _leaf_distance(b"".join(trial), target, fmt)
+                    if distance is not None and (
+                        distance < remaining or (keep_neutral and distance == remaining)
+                    ):
+                        current, remaining = trial, distance
+                        break
+            if current is not before:
+                break
     return b"".join(current) if remaining == 0 else None
 
 

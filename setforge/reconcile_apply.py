@@ -34,7 +34,9 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+from patiencediff import PatienceSequenceMatcher
 
 from setforge.errors import (
     DuplicateKeyInMergeModel,
@@ -64,7 +66,7 @@ from setforge.reconcile.structured_units import (
     uses_aliases,
 )
 from setforge.reconcile.types import Absent
-from setforge.structural_merge import merge_structural
+from setforge.structural_merge import get_at_path, merge_structural
 from setforge.ui.primitives import CANCEL, Cancelled
 
 if TYPE_CHECKING:
@@ -396,6 +398,79 @@ def _loses_strictness(
     )
 
 
+type _ElementOp = tuple[int, int, list[str]]
+
+
+def _element_ops(base: list[str], side: list[str]) -> list[_ElementOp]:
+    """The base ranges ``side`` replaced, each with its replacement elements."""
+    matcher = PatienceSequenceMatcher(None, base, side)
+    return [
+        (i1, i2, side[j1:j2])
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    ]
+
+
+def _element_ops_collide(left: _ElementOp, right: _ElementOp) -> bool:
+    """Whether two sides' edits claim the same place in the base array.
+
+    Two replaced ranges collide when they intersect; an insertion collides with
+    another insertion at the same point and with a range it falls strictly
+    inside. An insertion at the EDGE of a replaced range is independent of it.
+    """
+    (a1, a2, _), (b1, b2, _) = left, right
+    if a1 == a2 and b1 == b2:
+        return a1 == b1
+    if a1 == a2:
+        return b1 < a1 < b2
+    if b1 == b2:
+        return a1 < b1 < a2
+    return a1 < b2 and b1 < a2
+
+
+def _array_root_target(
+    base: object, live: object, tracked: object
+) -> list[object] | None:
+    """The element-wise 3-way of three JSON array-root documents, or ``None``.
+
+    An object root has key identity; an array root has none, and its line 3-way
+    false-conflicts whenever the last element gains a comma. Each element is one
+    unit here: edits and appends at different positions merge, edits at the same
+    position stay a conflict (``None``, as for a non-array root).
+    """
+    sides = [get_at_path(model, "") for model in (base, live, tracked)]
+    if not all(isinstance(side, list) for side in sides):
+        return None
+    base_keys, live_keys, tracked_keys = (
+        [json.dumps(element, sort_keys=True) for element in cast("list[object]", side)]
+        for side in sides
+    )
+    ours = _element_ops(base_keys, live_keys)
+    theirs = [op for op in _element_ops(base_keys, tracked_keys) if op not in ours]
+    if any(_element_ops_collide(left, right) for left in ours for right in theirs):
+        return None
+    merged = list(base_keys)
+    for i1, i2, elements in sorted([*ours, *theirs], reverse=True):
+        merged[i1:i2] = elements
+    return [json.loads(key) for key in merged]
+
+
+def _render_array_root(
+    base: bytes, live: bytes, tracked: bytes, target: list[object]
+) -> bytes | None:
+    """``target`` in source bytes: no array re-serialisation exists to fall to."""
+    fmt = StructuredFormat.JSONC
+    for candidate in (
+        lambda: _line_merge_agreeing(base, live, tracked, target, fmt),
+        lambda: splice_lines_toward(live, tracked, target, fmt),
+        lambda: splice_lines_toward(tracked, live, target, fmt, keep_neutral=True),
+    ):
+        text = candidate()
+        if text is not None and not _loses_strictness(text, live, tracked, fmt):
+            return text
+    return None
+
+
 def _key_merge(
     base: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
 ) -> bytes | None:
@@ -403,17 +478,21 @@ def _key_merge(
 
     ``None`` on a same-key conflict and for a side the key engine cannot model
     (unparseable, multi-document, duplicate or non-string keys, a non-mapping
-    root, YAML aliases / merge keys) — the caller line-merges those. Each side
-    is parsed FRESH because ``merge_structural`` mutates ``ours`` (live) in place.
+    YAML root, YAML aliases / merge keys) — the caller line-merges those. Each
+    side is parsed FRESH because ``merge_structural`` mutates ``ours`` (live) in
+    place.
     """
     try:
         if fmt is StructuredFormat.YAML and any(
             uses_aliases(side) for side in (base, live, tracked)
         ):
             return None
-        result = merge_structural(
-            _load_model(base, fmt), _load_model(live, fmt), _load_model(tracked, fmt)
-        )
+        models = [_load_model(side, fmt) for side in (base, live, tracked)]
+        if fmt is StructuredFormat.JSONC:
+            target = _array_root_target(*models)
+            if target is not None:
+                return _render_array_root(base, live, tracked, target)
+        result = merge_structural(*models)
         if not result.clean:
             return None
         model = result.merged_model
