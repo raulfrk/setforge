@@ -25,6 +25,7 @@ import errno
 import json
 import os
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,8 @@ from typing import Any
 import pytest
 from hypothesis import settings
 
+import setforge.cli  # noqa: F401  (import every module that binds LOCAL_CONFIG_PATH)
+from setforge import binaries as _binaries_mod
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge import claude_plugins as _cp
 from setforge.config import (
@@ -56,6 +59,25 @@ if hypothesis_profile := os.environ.get("HYPOTHESIS_PROFILE"):
     settings.load_profile(hypothesis_profile)
 
 
+_LOCAL_CONFIG_ATTRS = ("LOCAL_CONFIG_PATH", "_LOCAL_CONFIG_PATH")
+_REAL_LOCAL_CONFIG_PATH = _binaries_mod.LOCAL_CONFIG_PATH
+
+
+def redirect_local_config_path(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """Point every module-level ``LOCAL_CONFIG_PATH`` binding at ``target``.
+
+    Walks every imported ``setforge`` module so a new ``from ... import
+    LOCAL_CONFIG_PATH`` is covered without editing this list. Default
+    arguments captured at import time are not reachable this way.
+    """
+    for name, module in list(sys.modules.items()):
+        if module is None or not (name == "setforge" or name.startswith("setforge.")):
+            continue
+        for attr in _LOCAL_CONFIG_ATTRS:
+            if hasattr(module, attr):
+                monkeypatch.setattr(module, attr, target)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_local_config(
     monkeypatch: pytest.MonkeyPatch,
@@ -71,33 +93,7 @@ def _isolated_local_config(
     ``set_cli_source`` (without going through a ``CliRunner`` callback)
     doesn't leak the value to later tests.
     """
-    monkeypatch.setattr(
-        "setforge.binaries.LOCAL_CONFIG_PATH",
-        tmp_path / "local.yaml",
-    )
-    monkeypatch.setattr(
-        "setforge.source.LOCAL_CONFIG_PATH",
-        tmp_path / "local.yaml",
-    )
-    # setforge.compare imports LOCAL_CONFIG_PATH for orphan_ignore reads;
-    # redirect that re-export too so tests don't read
-    # the dev host's local.yaml mid-compare.
-    monkeypatch.setattr(
-        "setforge.compare.LOCAL_CONFIG_PATH",
-        tmp_path / "local.yaml",
-    )
-    # setforge.cli.orphans imports LOCAL_CONFIG_PATH for orphan_ignore
-    # writes; redirect that re-export too.
-    monkeypatch.setattr(
-        "setforge.cli.orphans.LOCAL_CONFIG_PATH",
-        tmp_path / "local.yaml",
-    )
-    # validate imports LOCAL_CONFIG_PATH under a private module binding;
-    # redirect it so validate tests never read the dev host's local.yaml.
-    monkeypatch.setattr(
-        "setforge.cli.validate._LOCAL_CONFIG_PATH",
-        tmp_path / "local.yaml",
-    )
+    redirect_local_config_path(monkeypatch, tmp_path / "local.yaml")
     monkeypatch.setattr("setforge.source._cli_source", None)
 
 

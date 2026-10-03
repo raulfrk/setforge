@@ -20,6 +20,8 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 
+from ..conftest import redirect_local_config_path
+
 _REAL_GIT_SUBCOMMANDS: tuple[str, ...] = (
     "init",
     "add",
@@ -192,13 +194,7 @@ def integration_env(
     monkeypatch.setattr(
         "setforge.claude_marketplace_cache.MARKETPLACE_CACHE_ROOT", mp_cache
     )
-    for mod_attr in (
-        "setforge.binaries.LOCAL_CONFIG_PATH",
-        "setforge.source.LOCAL_CONFIG_PATH",
-        "setforge.compare.LOCAL_CONFIG_PATH",
-        "setforge.cli.orphans.LOCAL_CONFIG_PATH",
-    ):
-        monkeypatch.setattr(mod_attr, local_yaml)
+    redirect_local_config_path(monkeypatch, local_yaml)
     for name in _MOCKED_BINARIES:
         monkeypatch.delenv(f"SETFORGE_{name.upper()}_BIN", raising=False)
 
