@@ -568,11 +568,7 @@ class _Json5Backend:
             new_value.wsc_after = _json5_from_break(_json5_tail(src))
         else:
             trail = _json5_member_trail(src, s_idx)
-            lead = (
-                [c for c in _json5_from_break(new_key.wsc_before) if _is_comment(c)]
-                if s_idx
-                else []
-            )
+            lead = [c for c in _json5_from_break(new_key.wsc_before) if _is_comment(c)]
             tail = _json5_tail(ours)
             carried = _json5_same_line(tail)
             closing = _json5_from_break(tail)

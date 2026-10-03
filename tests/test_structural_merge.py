@@ -1233,6 +1233,20 @@ _JSON_LAYOUT_CASES = [
         id="add-after-line-comment-starts-a-new-line",
     ),
     pytest.param(
+        '{ "a": 1 }',
+        '{ "a": 2 }',
+        '{ "a": 1,\n  "d": 4 // four\n}',
+        '{ "a": 2, "d": 4 }',
+        id="add-drops-a-line-comment-that-would-swallow-the-brace",
+    ),
+    pytest.param(
+        '{\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true\n}\n',
+        '{\n  // header\n  "d": 4,\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true,\n  "d": 4\n}\n',
+        id="add-of-the-first-member-leaves-the-header-comment",
+    ),
+    pytest.param(
         '{\n  "o": {},\n  "k": 1\n}\n',
         '{\n  "o": {},\n  "k": 2\n}\n',
         '{\n  "o": {\n    "x": 1,\n    "y": 2\n  },\n  "k": 1\n}\n',
@@ -1294,6 +1308,13 @@ _JSON_LAYOUT_CASES = [
         '{\n  "o": {\n  },\n  "k": 1\n}\n',
         '{\n  "o": {\n    // about x\n  },\n  "k": 2\n}\n',
         id="delete-only-member",
+    ),
+    pytest.param(
+        '{\n  "o": { "x": 1},\n  "k": 1\n}\n',
+        '{\n  "o": { "x": 1},\n  "k": 2\n}\n',
+        '{\n  "o": {},\n  "k": 1\n}\n',
+        '{\n  "o": { },\n  "k": 2\n}\n',
+        id="delete-only-member-keeps-leading-space",
     ),
     pytest.param(
         '{\n  "o": {"x": 1,},\n  "k": 1\n}\n',
