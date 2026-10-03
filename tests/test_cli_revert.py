@@ -1045,3 +1045,27 @@ def test_diff_summary_normalizes_leading_slash_no_double_slash() -> None:
     result = _diff_summaries_from_patch(patch)
 
     assert result == {"/root/x.txt": "+1 -1"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"\xff\xfe\x00not utf-8\x80", b'{"paths": [', b"[]"],
+    ids=["not-utf8", "truncated", "not-an-object"],
+)
+def test_revert_refuses_unreadable_transition_meta_cleanly(
+    tmp_path: Path, payload: bytes
+) -> None:
+    from setforge import transitions
+    from setforge.cli import revert as revert_mod
+    from setforge.errors import InvalidTransitionRecord
+
+    transition = transitions.TransitionDir(tmp_path / "20260101T000000Z-install-vmh")
+    transition.mkdir()
+    (transition / "meta.json").write_bytes(payload)
+
+    with pytest.raises(InvalidTransitionRecord, match=r"meta\.json"):
+        revert_mod._load_meta_touched_paths(transition)
+    with pytest.raises(InvalidTransitionRecord, match=r"meta\.json"):
+        revert_mod._transition_legacy_symlink_paths(
+            transition, tmp_path / "setforge.yaml", "vmh"
+        )

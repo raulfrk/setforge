@@ -280,21 +280,27 @@ def _load_meta_touched_paths(transition: transitions.TransitionDir) -> list[Path
     :class:`InvalidTransitionRecord` here rather than an unwrapped
     ``AttributeError`` from calling ``.get`` on a list.
     """
+    payload = _load_meta_payload(transition)
+    raw_paths = payload.get("paths", [])
+    if not isinstance(raw_paths, list):
+        raise InvalidTransitionRecord(
+            f"meta.json at {transition / 'meta.json'} has a non-list 'paths' field"
+        )
+    return [Path(p) for p in raw_paths]
+
+
+def _load_meta_payload(transition: transitions.TransitionDir) -> dict[str, Any]:
+    """Read ``transition``'s raw meta.json object or refuse it cleanly."""
     meta_file = transition / "meta.json"
     try:
         payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"cannot read meta.json at {meta_file}: {exc}"
         ) from exc
     if not isinstance(payload, dict):
         raise InvalidTransitionRecord(f"meta.json at {meta_file} is not a JSON object")
-    raw_paths = payload.get("paths", [])
-    if not isinstance(raw_paths, list):
-        raise InvalidTransitionRecord(
-            f"meta.json at {meta_file} has a non-list 'paths' field"
-        )
-    return [Path(p) for p in raw_paths]
+    return payload
 
 
 def _build_revert_plan(
@@ -1088,8 +1094,7 @@ def _transition_legacy_symlink_paths(
     """Refuse uncertain legacy link inverses; typed images handle current links."""
     covered = {delta.path for delta in transitions.load_filesystem_deltas(transition)}
     touched = frozenset(_load_meta_touched_paths(transition))
-    metadata = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
-    attribution = metadata.get("tracked_file_destinations", {})
+    attribution = _load_meta_payload(transition).get("tracked_file_destinations", {})
     if not isinstance(attribution, dict) or any(
         not isinstance(name, str)
         or not isinstance(paths, list)
