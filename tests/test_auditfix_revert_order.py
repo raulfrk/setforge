@@ -7,10 +7,9 @@ deployed link or replaced it with a regular file. A refusal raised after
 the content patch was already reversed left a PARTIAL, un-redoable revert
 (content reverted, link untouched, no reverse transition written).
 
-Fix: ``_apply_revert`` now pre-flights the symlink-revert refusal
-conditions via ``_revert_symlink_deployments(dry_run=True)`` BEFORE any
-mutation — symmetric to ``apply_patch_reverse``'s own ``--dry-run`` gate —
-so revert refuses cleanly with zero mutation.
+Fix: ``_apply_revert`` validates the recorded link images against the live
+tree BEFORE any mutation — symmetric to ``apply_patch_reverse``'s own
+``--dry-run`` gate — so revert refuses cleanly with zero mutation.
 """
 
 import json
@@ -20,15 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.errors import SetforgeError
-
-# Reuse the existing overlay-symlink harness from the sibling revert suite.
-from tests.test_cli_revert import (
-    _no_code,
-    _point_local_yaml,
-    _setup_symlink_repo,
-    _state_root,
-)
+from tests.test_cli_revert import _no_code, _state_root
 
 _SYMLINK_DEPLOY_YAML = """\
 version: 1
@@ -68,61 +59,6 @@ def _setup_content_plus_symlink_repo(
         encoding="utf-8",
     )
     return cfg, content_dst, link_dst, link_target
-
-
-def test_dry_run_pass_raises_on_retargeted_overlay_symlink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The pre-flight (``dry_run=True``) pass raises when the live link was
-    retargeted away from the deployed target — WITHOUT unlinking it.
-
-    Pre-fix there was no dry-run pass at all; this exercises the new gate
-    directly on the overlay-symlink harness.
-    """
-    from setforge.cli.revert import _revert_symlink_deployments
-
-    cfg, dst = _setup_symlink_repo(tmp_path)
-    target = tmp_path / "live" / "hook-target.sh"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _point_local_yaml(
-        tmp_path,
-        monkeypatch,
-        f"tracked_files:\n  hook:\n    symlink_target: {target}\n",
-    )
-    # User retargeted the link to a DIFFERENT path than the deployed target.
-    other = tmp_path / "live" / "somewhere-else.sh"
-    dst.symlink_to(other)
-
-    with pytest.raises(SetforgeError, match="symlink target changed"):
-        _revert_symlink_deployments(config=cfg, profile="vmh", dry_run=True)
-
-    # Zero mutation: the link is still present and still points where the
-    # user pointed it — the dry-run pass never unlinked.
-    assert dst.is_symlink()
-    assert str(dst.readlink()) == str(other)
-
-
-def test_dry_run_pass_clean_for_expected_symlink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The pre-flight pass does NOT raise (and does NOT unlink) when the
-    live link still matches the deployed target."""
-    from setforge.cli.revert import _revert_symlink_deployments
-
-    cfg, dst = _setup_symlink_repo(tmp_path)
-    target = tmp_path / "live" / "hook-target.sh"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _point_local_yaml(
-        tmp_path,
-        monkeypatch,
-        f"tracked_files:\n  hook:\n    symlink_target: {target}\n",
-    )
-    dst.symlink_to(target)
-
-    _revert_symlink_deployments(config=cfg, profile="vmh", dry_run=True)
-
-    # Still present — dry-run is read-only.
-    assert dst.is_symlink()
 
 
 def test_apply_revert_refuses_with_zero_mutation_on_retargeted_link(
@@ -179,7 +115,7 @@ def test_apply_revert_succeeds_when_link_untouched(
 ) -> None:
     """Control: when the link is NOT user-mutated, ``_apply_revert`` runs
     fully — content patch reversed, link unlinked, reverse transition
-    written — confirming the new dry-run gate does not block the happy path.
+    written — confirming the pre-flight does not block the happy path.
     """
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)

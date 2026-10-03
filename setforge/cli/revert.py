@@ -39,7 +39,6 @@ from setforge.cli._help_examples import (
     TRANSITIONS_SHOW_EXAMPLES,
 )
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
-from setforge.cli._install_helpers import revert_symlink_deployment
 from setforge.cli._output import make_console, render
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
@@ -473,18 +472,7 @@ def _apply_revert(
     pre_command_modes = transitions.load_file_modes(transition)
     reverse_modes = _recapture_modes(pre_command_modes)
 
-    # Pre-flight the symlink-revert refusal conditions (link retargeted /
-    # replaced by a regular file) BEFORE any live mutation — symmetric to
-    # ``apply_patch_reverse``'s own ``--dry-run`` gate. Without this, a
-    # symlink refusal raised AFTER the content patch was already reversed
-    # would leave a partial, un-redoable revert (content reverted, link
-    # untouched, no reverse transition written). The dry-run pass runs the
-    # same readlink / regular-file probes the real unlink does, so revert
-    # refuses cleanly with zero mutation.
-    legacy_symlinks = _transition_legacy_symlink_paths(transition, config, profile)
-    _revert_symlink_deployments(
-        config=config, profile=profile, dry_run=True, selected_paths=legacy_symlinks
-    )
+    _refuse_legacy_symlink_record(transition, config, profile)
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
     ownership_store = OwnershipStore()
     _validate_ownership_transfer_reverse(
@@ -497,9 +485,6 @@ def _apply_revert(
 
     transitions.apply_patch_reverse(transition)
     operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
-    _revert_symlink_deployments(
-        config=config, profile=profile, selected_paths=legacy_symlinks
-    )
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
     # Restore each path's pre-install mode AFTER the patch reverse rewrote
@@ -662,92 +647,6 @@ def _restore_modes(recorded: dict[Path, int]) -> None:
             path.chmod(mode)
         except FileNotFoundError:
             continue
-
-
-def _revert_symlink_deployments(
-    *,
-    config: Path,
-    profile: str,
-    dry_run: bool = False,
-    selected_paths: frozenset[Path] | None = None,
-) -> None:
-    """Unlink every symlink-deployed tracked_file in the resolved profile.
-
-    Loads the resolved profile through :func:`resolve_effective_profile`, the
-    same boundary the install side uses, so the iteration order, bundle
-    expansion semantics, and host-local overlay folding match — an
-    overlay-only symlink (``symlink_target`` in local.yaml) is therefore
-    visible to the unlink pass instead of left dangling. For each tracked_file
-    with
-    ``symlink is not None``, invokes
-    :func:`setforge.cli._install_helpers.revert_symlink_deployment` on
-    the resolved ``sub_dst`` (the link path). The helper is idempotent
-    on absent links (returns False) and refuses on user-mutated state
-    (raises :class:`setforge.errors.SetforgeError`).
-
-    When ``dry_run=True``: run only the refusal probes (link retargeted /
-    replaced by a regular file) on each ``sub_dst`` WITHOUT unlinking, so a
-    caller can pre-flight the whole pass and refuse with zero mutation —
-    mirroring :func:`setforge.transitions.apply_patch_reverse`'s own
-    ``--dry-run`` gate. The probe conditions are the exact refusal contract
-    of :func:`revert_symlink_deployment`.
-
-    The profile-agnostic ``migrate`` transition label has no config profile
-    and never deploys symlinks, so it no-ops cleanly. Any OTHER profile that
-    fails to resolve (e.g. one deleted from ``setforge.yaml`` since its
-    install) is surfaced rather than silently skipping a symlink revert that
-    should have run.
-    """
-    cfg = load_config(config)
-    repo_root = config.resolve().parent
-    try:
-        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    except ProfileNotFound:
-        if profile == transitions.MIGRATE_TRANSITION_PROFILE:
-            return
-        raise
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if tracked_file.symlink is None:
-            continue
-        if selected_paths is not None and sub_dst not in selected_paths:
-            continue
-        if dry_run:
-            _check_symlink_revertable(sub_dst, tracked_file.symlink)
-            continue
-        revert_symlink_deployment(sub_dst, tracked_file.symlink)
-
-
-def _check_symlink_revertable(dst: Path, expected_target: str) -> None:
-    """Raise if reverting ``dst``'s symlink would refuse — without unlinking.
-
-    Read-only pre-flight mirroring the refusal contract of
-    :func:`setforge.cli._install_helpers.revert_symlink_deployment`:
-    raises :class:`SetforgeError` when ``dst`` is a symlink retargeted away
-    from ``expected_target`` or a regular file replacing setforge's link.
-    A symlink with the expected target, or an absent path, is revertable —
-    no raise (the real unlink pass handles those idempotently).
-    """
-    if dst.is_symlink():
-        # str() keeps ``actual`` a plain string so the != compare against the
-        # string expected_target and the {actual!r} repr stay verbatim.
-        actual = str(dst.readlink())
-        if actual != expected_target:
-            raise SetforgeError(
-                f"refusing to unlink {dst}: symlink target changed since "
-                f"deploy ({actual!r} != {expected_target!r}). Re-point or "
-                f"remove the link manually if you want revert to proceed."
-            )
-        return
-    if dst.exists():
-        raise SetforgeError(
-            f"refusing to unlink {dst}: a regular file is present where "
-            f"setforge previously installed a symlink "
-            f"(target {expected_target!r}). Remove the file manually if "
-            f"you want revert to proceed."
-        )
 
 
 _TO_BEFORE_OPTION = typer.Option(
@@ -1052,11 +951,9 @@ def _prepare_revert_journal(
                 endpoints = mcp_endpoints.setdefault(name, [])
                 if (command, scope) not in endpoints:
                     endpoints.append((command, scope))
-        legacy_symlinks = _transition_legacy_symlink_paths(
+        _refuse_legacy_symlink_record(
             transition, config, transitions.load_meta(transition).profile
         )
-        touched.update(dict.fromkeys(legacy_symlinks))
-        generic_paths.update(dict.fromkeys(legacy_symlinks))
     return operations.prepare(
         command="revert",
         profile=profile,
@@ -1088,9 +985,9 @@ def _revert_locked_profiles(
     return tuple(sorted(profiles))
 
 
-def _transition_legacy_symlink_paths(
+def _refuse_legacy_symlink_record(
     transition: transitions.TransitionDir, config: Path, profile: str
-) -> frozenset[Path]:
+) -> None:
     """Refuse uncertain legacy link inverses; typed images handle current links."""
     covered = {delta.path for delta in transitions.load_filesystem_deltas(transition)}
     touched = frozenset(_load_meta_touched_paths(transition))
@@ -1112,7 +1009,7 @@ def _transition_legacy_symlink_paths(
         resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
     except ProfileNotFound:
         if profile == transitions.MIGRATE_TRANSITION_PROFILE:
-            return frozenset()
+            return
         raise
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
@@ -1133,24 +1030,6 @@ def _transition_legacy_symlink_paths(
                 "Preserve the current files and reconcile the desired tracked source "
                 "with install --file instead."
             )
-    return frozenset()
-
-
-def _revert_symlink_paths(config: Path, profile: str) -> tuple[Path, ...]:
-    cfg = load_config(config)
-    repo_root = config.resolve().parent
-    try:
-        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    except ProfileNotFound:
-        return ()
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    return tuple(
-        sub_dst
-        for tracked_file, _name, _src, sub_dst in _iter_all_tracked_files(ctx)
-        if tracked_file.symlink is not None
-    )
 
 
 def _revert_adapter_snapshots(
