@@ -20,7 +20,7 @@ def _declare_extension(env: IntegrationEnv) -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_failed_extension_install_exits_nonzero(
+def test_failed_extension_install_is_skipped_with_exit_zero_under_yes(
     integration_env: Callable[..., IntegrationEnv], integration_subprocess
 ) -> None:
     env = integration_env()
@@ -38,7 +38,7 @@ def test_failed_extension_install_exits_nonzero(
 
     result = env.run_verb(_INSTALL)
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 0, result.output
     assert "ms.python" in result.output
     assert env.live(".setforge_it/text/note.txt").exists()
 
