@@ -2343,7 +2343,8 @@ def apply_patch_reverse(
     the user sees the conflicting paths.
     """
     patch_file = transition_dir / "changes.patch"
-    if not patch_file.exists():
+    if not patch_file.exists() or patch_file.stat().st_size == 0:
+        _require_no_unpatched_changes(transition_dir)
         return
     patch_bin = resolve_binary("patch")
     if patch_bin is None:
@@ -2418,6 +2419,31 @@ def apply_patch_reverse(
             f"patch -R failed unexpectedly after dry-run succeeded "
             f"(exit {result.returncode}):\n"
             f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
+def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
+    """Refuse to report success when the metadata lists file changes that a
+    missing or empty ``changes.patch`` can no longer undo."""
+    try:
+        payload = json.loads((transition_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(paths, list) or not paths:
+        return
+    try:
+        covered = {str(item.path) for item in load_filesystem_deltas(transition_dir)}
+    except InvalidTransitionRecord:
+        covered = set()
+    missing = [str(path) for path in paths if str(path) not in covered]
+    if missing:
+        shown = ", ".join(missing[:3]) + (
+            f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+        )
+        raise RevertFailed(
+            f"changes.patch is missing or empty but {transition_dir.name} "
+            f"recorded changes to {shown}; nothing was reverted"
         )
 
 
