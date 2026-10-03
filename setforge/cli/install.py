@@ -826,7 +826,7 @@ def _hold_generated_adoptions(
         if str(content_path.absolute()) not in adopting or not content_path.is_file():
             held.append(record)
             continue
-        live = content_path.read_text(encoding="utf-8")
+        live = deploy.read_text_exact(content_path)
         if record.resolved is not None:
             held.append(
                 replace(

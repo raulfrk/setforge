@@ -19,6 +19,7 @@ from click import ClickException
 from setforge import (
     atomicio,
     codex_lifecycle,
+    deploy,
     operations,
     transitions,
     vscode_extensions,
@@ -849,8 +850,8 @@ def _restore_sync_snapshots(
         if pre_text is None:
             path.unlink(missing_ok=True)
             continue
-        if path.exists() and path.read_text(encoding="utf-8") == pre_text:
+        if path.exists() and deploy.read_text_exact(path) == pre_text:
             continue
         mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
-        atomicio.atomic_write_text(path, pre_text, mode=mode)
+        atomicio.atomic_write_bytes(path, deploy.encode_text_exact(pre_text), mode=mode)
     transitions.restore_state_snapshots(state_pre)

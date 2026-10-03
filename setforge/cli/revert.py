@@ -325,7 +325,7 @@ def _build_revert_plan(
     diff_summaries: dict[str, str] = {}
     if patch_file.exists():
         diff_summaries = _diff_summaries_from_patch(
-            patch_file.read_text(encoding="utf-8")
+            patch_file.read_text(encoding="utf-8", errors="surrogateescape")
         )
 
     # Per-path mode restore: when the forward transition recorded a
@@ -1465,7 +1465,7 @@ def _render_files_section_show(
     diff_summaries: dict[str, str] = {}
     if patch_file.exists():
         diff_summaries = _diff_summaries_from_patch(
-            patch_file.read_text(encoding="utf-8")
+            patch_file.read_text(encoding="utf-8", errors="surrogateescape")
         )
     sorted_items = sorted(file_actions.items())
     console.print(f"  files mutated ({len(sorted_items)}):")

@@ -395,7 +395,7 @@ def _write_text_durable(path: Path, text: str) -> None:
     data fsync (e.g. ``ENOSPC``) propagates — a swallowed data-fsync
     error would report durable when it isn't.
     """
-    with path.open("w", encoding="utf-8", newline="") as fh:
+    with path.open("w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
@@ -450,21 +450,17 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     """Read every path in ``paths``. Missing files map to ``None``.
 
     Returns a dict so callers can pass it directly to :func:`compute_patch`.
-    Decodes the raw bytes as UTF-8 without newline translation so CRLF and
-    lone CR survive into the recorded diff. Binary file deploys are out of
-    scope for v1 (the deploy primitive itself only handles text tracked_files
-    today).
+    Decodes the raw bytes as UTF-8 with ``surrogateescape`` and no newline
+    translation, so CRLF, lone CR and undecodable bytes survive into the
+    recorded diff and can be re-encoded byte for byte (see
+    :func:`setforge.deploy.read_text_exact`).
     """
     out: dict[Path, str | None] = {}
     for p in paths:
         try:
-            out[p] = p.read_bytes().decode("utf-8")
+            out[p] = p.read_bytes().decode("utf-8", "surrogateescape")
         except FileNotFoundError:
             out[p] = None
-        except UnicodeDecodeError as exc:
-            raise SetforgeError(
-                f"cannot snapshot {p}: file is not valid UTF-8"
-            ) from exc
     return out
 
 

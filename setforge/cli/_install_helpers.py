@@ -598,7 +598,7 @@ def _resolve_one_pending(
             symlink_content=(
                 generated.rendered
                 if generated is not None
-                else sub_src.read_text(encoding="utf-8")
+                else deploy.read_text_exact(sub_src)
             ),
             symlink_mode=(
                 tracked_file.mode
