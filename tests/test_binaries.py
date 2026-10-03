@@ -475,6 +475,45 @@ def test_host_local_config_both_blocks_malformed_binaries_error_wins() -> None:
     assert "install_mode" not in str(excinfo.value)
 
 
+def _stub_example_blocks() -> list[str]:
+    blocks: list[list[str]] = []
+    for line in binaries._STUB_TEMPLATE.splitlines():
+        if line.startswith("# ") and line[2:3].isalpha() and line.endswith(":"):
+            blocks.append([line[2:]])
+        elif line.startswith("#  ") and blocks:
+            blocks[-1].append(line[2:])
+        elif not line.startswith("#  "):
+            continue
+    return ["\n".join(block) + "\n" for block in blocks if len(block) > 1]
+
+
+def test_stub_has_examples_for_every_documented_block() -> None:
+    keys = {block.split(":", 1)[0] for block in _stub_example_blocks()}
+    assert keys >= {
+        "binaries",
+        "claude",
+        "plugins",
+        "extensions",
+        "marketplaces",
+        "tracked_files",
+    }
+
+
+@pytest.mark.parametrize("block", _stub_example_blocks())
+def test_every_uncommented_stub_example_validates(block: str) -> None:
+    from ruamel.yaml import YAML
+
+    from setforge.cli.validate import _LocalConfig
+    from setforge.source import _load_local_source_config
+
+    path = binaries.LOCAL_CONFIG_PATH
+    path.write_text(block, encoding="utf-8")
+
+    _LocalConfig.model_validate(YAML(typ="safe").load(block))
+    _load_local_source_config(path)
+    load_host_local_config()
+
+
 def test_tilde_in_binary_override_is_expanded(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     (home / "bin").mkdir(parents=True)

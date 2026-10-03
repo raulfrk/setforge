@@ -81,29 +81,28 @@ _STUB_TEMPLATE: Final[str] = """\
 # is enforced by the relevant loader; see the spec for full semantics.
 # ---------------------------------------------------------------------------
 #
-# Per-host plugin overrides (claude_plugins). Uncomment + edit:
+# Per-host plugin changes (name@marketplace). Uncomment + edit:
 # plugins:
-#   include:
+#   add:
 #     - secure-code-review@work-internal
-#   exclude: []
+#   remove: []
 #
-# Per-host extension overrides. Uncomment + edit:
+# Per-host VS Code extension changes. Uncomment + edit:
 # extensions:
-#   include:
+#   add:
 #     - work-only-extension
-#   exclude: []
+#   remove: []
 #
-# Marketplaces (claude). Uncomment + edit:
+# Per-host marketplaces (claude). Uncomment + edit:
 # marketplaces:
-#   work-internal: github:my-employer/claude-plugins-internal
+#   add:
+#     work-internal:
+#       source: github
+#       repo: my-employer/claude-plugins-internal
+#   remove: []
 #
-# Host-local user-sections (overrides marker namespace on a per-tracked-file
-# basis):
-# host_local_sections:
-#   claude_clauded_md:
-#     - per-host-section-name
-#
-# Per-host tracked file overrides (rarely needed):
+# Per-host tracked file overrides (rarely needed; the id must exist in
+# setforge.yaml):
 # tracked_files:
 #   claude_clauded_md:
 #     dst: /custom/path/to/CLAUDE.md
