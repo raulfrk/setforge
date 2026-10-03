@@ -914,3 +914,81 @@ def test_alias_bearing_yaml_still_merges_adjacent_edits_by_key() -> None:
     assert out.kind is ReconcileKind.WRITE
     assert out.content == host.replace(b"z: 1", b"z: 2")
     assert out.new_base == upstream
+
+
+def _assert_converged(fid, out, upstream: bytes, fmt: StructuredFormat) -> None:
+    assert isinstance(out.content, bytes)
+    _seed(fid, base=upstream, local=out.content)
+    again = reconcile_structured_file(
+        _P, fid, live=out.content, tracked=upstream, fmt=fmt
+    )
+    assert again.kind is ReconcileKind.NOOP
+
+
+_SAME_SPOT_INSERTS = [
+    pytest.param(
+        _FMT,
+        b"a: 1\n",
+        b"a: 1\n# host note: keep me\n",
+        b"a: 1\nt: 1\n",
+        b"a: 1\n# host note: keep me\nt: 1\n",
+        id="yaml-host-comment-at-end",
+    ),
+    pytest.param(
+        _FMT,
+        b"a: 1\nz: 9\n",
+        b"a: 1\n# host note\nz: 9\n",
+        b"a: 1\nt: 1\nz: 9\n",
+        b"a: 1\n# host note\nt: 1\nz: 9\n",
+        id="yaml-host-comment-mid-file",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "a": 1,\n  "b": 2\n}\n',
+        b'{\n  "a": 1,\n  // host note\n  "b": 2\n}\n',
+        b'{\n  "a": 1,\n  "t": 1,\n  "b": 2\n}\n',
+        b'{\n  "a": 1,\n  // host note\n  "t": 1,\n  "b": 2\n}\n',
+        id="jsonc-host-comment-above-a-key",
+    ),
+    pytest.param(
+        _FMT,
+        b"a: 1\nn: null\nb:   2\n",
+        b"a: 1\nn: null\nb:   2\nh: 1\n",
+        b"a: 1\nn: null\nb:   2\nt: 1\n",
+        b"a: 1\nn: null\nb:   2\nh: 1\nt: 1\n",
+        id="yaml-both-append",
+    ),
+    pytest.param(
+        _FMT,
+        b"a: 1\nn: ~\nz:   2\n",
+        b"a: 1\nh: 1\nn: ~\nz:   2\n",
+        b"a: 1\nt: 1\nu: 2\nn: ~\nz:   2\n",
+        b"a: 1\nh: 1\nt: 1\nu: 2\nn: ~\nz:   2\n",
+        id="yaml-both-insert-uneven",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "a":   1,\n  "c": 3\n}\n',
+        b'{\n  "a":   1,\n  "c": 3,\n  "h": true\n}\n',
+        b'{\n  "a":   1,\n  "c": 3,\n  "t": 2\n}\n',
+        b'{\n  "a":   1,\n  "c": 3,\n  "h": true,\n  "t": 2\n}\n',
+        id="json-both-append",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("fmt", "base", "host", "upstream", "expected"), _SAME_SPOT_INSERTS
+)
+def test_both_sides_inserting_at_one_spot_keeps_both_lines(
+    fmt: StructuredFormat, base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("same-spot")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+    _assert_converged(fid, out, upstream, fmt)

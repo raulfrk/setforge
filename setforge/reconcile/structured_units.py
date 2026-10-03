@@ -743,8 +743,7 @@ def _changed_runs(current: list[bytes], source: list[bytes]) -> list[_RegionGrou
 
     A replaced run is split into single-line pairs plus its uneven remainder,
     so a wanted line is not held back by an unwanted neighbour. An uneven run
-    can pair from its head or from its tail; both groups are offered, pairs
-    first (the remainder shifts every line after it).
+    can pair from its head or from its tail; both groups are offered.
     """
     runs: list[_RegionGroups] = []
     matcher = PatienceSequenceMatcher(None, current, source)
@@ -773,19 +772,30 @@ def _keep_comma(line: bytes, like: bytes) -> bytes:
 
 
 def _replacements(
-    old: list[bytes], new: list[bytes], fmt: StructuredFormat
+    old: list[bytes], new: list[bytes], fmt: StructuredFormat, *, source_first: bool
 ) -> list[list[bytes]]:
-    """The texts to try in place of ``old``: ``new``, then its JSON comma fit.
+    """The texts to try in place of ``old``, most preferred first.
+
+    A changed line pair is ambiguous: ``new`` may REPLACE ``old`` (one side
+    edited the line) or both may have been inserted at the same spot (a host
+    comment where upstream adds a key, a key appended by each side), so ``old``
+    followed by ``new`` and the reverse are offered as well. Keeping ``old`` is
+    preferred, unless ``source_first`` asks for the source's text to win.
 
     A JSON member line carries the separator to the NEXT member, which belongs
-    to the position, not to the member: a line taken into a different position
-    is also tried with the comma state of the line it replaces.
+    to the position, not to the member: every form is also tried with the
+    commas its lines need in their new positions.
     """
-    if fmt is StructuredFormat.JSONC and len(old) == 1 and len(new) == 1:
-        fitted = [_keep_comma(new[0], old[0])]
-        if fitted != new:
-            return [new, fitted]
-    return [new]
+    replace, keep_both = [new], []
+    if len(old) == 1 and len(new) == 1:
+        keep_both = [old + new, new + old]
+        if fmt is StructuredFormat.JSONC:
+            replace.append([_keep_comma(new[0], old[0])])
+            keep_both += [
+                [_keep_comma(old[0], b","), _keep_comma(new[0], old[0])],
+                [_keep_comma(new[0], b","), old[0]],
+            ]
+    return [*replace, *keep_both] if source_first else [*keep_both, *replace]
 
 
 def splice_lines_toward(
@@ -801,12 +811,12 @@ def splice_lines_toward(
     The byte-preserving rendering of a merged / reconstructed ``model`` whose
     values all come from ``start`` or ``source``: each changed start↔source line
     region is taken only when it moves the text strictly closer to ``model``'s
-    values, so a value ``model`` keeps from ``start``, a comment-only edit and
-    every untouched line keep their ``start`` bytes. With ``keep_neutral`` a
-    region that leaves the values as they are is taken too, so ``source``'s
-    text-only edits win instead. ``None`` when no such selection parses to
-    exactly ``model``'s values (a value from neither text, or one line carrying
-    both a wanted and an unwanted change).
+    values, in the form that gets closest, so a value ``model`` keeps from
+    ``start``, a comment-only edit and every untouched line keep their ``start``
+    bytes. With ``keep_neutral`` a region that leaves the values as they are is
+    taken too, so ``source``'s text-only edits win instead. ``None`` when no
+    such selection parses to exactly ``model``'s values (a value from neither
+    text, or one line carrying both a wanted and an unwanted change).
     """
     try:
         target = dict(_plain_leaves(get_at_path(model, "")))
@@ -823,15 +833,16 @@ def splice_lines_toward(
     for alternatives in reversed(runs):
         for group in alternatives:
             before = current
-            for i1, i2, j1, j2 in group:
-                for lines in _replacements(current[i1:i2], source_lines[j1:j2], fmt):
+            # Last region first: a taken region may change the line count.
+            for i1, i2, j1, j2 in sorted(group, reverse=True):
+                limit = remaining + 1 if keep_neutral else remaining
+                for lines in _replacements(
+                    current[i1:i2], source_lines[j1:j2], fmt, source_first=keep_neutral
+                ):
                     trial = current[:i1] + lines + current[i2:]
                     distance = _leaf_distance(b"".join(trial), target, fmt)
-                    if distance is not None and (
-                        distance < remaining or (keep_neutral and distance == remaining)
-                    ):
-                        current, remaining = trial, distance
-                        break
+                    if distance is not None and distance < limit:
+                        current, remaining, limit = trial, distance, distance
             if current is not before:
                 break
     return b"".join(current) if remaining == 0 else None
