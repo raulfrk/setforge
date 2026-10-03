@@ -377,6 +377,24 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     return tuple(previews)
 
 
+def _refuse_unparseable_structured(sub_name: str, src: Path, dst: Path) -> None:
+    """Refuse a live JSON/YAML that does not parse when the tracked one does."""
+    fmt = su_mod.structured_format(dst)
+    if fmt is None or not src.is_file() or not dst.is_file():
+        return
+    try:
+        su_mod._load_model(src.read_bytes(), fmt)
+    except StructuredParseError:
+        return
+    try:
+        su_mod._load_model(dst.read_bytes(), fmt)
+    except StructuredParseError as err:
+        raise InvariantViolation(
+            f"live file {dst} ({sub_name!r}) is not parseable {fmt.value}: {err}; "
+            "refusing to overwrite the tracked copy. Fix the live file and re-run sync"
+        ) from err
+
+
 def capture_tracked_file(
     src: Path,
     dst: Path,
@@ -740,6 +758,10 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
                     f"claim; run `setforge stage {sub_name}` to adopt it"
                 )
             participating.add(sub_name)
+
+    for sub_name, sub_src, sub_dst, _names, _generated in work:
+        if sub_name not in participating:
+            _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
 
     for sub_name, sub_src, sub_dst, host_local_names, _generated in work:
         fmt = su_mod.structured_format(sub_dst)

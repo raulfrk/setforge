@@ -103,3 +103,21 @@ def test_compare_reports_tracked_source_missing_from_repo(
     _no_traceback(result)
     assert result.exit_code == 1
     assert "tracked source missing" in result.output
+
+
+@pytest.mark.parametrize("bad", [b'{\n  "a": 1,\n  "L', b""])
+def test_sync_refuses_live_json_that_does_not_parse(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    bad: bytes,
+) -> None:
+    env = integration_env()
+    assert env.run_verb(["install", "--yes"]).exit_code == 0
+    live = env.live(".setforge_it/json/settings.json")
+    tracked = env.tracked("json/settings.json")
+    before = tracked.read_bytes()
+    live.write_bytes(bad)
+    result = env.run_verb(["sync", "--auto=use-live", "--yes"])
+    assert result.exit_code != 0
+    assert "settings.json" in f"{result.output}{result.exception}"
+    assert tracked.read_bytes() == before
