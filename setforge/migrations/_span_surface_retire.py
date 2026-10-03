@@ -218,7 +218,7 @@ class SpanSurfaceRetireMigration:
             file_post: dict[Path, str | None]
             if pre is not None:
                 file_pre = dict(pre)
-                file_post = dict(transitions.snapshot_paths(tuple(pre)))
+                file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
                 file_post[local_yaml] = local_post
             else:
                 file_pre = {roots.cfg_path: cfg_pre, local_yaml: local_pre}
@@ -261,7 +261,7 @@ class SpanSurfaceRetireMigration:
                 file_pre[local_yaml] = pre[local_yaml]
         else:
             file_pre = {roots.cfg_path: cfg_pre}
-        file_post = dict(transitions.snapshot_paths(tuple(file_pre)))
+        file_post = dict(transitions.snapshot_paths(tuple(file_pre), strict=True))
         _write_span_retire_transition(
             file_pre=file_pre,
             file_post=file_post,

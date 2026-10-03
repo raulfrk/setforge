@@ -146,7 +146,7 @@ def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> None:
     file_post: dict[Path, str | None]
     if pre is not None:
         file_pre = dict(pre)
-        file_post = dict(transitions.snapshot_paths(tuple(pre)))
+        file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
     else:
         file_pre = {roots.cfg_path: cfg_pre}
         file_post = {roots.cfg_path: roots.cfg_path.read_text(encoding="utf-8")}

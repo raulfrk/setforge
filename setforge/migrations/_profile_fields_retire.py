@@ -359,7 +359,7 @@ def _build_stamp_transition_images(
     pre = roots.pre_chain_snapshot
     if pre is not None:
         file_pre = dict(pre)
-        file_post = dict(transitions.snapshot_paths(tuple(pre)))
+        file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
     else:
         file_pre = {roots.cfg_path: cfg_pre}
         file_post = {roots.cfg_path: roots.cfg_path.read_text(encoding="utf-8")}

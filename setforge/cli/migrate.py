@@ -348,7 +348,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # Snapshot BEFORE any mutation: file_pre is the (UTF-8 text) image
     # ``revert`` restores to. Captured here (not aliased to file_post) so the
     # recorded patch reverses to the exact pre-migration state.
-    file_pre = transitions.snapshot_paths(affected)
+    file_pre = transitions.snapshot_paths(affected, strict=True)
     # Thread the pre-chain frozen image to a step that records its OWN
     # transition (the cutover). Without it, such a step captures only its
     # pre-step state, so a multi-step chain reverts to the intermediate schema
@@ -385,7 +385,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
             _finalize_owned_transition(
                 before=owned_transition_dirs,
                 file_pre=file_pre,
-                file_post=transitions.snapshot_paths(affected),
+                file_post=transitions.snapshot_paths(affected, strict=True),
             )
     except BaseException as primary:
         try:
@@ -404,7 +404,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # writing a second, overlapping record would break the LIFO revert of the
     # shared setforge.yaml edit. See :func:`_chain_owns_transition`.
     if not _chain_owns_transition(chain):
-        file_post = transitions.snapshot_paths(affected)
+        file_post = transitions.snapshot_paths(affected, strict=True)
         _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)
@@ -517,7 +517,7 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
         return
 
     paths = [src for src, _, _ in plans]
-    file_pre = transitions.snapshot_paths(paths)
+    file_pre = transitions.snapshot_paths(paths, strict=True)
     journal = operations.prepare(
         command="migrate-finalize",
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
@@ -555,7 +555,7 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
             written_count=len(written),
             error=exc,
         )
-    file_post = transitions.snapshot_paths(paths)
+    file_post = transitions.snapshot_paths(paths, strict=True)
     _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)

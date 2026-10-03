@@ -446,7 +446,9 @@ def write_meta(
     _write_text_durable(transition_dir / "meta.json", payload)
 
 
-def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
+def snapshot_paths(
+    paths: Iterable[Path], *, strict: bool = False
+) -> dict[Path, str | None]:
     """Read every path in ``paths``. Missing files map to ``None``.
 
     Returns a dict so callers can pass it directly to :func:`compute_patch`.
@@ -454,13 +456,21 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     translation, so CRLF, lone CR and undecodable bytes survive into the
     recorded diff and can be re-encoded byte for byte (see
     :func:`setforge.deploy.read_text_exact`).
+
+    ``strict=True`` is for configuration files (migration inputs), which are
+    text: a file that is not valid UTF-8 raises :class:`SetforgeError`.
     """
     out: dict[Path, str | None] = {}
     for p in paths:
         try:
-            out[p] = p.read_bytes().decode("utf-8", "surrogateescape")
+            data = p.read_bytes()
+            out[p] = data.decode("utf-8", "strict" if strict else "surrogateescape")
         except FileNotFoundError:
             out[p] = None
+        except UnicodeDecodeError as exc:
+            raise SetforgeError(
+                f"cannot snapshot {p}: file is not valid UTF-8"
+            ) from exc
     return out
 
 
