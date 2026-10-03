@@ -959,13 +959,16 @@ def _stringify_field_value(data: Mapping[str, object], key: str, msg: object) ->
 
 
 def _build_snippet(raw_lines: list[str], line_1: int) -> list[str]:
-    """Return up to 3 snippet lines centered on ``line_1`` (1-indexed)."""
+    """Return up to 3 snippet lines ending on ``line_1`` (1-indexed).
+
+    The formatter marks the last snippet line, so the offending line
+    must be last.
+    """
     if not raw_lines:
         return [""]
-    idx = max(line_1 - 1, 0)
-    start = max(idx - 1, 0)
-    end = min(idx + 1, len(raw_lines))
-    return raw_lines[start : end + 1]
+    idx = min(max(line_1 - 1, 0), len(raw_lines) - 1)
+    start = max(idx - 2, 0)
+    return raw_lines[start : idx + 1]
 
 
 def _home_relative(path: Path) -> str:
@@ -1089,6 +1092,10 @@ def _setforge_yaml_error_to_context(
     line_1, col_1, field_value, suggestion = _resolve_setforge_yaml_error_position(
         raw, loc, err_type, msg
     )
+    if err_type == "missing" and loc:
+        msg = f"{msg}: {'.'.join(str(step) for step in loc)}"
+    elif err_type == "string_type" and loc and loc[-1] == "schema_version":
+        msg = f'{msg} (write it as a quoted string, e.g. schema_version: "1.0")'
     snippet_lines = _build_snippet(raw_lines, line_1)
     fix_hint = _build_setforge_fix_hint(config_path, line_1, err_type, field_value, msg)
     return ValidationErrorWithContext(
@@ -1188,6 +1195,15 @@ def _resolve_nested_setforge_error(
         line_1, col_1 = _lookup_key_position(parent, leaf)
         suggestion = suggest_close_match(leaf, candidates) if candidates else None
         return line_1, col_1, leaf, suggestion
+    if err_type == "missing" and leaf not in parent:
+        owner: object = raw
+        for step in loc[:-2]:
+            owner = owner[step] if isinstance(owner, Mapping) else {}
+        owner_key = str(loc[-2])
+        if isinstance(owner, Mapping) and owner_key in owner:
+            line_1, col_1 = _lookup_key_position(owner, owner_key)
+            return line_1, col_1, owner_key, None
+        return 1, 1, "", None
     line_1, col_1 = _lookup_value_position(parent, leaf)
     field_value = _stringify_field_value(parent, leaf, msg)
     return line_1, col_1, field_value, None
