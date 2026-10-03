@@ -8,7 +8,6 @@ delete-vs-edit conflict detection, and byte-stable idempotency.
 
 import io
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -32,7 +31,6 @@ from setforge.structural_merge import (
     encode_key_segment,
     get_at_path,
     get_node_at_path,
-    is_structural,
     join_key_segments,
     list_keys_at_path,
     merge_structural,
@@ -855,31 +853,6 @@ def test_merge_flat_dotted_key_and_nested_path_do_not_collide() -> None:
 
     assert not result.clean
     assert {c.path for c in result.conflicts} == {"a\\.b", "a.b"}
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "settings.json",
-        "config.yaml",
-        "config.yml",
-    ],
-)
-def test_is_structural_true_for_json_and_yaml(name: str) -> None:
-    assert is_structural(Path("/some/dir") / name) is True
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "notes.md",
-        "plain.txt",
-        "README",
-        "archive.yaml.bak",
-    ],
-)
-def test_is_structural_false_for_non_structural(name: str) -> None:
-    assert is_structural(Path("/some/dir") / name) is False
 
 
 @pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])

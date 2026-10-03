@@ -31,7 +31,6 @@ import copy
 import datetime
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 from json5.dumper import ModelDumper
@@ -48,7 +47,6 @@ from json5.model import (
 )
 from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 
-from setforge import jsonc
 from setforge.errors import DuplicateKeyInMergeModel, MergeTypeMismatch
 from setforge.jsonc import _find_key_index, _key_text
 from setforge.scalar_merge import (
@@ -68,7 +66,6 @@ __all__ = [
     "encode_key_segment",
     "get_at_path",
     "get_node_at_path",
-    "is_structural",
     "join_key_segments",
     "list_keys_at_path",
     "merge_structural",
@@ -1536,19 +1533,3 @@ def _walk_ruamel_anchored_nodes(
     elif isinstance(node, CommentedSeq):
         for elem in node:
             _walk_ruamel_anchored_nodes(elem, visit, exclude)
-
-
-# ---------------------------------------------------------------------------
-# Structural-file dispatch + comment-preserving parse.
-# ---------------------------------------------------------------------------
-
-
-def is_structural(dst: Path) -> bool:
-    """Whether ``dst`` routes through the structural (comment-tree) engine.
-
-    Public seam: ``cli/_helpers.py``'s marker-duplicate pre-check uses this
-    predicate to skip structural files (JSON / JSONC / YAML carry no inline
-    user-section markers), so it is part of the module's surface rather than
-    a private helper.
-    """
-    return jsonc.is_jsonc_file(dst) or dst.suffix in {".yaml", ".yml"}
