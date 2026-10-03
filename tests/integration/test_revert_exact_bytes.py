@@ -1,8 +1,9 @@
-"""Revert and redo restore exact bytes."""
+"""Revert and redo restore exact bytes and work through symlinked destinations."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -80,3 +81,48 @@ def test_older_transition_with_crlf_can_be_reverted(
 
     assert result.exit_code == 0, result.output
     assert not live.exists()
+
+
+def test_revert_through_symlinked_destination_directory(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    tmp_path: Path,
+) -> None:
+    env = integration_env(tracked=_tracked_only())
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    (env.home / ".setforge_it").symlink_to(real)
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+    _set_tracked(env, b"seed\nmore\n")
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+
+    result = env.run_verb(["revert", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (real / "text/note.txt").read_text() == "seed\n"
+    result = env.run_verb(["revert", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert (real / "text/note.txt").read_text() == "seed\nmore\n"
+
+
+def test_revert_when_destination_is_a_symlink(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    tmp_path: Path,
+) -> None:
+    env = integration_env(tracked=_tracked_only())
+    target = tmp_path / "managed-elsewhere.txt"
+    target.write_text("seed\n")
+    live = env.live(_REL)
+    live.parent.mkdir(parents=True)
+    live.symlink_to(target)
+    assert env.run_verb(["install", "--no-git-check", "--yes"]).exit_code == 0
+    _set_tracked(env, b"seed\nmore\n")
+    assert env.run_verb(["install", "--no-git-check", "--yes"]).exit_code == 0
+    assert live.is_symlink()
+
+    result = env.run_verb(["revert", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert live.is_symlink()
+    assert target.read_text() == "seed\n"

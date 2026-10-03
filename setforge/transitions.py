@@ -35,10 +35,12 @@ import difflib
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
-from collections.abc import Iterable, Mapping
+import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -2314,6 +2316,93 @@ def _pick_latest_transition(candidates: list[Path]) -> Path | None:
     return max(candidates, key=lambda d: d.name)
 
 
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def _patch_header_indices(lines: Sequence[str]) -> list[int]:
+    """Indices of the ``--- `` lines that open a file section.
+
+    Hunk bodies are skipped by their declared line counts, so a body line
+    such as ``--- x`` (a removed ``-- x``) is never mistaken for a header.
+    """
+    found: list[int] = []
+    i = 0
+    count = len(lines)
+    while i < count:
+        if not (
+            lines[i].startswith("--- ")
+            and i + 2 < count
+            and lines[i + 1].startswith("+++ ")
+            and lines[i + 2].startswith("@@ ")
+        ):
+            i += 1
+            continue
+        found.append(i)
+        i += 2
+        while i < count and (match := _HUNK_HEADER.match(lines[i])):
+            old = int(match.group(1) or 1)
+            new = int(match.group(2) or 1)
+            i += 1
+            while i < count and (old > 0 or new > 0):
+                marker = lines[i][:1]
+                if marker == " ":
+                    old -= 1
+                    new -= 1
+                elif marker == "-":
+                    old -= 1
+                elif marker == "+":
+                    new -= 1
+                i += 1
+            while i < count and lines[i].startswith("\\"):
+                i += 1
+    return found
+
+
+def _resolve_header_path(field: str) -> str:
+    """Rewrite one ``---``/``+++`` path with symlinks resolved.
+
+    GNU patch refuses to traverse an absolute symlink and refuses to patch a
+    symlink leaf, so the lexical path recorded at install time is replaced by
+    its real location when the revert is applied.
+    """
+    name, sep, tail = field.partition("\t")
+    unquoted = _cunquote_path(name)
+    if unquoted == "/dev/null":
+        return field
+    resolved = os.path.realpath("/" + unquoted)
+    if resolved == "/" + unquoted:
+        return field
+    return _diff_path(Path(resolved)) + sep + tail
+
+
+def _resolve_patch_symlinks(patch_bytes: bytes) -> bytes:
+    lines = patch_bytes.decode("utf-8", "surrogateescape").split("\n")
+    headers = set(_patch_header_indices(lines))
+    out: list[str] = []
+    changed = False
+    for index, line in enumerate(lines):
+        if index - 1 in headers:
+            continue
+        if index not in headers:
+            out.append(line)
+            continue
+        old_from, old_to = line[4:], lines[index + 1][4:]
+        new_from, new_to = _resolve_header_path(old_from), _resolve_header_path(old_to)
+        if (new_from, new_to) == (old_from, old_to):
+            out.extend((line, lines[index + 1]))
+            continue
+        changed = True
+        if out and out[-1].startswith("diff --git "):
+            out.pop()
+        real = new_to if new_from == "/dev/null" else new_from
+        if real.startswith('"'):
+            out.append(f"diff --git {real} {real}")
+        out.extend((f"--- {new_from}", f"+++ {new_to}"))
+    if not changed:
+        return patch_bytes
+    return "\n".join(out).encode("utf-8", "surrogateescape")
+
+
 def apply_patch_reverse(
     transition_dir: TransitionDir, *, dry_run: bool = False
 ) -> None:
@@ -2364,6 +2453,43 @@ def apply_patch_reverse(
     # required the same privileges this revert grants, so confinement adds no
     # boundary. The dry-run-first pass below also aborts on any drift before a
     # byte is written. Accepted-as-safe, not an oversight.
+    original = patch_file.read_bytes()
+    resolved = _resolve_patch_symlinks(original)
+    if resolved == original:
+        _run_patch_reverse(patch_bin, patch_file.resolve(), dry_run=dry_run)
+        return
+    with tempfile.TemporaryDirectory(prefix="setforge-revert-") as scratch:
+        resolved_file = Path(scratch) / "changes.patch"
+        resolved_file.write_bytes(resolved)
+        _run_patch_reverse(patch_bin, resolved_file, dry_run=dry_run)
+
+
+def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
+    """Refuse to report success when the metadata lists file changes that a
+    missing or empty ``changes.patch`` can no longer undo."""
+    try:
+        payload = json.loads((transition_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(paths, list) or not paths:
+        return
+    try:
+        covered = {str(item.path) for item in load_filesystem_deltas(transition_dir)}
+    except InvalidTransitionRecord:
+        covered = set()
+    missing = [str(path) for path in paths if str(path) not in covered]
+    if missing:
+        shown = ", ".join(missing[:3]) + (
+            f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+        )
+        raise RevertFailed(
+            f"changes.patch is missing or empty but {transition_dir.name} "
+            f"recorded changes to {shown}; nothing was reverted"
+        )
+
+
+def _run_patch_reverse(patch_bin: Path, patch_file: Path, *, dry_run: bool) -> None:
     base_args = [
         str(patch_bin),
         "-p0",
@@ -2374,7 +2500,7 @@ def apply_patch_reverse(
         "/",
         "--reject-file=-",
         "--input",
-        str(patch_file.resolve()),
+        str(patch_file),
     ]
     try:
         dry = subprocess.run(
@@ -2419,31 +2545,6 @@ def apply_patch_reverse(
             f"patch -R failed unexpectedly after dry-run succeeded "
             f"(exit {result.returncode}):\n"
             f"{result.stderr.strip() or result.stdout.strip()}"
-        )
-
-
-def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
-    """Refuse to report success when the metadata lists file changes that a
-    missing or empty ``changes.patch`` can no longer undo."""
-    try:
-        payload = json.loads((transition_dir / "meta.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    paths = payload.get("paths") if isinstance(payload, dict) else None
-    if not isinstance(paths, list) or not paths:
-        return
-    try:
-        covered = {str(item.path) for item in load_filesystem_deltas(transition_dir)}
-    except InvalidTransitionRecord:
-        covered = set()
-    missing = [str(path) for path in paths if str(path) not in covered]
-    if missing:
-        shown = ", ".join(missing[:3]) + (
-            f" and {len(missing) - 3} more" if len(missing) > 3 else ""
-        )
-        raise RevertFailed(
-            f"changes.patch is missing or empty but {transition_dir.name} "
-            f"recorded changes to {shown}; nothing was reverted"
         )
 
 
@@ -2650,14 +2751,7 @@ def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
         return {}
     lines = patch_file.read_bytes().decode("utf-8", "surrogateescape").split("\n")
     out: dict[str, str] = {}
-    i = 0
-    while i < len(lines) - 1:
-        if not lines[i].startswith("--- "):
-            i += 1
-            continue
-        if not lines[i + 1].startswith("+++ "):
-            i += 1
-            continue
+    for i in _patch_header_indices(lines):
         from_path = _cunquote_path(lines[i][4:].split("\t", 1)[0])
         to_path = _cunquote_path(lines[i + 1][4:].split("\t", 1)[0])
         if from_path == "/dev/null" and to_path != "/dev/null":
@@ -2666,5 +2760,4 @@ def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
             out["/" + from_path] = "deleted"
         elif from_path != "/dev/null":
             out["/" + from_path] = "modified"
-        i += 2
     return out
