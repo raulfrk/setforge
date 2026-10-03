@@ -26,6 +26,9 @@ sed -i 's/my-setup:user-section/setforge:user-section/g' ~/.claude/CLAUDE.md
 # repeat for any other live file you installed with markers
 ```
 
+Markers are a retired mechanism: after the rename, run `setforge migrate` to
+strip them (see [commands.md](commands.md#retired-user-section-markers)).
+
 `setforge install` detects pre-rename markers and refuses to clobber section
 bodies, pointing you at this command — but running it preemptively is safer.
 

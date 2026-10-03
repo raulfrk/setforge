@@ -543,48 +543,24 @@ assets.
 
 ## Per-host preservation
 
-Some live state is host-specific and must survive a re-`install`. setforge
-offers two mechanisms.
+Some live state is host-specific and must survive a re-`install`. Classify it
+with `setforge stage`; the notes below cover the retired marker syntax and the
+seeding helper.
 
-### Markdown: user-section markers
+### Retired: user-section markers
 
-Wrap a region of a tracked markdown *source* file in HTML-comment markers to
-**declare** it a user section. The marker pair is the authoring syntax in the
-source; it is **not** what gets deployed (see below). Both
-markers need a `host-local` or `shared` semantics keyword:
+The `<!-- setforge:user-section start|end host-local|shared NAME -->` marker
+pairs are **retired** (schema 2.0 → 2.1). A marker left in a tracked source is
+deployed verbatim, and `sync` copies the host-local body between the markers
+into the shared source. `setforge validate` reports tracked sources that still
+carry markers; `setforge migrate` strips them and moves host-local bodies into
+the markerless `local.yaml` overlay. See
+[commands.md](commands.md#retired-user-section-markers).
 
-```markdown
-<!-- setforge:user-section start host-local NAME -->
-... per-machine body; kept live, never shared ...
-<!-- setforge:user-section end host-local NAME -->
-
-<!-- setforge:user-section start shared NAME -->
-... shared body; tracked-side updates reconcile via
-    `install --reconcile-user-sections` ...
-<!-- setforge:user-section end shared NAME -->
-```
-
-**The deployed file is markerless.** `install` strips the tracked-authored
-markers so they never reach the live file, and reconciles each section by its
-semantics:
-
-- **host-local** → the per-host body is injected *markerless* into the live file
-  and preserved across re-installs (nothing host-specific reaches the config
-  repo).
-- **shared** → the region is reconciled as a stored-base 3-way merge against
-  live edits; the reconcile wizard surfaces any conflict.
-
-Configs predating the current schema (no `schema_version`, or an older one) that
-relied on marker *survival* in the live file are migrated forward by
-`setforge migrate` (and transparently on
-`install`). The project-root [CLAUDE.md](../CLAUDE.md) documents the full marker
-grammar. Marker pairs are **hand-authored** — there is no `section` subcommand;
-open the tracked source and write the pair yourself. The `host-local` / `shared`
-keyword is required on both markers and must match; the `NAME` is optional (and
-must match between start and end when present). Leave off the end marker's
-`hash=<sha256-hex>` segment — `install` computes and rewrites it on every run, so
-you never calculate it by hand. See [commands.md](commands.md#managing-user-section-markers)
-for the authoring walkthrough.
+To keep part of a file host-only, classify it with `setforge stage`: each text
+hunk or YAML key is SHARED (may flow back to the config repo) or LOCAL (stays on
+this host). A `.json` file is staged as one whole-document unit rather than per
+key.
 
 #### Seeding host-local bodies (optional)
 
@@ -595,9 +571,7 @@ config repo's `templates/` directory), then map a host-local section NAME to it
 in a profile's `section_slots:`. On `install`, an empty or missing host-local
 section named there is seeded **once** from the template body; a section that
 already has content is left untouched (the host owns it), so later template
-edits do not propagate to a host that has already adopted the section. This is a
-convenience layer on top of hand-authored markers — the marker pair is still
-what declares the section.
+edits do not propagate to a host that has already adopted the section.
 
 ## Host-local, never-tracked files
 

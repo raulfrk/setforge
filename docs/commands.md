@@ -9,7 +9,9 @@ your config repo's `setforge.yaml`.
 
 ## Global options
 
-Apply to every command (`setforge [OPTIONS] COMMAND`):
+Apply to every command (`setforge [OPTIONS] COMMAND`). They must come
+**before** the subcommand: `setforge -o json compare` works, while
+`setforge compare -o json` fails with "No such option".
 
 - `--source PATH` — config source directory (overrides `SETFORGE_SOURCE` and
   `local.yaml`).
@@ -340,42 +342,18 @@ operator moves the replacement aside and retries recovery.
 | `--ignore` | Legacy mode only: record one tracked id as host-local ignored. |
 | `--scan` | Opt into bounded unrecorded-leaf discovery. |
 
-### Managing user-section markers
+### Retired user-section markers
 
-User-section markers are **hand-authored** — there is no `section` subcommand.
-Open the tracked source and add the `<!-- setforge:user-section ... -->` pair
-yourself:
+The hand-authored `<!-- setforge:user-section ... -->` marker pairs are
+**retired** (schema 2.0 → 2.1). They are no longer parsed on install or sync:
+a marker left in a tracked source is deployed verbatim and `sync` copies the
+text between the markers into the shared source. `setforge validate` fails when a
+tracked source still contains one, and `setforge migrate` strips them (host-local
+bodies move to the markerless `local.yaml` overlay).
 
-```markdown
-<!-- setforge:user-section start host-local my-notes -->
-... per-machine body; kept live, never shared ...
-<!-- setforge:user-section end host-local my-notes -->
-```
-
-Rules the parser enforces (see `setforge/user_section_markers.py`):
-
-- The `host-local` / `shared` keyword is **required** on both the start and end
-  marker, and the two must match.
-- The `NAME` is **optional** but must match between start and end when present;
-  unnamed sections are keyed by their position in the file. No nesting.
-- The end marker also carries a `hash=<sha256-hex>` segment (64 lowercase hex
-  chars). **You never compute it by hand** — omit it (or leave any placeholder)
-  when you first author the pair, and `setforge install` stamps and rewrites the
-  real body hash on every run.
-
-Pick the semantics keyword by where the body should live:
-
-- **host-local** — per-machine content. The body is injected *markerless* into
-  the live file and kept as an overlay in `local.yaml`; it never reaches the
-  config repo and is always preserved live.
-- **shared** — content that travels in the config repo. Tracked-side updates
-  reconcile against live edits through the `install --reconcile-user-sections`
-  wizard.
-
-Markers work in any tracked text file, not just markdown. To *seed* an empty
-host-local section's body from a reusable template, see the optional
-`section_templates` / `section_slots` helper in
-[configuration.md](configuration.md#seeding-host-local-bodies-optional).
+To keep part of a file host-only, use `setforge stage`: it classifies each text
+hunk or YAML key as SHARED (may flow back to the config repo) or LOCAL (stays on
+this host). A `.json` file is staged as a single whole-document unit.
 
 ## Mutating `--auto=*` confirmation
 

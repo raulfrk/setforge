@@ -29,7 +29,7 @@ terminal mockups, and links to the complete inventory.
   - [Lifecycle: install, compare, sync, capture, revert, status, validate](#lifecycle-commands)
   - [Config repo and locks: init, fetch, lock, migrate, upgrade](#config-repo-commands)
   - [cleanup and cleanup-orphans](#cleanup-orphans)
-  - [User sections (host-local vs shared) + the reconcile wizard](#user-sections--the-reconcile-wizard)
+  - [Host-local vs shared content + the reconcile wizard](#user-sections--the-reconcile-wizard)
   - [Plugins, marketplaces, extensions](#plugins-marketplaces-extensions)
   - [Snapshots](#snapshots)
   - [Profiles, transitions, config](#profiles-transitions-config)
@@ -303,12 +303,12 @@ $ setforge compare --profile=default
 ```
 
 ```
-                Drift Summary
-┏━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━┓
-┃ File      ┃ Disposition ┃ Class      ┃ Why ┃
-┡━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━┩
-│ gitconfig │             │ unexpected │     │
-└───────────┴─────────────┴────────────┴─────┘
+        Drift Summary
+┏━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━┓
+┃ File      ┃ Class      ┃ Why ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━┩
+│ gitconfig │ unexpected │     │
+└───────────┴────────────┴─────┘
 UNCHANGED: 1 files
 ```
 
@@ -319,8 +319,8 @@ $ setforge compare --profile=default --full-diff
 ```
 
 ```
---- ~/.config/sample/gitconfig
-+++ ~/projects/dotfiles/tracked/gitconfig
+--- /home/you/.config/sample/gitconfig
++++ /home/you/projects/dotfiles/tracked/gitconfig
 @@ -3,6 +3,3 @@
      email = you@example.com
  [init]
@@ -505,7 +505,7 @@ quick index.
 
 - **`migrate`** — run schema migrations against the active `setforge.yaml`.
   `--check` previews, `--apply` writes, `--pin`/`--to` target a version,
-  `--finalize` strips vestigial host-local user-section markers from tracked
+  `--finalize` strips vestigial retired user-section markers from tracked
   sources (gated on a `minimum_version` floor). *When:* after a `schema_version`
   bump, or on upgrade.
 
@@ -603,44 +603,28 @@ move the replacement aside, retry `setforge recover --profile=default --apply
 to review otherwise unrecorded leaves inside already managed trees.
 
 <a id="user-sections--the-reconcile-wizard"></a>
-### User sections (host-local vs shared) + the reconcile wizard
+### Host-local vs shared content + the reconcile wizard
 
-A **user section** is a region you mark in a tracked *source* markdown file with
-HTML-comment markers. The marker pair is the **authoring syntax** — it is *not*
-what ends up in the deployed file. A section is either **host-local**
-(per-machine, never shared) or **shared** (travels in the config repo). This lets
-one tracked file carry both shared and per-machine content.
+**User-section markers are retired.** The `<!-- setforge:user-section ... -->`
+marker pairs that older configs hand-authored in tracked sources no longer mean
+anything: the schema 2.0 → 2.1 migration stripped them from tracked and live
+files and moved host-local bodies into the markerless `local.yaml` overlay. A
+marker left in a tracked source is **deployed verbatim** and `sync` will copy
+whatever sits between the markers back into the shared repo, so do not write new
+ones. `setforge validate` reports any tracked source that still contains them;
+`setforge migrate` (and `migrate --finalize`) removes them.
 
-**The deployed file is markerless.** `install` strips the tracked-authored
-markers so they never survive in the live file, and reconciles each section by
-its semantics:
+**What replaced them is `setforge stage`.** Instead of marking regions in the
+source, you classify the differences between a live file and its recorded base:
+each text hunk, or each YAML key, is **SHARED** (may flow back into the config
+repo on `sync`/`capture`) or **LOCAL** (stays on this host and survives
+re-installs). Unclassified units stay **PENDING** and are not published.
+JSON files are the exception: a `.json` file is staged as **one whole-document
+unit**, so Share / Keep-local applies to the entire document rather than per key.
 
-- **host-local** → the per-host body is injected *markerless* into the live file
-  and preserved across re-installs (nothing host-specific in the config repo, no
-  markers in the live file).
-- **shared** → the region is reconciled as a stored-base 3-way merge; tracked-side
-  updates reconcile against live edits via the wizard.
-
-Legacy configs that relied on marker *survival* are migrated forward by
-`setforge migrate` (and on `install`).
-
-Declare a section by hand-authoring the marker pair in the tracked source (there
-is no `section` subcommand). The `host-local` / `shared` keyword is required on
-both markers:
-
-```markdown
-<!-- setforge:user-section start host-local mymachine -->
-... per-machine body ...
-<!-- setforge:user-section end host-local mymachine -->
-```
-
-Leave the end marker's `hash=<sha256-hex>` segment off (or drop in any
-placeholder) — `setforge install` computes and rewrites the real body hash on
-every run, so you never calculate it yourself. Name the section (optional) to
-key it stably; unnamed sections are keyed by position. Sections cannot nest.
-
-When a **shared** section has drifted between live and tracked, `install`
-(with `--reconcile-user-sections`) opens the reconcile wizard — one full-screen
+When live and tracked have both changed the same region, `install`
+(with `--reconcile-user-sections`, a historical flag name that now opens the
+conflict wizard for any file) opens the reconcile wizard — one full-screen
 prompt per conflicting region. Each region shows the two sides framed as a
 git-style diff, with a **navigable button bar** below it (arrow keys move the
 focus, Enter picks):
@@ -934,7 +918,8 @@ resolved config without opening the file.
 $ setforge completion install zsh    # install shell completion (or bash / fish)
 ```
 
-**Global options** (before the command) apply everywhere:
+**Global options** apply everywhere and must be written **before** the
+subcommand (`setforge -o json compare`, not `setforge compare -o json`):
 
 - `--source PATH` — override config-source discovery.
 - `--code-bin` / `--claude-bin` / `--gitleaks-bin` / `--patch-bin` — override a
