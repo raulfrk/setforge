@@ -513,6 +513,40 @@ def test_mixed_file_tree_inventory_accepts_profile_order(
         assert (live / "tree/item").read_bytes() == b"tree\n"
 
 
+def test_unchanged_install_with_managed_tree_records_no_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("tree", "one", "two"))
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    runner = CliRunner()
+    initial = runner.invoke(app, args)
+    assert initial.exit_code == 0, (initial.output, initial.exception)
+    (config.parent / "tracked/one").write_text("one updated\n")
+    updated = runner.invoke(app, args)
+    assert updated.exit_code == 0, (updated.output, updated.exception)
+    recorded = transitions.load_latest("p")
+    assert recorded is not None
+
+    repeated = runner.invoke(app, args)
+
+    assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+    assert "transition:" not in repeated.output
+    assert transitions.load_latest("p") == recorded
+    reverted = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+    assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+    assert (live / "one").read_bytes() == b"one\n"
+    assert (live / "tree/item").read_bytes() == b"tree\n"
+
+
 def _install_then_hold_tree_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[list[str], Path, Path]:

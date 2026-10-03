@@ -1265,7 +1265,15 @@ def read_inventory(profile: str, tracked_id: str) -> TreeInventory | None:
 
 
 def write_inventory(profile: str, tracked_id: str, inventory: TreeInventory) -> None:
-    """Atomically publish one successfully applied tree inventory."""
+    """Atomically publish one successfully applied tree inventory.
+
+    An unchanged inventory is left untouched so a no-op install has no
+    state delta to record.
+    """
     path = inventory_path(profile, tracked_id)
+    text = dumps_inventory(inventory)
+    with suppress(FileNotFoundError):
+        if path.read_bytes() == text.encode():
+            return
     path.parent.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
-    atomicio.atomic_write_text(path, dumps_inventory(inventory), mode=_FILE_MODE)
+    atomicio.atomic_write_text(path, text, mode=_FILE_MODE)
