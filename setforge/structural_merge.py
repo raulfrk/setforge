@@ -38,9 +38,11 @@ from json5.dumper import ModelDumper
 from json5.dumper import dumps as _json5_dumps
 from json5.loader import loads as _json5_loads
 from json5.model import (
+    Comment,
     JSONArray,
     JSONObject,
     JSONText,
+    LineComment,
     UnaryOp,
     Value,
 )
@@ -491,6 +493,12 @@ class _Json5Backend:
     trailing comment rides its value node's ``wsc_after``, leaving the key node
     in place (swapping the whole pair would clobber the preceding sibling's
     ``wsc_before``).
+
+    Layout: json-five stores whitespace POSITIONALLY. The run after a member's
+    comma (its same-line comment, then the line break and indent) sits on the
+    NEXT key's ``wsc_before``; the run before the closing brace sits on the last
+    value's ``wsc_after`` (or on the trailing comma's). A member moved to a
+    different position therefore has those runs re-homed, never copied as-is.
     """
 
     def __init__(self, base: object, ours: JSONObject, theirs: object) -> None:
@@ -534,7 +542,17 @@ class _Json5Backend:
         # clobber the preceding sibling's comment. Value-only is the stable,
         # provenance-correct unit. ``keys``/``values`` stay length-consistent,
         # so the derived ``key_value_pairs`` view follows automatically.
-        self._ours.values[o_idx] = theirs.values[t_idx]
+        ours = self._ours
+        value = theirs.values[t_idx]
+        ours_last = o_idx == len(ours.keys) - 1
+        theirs_last = t_idx == len(theirs.keys) - 1
+        if ours_last != theirs_last or (ours.trailing_comma is None) != (
+            theirs.trailing_comma is None
+        ):
+            # The run after the value is positional (separator vs closing
+            # brace); in a different position ours' run is the one that fits.
+            value.wsc_after = ours.values[o_idx].wsc_after
+        ours.values[o_idx] = value
 
     def add(self, side: str, key: str) -> None:
         # Append ``key``'s key+value nodes from ``side`` onto ours; both lists
@@ -542,21 +560,89 @@ class _Json5Backend:
         src = self._sides[side]
         s_idx = self._index(src, key)
         assert s_idx is not None
-        self._ours.keys.append(src.keys[s_idx])
-        self._ours.values.append(src.values[s_idx])
+        ours = self._ours
+        new_key, new_value = src.keys[s_idx], src.values[s_idx]
+        if not ours.keys:
+            ours.leading_wsc = list(src.leading_wsc)
+            new_key.wsc_before = []
+            new_value.wsc_after = _json5_from_break(_json5_tail(src))
+        else:
+            trail = _json5_member_trail(src, s_idx)
+            lead = (
+                [c for c in _json5_from_break(new_key.wsc_before) if _is_comment(c)]
+                if s_idx
+                else []
+            )
+            tail = _json5_tail(ours)
+            carried = _json5_same_line(tail)
+            closing = _json5_from_break(tail)
+            sep = self._separator()
+            if "\n" not in sep and any(isinstance(c, LineComment) for c in carried):
+                sep = "\n" + sep
+            if any(isinstance(c, LineComment) for c in trail) and not any(
+                isinstance(c, str) and "\n" in c for c in closing
+            ):
+                trail = []
+            new_key.wsc_before = [*carried, sep, *(x for c in lead for x in (c, sep))]
+            if ours.trailing_comma is None:
+                ours.values[-1].wsc_after = []
+                new_value.wsc_after = [*trail, *closing]
+            else:
+                new_value.wsc_after = []
+                ours.trailing_comma.wsc_after = [*trail, *closing]
+        ours.keys.append(new_key)
+        ours.values.append(new_value)
 
     def delete(self, key: str) -> None:
-        idx = self._index(self._ours, key)
+        ours = self._ours
+        idx = self._index(ours, key)
         if idx is None:
             # A DELETE outcome means "the key must be absent in the result".
             # When live (ours) wholesale-replaced its keys, the key base/theirs
             # carried is already gone from ours, so the deletion is satisfied:
             # treat an absent key as a no-op rather than crashing the merge.
             return
+        removed_before = list(ours.keys[idx].wsc_before)
+        tail = _json5_tail(ours)
+        was_last = idx == len(ours.keys) - 1
         # Keep keys / values consistent; key_value_pairs is derived so it
         # follows automatically on next access.
-        del self._ours.keys[idx]
-        del self._ours.values[idx]
+        del ours.keys[idx]
+        del ours.values[idx]
+        if not ours.keys:
+            closing = _json5_from_break(tail)
+            leading = list(ours.leading_wsc)
+            if closing and leading and isinstance(leading[-1], str):
+                leading.pop()
+            ours.leading_wsc = [*leading, *closing]
+            ours.trailing_comma = None
+        elif was_last:
+            run = [*_json5_same_line(removed_before), *_json5_from_break(tail)]
+            if ours.trailing_comma is None:
+                ours.values[-1].wsc_after = [*ours.values[-1].wsc_after, *run]
+            else:
+                ours.trailing_comma.wsc_after = run
+        elif idx == 0:
+            successor = ours.keys[0]
+            lead = _json5_from_break(successor.wsc_before)
+            sep = lead[-1] if lead and isinstance(lead[-1], str) else ""
+            ours.leading_wsc = [
+                *ours.leading_wsc,
+                *(x for c in lead if _is_comment(c) for x in (c, sep)),
+            ]
+            successor.wsc_before = []
+        else:
+            successor = ours.keys[idx]
+            successor.wsc_before = [
+                *_json5_same_line(removed_before),
+                *_json5_from_break(successor.wsc_before),
+            ]
+
+    def _separator(self) -> str:
+        """The whitespace that starts a member in ours (line break + indent)."""
+        ours = self._ours
+        run = ours.keys[-1].wsc_before if len(ours.keys) > 1 else ours.leading_wsc
+        return run[-1] if run and isinstance(run[-1], str) else ""
 
     @staticmethod
     def _index(node: JSONObject, key: str) -> int | None:
@@ -569,6 +655,49 @@ class _Json5Backend:
 # ---------------------------------------------------------------------------
 # json-five node helpers (kept local to this module per the jsonc.py rule).
 # ---------------------------------------------------------------------------
+
+
+type _Wsc = list[str | Comment]
+
+
+def _is_comment(item: object) -> bool:
+    return isinstance(item, Comment)
+
+
+def _json5_break(run: _Wsc) -> int:
+    """Index of the first line-break-bearing string in ``run`` (its length if none)."""
+    for index, item in enumerate(run):
+        if isinstance(item, str) and "\n" in item:
+            return index
+    return len(run)
+
+
+def _json5_same_line(run: _Wsc) -> _Wsc:
+    """The part of ``run`` before its first line break; empty when it has none."""
+    cut = _json5_break(run)
+    return list(run[:cut]) if cut < len(run) else []
+
+
+def _json5_from_break(run: _Wsc) -> _Wsc:
+    """``run`` from its first line break on; the whole run when it has none."""
+    cut = _json5_break(run)
+    return list(run[cut:]) if cut < len(run) else list(run)
+
+
+def _json5_tail(node: JSONObject) -> _Wsc:
+    """The run between ``node``'s last member and its closing brace."""
+    comma = node.trailing_comma
+    return list(comma.wsc_after if comma is not None else node.values[-1].wsc_after)
+
+
+def _json5_member_trail(node: JSONObject, index: int) -> _Wsc:
+    """The same-line run (comment) that follows member ``index`` of ``node``."""
+    own = list(node.values[index].wsc_after)
+    if index + 1 < len(node.keys):
+        return [*own, *_json5_same_line(node.keys[index + 1].wsc_before)]
+    if node.trailing_comma is not None:
+        return [*own, *_json5_same_line(node.trailing_comma.wsc_after)]
+    return _json5_same_line(own)
 
 
 def _json5_key_text(key_node: object) -> str:

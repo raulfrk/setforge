@@ -1141,3 +1141,175 @@ def test_non_string_yaml_key_is_a_type_mismatch(document: str, message: str) -> 
         merge_structural(base, ours, theirs)
 
     assert str(excinfo.value) == message
+
+
+# --------------------------------------------------------------------------
+# json-five layout: spliced members follow the live file's separators.
+# --------------------------------------------------------------------------
+
+_JSON_LAYOUT_CASES = [
+    pytest.param(
+        '{\n  "a": 1,\n  "c": 3 // last\n}\n',
+        '{\n  "a": 1,\n  "c": 3, // last\n  "hostonly": true\n}\n',
+        '{\n  "a": 1,\n  "c": 4 // last\n}\n',
+        '{\n  "a": 1,\n  "c": 4, // last\n  "hostonly": true\n}\n',
+        id="take-theirs-last-into-ours-non-last",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n  "c": 3, // c\n  "z": 0\n}\n',
+        '{\n  "a": 1,\n  "c": 3 // c\n}\n',
+        '{\n  "a": 1,\n  "c": 4, // c\n  "z": 0\n}\n',
+        '{\n  "a": 1,\n  "c": 4 // c\n}\n',
+        id="take-theirs-non-last-into-ours-last",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n  "c": 3,\n}\n',
+        '{\n  "a": 2,\n  "c": 3, // mine\n}\n',
+        '{\n  "a": 1,\n  "c": 4 // theirs\n}\n',
+        '{\n  "a": 2,\n  "c": 4, // mine\n}\n',
+        id="take-theirs-across-trailing-comma-styles",
+    ),
+    pytest.param(
+        '{\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true\n}\n',
+        '{\n  "a": 1,\n  "d": 4\n}\n',
+        '{\n  "a": 1,\n  "host": true,\n  "d": 4\n}\n',
+        id="add-after-last",
+    ),
+    pytest.param(
+        '{\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true // mine\n}\n',
+        '{\n  "a": 1,\n  // why d\n  "d": 4 // four\n}\n',
+        '{\n  "a": 1,\n  "host": true, // mine\n  // why d\n  "d": 4 // four\n}\n',
+        id="add-carries-its-own-comments",
+    ),
+    pytest.param(
+        '{\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true\n}\n',
+        '{\n  "d": 4, // four\n  "a": 1\n}\n',
+        '{\n  "a": 1,\n  "host": true,\n  "d": 4 // four\n}\n',
+        id="add-of-a-non-last-member",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n}\n',
+        '{\n  "a": 1,\n  "host": true, // mine\n}\n',
+        '{\n  "a": 1,\n  "d": 4, // four\n}\n',
+        '{\n  "a": 1,\n  "host": true, // mine\n  "d": 4, // four\n}\n',
+        id="add-with-trailing-comma",
+    ),
+    pytest.param(
+        '{\n  "a": 1\n}\n',
+        '{\n  "a": 2\n}\n',
+        '{\n  "a": 1,\n  "d": 4\n}\n',
+        '{\n  "a": 2,\n  "d": 4\n}\n',
+        id="add-to-single-member",
+    ),
+    pytest.param(
+        '{"a":1}',
+        '{"a":1,"h":true}',
+        '{"a":1,"d":4}',
+        '{"a":1,"h":true,"d":4}',
+        id="add-compact",
+    ),
+    pytest.param(
+        '{ "a": 1 }',
+        '{ "a": 1, "h": true }',
+        '{ "a": 1, "d": 4 }',
+        '{ "a": 1, "h": true, "d": 4 }',
+        id="add-spaced-one-line",
+    ),
+    pytest.param(
+        '{\r\n\t"a": 1\r\n}\r\n',
+        '{\r\n\t"a": 1,\r\n\t"h": true\r\n}\r\n',
+        '{\r\n\t"a": 1,\r\n\t"d": 4\r\n}\r\n',
+        '{\r\n\t"a": 1,\r\n\t"h": true,\r\n\t"d": 4\r\n}\r\n',
+        id="add-tabs-crlf",
+    ),
+    pytest.param(
+        '{ "a": 1 // one\n}\n',
+        '{ "a": 2 // one\n}\n',
+        '{ "a": 1, // one\n  "d": 4\n}\n',
+        '{ "a": 2, // one\n "d": 4\n}\n',
+        id="add-after-line-comment-starts-a-new-line",
+    ),
+    pytest.param(
+        '{\n  "o": {},\n  "k": 1\n}\n',
+        '{\n  "o": {},\n  "k": 2\n}\n',
+        '{\n  "o": {\n    "x": 1,\n    "y": 2\n  },\n  "k": 1\n}\n',
+        '{\n  "o": {\n    "x": 1,\n    "y": 2\n  },\n  "k": 2\n}\n',
+        id="add-into-empty-object",
+    ),
+    pytest.param(
+        '{\n  "a": 1, // one\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "a": 5, // one\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "a": 1, // one\n  "c": 3 // three\n}\n',
+        '{\n  "a": 5, // one\n  "c": 3 // three\n}\n',
+        id="delete-middle",
+    ),
+    pytest.param(
+        '{\n  "a": 1, // one\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "a": 1, // one\n  "b": 2, // two\n  "c": 9 // three\n}\n',
+        '{\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "b": 2, // two\n  "c": 9 // three\n}\n',
+        id="delete-first",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n  // about b\n  "b": 2,\n  "c": 3\n}\n',
+        '{\n  "a": 1,\n  // about b\n  "b": 2,\n  "c": 9\n}\n',
+        '{\n  // about b\n  "b": 2,\n  "c": 3\n}\n',
+        '{\n  // about b\n  "b": 2,\n  "c": 9\n}\n',
+        id="delete-first-keeps-successor-lead-comment",
+    ),
+    pytest.param(
+        '{\n  "a": 1, // one\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "a": 5, // one\n  "b": 2, // two\n  "c": 3 // three\n}\n',
+        '{\n  "a": 1, // one\n  "b": 2 // two\n}\n',
+        '{\n  "a": 5, // one\n  "b": 2 // two\n}\n',
+        id="delete-last",
+    ),
+    pytest.param(
+        '{\n  "a": 1, // one\n  "b": 2, // two\n}\n',
+        '{\n  "a": 5, // one\n  "b": 2, // two\n}\n',
+        '{\n  "a": 1, // one\n}\n',
+        '{\n  "a": 5, // one\n}\n',
+        id="delete-last-with-trailing-comma",
+    ),
+    pytest.param(
+        '{ "a": 1, "b": 2, "c": 3 }',
+        '{ "a": 5, "b": 2, "c": 3 }',
+        '{ "a": 1, "b": 2 }',
+        '{ "a": 5, "b": 2 }',
+        id="delete-last-spaced-one-line",
+    ),
+    pytest.param(
+        '{ "a": 1, "b": 2, "c": 3 }',
+        '{ "a": 1, "b": 2, "c": 9 }',
+        '{ "a": 1, "c": 3 }',
+        '{ "a": 1, "c": 9 }',
+        id="delete-middle-spaced-one-line",
+    ),
+    pytest.param(
+        '{\n  "o": {\n    // about x\n    "x": 1\n  },\n  "k": 1\n}\n',
+        '{\n  "o": {\n    // about x\n    "x": 1\n  },\n  "k": 2\n}\n',
+        '{\n  "o": {\n  },\n  "k": 1\n}\n',
+        '{\n  "o": {\n    // about x\n  },\n  "k": 2\n}\n',
+        id="delete-only-member",
+    ),
+    pytest.param(
+        '{\n  "o": {"x": 1,},\n  "k": 1\n}\n',
+        '{\n  "o": {"x": 1,},\n  "k": 2\n}\n',
+        '{\n  "o": {},\n  "k": 1\n}\n',
+        '{\n  "o": {},\n  "k": 2\n}\n',
+        id="delete-only-member-drops-trailing-comma",
+    ),
+]
+
+
+@pytest.mark.parametrize(("base", "ours", "theirs", "expected"), _JSON_LAYOUT_CASES)
+def test_jsonc_spliced_members_follow_the_live_layout(
+    base: str, ours: str, theirs: str, expected: str
+) -> None:
+    result = merge_structural(_jload(base), _jload(ours), _jload(theirs))
+
+    assert result.clean
+    assert _jdump(result.merged_model) == expected

@@ -681,3 +681,45 @@ def test_json5_syntax_already_in_use_may_stay_in_the_merge() -> None:
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "a": 5,\n}\n'
+
+
+@pytest.mark.parametrize(
+    ("base", "host", "upstream", "expected"),
+    [
+        pytest.param(
+            b'{\n  "a": 1,\n  "c": 3 // last\n}\n',
+            b'{\n  "a": 1,\n  "c": 3, // last\n  "hostonly": true\n}\n',
+            b'{\n  "a": 1,\n  "c": 4 // last\n}\n',
+            b'{\n  "a": 1,\n  "c": 4, // last\n  "hostonly": true\n}\n',
+            id="host-appends-upstream-edits-last-key",
+        ),
+        pytest.param(
+            b'{\n  "editor.fontSize": 12,\n  "files.autoSave": "off"\n}\n',
+            b'{\n  "editor.fontSize": 12,\n  "files.autoSave": "off",\n'
+            b'  "claudeCode.local": true\n}\n',
+            b'{\n  "editor.fontSize": 12,\n  "files.autoSave": "off",\n'
+            b'  "editor.tabSize": 2\n}\n',
+            b'{\n  "editor.fontSize": 12,\n  "files.autoSave": "off",\n'
+            b'  "claudeCode.local": true,\n  "editor.tabSize": 2\n}\n',
+            id="both-append-a-key",
+        ),
+        pytest.param(
+            b'{\n  "a": 1,\n  "b": 2\n}\n',
+            b'{\n  "a": 5,\n  "b": 2\n}\n',
+            b'{\n  "a": 1\n}\n',
+            b'{\n  "a": 5\n}\n',
+            id="upstream-deletes-last-key",
+        ),
+    ],
+)
+def test_json_key_merge_follows_the_live_layout(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("json-layout")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
