@@ -360,6 +360,26 @@ def test_create_snapshot_rejects_unsafe_label(fake_home: Path, label: str) -> No
         _create(ctx, label)
 
 
+@pytest.mark.parametrize(
+    "label",
+    ["x" * 231, "é" * 116, "x" * 300],
+    ids=["one-byte-over", "multibyte", "far-over"],
+)
+def test_create_snapshot_rejects_label_longer_than_a_directory_name(
+    fake_home: Path, label: str
+) -> None:
+    ctx, _, _ = _build_ctx(fake_home)
+    with pytest.raises(SetforgeError, match="--label must be at most 230 bytes"):
+        _create(ctx, label)
+    assert not tuple(snap_mod.snapshots_root().iterdir())
+
+
+def test_create_snapshot_accepts_longest_label(fake_home: Path) -> None:
+    ctx, _, _ = _build_ctx(fake_home)
+    meta = _create(ctx, "x" * 230)
+    assert snap_mod.resolve_snapshot(meta.snapshot_id) == meta
+
+
 def test_create_snapshot_rejects_negative_keep(fake_home: Path) -> None:
     ctx, _, _ = _build_ctx(fake_home)
     with pytest.raises(SetforgeError, match="non-negative"):

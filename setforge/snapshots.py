@@ -68,6 +68,9 @@ _META_FILENAME: Final[str] = "_meta.json"
 _PARTIAL_SUFFIX: Final[str] = ".partial"
 """Temporary suffix used during atomic create."""
 
+_MAX_NAME_BYTES: Final[int] = 255
+"""Longest directory name common filesystems accept."""
+
 _SETUID_SETGID_MASK: Final[int] = ~0o6000 & 0o7777
 """Mask to strip the setuid + setgid bits while preserving the low 9 + sticky."""
 
@@ -263,7 +266,14 @@ def _snapshot_id(label: str, *, timestamp: datetime | None = None) -> str:
     ):
         raise SetforgeError("snapshot: --label must be a safe non-empty name")
     ts = timestamp if timestamp is not None else now_utc()
-    return f"{ts.strftime(_SNAPSHOT_TIMESTAMP_FMT)}-{label}"
+    prefix = f"{ts.strftime(_SNAPSHOT_TIMESTAMP_FMT)}-"
+    limit = _MAX_NAME_BYTES - len(prefix) - len(_PARTIAL_SUFFIX)
+    size = len(os.fsencode(label))
+    if size > limit:
+        raise SetforgeError(
+            f"snapshot: --label must be at most {limit} bytes, got {size}"
+        )
+    return f"{prefix}{label}"
 
 
 def _resolve_dst_paths(
