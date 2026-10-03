@@ -107,6 +107,15 @@ class TestAfterSectionAnchor:
         with pytest.raises(AnchorNotFoundError):
             resolve_anchor(text, AnchorAfterSection(name="missing"))
 
+    def test_after_section_duplicated_name_raises(self) -> None:
+        pair = (
+            "<!-- setforge:user-section start shared notes -->\n"
+            "body\n"
+            "<!-- setforge:user-section end shared notes -->\n"
+        )
+        with pytest.raises(AnchorAmbiguousError, match="lines 3, 6"):
+            resolve_anchor(pair + pair, AnchorAfterSection(name="notes"))
+
     def test_strip_host_local_sections_drops_named_pairs(self) -> None:
         """``strip_host_local_sections`` removes named host-local pairs only.
 

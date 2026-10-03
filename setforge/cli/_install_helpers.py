@@ -58,7 +58,6 @@ from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
     _iter_all_trees,
-    _refuse_duplicate_section_names,
     _resolve_drift_paths,
 )
 from setforge.cli._mcp_helpers import MCPInstallPlan
@@ -1177,22 +1176,13 @@ def _run_predeploy_gates(
 ) -> None:
     """Run the pre-deploy confirm/reject gates in their fixed order.
 
-    Bundles the duplicate-section-name refusal + the unexpected-drift
-    confirm (``--auto-accept-{tracked,live}``) + the bare-install
-    unexpected-drift reject into one orchestrator so :func:`install`
-    reads as a high-level pipeline rather than three nearly-identical
-    confirm shells. Each gate is independent and short-circuits when its
-    triggering flag is unset; the order matches the pre-extraction body
-    verbatim so flag interactions stay unchanged.
-
-    A duplicate user-section name is structural corruption (NOT a
-    migratable legacy-marker artifact, so install does not silently fix it
-    the way it migrates pre-hash markers): refuse it FIRST, before any
-    other gate, so a duplicate-bearing tracked/live file aborts the install
-    with the actionable rename message rather than collapsing a section
-    body during deploy.
+    Bundles the unexpected-drift confirm (``--auto-accept-{tracked,live}``)
+    + the bare-install unexpected-drift reject into one orchestrator so
+    :func:`install` reads as a high-level pipeline rather than
+    nearly-identical confirm shells. Each gate is independent and
+    short-circuits when its triggering flag is unset; the order matches the
+    pre-extraction body verbatim so flag interactions stay unchanged.
     """
-    _refuse_duplicate_section_names(ctx, command="install")
     _confirm_legacy_drift_or_exit(
         drift_report=drift_report,
         ctx=ctx,
