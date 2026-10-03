@@ -1656,6 +1656,38 @@ def test_recreated_project_at_the_same_path_names_a_working_remedy(
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("damage", ["git-removed", "git-unreadable"])
+def test_sibling_without_readable_git_identity_does_not_block_other_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    sibling = _git_repo(tmp_path / "sibling")
+    runner = CliRunner()
+    first = runner.invoke(
+        app, ["project", "inject", "demo", str(sibling), "--config", str(config), "-y"]
+    )
+    assert first.exit_code == 0, first.output
+    if damage == "git-removed":
+        shutil.rmtree(sibling / ".git")
+    else:
+        (sibling / ".git" / "HEAD").write_text("not a ref\n")
+    record = manifest_path(sibling, "demo").read_bytes()
+    target = _git_repo(tmp_path / "target")
+
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+
+    assert injected.exit_code == 0, injected.output
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+    assert manifest_path(sibling, "demo").read_bytes() == record
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert f"{target}  [demo]\n  hidden: AGENTS.md\n" in listed.output
+    assert f"{sibling}  [demo]\n  error: " in listed.output
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -710,7 +710,25 @@ def _plan_injection_visibility(
     )
 
 
-def _require_compatible_visibility(  # noqa: C901 - one fail-closed sibling scan
+def _sibling_exclude_path(raw: dict[str, object]) -> Path | None:
+    """Return a recorded sibling's exclude file, or ``None`` for a stale one.
+
+    A vanished directory, or one whose Git identity can no longer be read,
+    keeps no intent to protect; hidden claims it left in a surviving
+    repository are read from the exclude file itself.
+    """
+    other_target = Path(str(raw["target"]))
+    if not other_target.is_dir():
+        return None
+    try:
+        if raw["git_dir"] is None and _verified_project_target(other_target)[1] is None:
+            return None
+        return info_exclude_path(other_target)
+    except SetforgeError:
+        return None
+
+
+def _require_compatible_visibility(
     *,
     target: Path,
     manifest: Path,
@@ -738,16 +756,7 @@ def _require_compatible_visibility(  # noqa: C901 - one fail-closed sibling scan
             continue
         try:
             raw = _load_manifest(path)
-            other_target = Path(str(raw["target"]))
-            if not other_target.is_dir():
-                # A vanished worktree keeps no intent; its exclude claims, if
-                # the repository survives, were already read above.
-                continue
-            if raw["git_dir"] is None:
-                _, other_git_dir, _ = _verified_project_target(other_target)
-                if other_git_dir is None:
-                    continue
-            if info_exclude_path(other_target) != exclude_path:
+            if _sibling_exclude_path(raw) != exclude_path:
                 continue
             raw_files = raw["files"]
             assert isinstance(raw_files, list)
