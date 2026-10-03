@@ -58,10 +58,10 @@ def _ext_cfg(profile: dict[str, Any], **top: Any) -> tuple[Config, ResolvedProfi
 def test_extensions_input_from_package_surface() -> None:
     cfg, resolved = _ext_cfg(
         {"packages": ["A"]},
-        packages={"A": {"type": "extension", "extension": "A"}},
+        packages={"A": {"type": "extension", "extension": "pub.A"}},
     )
     got = adapter.extensions_input(cfg, resolved)
-    assert got.include == ["A"]
+    assert got.include == ["pub.A"]
 
 
 def test_extensions_input_exclude_from_reconcile_block() -> None:

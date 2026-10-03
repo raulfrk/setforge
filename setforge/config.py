@@ -997,11 +997,24 @@ class PluginPackage(BaseModel):
     plugin: str
 
 
+EXT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9-]*$")
+
+
 class ExtensionPackage(BaseModel):
     model_config = _STRICT
 
     type: Literal[PackageKind.EXTENSION] = PackageKind.EXTENSION
     extension: str
+
+    @field_validator("extension")
+    @classmethod
+    def _extension_id_shape(cls, value: str) -> str:
+        if not EXT_ID_RE.match(value):
+            raise ValueError(
+                f"extension id {value!r} must look like 'publisher.name' "
+                "(letters, digits and hyphens)"
+            )
+        return value
 
 
 Package = Annotated[

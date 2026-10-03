@@ -1104,8 +1104,8 @@ def test_resolve_two_level_chain_lists_and_scalars() -> None:
         packages={
             "p1-pkg": PluginPackage(plugin="p1"),
             "p2-pkg": PluginPackage(plugin="p2"),
-            "e1-pkg": ExtensionPackage(extension="e1"),
-            "e2-pkg": ExtensionPackage(extension="e2"),
+            "e1-pkg": ExtensionPackage(extension="pub.e1"),
+            "e2-pkg": ExtensionPackage(extension="pub.e2"),
         },
         profiles={
             "parent": Profile(
@@ -1126,7 +1126,10 @@ def test_resolve_two_level_chain_lists_and_scalars() -> None:
     resolved = resolve_profile(cfg, "child")
     assert resolved.tracked_files == ["a", "b", "c"]
     assert reconcile_adapter.plugin_bare_names(cfg, resolved) == ["p1", "p2"]
-    assert reconcile_adapter.extensions_input(cfg, resolved).include == ["e1", "e2"]
+    assert reconcile_adapter.extensions_input(cfg, resolved).include == [
+        "pub.e1",
+        "pub.e2",
+    ]
     assert resolved.reconcile.extensions.policy is ReconcilePolicy.PRUNE
     assert resolved.reconcile.plugins.policy is ReconcilePolicy.PRUNE
 
@@ -1192,7 +1195,7 @@ def test_resolve_scalar_child_explicit_override() -> None:
 def test_resolve_extension_reconcile_inherits() -> None:
     cfg = Config(
         tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
-        packages={"x-pkg": ExtensionPackage(extension="x")},
+        packages={"x-pkg": ExtensionPackage(extension="pub.x")},
         profiles={
             "parent": Profile(
                 reconcile=ReconcileSpec(
@@ -1204,7 +1207,7 @@ def test_resolve_extension_reconcile_inherits() -> None:
     )
     resolved = resolve_profile(cfg, "child")
     assert resolved.reconcile.extensions.policy is ReconcilePolicy.PRUNE
-    assert reconcile_adapter.extensions_input(cfg, resolved).include == ["x"]
+    assert reconcile_adapter.extensions_input(cfg, resolved).include == ["pub.x"]
 
 
 def test_resolve_cycle_raises_with_chain() -> None:

@@ -19,7 +19,6 @@ import hashlib
 import hmac
 import logging
 import os
-import re
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -36,6 +35,7 @@ from setforge import reconcile_adapter
 from setforge.atomicio import atomic_write_text
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import (
+    EXT_ID_RE,
     Config,
     ExtensionPackage,
     Extensions,
@@ -80,7 +80,7 @@ _TIMEOUT_S = 30
 # installed extensions. The Remote-SSH `code` CLI prepends an
 # "Extensions installed on SSH: <ip>:" header line (it has spaces and a
 # colon) which this regex still rejects.
-_EXT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9-]*$")
+_EXT_ID_RE = EXT_ID_RE
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,6 +607,11 @@ def add_to_include(
     Raises :class:`ProfileNotFound` if ``profile`` isn't declared in
     ``cfg.profiles``.
     """
+    if not EXT_ID_RE.match(ext_id):
+        raise ConfigError(
+            f"invalid extension id {ext_id!r}: expected 'publisher.name' "
+            "(letters, digits and hyphens)"
+        )
     key = key or ext_id
     cfg = load_config(config_path)
     if profile not in cfg.profiles:

@@ -26,7 +26,7 @@ def test_plugin_and_extension_packages_validate_and_discriminate() -> None:
         {"only": Profile()},
         packages={
             "p": {"type": "plugin", "plugin": "p"},
-            "e": {"type": "extension", "extension": "e"},
+            "e": {"type": "extension", "extension": "pub.e"},
         },
     )
     assert isinstance(cfg.packages["p"], PluginPackage)
@@ -34,7 +34,7 @@ def test_plugin_and_extension_packages_validate_and_discriminate() -> None:
     assert cfg.packages["p"].plugin == "p"
     assert isinstance(cfg.packages["e"], ExtensionPackage)
     assert cfg.packages["e"].type is PackageKind.EXTENSION
-    assert cfg.packages["e"].extension == "e"
+    assert cfg.packages["e"].extension == "pub.e"
 
 
 def test_plugin_package_rejects_unknown_field() -> None:
@@ -44,7 +44,7 @@ def test_plugin_package_rejects_unknown_field() -> None:
 
 def test_extension_package_rejects_unknown_field() -> None:
     with pytest.raises(ValidationError):
-        ExtensionPackage(extension="e", bogus="y")  # type: ignore[call-arg]
+        ExtensionPackage(extension="pub.e", bogus="y")  # type: ignore[call-arg]
 
 
 def test_config_rejects_plugin_package_with_extra_key() -> None:

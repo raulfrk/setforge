@@ -115,3 +115,33 @@ def test_reconcile_case_insensitive_match_no_churn(fake_code) -> None:
     assert report.to_uninstall == []
     assert fake.install_args == []
     assert fake.uninstall_args == []
+
+
+@pytest.mark.parametrize("bad", ["--install-extension", "a b.c", "pub.name;rm", "x"])
+def test_add_to_include_rejects_malformed_id_before_editing(
+    tmp_path: Path, bad: str
+) -> None:
+    from setforge.errors import ConfigError
+    from setforge.vscode_extensions import add_to_include
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\ntracked_files: {}\nprofiles:\n  base:\n    tracked_files: []\n",
+        encoding="utf-8",
+    )
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigError, match="invalid extension id"):
+        add_to_include(cfg, "base", bad)
+
+    assert cfg.read_bytes() == before
+
+
+def test_manifest_rejects_malformed_extension_package_id() -> None:
+    from pydantic import ValidationError
+
+    from setforge.config import ExtensionPackage
+
+    with pytest.raises(ValidationError, match=r"publisher\.name"):
+        ExtensionPackage(extension="--install-extension")
+    assert ExtensionPackage(extension="GitHub.copilot-chat").extension

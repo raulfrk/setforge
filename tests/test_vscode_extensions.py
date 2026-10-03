@@ -614,7 +614,7 @@ profiles:
     before = cfg.read_text()
 
     with pytest.raises(_ConfigError, match="--name") as exc_info:
-        add_to_include(cfg, "base", "ripgrep", key="ripgrep")
+        add_to_include(cfg, "base", "pub.ripgrep", key="ripgrep")
     assert "ripgrep" in str(exc_info.value)
     # Fail-closed: the collision mutated nothing.
     assert cfg.read_text() == before
@@ -651,7 +651,7 @@ def test_add_to_include_creates_extensions_block_when_missing(
 def test_add_to_include_unknown_profile_raises(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
     with pytest.raises(ProfileNotFound):
-        add_to_include(cfg, "ghost", "x")
+        add_to_include(cfg, "ghost", "pub.x")
 
 
 @pytest.mark.parametrize("extension_id", ["keep.me", "Keep.Me", "KEEP.ME"])
