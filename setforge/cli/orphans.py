@@ -33,7 +33,6 @@ from typing import Any
 
 import typer
 from rich.console import Console
-from ruamel.yaml import YAML
 
 from setforge import compare as compare_mod
 from setforge import local_config, operations, orphan_scan, transitions
@@ -55,6 +54,7 @@ from setforge.errors import (
 )
 from setforge.file_ownership import active_file_claims, refuse_active_file_claims
 from setforge.locking import mutation_locks
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.ownership import OwnershipStore
 
 __all__ = [
@@ -94,12 +94,13 @@ def _append_ignored_orphan(ignore_id: str) -> None:
     ordering survive. Creates the file (with parent dirs) when absent.
     Idempotent — re-adding an existing id is a no-op.
     """
-    yaml = YAML(typ="rt")
     LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if LOCAL_CONFIG_PATH.exists():
-        data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
-    else:
-        data = None
+    original = (
+        LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+        if LOCAL_CONFIG_PATH.exists()
+        else None
+    )
+    data = yaml_rt().load(original) if original is not None else None
     if not isinstance(data, dict):
         data = {}
     raw = data.get("orphan_ignore")
@@ -109,8 +110,7 @@ def _append_ignored_orphan(ignore_id: str) -> None:
         return
     raw.append(ignore_id)
     data["orphan_ignore"] = raw
-    with LOCAL_CONFIG_PATH.open("w", encoding="utf-8") as fh:
-        yaml.dump(data, fh)
+    atomic_write_yaml(LOCAL_CONFIG_PATH, data)
 
 
 def _print_skip_note(

@@ -11,7 +11,6 @@ from typing import Any
 
 import typer
 from rich.console import Console
-from ruamel.yaml import YAML
 
 from setforge import binaries, local_config, operations, transitions
 from setforge.cli import (
@@ -29,6 +28,7 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, SetforgeError
 from setforge.locking import mutation_locks
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.ownership import (
     Authority,
     ClaimLifecycle,
@@ -366,9 +366,8 @@ def mark_orphan(
     identity: Identity, *, provider: str | None = None, console: Console
 ) -> None:
     path = binaries.LOCAL_CONFIG_PATH
-    yaml = YAML(typ="rt")
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = yaml.load(path.read_text(encoding="utf-8")) if path.exists() else None
+    data = yaml_rt().load(path.read_text(encoding="utf-8")) if path.exists() else None
     if not isinstance(data, dict):
         data = {}
     raw = data.get(_PROVISION_IGNORE_KEY)
@@ -378,8 +377,7 @@ def mark_orphan(
     if ignore_id not in raw:
         raw.append(ignore_id)
     data[_PROVISION_IGNORE_KEY] = raw
-    with path.open("w", encoding="utf-8") as fh:
-        yaml.dump(data, fh)
+    atomic_write_yaml(path, data)
     console.print(f"  marked orphan (kept binary): {identity.display}")
 
 
