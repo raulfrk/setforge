@@ -375,6 +375,7 @@ def _line_merge_agreeing(
 
 
 def _is_strict_json(data: bytes) -> bool:
+    """Whether ``data`` parses with the standard (non-JSON5) JSON grammar."""
     try:
         json.loads(data)
     except ValueError:
@@ -478,15 +479,17 @@ def _key_merge(
 
     ``None`` on a same-key conflict and for a side the key engine cannot model
     (unparseable, multi-document, duplicate or non-string keys, a non-mapping
-    YAML root, YAML aliases / merge keys) — the caller line-merges those. Each
-    side is parsed FRESH because ``merge_structural`` mutates ``ours`` (live) in
-    place.
+    YAML root) — the caller line-merges those. Each side is parsed FRESH because
+    ``merge_structural`` mutates ``ours`` (live) in place.
+
+    A YAML with aliases / merge keys is merged on its resolved values but never
+    re-serialised: the dump would inline the shared nodes and invent anchors, so
+    without a rendering from the source lines the result is ``None`` too.
     """
     try:
-        if fmt is StructuredFormat.YAML and any(
+        aliased = fmt is StructuredFormat.YAML and any(
             uses_aliases(side) for side in (base, live, tracked)
-        ):
-            return None
+        )
         models = [_load_model(side, fmt) for side in (base, live, tracked)]
         if fmt is StructuredFormat.JSONC:
             target = _array_root_target(*models)
@@ -500,7 +503,7 @@ def _key_merge(
         if merged is None or _loses_strictness(merged, live, tracked, fmt):
             merged = splice_lines_toward(live, tracked, model, fmt)
         if merged is None or _loses_strictness(merged, live, tracked, fmt):
-            merged = _dump_model(model, fmt, like=live)
+            merged = None if aliased else _dump_model(model, fmt, like=live)
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
     return merged
@@ -528,12 +531,11 @@ def reconcile_structured_file(
     line 3-way's whenever that is clean and holds the same values, else live with
     the tracked line regions that realise those values (untouched lines stay
     byte-identical either way), else the re-serialised model. When one side did
-    not move
-    the other side's bytes are used verbatim. The base-absent seed is byte-identical
-    to the plain path. A GENUINE same-key collision (``merge_structural`` reports
-    conflicts) is delegated to :func:`reconcile_plain_file`, so the one proven
-    wizard / ``--auto`` / DEFERRED tail resolves it — no separate structured
-    conflict UI is introduced.
+    not move, the other side's bytes are used verbatim. The base-absent seed is
+    byte-identical to the plain path. A GENUINE same-key collision
+    (``merge_structural`` reports conflicts) is delegated to
+    :func:`reconcile_plain_file`, so the one proven wizard / ``--auto`` / DEFERRED
+    tail resolves it — no separate structured conflict UI is introduced.
 
     ``fmt`` is the caller-detected :class:`StructuredFormat`.
     """

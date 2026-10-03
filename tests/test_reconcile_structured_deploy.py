@@ -901,3 +901,16 @@ def test_json_array_root_identical_edits_on_both_sides_merge() -> None:
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"[\n  0,\n  2,\n  3,\n  4,\n  5\n]\n"
+
+
+def test_alias_bearing_yaml_still_merges_adjacent_edits_by_key() -> None:
+    fid = file_id("anchors-adjacent")
+    host = _ANCHORED + b"svc3:\n  <<: *d\n  name: three\n"
+    upstream = _ANCHORED.replace(b"z: 1", b"z: 2")
+    _seed(fid, base=_ANCHORED, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == host.replace(b"z: 1", b"z: 2")
+    assert out.new_base == upstream
