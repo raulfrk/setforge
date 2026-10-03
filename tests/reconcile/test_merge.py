@@ -239,7 +239,7 @@ def test_merge_uses_patience_matcher(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(*args, **kwargs)
 
     monkeypatch.setattr(M.merge3, "Merge3", _spy)
-    merge(b"a\nb\n", b"a\nX\n", b"a\nb\n")
+    merge(b"a\nb\nc\n", b"a\nX\nc\n", b"a\nb\nY\n")
     assert captured["sm"] is M.PatienceSequenceMatcher
 
 
