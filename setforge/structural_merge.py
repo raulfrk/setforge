@@ -508,6 +508,8 @@ class _Json5Backend:
             self._sides["base"] = base
         if isinstance(theirs, JSONObject):
             self._sides["theirs"] = theirs
+        for side in self._sides.values():
+            _json5_settle_cr(side)
 
     def keys(self) -> list[str]:
         return [_json5_key_text(k) for k in self._ours.keys]
@@ -658,6 +660,31 @@ type _Wsc = list[str | Comment]
 
 def _is_comment(item: object) -> bool:
     return isinstance(item, Comment)
+
+
+def _json5_settle_cr(node: JSONObject) -> None:
+    """Move the ``\\r`` a CRLF ``//`` comment ends in onto the line break after it.
+
+    json-five ends a line comment before the ``\\n``, leaving the ``\\r`` inside
+    the comment and a bare ``\\n`` as the following whitespace. Runs are re-homed
+    by their line break, so the break must be whole: otherwise a moved comment
+    takes its ``\\r`` along and the separator stays a bare ``\\n``.
+    """
+    runs: list[_Wsc] = [node.leading_wsc]
+    runs += [key.wsc_before for key in node.keys]
+    runs += [value.wsc_after for value in node.values]
+    if node.trailing_comma is not None:
+        runs.append(node.trailing_comma.wsc_after)
+    for run in runs:
+        for index, item in enumerate(run[:-1]):
+            after = run[index + 1]
+            if (
+                isinstance(item, LineComment)
+                and item.value.endswith("\r")
+                and isinstance(after, str)
+            ):
+                item.value = item.value[:-1]
+                run[index + 1] = "\r" + after
 
 
 def _json5_break(run: _Wsc) -> int:
