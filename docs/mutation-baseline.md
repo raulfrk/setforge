@@ -1,9 +1,13 @@
 # Mutation-testing baseline — merge/reconcile/store core
 
-The nightly workflow enforces a mutation score strictly above 80% over this
-whole core. Pull requests separately block unkilled mutants whose functions
-overlap changed core lines. Survivors remain an assertion-gap backlog; they do
-not imply a 100% nightly requirement.
+The nightly mutation gate (run by the home CI coordinator for the nightly
+`full` trigger in `.github/workflows/nightly.yml`) requires a mutation score
+strictly above 80% over this whole core: `scripts/mutmut_diff_gate.py --full`
+over the results of a full `mutmut run`. Changes to core files are separately
+gated by `scripts/mutmut_diff_gate.py`, which blocks unkilled mutants whose
+functions overlap changed lines; run it by hand before merging a core change.
+Survivors remain an assertion-gap backlog; they do not imply a 100% nightly
+requirement.
 
 ## Headline
 
