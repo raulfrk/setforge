@@ -343,3 +343,84 @@ def test_inspect_index_reflects_recorded_store_classes(
     index = json.loads(result.stdout)["data"]["index"]
     assert [r["label"] for r in index["shared"]] == ["## Shell"]
     assert [r["label"] for r in index["kept_local"]] == ["## Host"]
+
+
+def _two_config_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path]:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    dst_a = tmp_path / "live" / "a" / "config.txt"
+    dst_b = tmp_path / "live" / "b" / "config.txt"
+    for name, dst in (("a", dst_a), ("b", dst_b)):
+        _write(repo / "tracked" / f"{name}.txt", f"{name}\n".encode())
+        _write(dst, f"{name} live\n".encode())
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        "version: 1\ntracked_files:\n"
+        f"  one:\n    src: a.txt\n    dst: {dst_a}\n"
+        f"  two:\n    src: b.txt\n    dst: {dst_b}\n"
+        "profiles:\n  p:\n    tracked_files: [one, two]\n",
+        encoding="utf-8",
+    )
+    return cfg_path, dst_a, dst_b
+
+
+def test_inspect_ambiguous_file_name_lists_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg_path, dst_a, dst_b = _two_config_setup(tmp_path, monkeypatch)
+    result = CliRunner().invoke(
+        app, ["inspect", "config.txt", "--profile=p", f"--config={cfg_path}"]
+    )
+    assert result.exit_code == 2
+    assert str(dst_a) in result.output
+    assert str(dst_b) in result.output
+
+
+def test_inspect_resolves_relative_and_home_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg_path, dst_a, dst_b = _two_config_setup(tmp_path, monkeypatch)
+    monkeypatch.chdir(dst_b.parent)
+    monkeypatch.setenv("HOME", str(dst_a.parent.parent))
+    for arg, expected in (
+        ("./config.txt", dst_b),
+        ("../b/config.txt", dst_b),
+        ("~/a/config.txt", dst_a),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "--format=json",
+                "inspect",
+                arg,
+                "--profile=p",
+                f"--config={cfg_path}",
+            ],
+        )
+        assert result.exit_code == 0, (arg, result.output)
+        assert json.loads(result.stdout)["data"]["file"] == str(expected)
+
+
+def test_inspect_reports_unparseable_structured_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    dst = tmp_path / "live" / "s.json"
+    _write(repo / "tracked" / "s.json", b'{"a": 1}\n')
+    _write(dst, b'{ "a": ')
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        f"version: 1\ntracked_files:\n  s:\n    src: s.json\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [s]\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        app, ["inspect", "s", "--profile=p", f"--config={cfg_path}"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "not parseable" in result.output
+    assert "merge clean" not in result.output
+    assert "merge is clean" not in result.output

@@ -30,9 +30,11 @@ from setforge.config import (
     load_config,
     resolve_effective_profile,
 )
+from setforge.errors import StructuredParseError
 from setforge.generated import rendered_source
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
+from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.index_model import FileEntry
 from setforge.reconcile.merge import merge
 from setforge.reconcile.merge_model import Conflict, MergeResult
@@ -51,17 +53,80 @@ if TYPE_CHECKING:
 _WIDE_THRESHOLD = 120
 
 
+_Match = tuple[FileId, Path, Path, GeneratedContent | None]
+
+
 def _resolve_fid(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, arg: str
-) -> tuple[FileId, Path, Path, GeneratedContent | None] | None:
+) -> list[_Match]:
+    """Return every tracked file ``arg`` names, from the most specific rule.
+
+    An id wins over a path, a path (``~`` and relative forms resolved) wins
+    over a bare file name; more than one result means the argument is
+    ambiguous.
+    """
+    candidate = Path(arg).expanduser().resolve()
+    by_id: list[_Match] = []
+    by_path: list[_Match] = []
+    by_name: list[_Match] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            if arg in (name, sub_name, str(sub_dst), sub_dst.name):
-                return file_id(sub_name), sub_dst, sub_src, tracked_file.generated
+            match = (file_id(sub_name), sub_dst, sub_src, tracked_file.generated)
+            if arg in (name, sub_name):
+                by_id.append(match)
+            elif candidate == sub_dst.resolve():
+                by_path.append(match)
+            elif arg == sub_dst.name:
+                by_name.append(match)
+    return by_id or by_path or by_name
+
+
+def _unparseable_reason(
+    live: bytes | Absent, upstream: bytes | Absent, dst: Path
+) -> str | None:
+    fmt = su_mod.structured_format(dst)
+    if fmt is None:
+        return None
+    for label, data in (("live", live), ("tracked", upstream)):
+        if isinstance(data, bytes) and data:
+            try:
+                su_mod.extract_structured_units(data, data, fmt)
+            except StructuredParseError as exc:
+                return f"{label} file is not parseable: {exc}"
     return None
+
+
+def _single_match(
+    ctx_obj: OutputContext | None, matches: list[_Match], file: str, profile: str
+) -> _Match:
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        listing = ", ".join(str(m[1]) for m in matches)
+        message = (
+            f"{file}: matches {len(matches)} tracked files ({listing}); "
+            "pass the tracked-file name or the full path"
+        )
+    else:
+        message = (
+            f"{file}: not a tracked file in profile {profile!r} "
+            f"(run `setforge compare --profile={profile}` to list tracked files)"
+        )
+    _emit_error(ctx_obj, message)
+    raise typer.Exit(code=2)
+
+
+def _merge_status(
+    parse_problem: str | None, base_present: bool, clean: bool | None
+) -> str:
+    if parse_problem:
+        return parse_problem
+    if not base_present:
+        return "no recorded merge base"
+    return "merge clean" if clean else "merge conflicts"
 
 
 def _pane_text(data: bytes | None | Absent) -> str | None:
@@ -144,15 +209,8 @@ def inspect(
     repo_root = config.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
 
-    match = _resolve_fid(cfg, resolved, repo_root, file)
-    if match is None:
-        _emit_error(
-            ctx.obj,
-            f"{file}: not a tracked file in profile {profile!r} "
-            f"(run `setforge compare --profile={profile}` to list tracked files)",
-        )
-        raise typer.Exit(code=2)
-    fid, dst, src, generated = match
+    matches = _resolve_fid(cfg, resolved, repo_root, file)
+    fid, dst, src, generated = _single_match(ctx.obj, matches, file, profile)
 
     staging_rows = summarize_stages(
         collect_stages(cfg, resolved, repo_root, profile, only=str(dst)),
@@ -188,6 +246,8 @@ def inspect(
         merge_pane = _pane_text(upstream) or ""
         index = {"shared": [], "kept_local": [], "conflict": []}
 
+    parse_problem = _unparseable_reason(live, upstream, dst)
+    result_clean = result.clean if base_present else None
     data: dict[str, Any] = {
         "file": str(dst),
         "base_present": base_present,
@@ -198,7 +258,7 @@ def inspect(
         },
         "index": index,
         "staging": staging.to_dict() if staging is not None else None,
-        "errors": [],
+        "errors": [parse_problem] if parse_problem else [],
     }
 
     def _human() -> None:
@@ -208,12 +268,7 @@ def inspect(
             if console.width >= _WIDE_THRESHOLD
             else RichLayout.STACKED
         )
-        if not base_present:
-            merge_status = "no recorded merge base"
-        elif result.clean:
-            merge_status = "merge clean"
-        else:
-            merge_status = "merge conflicts"
+        merge_status = _merge_status(parse_problem, base_present, result_clean)
         header = theme.styled(
             f"inspect {dst}  ({merge_status})",
             theme.Role.HEADING,
@@ -224,7 +279,8 @@ def inspect(
         if console.is_terminal:
             body = Panel(body, title="base | live | merge")
         console.print(body)
-        _render_index(console, index)
+        if not parse_problem:
+            _render_index(console, index)
         _render_staging(console, staging)
 
     render(ctx.obj, "inspect", data, human_fn=_human)
