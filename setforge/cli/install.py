@@ -1644,9 +1644,7 @@ def _prepare_lock(
     entry aborts here.
     """
     path = lock_path(config)
-    active_lock = (
-        parse_lock(path.read_text(encoding="utf-8")) if path.exists() else None
-    )
+    active_lock = parse_lock(path.read_bytes()) if path.exists() else None
     if locked:
         _gate_on_lock_coverage(cfg, resolved, active_lock)
     return active_lock

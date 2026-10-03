@@ -352,3 +352,8 @@ def test_newer_lock_version_refused_before_pin_parsing() -> None:
 def test_newer_lock_version_is_a_setforge_error() -> None:
     with pytest.raises(SetforgeError):
         parse_lock("version = 999\n")
+
+
+def test_parse_lock_rejects_non_utf8_bytes() -> None:
+    with pytest.raises(MalformedLockError, match="not valid UTF-8"):
+        parse_lock(b"\xff\xfe")

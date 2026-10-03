@@ -101,7 +101,7 @@ def apply_update(existing: LockFile, updated: ResolvedPin) -> LockFile:
 def _load_existing_lock(path: Path) -> LockFile | None:
     if not path.exists():
         return None
-    return parse_lock(path.read_text(encoding="utf-8"))
+    return parse_lock(path.read_bytes())
 
 
 @app.command("lock", epilog=LOCK_EXAMPLES)

@@ -50,7 +50,14 @@ def dump_lock(lockfile: LockFile) -> str:
     return tomli_w.dumps(document)
 
 
-def parse_lock(text: str) -> LockFile:
+def parse_lock(text: str | bytes) -> LockFile:
+    if isinstance(text, bytes):
+        try:
+            text = text.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise MalformedLockError(
+                f"setforge.lock is not valid UTF-8: {exc}"
+            ) from exc
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:

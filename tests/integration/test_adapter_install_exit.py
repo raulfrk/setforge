@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 import pytest
 
+from setforge.errors import MalformedLockError
+
 from .conftest import IntegrationEnv
 
 pytestmark = pytest.mark.integration
@@ -50,3 +52,18 @@ def test_missing_code_binary_is_skipped_with_exit_zero(
     result = env.run_verb(_INSTALL)
 
     assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("argv", [_INSTALL, ["lock"]])
+def test_non_utf8_lock_file_is_a_clean_error(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    argv: list[str],
+) -> None:
+    env = integration_env()
+    (env.repo / "setforge.lock").write_bytes(b"\xff\xfe")
+
+    result = env.run_verb(argv)
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, MalformedLockError)
