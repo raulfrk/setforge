@@ -421,7 +421,7 @@ def _key_merge(
         if merged is None or _loses_strictness(merged, live, tracked, fmt):
             merged = splice_lines_toward(live, tracked, model, fmt)
         if merged is None or _loses_strictness(merged, live, tracked, fmt):
-            merged = _dump_model(model, fmt)
+            merged = _dump_model(model, fmt, like=live)
     except (MergeTypeMismatch, DuplicateKeyInMergeModel, StructuredParseError):
         return None
     return merged

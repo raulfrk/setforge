@@ -23,6 +23,8 @@ from setforge.errors import (
 from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
+    _block_indents,
+    _dump_model,
     _load_model,
     _walk_leaves,
     assert_stage_fidelity_structured,
@@ -1213,3 +1215,62 @@ def test_reconstruct_keeps_anchors_and_merge_keys_byte_identical() -> None:
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
     assert out == base.replace(b"name: one", b"name: uno")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", (None, None)),
+        ("a: 1\nb: 2\n", (None, None)),
+        ("a:\nb: 1\n", (None, None)),
+        ("l:\n  - a\n", (None, 2)),
+        ("l:\n- a\n- b\n", (None, 0)),
+        ("m:\n    x: 1\nl:\n- a\n", (4, 0)),
+        ("l:   # items\n    - a\nm:\n    x: 1\n", (4, 4)),
+        ("l:\n  - k:\n      - x\n    v: 2\n", (None, 2)),
+        ("l:\n- k:\n    deep: 1\n", (2, 0)),
+        ("l:\n-\n  k:\n     v: 1\n", (3, 0)),
+        ("m:\n\n  # c\n   k: 1\n", (3, None)),
+        ("s: |\n      body:\n          x\n      - y\nm:\n  k: 1\n", (2, None)),
+        ("s: >-  # folded\n      body:\n          x\nm:\n   k: 1\n", (3, None)),
+        ("- |\n      body:\n          x\n", (None, None)),
+        ("p: a|\nm:\n    k: 1\n", (4, None)),
+    ],
+)
+def test_block_indents_reads_the_first_child_of_a_key(
+    text: str, expected: tuple[int | None, int | None]
+) -> None:
+    assert _block_indents(text.splitlines()) == expected
+
+
+def test_dump_model_without_a_source_uses_the_default_layout() -> None:
+    model = _load_model(b"l:\n    - a\nm:\n    k: 1\n", StructuredFormat.YAML)
+
+    assert _dump_model(model, StructuredFormat.YAML) == b"l:\n- a\nm:\n  k: 1\n"
+
+
+def test_dump_model_with_an_empty_source_keeps_the_final_newline() -> None:
+    model = _load_model(b"a: 1\n", StructuredFormat.YAML)
+
+    assert _dump_model(model, StructuredFormat.YAML, like=b"") == b"a: 1\n"
+
+
+def test_dump_model_keeps_lf_for_mixed_line_endings() -> None:
+    model = _load_model(b"a: 1\r\nb: 2\n", StructuredFormat.YAML)
+
+    out = _dump_model(model, StructuredFormat.YAML, like=b"a: 1\r\nb: 2\n")
+
+    assert out == b"a: 1\nb: 2\n"
+
+
+def test_reconstruct_fallback_dump_follows_the_base_layout() -> None:
+    base = (
+        b"\xef\xbb\xbf# head\r\n---\r\nm: {x: 1, y: 2}\r\n"
+        b"l:\r\n    - a    # first\r\nn:\r\n    deep: 1"
+    )
+    live = base.replace(b"x: 1, y: 2", b"x: 5, y: 7")
+    units = _classified(base, live, {"m.x": HunkClass.SHARED, "m.y": HunkClass.LOCAL})
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == base.replace(b"x: 1, y: 2", b"x: 5, y: 2")

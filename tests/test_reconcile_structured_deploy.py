@@ -723,3 +723,47 @@ def test_json_key_merge_follows_the_live_layout(
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
     assert out.new_base == upstream
+
+
+_ONE_LINE = b"m: {x: 1, y: 2}\n"
+_REDUMPED_LAYOUTS = [
+    pytest.param(b"\xef\xbb\xbf" + _ONE_LINE + b"z: 2\n", id="bom"),
+    pytest.param(b"top: 1  # one\r\nm: {x: 1, y: 2}\r\nn:\r\n  a: 1\r\n", id="crlf"),
+    pytest.param(
+        b"%YAML 1.2\n---\n" + _ONE_LINE + b"z: 2\n...\n", id="directive-and-end"
+    ),
+    pytest.param(b"# head\n\n---\n# c\n" + _ONE_LINE + b"z: 2\n", id="document-start"),
+    pytest.param(_ONE_LINE + b"z: 2", id="no-final-newline"),
+    pytest.param(
+        _ONE_LINE + b"l:\n  - a   # c\n  - b\nz: 2\n", id="sequence-indented-by-two"
+    ),
+    pytest.param(
+        _ONE_LINE
+        + b"l:\n    - a    # first\n    - b\n"
+        + b"n:\n    x: 1   # xx\n    o:\n        - q\n",
+        id="four-space-indent",
+    ),
+    pytest.param(
+        _ONE_LINE + b"n:\n    deep: 1\nl:\n- k: 1\n  v: 2\n",
+        id="flush-sequence-wide-mapping",
+    ),
+    pytest.param(
+        _ONE_LINE + b"l:\n  - k:\n      - x\n    v: 2\n", id="nested-sequences"
+    ),
+    pytest.param(
+        _ONE_LINE + b"s: |\n  - not a list\n  k:\n      v\nz: 2\n", id="plain"
+    ),
+]
+
+
+@pytest.mark.parametrize("base", _REDUMPED_LAYOUTS)
+def test_re_serialised_yaml_keeps_the_source_byte_layout(base: bytes) -> None:
+    fid = file_id("redumped")
+    host = base.replace(b"x: 1, y: 2", b"x: 5, y: 2")
+    upstream = base.replace(b"x: 1, y: 2", b"x: 1, y: 7")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == base.replace(b"x: 1, y: 2", b"x: 5, y: 7")

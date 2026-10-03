@@ -17,6 +17,7 @@ store (the caller wires all I/O).
 from __future__ import annotations
 
 import io
+import re
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -186,13 +187,101 @@ def uses_aliases(data: bytes) -> bool:
     )
 
 
-def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
-    """Serialise ``model`` back to byte-faithful text for ``fmt``."""
+_BOM: Final = "\ufeff"
+
+#: A line that opens a block scalar (``key: |``, ``- >-``, ``k: |2+  # note``).
+_BLOCK_SCALAR_RE: Final = re.compile(r"(?:^|[\s:-])[|>][0-9+-]{0,2}(?:\s+#.*)?$")
+
+
+def _block_indents(lines: list[str]) -> tuple[int | None, int | None]:
+    """Guess ``(mapping indent, sequence dash offset)`` from block-style lines.
+
+    The first child of a ``key:`` line decides each: a nested key gives the
+    mapping indent, a ``- `` item gives how far the dash sits right of its parent
+    key. ``None`` where the text shows no such child (the dumper default stays).
+    """
+    mapping: int | None = None
+    offset: int | None = None
+    parent: int | None = None
+    scalar: int | None = None
+    for line in lines:
+        content = line.strip()
+        if not content or content.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if scalar is not None and indent > scalar:
+            continue  # the body of a block scalar is text, not structure
+        scalar = indent if _BLOCK_SCALAR_RE.search(content) else None
+        is_item = content == "-" or content.startswith("- ")
+        if parent is not None and indent >= parent:
+            if is_item and offset is None:
+                offset = indent - parent
+            elif not is_item and mapping is None and indent > parent:
+                mapping = indent - parent
+        key_column = indent
+        while content.startswith("- "):
+            content = content[2:].lstrip(" ")
+            key_column = len(line) - len(content)
+        opens_block = content.split(" #", 1)[0].rstrip().endswith(":")
+        parent = key_column if opens_block else None
+    return mapping, offset
+
+
+def _dump_yaml(model: object, like: bytes | None) -> bytes:
+    """Dump ``model``, re-applying the byte-level layout of the source ``like``.
+
+    ruamel keeps comments, quoting and key order but not the BOM, CRLF line
+    ends, a missing final newline, the ``%YAML`` / ``---`` / ``...`` markers
+    (nor anything above ``---``) or the block indentation; those are read off
+    ``like`` and put back.
+    """
+    yaml = _yaml()
+    source = "" if like is None else like.decode("utf-8")
+    lines = source.removeprefix(_BOM).splitlines()
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip() and not line.startswith(("#", "%"))
+        ),
+        len(lines),
+    )
+    explicit_start = start < len(lines) and lines[start].rstrip() == "---"
+    yaml.explicit_start = explicit_start
+    yaml.explicit_end = next(
+        (line.rstrip() == "..." for line in reversed(lines) if line.strip()), False
+    )
+    mapping, offset = _block_indents(lines)
+    yaml.indent(
+        mapping=mapping,
+        sequence=None if offset is None else offset + 2,
+        offset=offset,
+    )
+    buf = io.StringIO()
+    yaml.dump(model, buf)
+    text = buf.getvalue()
+    if explicit_start:
+        text = "".join(f"{line}\n" for line in lines[:start]) + text
+    if source and not source.endswith("\n"):
+        text = text.removesuffix("\n")
+    if "\r\n" in source and source.count("\r\n") == source.count("\n"):
+        # ruamel keeps a comment's own "\r", so settle on "\n" before converting.
+        text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    if source.startswith(_BOM):
+        text = _BOM + text
+    return text.encode("utf-8")
+
+
+def _dump_model(
+    model: object, fmt: StructuredFormat, *, like: bytes | None = None
+) -> bytes:
+    """Serialise ``model`` back to byte-faithful text for ``fmt``.
+
+    ``like`` is the source text whose byte-level layout a YAML dump follows.
+    """
     try:
         if fmt is StructuredFormat.YAML:
-            buf = io.StringIO()
-            _yaml().dump(model, buf)
-            return buf.getvalue().encode("utf-8")
+            return _dump_yaml(model, like)
         from json5.dumper import ModelDumper
         from json5.dumper import dumps as _json5_dumps
 
@@ -669,7 +758,7 @@ def _render_reconstruction(
         spliced = splice_lines_toward(base, live, model, fmt)
         if spliced is not None:
             return spliced
-    return _dump_model(model, fmt)
+    return _dump_model(model, fmt, like=base)
 
 
 def reconstruct_structured(
