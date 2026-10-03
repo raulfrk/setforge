@@ -132,7 +132,7 @@ def _reverse_mcp(
     if delta.is_empty():
         return None, []
     try:
-        mcp_mod.require_inventory_context(delta.context)
+        mcp_mod.require_inventory_context(delta.context, delta.scopes)
     except SetforgeError as exc:
         return None, [
             (name, str(exc))

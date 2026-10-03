@@ -35,8 +35,10 @@ import json
 import logging
 import os
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
@@ -271,14 +273,36 @@ def parse_inventory_context(raw: object) -> tuple[str, str, str]:
     return cwd, config, local_key
 
 
-def require_inventory_context(context: tuple[str, str, str] | None) -> None:
-    """Refuse native effects when their original destination is unprovable."""
+_SCOPE_CONTEXT_FIELDS: Final[dict[str, tuple[int, ...]]] = {
+    "user": (1,),
+    "local": (1, 2),
+    "project": (0, 1),
+}
+
+
+def require_inventory_context(
+    context: tuple[str, str, str] | None,
+    scopes: Iterable[str] | None = None,
+) -> None:
+    """Refuse native effects when their original destination is unprovable.
+
+    With ``scopes`` only the context fields that locate those scopes are
+    compared (a user-scope server does not depend on the working directory).
+    An unknown scope compares every field.
+    """
     if context is None:
         raise SetforgeError(
             "legacy MCP record lacks native inventory context; automatic reversal "
             "is unsafe — restore the original registration manually"
         )
-    if inventory_context() != context:
+    current = inventory_context()
+    if scopes is None:
+        fields: set[int] = {0, 1, 2}
+    else:
+        fields = set()
+        for scope in scopes:
+            fields.update(_SCOPE_CONTEXT_FIELDS.get(scope, (0, 1, 2)))
+    if any(current[i] != context[i] for i in fields):
         raise SetforgeError("native MCP inventory context changed; refusing mutation")
 
 

@@ -852,3 +852,53 @@ def test_empty_mcp_plan_needs_no_native_tools(monkeypatch: pytest.MonkeyPatch) -
     assert mcp.plan_reconcile(_cfg({}), _resolved([])) == mcp.McpPlan(
         entries=(), preconditions=()
     )
+
+
+def _context_moved_to(
+    monkeypatch: pytest.MonkeyPatch, *, cwd: str, config: str, key: str
+) -> tuple[str, str, str]:
+    recorded = ("/work/a", "/home/u/.claude.json", "/work/a")
+    monkeypatch.setattr(mcp, "inventory_context", lambda: (cwd, config, key))
+    return recorded
+
+
+def test_user_scope_context_ignores_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _context_moved_to(
+        monkeypatch, cwd="/work/b", config="/home/u/.claude.json", key="/work/b"
+    )
+
+    mcp.require_inventory_context(recorded, ["user"])
+
+    with pytest.raises(SetforgeError, match="context changed"):
+        mcp.require_inventory_context(recorded)
+
+
+def test_user_scope_context_still_requires_same_config_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _context_moved_to(
+        monkeypatch, cwd="/work/a", config="/other/.claude.json", key="/work/a"
+    )
+
+    with pytest.raises(SetforgeError, match="context changed"):
+        mcp.require_inventory_context(recorded, ["user"])
+
+
+def test_local_and_project_scope_context_track_their_locations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _context_moved_to(
+        monkeypatch, cwd="/work/a", config="/home/u/.claude.json", key="/work/b"
+    )
+    with pytest.raises(SetforgeError, match="context changed"):
+        mcp.require_inventory_context(recorded, ["user", "local"])
+    mcp.require_inventory_context(recorded, ["project"])
+
+    recorded = _context_moved_to(
+        monkeypatch, cwd="/work/b", config="/home/u/.claude.json", key="/work/a"
+    )
+    with pytest.raises(SetforgeError, match="context changed"):
+        mcp.require_inventory_context(recorded, ["project"])
+    mcp.require_inventory_context(recorded, ["user"])

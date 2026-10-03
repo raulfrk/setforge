@@ -762,6 +762,10 @@ class MCPDelta:
     def is_empty(self) -> bool:
         return not (self.added or self.updated)
 
+    @property
+    def scopes(self) -> frozenset[str]:
+        return frozenset(scope for _, _, scope in (*self.added, *self.updated))
+
 
 class ReconcileKind(StrEnum):
     """Closed set of item kinds a :class:`ReconcileOutcome` can record.
