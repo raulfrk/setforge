@@ -323,7 +323,7 @@ def test_scan_locked_rescan_can_only_contract_approval(
     _, refreshed = orphans_mod._detect_scan_live("p", config)
     detections = iter(((cfg, initial), (cfg, refreshed)))
     monkeypatch.setattr(
-        orphans_mod, "_detect_scan_live", lambda *_args: next(detections)
+        orphans_mod, "_detect_scan_live", lambda *_args, **_kw: next(detections)
     )
     monkeypatch.setattr(
         orphans_mod, "_confirm_scan_entries", lambda *_args: (approved,)
@@ -346,7 +346,7 @@ def test_scan_locked_rescan_does_not_expand_to_new_candidate(
     _, refreshed = orphans_mod._detect_scan_live("p", config)
     detections = iter(((cfg, initial), (cfg, refreshed)))
     monkeypatch.setattr(
-        orphans_mod, "_detect_scan_live", lambda *_args: next(detections)
+        orphans_mod, "_detect_scan_live", lambda *_args, **_kw: next(detections)
     )
     monkeypatch.setattr(
         orphans_mod, "_confirm_scan_entries", lambda *_args: initial.entries

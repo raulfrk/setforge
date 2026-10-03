@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ from setforge.errors import (
 )
 from setforge.file_ownership import refuse_active_file_claims
 from setforge.locking import mutation_locks
+from setforge.ownership import OwnershipError, read_owner_id
 
 __all__ = [
     "ApplyChoice",
@@ -188,8 +190,19 @@ def _print_scan_dry_run(result: orphan_scan.ScanResult, console: Console) -> Non
         )
 
 
+def _checkout_owner(config_path: Path) -> uuid.UUID | None:
+    try:
+        return read_owner_id(config_path.resolve().parent)
+    except OwnershipError:
+        return None
+
+
 def _detect_orphans_live(
-    profile: str, config_path: Path
+    profile: str,
+    config_path: Path,
+    *,
+    refuse_claims: bool = True,
+    owner: uuid.UUID | None = None,
 ) -> tuple[Any, OrphanDetection]:
     """Resolve the effective profile and re-detect orphans from live state.
 
@@ -230,12 +243,21 @@ def _detect_orphans_live(
         skipped_unmanaged=report.orphan_skipped_unmanaged,
         skipped_host_local=report.orphan_skipped_host_local,
     )
-    refuse_active_file_claims(orphan.path for orphan in detection.orphans)
+    if refuse_claims:
+        refuse_active_file_claims(
+            (orphan.path for orphan in detection.orphans),
+            allowed_owner=owner,
+            config_path=config_path,
+        )
     return cfg, detection
 
 
 def _detect_scan_live(
-    profile: str, config_path: Path
+    profile: str,
+    config_path: Path,
+    *,
+    refuse_claims: bool = True,
+    owner: uuid.UUID | None = None,
 ) -> tuple[Any, orphan_scan.ScanResult]:
     """Reload config and scan every effective profile from current disk state."""
     cfg = load_config(config_path)
@@ -247,7 +269,12 @@ def _detect_scan_live(
         config_path=config_path.resolve(),
         transitions_dir=transitions.transitions_root(),
     )
-    refuse_active_file_claims(entry.path for entry in result.entries)
+    if refuse_claims:
+        refuse_active_file_claims(
+            (entry.path for entry in result.entries),
+            allowed_owner=owner,
+            config_path=config_path,
+        )
     return cfg, result
 
 
@@ -292,7 +319,8 @@ def _execute_scan_cleanup(
     console: Console,
 ) -> None:
     """Apply only individually approved candidates surviving a locked re-scan."""
-    _, initial = _detect_scan_live(profile, config_path)
+    owner = _checkout_owner(config_path)
+    _, initial = _detect_scan_live(profile, config_path, owner=owner)
     if not initial.entries:
         console.print("=== no unrecorded managed-tree candidates ===")
         return
@@ -308,7 +336,7 @@ def _execute_scan_cleanup(
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
-        _, refreshed = _detect_scan_live(profile, config_path)
+        _, refreshed = _detect_scan_live(profile, config_path, owner=owner)
         selected = tuple(
             entry
             for entry in refreshed.entries
@@ -576,7 +604,8 @@ def _apply_orphan_cleanup(
     confirm it in the pre-prompt list.
     """
     _require_readable_ignore_list()
-    _, detection = _detect_orphans_live(profile, config_path)
+    owner = _checkout_owner(config_path)
+    _, detection = _detect_orphans_live(profile, config_path, owner=owner)
     orphans = detection.orphans
     if not orphans:
         console.print("=== no orphans ===")
@@ -595,7 +624,7 @@ def _apply_orphan_cleanup(
         operations.recover_on_error(profile, "cleanup-orphans"),
     ):
         operations.refuse_active(profile)
-        _, refreshed = _detect_orphans_live(profile, config_path)
+        _, refreshed = _detect_orphans_live(profile, config_path, owner=owner)
         approved_still_orphaned = [
             orphan
             for orphan in refreshed.orphans
@@ -715,12 +744,14 @@ def cleanup_orphans(
             _require_readable_ignore_list()
             _execute_scan_cleanup(profile, resolved_config, console=console)
         else:
-            _, result = _detect_scan_live(profile, resolved_config)
+            _, result = _detect_scan_live(profile, resolved_config, refuse_claims=False)
             _print_scan_dry_run(result, console)
         return
 
     if not apply:
-        _, detection = _detect_orphans_live(profile, resolved_config)
+        _, detection = _detect_orphans_live(
+            profile, resolved_config, refuse_claims=False
+        )
         _print_dry_run(
             detection.orphans,
             console,

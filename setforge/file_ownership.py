@@ -104,18 +104,27 @@ def active_file_claims(
 
 
 def refuse_active_file_claims(
-    destinations: Iterable[Path], *, allowed_owner: uuid.UUID | None = None
+    destinations: Iterable[Path],
+    *,
+    allowed_owner: uuid.UUID | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Refuse claimed effects unless the caller has verified the allowed owner.
 
     Apply callers must hold the resources lock through their file effects.
-    Cleanup passes no owner: it cannot implicitly release existing ownership.
+    Callers that pass no owner cannot implicitly release existing ownership.
     """
+    store: OwnershipStore | None = None
     for destination, claim in active_file_claims(destinations):
         if claim.owner_id != allowed_owner:
+            store = store or OwnershipStore()
+            config = config_path if config_path is not None else "setforge.yaml"
             raise OwnershipError(
                 f"{destination} has an active tracked-file ownership claim "
-                f"from {claim.owner_id}; release the claim before mutation"
+                f"{store.claim_id(claim.resource_id)} held by another checkout; "
+                "release the claim before mutation: "
+                f"setforge ownership release {store.claim_id(claim.resource_id)} "
+                f"--config={config} --yes"
             )
 
 

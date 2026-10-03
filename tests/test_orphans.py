@@ -717,7 +717,7 @@ def _write_minimal_yaml(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("scan", [False, True])
-@pytest.mark.parametrize("phase", ["preview", "apply", "after-confirmation"])
+@pytest.mark.parametrize("phase", ["apply", "after-confirmation"])
 def test_cleanup_refuses_foreign_active_claim(
     tmp_path: Path,
     isolated_state_dir: Path,
@@ -786,13 +786,15 @@ def test_cleanup_refuses_foreign_active_claim(
     args = ["cleanup-orphans", "--profile=p", f"--config={config}"]
     if scan:
         args.append("--scan")
-    if phase != "preview":
-        args.append("--apply")
+    args.append("--apply")
 
     result = CliRunner().invoke(app, args)
 
     assert result.exit_code != 0, result.output
     assert "active tracked-file ownership claim" in str(result.exception)
+    claim_id = store.claim_id(claims[0].resource_id)
+    assert claim_id in str(result.exception)
+    assert f"setforge ownership release {claim_id} --config=" in str(result.exception)
     assert candidate.read_bytes() == b"owned by another checkout\n"
     assert store.read(file_resource_id(candidate)) == claims[0]
     assert not list((isolated_state_dir / "transitions").glob("*cleanup-orphans*"))
@@ -1074,7 +1076,7 @@ def test_apply_yes_holds_profile_lock(
     monkeypatch.setattr(
         orphans_mod,
         "_detect_orphans_live",
-        lambda profile, config_path: (_make_config_with({}), detection),
+        lambda profile, config_path, **_kw: (_make_config_with({}), detection),
     )
 
     orphans_mod._apply_orphan_cleanup(
@@ -1164,7 +1166,7 @@ def test_apply_never_deletes_orphan_discovered_after_prompt(
         return kwargs["journal"]
 
     monkeypatch.setattr(
-        orphans_mod, "_detect_orphans_live", lambda *_a: next(detections)
+        orphans_mod, "_detect_orphans_live", lambda *_a, **_kw: next(detections)
     )
     monkeypatch.setattr(
         orphans_mod,
@@ -1742,3 +1744,83 @@ def test_compare_and_cleanup_skip_unreadable_history(
     assert set(live.iterdir()) == {active, neighbor}
     assert source_path.read_bytes() == b"active tracked bytes\n"
     assert bad.read_bytes() == b"\xff"
+
+
+@pytest.mark.parametrize("scan", [False, True])
+@pytest.mark.parametrize("claimant", ["own", "foreign"])
+def test_cleanup_preview_never_refuses_claimed_file(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+    scan: bool,
+    claimant: str,
+) -> None:
+    candidate, config = _claimed_candidate(
+        tmp_path, isolated_state_dir, scan=scan, claimant=claimant
+    )
+    args = ["cleanup-orphans", "--profile=p", f"--config={config}"]
+    if scan:
+        args.append("--scan")
+
+    result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 0, result.output + str(result.exception)
+    assert candidate.exists()
+
+
+def test_cleanup_apply_deletes_file_claimed_by_this_checkout(
+    tmp_path: Path,
+    isolated_state_dir: Path,
+) -> None:
+    candidate, config = _claimed_candidate(
+        tmp_path, isolated_state_dir, scan=False, claimant="own"
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["cleanup-orphans", "--profile=p", f"--config={config}", "--apply", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output + str(result.exception)
+    assert not candidate.exists()
+
+
+def _claimed_candidate(
+    tmp_path: Path, isolated_state_dir: Path, *, scan: bool, claimant: str
+) -> tuple[Path, Path]:
+    from setforge.file_ownership import observe_file
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+
+    repo = tmp_path / "caller-checkout"
+    config = _write_minimal_yaml(repo)
+    (repo / "tracked").mkdir()
+    (repo / "tracked/kept.txt").write_text("kept\n")
+    candidate = Path.home() / ".config/example/claimed.txt"
+    candidate.parent.mkdir(parents=True)
+    config.write_text(
+        config.read_text().replace(str(repo / "live"), str(candidate.parent))
+    )
+    candidate.write_bytes(b"installed earlier\n")
+    if not scan:
+        _write_meta_record(
+            isolated_state_dir / "transitions", "prior-install", [str(candidate)]
+        )
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    for checkout in (repo, other):
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    owner = load_or_create_owner_id(repo if claimant == "own" else other)
+    if claimant != "own":
+        load_or_create_owner_id(repo)
+    observation = observe_file(candidate)
+    with mutation_locks(resources=True):
+        OwnershipStore().claim_locked(
+            resource_id=observation.resource_id,
+            owner_id=owner,
+            declaration_refs=("tracked_files.claimed",),
+            provenance=(),
+            locator=str(candidate),
+            fingerprint=observation.fingerprint,
+            expected_generation=None,
+        )
+    return candidate, config
