@@ -249,11 +249,7 @@ pytest_add_cli_args_test_selection = [
 # --cov-fail-under=85` + the conftest auto-xdist on e2e) and mis-score a mutant
 # "killed" by the coverage gate firing instead of by an assertion. `-o addopts=`
 # clears the inherited addopts entirely. mutmut adds its own `-x`.
-# mutmut ends each worker with os._exit, so pytest never releases the lock on
-# that session's temporary directory and its usual pruning skips it; one run
-# then leaves thousands of them. `tmp_path_retention_policy=none` removes each
-# test's directory as the test finishes.
-pytest_add_cli_args = ["-o", "addopts=", "-o", "tmp_path_retention_policy=none"]
+pytest_add_cli_args = ["-o", "addopts="]
 
 [tool.mypy]
 # Aligned with [project].requires-python and [tool.ruff].target-version

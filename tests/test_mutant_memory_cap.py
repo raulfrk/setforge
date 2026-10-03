@@ -3,7 +3,6 @@
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -43,11 +42,3 @@ def test_mutant_worker_cannot_allocate_without_bound() -> None:
 @pytest.mark.parametrize("mutant", [None, "", "stats", "fail"])
 def test_ordinary_and_bookkeeping_sessions_are_not_capped(mutant: str | None) -> None:
     assert _probe(mutant) == 10
-
-
-def test_mutation_sessions_do_not_retain_temp_directories() -> None:
-    config = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
-    args = config["tool"]["mutmut"]["pytest_add_cli_args"]
-    options = dict(zip(args[::2], args[1::2], strict=True))
-    assert set(options) == {"-o"}
-    assert "tmp_path_retention_policy=none" in args

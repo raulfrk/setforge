@@ -25,9 +25,10 @@ import errno
 import json
 import os
 import resource
+import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -240,6 +241,10 @@ def pytest_collection_modifyitems(
 _MUTANT_MEMORY_HEADROOM = 1 << 30
 
 
+def _is_mutant_worker() -> bool:
+    return "__mutmut_" in os.environ.get("MUTANT_UNDER_TEST", "")
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Cap the address space of a mutation-test worker.
 
@@ -249,7 +254,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     ``MemoryError`` at once and is counted as killed.
     """
     del session
-    if "__mutmut_" not in os.environ.get("MUTANT_UNDER_TEST", ""):
+    if not _is_mutant_worker():
         return
     try:
         pages = int(Path("/proc/self/statm").read_text().split()[0])
@@ -260,6 +265,21 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if hard != resource.RLIM_INFINITY:
         limit = min(limit, hard)
     resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _mutant_worker_leaves_no_temp(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Remove a mutation-test worker's temporary directory when its session ends.
+
+    mutmut ends each worker with ``os._exit``, which skips the exit handler
+    pytest prunes that directory from and leaves its lock held, so later
+    sessions never prune it either.
+    """
+    yield
+    if _is_mutant_worker():
+        shutil.rmtree(tmp_path_factory.getbasetemp(), ignore_errors=True)
 
 
 @pytest.fixture
