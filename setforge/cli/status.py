@@ -34,7 +34,7 @@ import typer
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from setforge import codex_lifecycle, transitions
+from setforge import codex_lifecycle, operations, transitions
 from setforge import compare as compare_mod
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -52,7 +52,7 @@ from setforge.cli._init_helpers import (
 from setforge.cli._output import render
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_effective_profile
-from setforge.errors import InvalidTransitionRecord
+from setforge.errors import InvalidTransitionRecord, SetforgeError
 from setforge.source import LOCAL_CONFIG_PATH
 
 _GIT_TIMEOUT_SECONDS: int = 30
@@ -85,6 +85,15 @@ class _GitInfo:
 class _DriftCounts:
     drifted: int
     deployed_current: bool
+    missing: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingOperation:
+    command: str | None
+    operation_id: str | None
+    recover_command: str
+    error: str | None = None
 
 
 def _git_run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -171,7 +180,9 @@ def _is_git_repo(source_dir: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def _resolve_git_info(source_dir: Path, prev_sha: str | None) -> _GitInfo:
+def _resolve_git_info(
+    source_dir: Path, prev_sha: str | None, *, installed: bool = True
+) -> _GitInfo:
     """Resolve the full git block for the status report.
 
     Falls back gracefully when ``source_dir`` is not a git repo: every
@@ -187,9 +198,12 @@ def _resolve_git_info(source_dir: Path, prev_sha: str | None) -> _GitInfo:
             commits_vs_origin_reason="config dir not a git repo",
         )
     head_short = _resolve_head_short(source_dir)
-    if prev_sha is None:
+    if not installed:
         commits_since_install: int | None = None
-        commits_since_reason: str | None = (
+        commits_since_reason: str | None = "never installed"
+    elif prev_sha is None:
+        commits_since_install = None
+        commits_since_reason = (
             "requires source_sha; this transition predates schema bump"
         )
     else:
@@ -270,14 +284,30 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
         report, ctx.cfg, ctx.resolved, ctx.repo_root, profile=ctx.profile
     )
     drifted = 0
+    missing = 0
     for entry in report.entries:
-        if entry.status is not CompareStatus.DRIFTED:
-            continue
-        drifted += 1
+        if entry.status is CompareStatus.DRIFTED:
+            drifted += 1
+        elif entry.status is CompareStatus.MISSING:
+            missing += 1
     deployed_current = bool(report.entries) and all(
         entry.status is CompareStatus.UNCHANGED for entry in report.entries
     )
-    return _DriftCounts(drifted=drifted, deployed_current=deployed_current)
+    return _DriftCounts(
+        drifted=drifted, deployed_current=deployed_current, missing=missing
+    )
+
+
+def _load_pending_operation(profile: str) -> _PendingOperation | None:
+    """Return the unfinished operation journal for ``profile``, if any."""
+    recover = f"setforge recover --profile={profile}"
+    try:
+        journal = operations.active(profile)
+    except SetforgeError as exc:
+        return _PendingOperation(None, None, recover, error=str(exc))
+    if journal is None:
+        return None
+    return _PendingOperation(journal.command, journal.operation_id, recover)
 
 
 def _read_overlay_counts(local_yaml: Path) -> dict[str, int]:
@@ -368,7 +398,23 @@ def _render_last_install(
 
 def _render_drift(drift: _DriftCounts) -> None:
     """Print the ``drift`` section."""
-    typer.echo(f"drift:          {drift.drifted} drifted")
+    line = f"drift:          {drift.drifted} drifted"
+    if drift.missing:
+        line += f", {drift.missing} missing"
+    typer.echo(line)
+
+
+def _render_pending(pending: _PendingOperation | None) -> None:
+    """Print the ``operation`` section when a journal is unfinished."""
+    if pending is None:
+        return
+    if pending.error is not None:
+        typer.echo(f"operation:      unreadable journal ({pending.error})")
+        return
+    typer.echo(
+        f"operation:      unfinished {pending.command} {pending.operation_id}; "
+        f"run `{pending.recover_command}`"
+    )
 
 
 def _render_overlay(overlay_counts: Mapping[str, int]) -> None:
@@ -426,8 +472,11 @@ def status(
     host = platform.node() or "unknown-host"
     meta = _load_last_install_meta(profile)
     git_info = _resolve_git_info(
-        source_dir, meta.source_sha if meta is not None else None
+        source_dir,
+        meta.source_sha if meta is not None else None,
+        installed=meta is not None,
     )
+    pending = _load_pending_operation(profile)
     now = datetime.now(UTC)
     drift = _compute_drift_counts(profile_ctx)
     overlay_counts = _read_overlay_counts(LOCAL_CONFIG_PATH)
@@ -442,9 +491,17 @@ def status(
         )
         _render_last_install(profile=profile, meta=meta, now=now)
         _render_drift(drift)
+        _render_pending(pending)
         _render_overlay(overlay_counts)
         _render_capabilities(probe.capabilities)
-        typer.echo("=== ready: run install if any drift surfaces or after fetch ===")
+        if pending is not None:
+            typer.echo(f"=== blocked: run `{pending.recover_command}` first ===")
+        elif drift.missing:
+            typer.echo("=== not ready: run install to create the missing files ===")
+        else:
+            typer.echo(
+                "=== ready: run install if any drift surfaces or after fetch ==="
+            )
 
     data = _status_json_data(
         profile=profile,
@@ -455,6 +512,7 @@ def status(
         drift=drift,
         overlay_counts=overlay_counts,
         capabilities=probe.capabilities,
+        pending=pending,
     )
     render(ctx.obj, "status", data, human_fn=_human)
 
@@ -469,6 +527,7 @@ def _status_json_data(
     drift: _DriftCounts,
     overlay_counts: Mapping[str, int],
     capabilities: tuple[CapabilityProbe, ...],
+    pending: _PendingOperation | None = None,
 ) -> dict[str, Any]:
     """Build the JSON-mode payload for ``setforge status``.
 
@@ -500,7 +559,18 @@ def _status_json_data(
         "last_install": last_install,
         "drift": {
             "drifted": drift.drifted,
+            "missing": drift.missing,
         },
+        "pending_operation": (
+            None
+            if pending is None
+            else {
+                "command": pending.command,
+                "operation_id": pending.operation_id,
+                "recover_command": pending.recover_command,
+                "error": pending.error,
+            }
+        ),
         "overlay": dict(overlay_counts),
         "capabilities": [
             {

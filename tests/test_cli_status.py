@@ -784,3 +784,63 @@ def test_status_unknown_profile_exits_nonzero(
     )
 
     assert result.exit_code != 0
+
+
+def _status_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Result, dict[str, object]]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config_path = _write_minimal_config(tmp_path)
+    _patch_git_for_clean_repo(monkeypatch)
+    result = CliRunner().invoke(
+        app,
+        [
+            "--format=json",
+            "--source",
+            str(tmp_path),
+            "status",
+            "--config",
+            str(config_path),
+            "--profile",
+            "vm-headless",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    return result, json.loads(result.stdout)["data"]
+
+
+def test_status_counts_missing_files_and_is_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, data = _status_json(tmp_path, monkeypatch)
+    assert data["drift"] == {"drifted": 0, "missing": 1}
+    assert data["pending_operation"] is None
+    assert data["config_repo"]["commits_since_install_reason"] == "never installed"  # type: ignore[index]
+
+    config_path = tmp_path / "setforge.yaml"
+    human = _invoke_status(source_dir=tmp_path, config_path=config_path)
+    assert "0 drifted, 1 missing" in human.output
+    assert "=== ready" not in human.output
+    assert "predates schema bump" not in human.output
+
+
+def test_status_shows_unfinished_operation_with_recover_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = SimpleNamespace(command="install", operation_id="op-1")
+    monkeypatch.setattr(status_mod.operations, "active", lambda profile: journal)
+    _, data = _status_json(tmp_path, monkeypatch)
+    assert data["pending_operation"] == {
+        "command": "install",
+        "operation_id": "op-1",
+        "recover_command": "setforge recover --profile=vm-headless",
+        "error": None,
+    }
+
+    human = _invoke_status(source_dir=tmp_path, config_path=tmp_path / "setforge.yaml")
+    assert "unfinished install op-1" in human.output
+    assert "setforge recover --profile=vm-headless" in human.output
+    assert "=== ready" not in human.output
