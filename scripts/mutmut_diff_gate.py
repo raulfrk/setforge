@@ -34,13 +34,18 @@ Fidelity constraint (grounded in mutmut 3.6.0's surface):
   file, and the survivor is kept only if that span overlaps the PR's changed
   lines.
 
-Chosen mutmut-3.6 scoping mechanism (verified by hand):
+Chosen mutmut-3.6 scoping mechanism:
 
-  ``mutmut run '<module>.*'`` — mutant selection is fnmatch-glob matched against
-  the mutant key (mutmut ``collect_source_file_mutation_data``), so a
-  ``'<module>.*'`` pattern per changed core file mutates ONLY those modules.
-  ``source_paths`` stays the whole package (imports must resolve in the sandbox);
-  narrowing happens at selection time, not by editing ``source_paths``.
+  ``mutmut run '<pattern>' ...`` — mutant selection is fnmatch-glob matched
+  against the mutant key (mutmut ``collect_source_file_mutation_data``). The gate
+  only blocks on survivors in changed FUNCTIONS, so it passes one pattern per
+  changed function (``<module>.x_<function>__mutmut_*`` or
+  ``<module>.xǁ<Class>ǁ<method>__mutmut_*``; the ``__mutmut_`` suffix keeps
+  ``add`` from selecting ``add_all``). See :func:`scoped_patterns`. A changed line
+  outside every top-level function or top-level-class method falls back to the
+  whole-module pattern ``<module>.*`` for that file. ``source_paths`` stays the
+  whole package (imports must resolve in the sandbox); narrowing happens at
+  selection time, not by editing ``source_paths``.
 
 Clean-baseline safety (fail-closed, exit 2): ``mutmut run`` runs the clean
 (unmutated) test suite in its sandbox first and aborts with a nonzero exit +
@@ -323,6 +328,61 @@ def survivors_on_changed_lines(
     return kept
 
 
+def scoped_patterns(module: str, source: str, changed: set[int]) -> list[str]:
+    """The mutmut selection patterns covering the changed lines of one module.
+
+    mutmut mutates only top-level functions and the methods of top-level
+    classes (nested functions are part of their enclosing function's mutants),
+    so each changed line maps to one such unit and yields
+    ``<module>.x_<function>__mutmut_*`` or ``<module>.xǁ<Class>ǁ<method>__mutmut_*``.
+    A changed line outside every unit that is not blank or a comment (module
+    statements, class attributes, nested classes) makes the result the single
+    whole-module pattern ``<module>.*``."""
+    whole = [f"{module}.*"]
+    units: list[tuple[int, int, str]] = []
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            members = [(node, f"x_{node.name}")]
+        elif isinstance(node, ast.ClassDef):
+            members = [
+                (m, f"x{_METHOD_SEP}{node.name}{_METHOD_SEP}{m.name}")
+                for m in node.body
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+        else:
+            continue
+        for member, local in members:
+            start = min([member.lineno, *(d.lineno for d in member.decorator_list)])
+            units.append((start, member.end_lineno or member.lineno, local))
+    lines = source.splitlines()
+    selected: set[str] = set()
+    for line in changed:
+        hit = [local for start, end, local in units if start <= line <= end]
+        if hit:
+            selected.add(hit[0])
+        elif 0 < line <= len(lines) and (
+            not lines[line - 1].strip() or lines[line - 1].strip().startswith("#")
+        ):
+            continue
+        else:
+            return whole
+    return [f"{module}.{local}__mutmut_*" for local in sorted(selected)]
+
+
+def stale_allowlist_entries(results_text: str, allowlist: set[str]) -> list[str]:
+    """Allowlisted ids that name no mutant in ``results_text``, for modules the
+    results cover. Mutant numbers shift when a function is edited, so an entry
+    past the function's current mutant count is certainly stale (an entry that
+    shifted but still exists cannot be detected here)."""
+    names = {name for name, _ in _result_lines(results_text)}
+    covered = {Survivor(name, "").module_dotted for name in names}
+    return sorted(
+        entry
+        for entry in allowlist
+        if entry not in names and Survivor(entry, "").module_dotted in covered
+    )
+
+
 def read_allowlist(path: Path = ALLOWLIST_PATH) -> set[str]:
     """Read the mutant-id allowlist: one id per line, ``#`` comments + blanks
     ignored. A missing file is an empty allowlist."""
@@ -497,6 +557,11 @@ def _print_block(remaining: list[Survivor]) -> None:
     )
 
 
+def _warn_stale(results_text: str, allowlist: set[str]) -> None:
+    for entry in stale_allowlist_entries(results_text, allowlist):
+        print(f"Mutation gate warning: stale allowlist entry {entry}", file=sys.stderr)
+
+
 def _print_failclosed(reason: str) -> None:
     print(f"Mutation gate FAIL-CLOSED (exit 2): {reason}", file=sys.stderr)
 
@@ -525,6 +590,7 @@ def _run_full(allowlist: set[str]) -> int:
             "run did not complete."
         )
         return EXIT_FAILCLOSED
+    _warn_stale(results_text, allowlist)
     score = mutation_score(results_text, allowlist)
     if score is None:
         _print_failclosed(
@@ -560,7 +626,14 @@ def _run_diff(allowlist: set[str], base_ref: str, *, results_only: bool = False)
     if not changed:
         return EXIT_CLEAN
 
-    patterns = [p[: -len(".py")].replace("/", ".") + ".*" for p in sorted(changed)]
+    sources = _read_sources(set(changed))
+    patterns = [
+        pattern
+        for path in sorted(changed)
+        for pattern in scoped_patterns(
+            path.removesuffix(".py").replace("/", "."), sources[path], changed[path]
+        )
+    ]
     run = MutmutRun(0, "") if results_only else _run_mutmut(patterns)
 
     results_text = _mutmut_results()
@@ -572,7 +645,6 @@ def _run_diff(allowlist: set[str], base_ref: str, *, results_only: bool = False)
         )
         return EXIT_FAILCLOSED
 
-    sources = _read_sources(set(changed))
     records = _result_lines(results_text)
     if results_only and any(status == "not checked" for _, status in records):
         _print_failclosed(
@@ -592,6 +664,7 @@ def _run_diff(allowlist: set[str], base_ref: str, *, results_only: bool = False)
     survivors = parse_results(results_text)
     on_diff = survivors_on_changed_lines(survivors, changed, sources)
     remaining, code = decide(on_diff, allowlist)
+    _warn_stale(results_text, allowlist)
     if remaining:
         _print_block(remaining)
     return code
