@@ -27,11 +27,13 @@ from setforge.ownership import (
 from setforge.project_injection import ProjectFileAction
 from setforge.project_sync import (
     AutoResolution,
+    SyncFileKind,
     _merge_mode,
     apply_sync,
     discover_injections,
     legacy_two_way_merge,
     merge_project_content,
+    missing_locally,
     plan_sync,
     render_sync_manifests,
     resolve_automatically,
@@ -601,6 +603,163 @@ def test_resolve_sync_plan_handles_clean_content_mode_conflict(
     assert adopted.files[0].result_mode == 0o755
     assert not kept.files[0].mode_conflict
     assert not adopted.files[0].mode_conflict
+    with pytest.raises(SetforgeError) as unresolved:
+        resolve_sync_plan(plan)
+    assert str(unresolved.value) == (
+        "project sync has an unresolved mode conflict in AGENTS.md; use --auto"
+    )
+
+
+def _injected_two_members(tmp_path: Path) -> tuple[Path, Path]:
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "EXTRA.md").write_text("extra\n")
+    config.write_text(
+        config.read_text()
+        + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    return config, target
+
+
+def test_missing_locally_is_true_only_for_a_cleanly_kept_deletion_of_a_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config, target = _injected_two_members(tmp_path)
+    (target / "AGENTS.md").unlink()
+    (target / "EXTRA.md").unlink()
+    (config.parent / "project" / "demo" / "EXTRA.md").write_text("extra v2\n")
+
+    kept, conflicted = plan_sync(target).files
+
+    assert (kept.kind, kept.live, kept.result) == (
+        SyncFileKind.UPDATE,
+        ABSENT,
+        MergeResult((), absent=True),
+    )
+    assert missing_locally(kept) is True
+    assert (conflicted.kind, conflicted.live) == (SyncFileKind.UPDATE, ABSENT)
+    assert not conflicted.result.clean
+    assert missing_locally(conflicted) is False
+
+    (target / "AGENTS.md").write_text("managed\n")
+    config.write_text(
+        config.read_text().split("      agents:")[0] + "      extra:\n"
+        "        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+    removed = plan_sync(target).files[0]
+    assert (removed.kind, removed.result) == (
+        SyncFileKind.REMOVE,
+        MergeResult((), absent=True),
+    )
+    assert missing_locally(removed) is False
+
+
+def test_use_profile_restores_a_missing_member_and_resolves_the_members_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config, target = _injected_two_members(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").chmod(0o755)
+    (target / "AGENTS.md").unlink()
+    plan = plan_sync(target)
+
+    resolved = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
+
+    assert resolved is not None
+    restored, untouched = resolved.files
+    assert restored.relative_destination == Path("AGENTS.md")
+    assert restored.result == MergeResult((Clean(b"managed\n"),))
+    assert restored.result_mode == 0o755
+    assert untouched == plan.files[1]
+    assert untouched.relative_destination == Path("EXTRA.md")
+
+
+def test_interactive_resolution_passes_the_conflict_to_the_wizard_and_can_defer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.reconcile.types import file_id as reconcile_file_id
+    from setforge.ui.primitives import CANCEL
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    (target / "AGENTS.md").write_text("local\n")
+    (target / "AGENTS.md").chmod(0o600)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text("profile\n")
+    plan = plan_sync(target)
+    assert plan.conflicts == 1
+    assert (plan.files[0].result_mode, plan.files[0].desired_mode) == (0o600, 0o644)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    answers: list[object] = [
+        WizardResult(MergeResult((Clean(b"chosen\n"),)), False, ("edit",)),
+        WizardResult(MergeResult((Clean(b"chosen\n"),)), True, (None,)),
+        CANCEL,
+    ]
+
+    def wizard(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        return answers[len(calls) - 1]
+
+    monkeypatch.setattr("setforge.reconcile.wizard.resolve_conflicts", wizard)
+
+    expected_call = (
+        (reconcile_file_id("demo/agents"), plan.files[0].result),
+        {"display_path": "AGENTS.md"},
+    )
+    resolved = resolve_sync_plan(plan, interactive=True)
+    assert calls == [expected_call]
+    assert resolved is not None
+    assert resolved.files[0].result == MergeResult((Clean(b"chosen\n"),))
+    assert resolved.files[0].result_mode == 0o600
+    assert resolve_sync_plan(plan, interactive=True) is None
+    assert resolve_sync_plan(plan, interactive=True) is None
+    assert calls == [expected_call] * 3
+
+
+@pytest.mark.parametrize(("selection", "absent"), [("theirs", True), ("ours", False)])
+def test_interactive_removal_of_an_edited_member_records_the_chosen_side(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str, absent: bool
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    (target / "AGENTS.md").write_text("local edit\n")
+    config.write_text(
+        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n    files: {}\n"
+    )
+    plan = plan_sync(target)
+    assert plan.files[0].kind is SyncFileKind.REMOVE
+    assert plan.files[0].desired_upstream is ABSENT
+    assert plan.conflicts == 1
+    monkeypatch.setattr(
+        "setforge.reconcile.wizard.resolve_conflicts",
+        lambda *args, **kwargs: WizardResult(
+            MergeResult((Clean(b""),)), False, (selection,)
+        ),
+    )
+
+    resolved = resolve_sync_plan(plan, interactive=True)
+
+    assert resolved is not None
+    assert resolved.files[0].result == (
+        MergeResult((), absent=True) if absent else MergeResult((Clean(b""),))
+    )
 
 
 @pytest.mark.parametrize("git_target", [False, True])

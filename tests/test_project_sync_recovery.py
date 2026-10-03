@@ -440,3 +440,34 @@ def test_sync_write_failure_is_a_clean_error_and_rolls_back(
     assert _file_state(target / "docs/guide.md") == (b"guide\n", 0o644)
     assert _private_files(state) == before_state
     assert not list(operations.journals_root().glob("*.json"))
+
+
+@pytest.mark.parametrize("change", ["update", "delete"])
+def test_sync_checks_the_parent_of_a_created_directory_only_when_removing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root writes into read-only directories")
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    config, target = _two_member_injection(tmp_path)
+    if change == "update":
+        (config.parent / "project" / "demo" / "guide.md").write_text("guide v2\n")
+    else:
+        config.write_text(config.read_text().split("      guide:")[0])
+    before_state = _private_files(state)
+    target.chmod(0o555)
+    try:
+        synced = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+    finally:
+        target.chmod(0o755)
+
+    if change == "update":
+        assert synced.exit_code == 0, synced.output
+        assert _file_state(target / "docs/guide.md") == (b"guide v2\n", 0o644)
+    else:
+        assert synced.exit_code == 1
+        assert str(synced.exception) == (f"project directory is not writable: {target}")
+        assert _file_state(target / "docs/guide.md") == (b"guide\n", 0o644)
+        assert _private_files(state) == before_state
+        assert not list(operations.journals_root().glob("*.json"))
