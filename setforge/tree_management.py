@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -25,6 +26,10 @@ _DIR_MODE = 0o700
 _FILE_MODE = 0o600
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2
+_RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
+_HARD_LINKS_UNSUPPORTED = frozenset(
+    {errno.EPERM, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK}
+)
 _RESERVED_SUFFIXES = tuple(
     f".setforge-{item}" for item in ("create", "update", "remove")
 )
@@ -572,7 +577,7 @@ def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> Non
             view = view[written:]
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_NOREPLACE)
+        _publish_noreplace_at(parent_fd, temporary, name)
         os.fsync(parent_fd)
     finally:
         os.close(descriptor)
@@ -584,7 +589,7 @@ def _atomic_symlink_at(parent_fd: int, name: str, target: str) -> None:
     temporary = temporary_entry_name(name, "create")
     try:
         os.symlink(target, temporary, dir_fd=parent_fd)
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_NOREPLACE)
+        _publish_noreplace_at(parent_fd, temporary, name)
         os.fsync(parent_fd)
     finally:
         with suppress(FileNotFoundError):
@@ -610,6 +615,78 @@ def _renameat2(
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), destination)
+
+
+def _publish_noreplace_at(parent_fd: int, source: str, name: str) -> None:
+    """Move a journal-owned sibling onto an absent name without replacing."""
+    try:
+        _renameat2(parent_fd, source, parent_fd, name, _RENAME_NOREPLACE)
+        return
+    except OSError as exc:
+        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+            raise
+    # NFS rejects every rename flag. A hard link is the atomic no-replace
+    # publication there; a directory cannot be linked and takes the claim.
+    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
+    if stat.S_ISDIR(observed.st_mode):
+        _rename_onto_claim_at(parent_fd, source, name)
+        return
+    try:
+        os.link(
+            source,
+            name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        if exc.errno not in _HARD_LINKS_UNSUPPORTED:
+            raise
+        raise SetforgeError(
+            "filesystem supports neither rename flags nor hard links; cannot "
+            f"publish managed tree entry without risking an overwrite: {name}"
+        ) from exc
+    os.unlink(source, dir_fd=parent_fd)
+
+
+def _isolate_noreplace_at(parent_fd: int, name: str, quarantine: str) -> None:
+    """Move a live entry onto its absent journal-owned sibling in one step."""
+    try:
+        _renameat2(parent_fd, name, parent_fd, quarantine, _RENAME_NOREPLACE)
+    except OSError as exc:
+        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+            raise
+        _rename_onto_claim_at(parent_fd, name, quarantine)
+
+
+def _rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None:
+    """Exclusively claim an absent destination, then rename over the claim.
+
+    The source moves atomically, an existing destination is refused, and the
+    only entry a plain rename can replace is the empty claim made here.
+    """
+    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
+    directory = stat.S_ISDIR(observed.st_mode)
+    if directory:
+        os.mkdir(destination, _DIR_MODE, dir_fd=parent_fd)
+    else:
+        os.close(
+            os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                _FILE_MODE,
+                dir_fd=parent_fd,
+            )
+        )
+    try:
+        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except BaseException:
+        with suppress(OSError):
+            if directory:
+                os.rmdir(destination, dir_fd=parent_fd)
+            else:
+                os.unlink(destination, dir_fd=parent_fd)
+        raise
 
 
 def _open_or_create_root(destination: Path, *, create: bool) -> int:
@@ -878,6 +955,53 @@ def _restore_exchange(parent_fd: int, temporary: str, name: str) -> None:
     _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
 
 
+def _exchange_verified_at(
+    parent_fd: int, temporary: str, name: str, expected: TreeEntry
+) -> None:
+    """Publish the staged sibling only while the live entry is still planned."""
+    try:
+        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
+    except OSError as exc:
+        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+            raise
+        _replace_verified_at(parent_fd, temporary, name, expected)
+        return
+    if _entry_at(parent_fd, temporary, expected.path) != expected:
+        _restore_exchange(parent_fd, temporary, name)
+        raise SetforgeError(
+            f"managed tree entry changed before update: {expected.path}"
+        )
+    os.unlink(temporary, dir_fd=parent_fd)
+
+
+def _replace_verified_at(
+    parent_fd: int, temporary: str, name: str, expected: TreeEntry
+) -> None:
+    """Update without an atomic exchange: isolate, verify, publish no-replace.
+
+    The name is briefly absent, but neither the live entry nor a concurrent
+    replacement can be overwritten.
+    """
+    quarantine = temporary_entry_name(name, "remove")
+    _isolate_noreplace_at(parent_fd, name, quarantine)
+    try:
+        if _entry_at(parent_fd, quarantine, expected.path) != expected:
+            raise SetforgeError(
+                f"managed tree entry changed before update: {expected.path}"
+            )
+        _publish_noreplace_at(parent_fd, temporary, name)
+    except BaseException:
+        try:
+            _publish_noreplace_at(parent_fd, quarantine, name)
+        except (OSError, SetforgeError) as restore_exc:
+            raise SetforgeError(
+                "managed tree update failed and isolated content could not be "
+                f"restored: {expected.path}; retained as {quarantine}: {restore_exc}"
+            ) from restore_exc
+        raise
+    os.unlink(quarantine, dir_fd=parent_fd)
+
+
 def _exchange_file_at(
     parent_fd: int, name: str, payload: bytes, mode: int, expected: TreeEntry
 ) -> None:
@@ -895,13 +1019,7 @@ def _exchange_file_at(
             view = view[written:]
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
-        if _entry_at(parent_fd, temporary, expected.path) != expected:
-            _restore_exchange(parent_fd, temporary, name)
-            raise SetforgeError(
-                f"managed tree entry changed before update: {expected.path}"
-            )
-        os.unlink(temporary, dir_fd=parent_fd)
+        _exchange_verified_at(parent_fd, temporary, name, expected)
         os.fsync(parent_fd)
     finally:
         os.close(descriptor)
@@ -915,13 +1033,7 @@ def _exchange_symlink_at(
     temporary = temporary_entry_name(name, "update")
     try:
         os.symlink(target, temporary, dir_fd=parent_fd)
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
-        if _entry_at(parent_fd, temporary, expected.path) != expected:
-            _restore_exchange(parent_fd, temporary, name)
-            raise SetforgeError(
-                f"managed tree entry changed before update: {expected.path}"
-            )
-        os.unlink(temporary, dir_fd=parent_fd)
+        _exchange_verified_at(parent_fd, temporary, name, expected)
         os.fsync(parent_fd)
     finally:
         with suppress(FileNotFoundError):
@@ -941,7 +1053,7 @@ def _apply_removals(plan: TreePlan, root_fd: int) -> None:
         quarantine = temporary_entry_name(name, "remove")
         isolated = False
         try:
-            _renameat2(parent_fd, name, parent_fd, quarantine, _RENAME_NOREPLACE)
+            _isolate_noreplace_at(parent_fd, name, quarantine)
             isolated = True
             if _entry_at(parent_fd, quarantine, entry.path) != entry:
                 raise SetforgeError(
@@ -958,15 +1070,9 @@ def _apply_removals(plan: TreePlan, root_fd: int) -> None:
         except BaseException as exc:
             if isolated:
                 try:
-                    _renameat2(
-                        parent_fd,
-                        quarantine,
-                        parent_fd,
-                        name,
-                        _RENAME_NOREPLACE,
-                    )
+                    _publish_noreplace_at(parent_fd, quarantine, name)
                     os.fsync(parent_fd)
-                except OSError as restore_exc:
+                except (OSError, SetforgeError) as restore_exc:
                     raise SetforgeError(
                         "managed tree removal failed and isolated content could "
                         f"not be restored: {action.path}; retained as {quarantine}"

@@ -158,6 +158,46 @@ def test_filesystem_delta_directory_recreation_refuses_existing_collision(
     assert not (tmp_path / ".managed.setforge-remove").exists()
 
 
+def test_filesystem_delta_reverse_recreates_directory_without_rename_flags(
+    tmp_path: Path, rename_flags_rejected: list[int]
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    child = parent / "child"
+    child.write_text("payload", encoding="utf-8")
+    deltas = transitions.filesystem_deletion_deltas((parent, child))
+    child.unlink()
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent, child))
+
+    operations.apply_filesystem_deltas_reverse_anchored(deltas, guards)
+
+    assert rename_flags_rejected
+    assert child.read_text(encoding="utf-8") == "payload"
+    assert not (tmp_path / ".managed.setforge-remove").exists()
+
+
+def test_filesystem_delta_recreation_without_rename_flags_refuses_collision(
+    tmp_path: Path, rename_flags_rejected: list[int]
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    parent.mkdir()
+    parent.chmod(0o711)
+    (parent / "external").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert rename_flags_rejected
+    assert parent.stat().st_mode & 0o777 == 0o711
+    assert (parent / "external").read_text(encoding="utf-8") == "keep"
+    assert not (tmp_path / ".managed.setforge-remove").exists()
+
+
 def test_filesystem_delta_directory_recreation_refuses_preidentity_staging_collision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

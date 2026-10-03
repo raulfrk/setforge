@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -575,6 +576,254 @@ def test_apply_tree_refuses_higher_anchor_root_replacement(
         os.close(anchor_fd)
 
     assert (destination / "replacement").read_text(encoding="utf-8") == "keep\n"
+
+
+def _reject_rename_flags(
+    monkeypatch: pytest.MonkeyPatch, error: int = errno.EINVAL
+) -> None:
+    def reject(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+        flags: int,
+    ) -> None:
+        del source_fd, source_name, destination_fd, flags
+        raise OSError(error, os.strerror(error), destination_name)
+
+    monkeypatch.setattr(tree_management, "_renameat2", reject)
+
+
+def _reserved_leftovers(root: Path) -> list[Path]:
+    return [path for path in root.rglob(".*") if ".setforge-" in path.name]
+
+
+@pytest.mark.parametrize("error", [errno.EINVAL, errno.ENOTSUP, errno.ENOSYS])
+def test_apply_tree_publishes_when_filesystem_rejects_rename_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: int
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+    (source / "nested").mkdir()
+    (source / "nested" / "created").write_text("created\n", encoding="utf-8")
+    (source / "link").symlink_to("created-target")
+    (source / "changed").write_text("wanted\n", encoding="utf-8")
+    (source / "relinked").symlink_to("new-target")
+    (live / "changed").write_text("planned\n", encoding="utf-8")
+    (live / "relinked").symlink_to("old-target")
+    for root in (live, prior_root):
+        (root / "orphan").write_text("owned\n", encoding="utf-8")
+        (root / "orphan-dir").mkdir()
+        (root / "orphan-link").symlink_to("owned-target")
+    policy = TreePolicy(
+        orphans=TreeOrphanPolicy.REMOVE_OWNED,
+        symlinks=TreeSymlinkPolicy.PRESERVE,
+    )
+    desired = scan_tree(source, policy, capture_payloads=True)
+    plan = plan_tree(
+        desired,
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    fresh = tmp_path / "fresh"
+    _reject_rename_flags(monkeypatch, error)
+
+    applied = apply_tree(plan, live, policy)
+    created = apply_tree(
+        plan_tree(desired, scan_tree(fresh, policy).inventory, None, policy),
+        fresh,
+        policy,
+    )
+
+    for root, inventory in ((live, applied), (fresh, created)):
+        assert (root / "nested" / "created").read_text(encoding="utf-8") == "created\n"
+        assert (root / "link").readlink() == Path("created-target")
+        assert (root / "changed").read_text(encoding="utf-8") == "wanted\n"
+        assert (root / "relinked").readlink() == Path("new-target")
+        assert inventory.entries == desired.inventory.entries
+        assert not _reserved_leftovers(root)
+    assert not any((live / name).is_symlink() for name in ("orphan", "orphan-link"))
+    assert not any((live / name).exists() for name in ("orphan", "orphan-dir"))
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "remove"])
+def test_apply_tree_without_rename_flags_keeps_concurrent_leaf_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+    current = live / "value"
+    if operation == "create":
+        (source / "value").write_text("wanted\n", encoding="utf-8")
+    elif operation == "update":
+        (source / "value").write_text("wanted\n", encoding="utf-8")
+        current.write_text("planned\n", encoding="utf-8")
+    else:
+        current.write_text("owned\n", encoding="utf-8")
+        (prior_root / "value").write_text("owned\n", encoding="utf-8")
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    swapped = False
+
+    def swap_leaf_then_reject(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+        flags: int,
+    ) -> None:
+        nonlocal swapped
+        del source_fd, destination_fd, flags
+        if not swapped and "value" in (source_name, destination_name):
+            swapped = True
+            current.write_text("external\n", encoding="utf-8")
+        raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), destination_name)
+
+    monkeypatch.setattr(tree_management, "_renameat2", swap_leaf_then_reject)
+
+    with pytest.raises(SetforgeError):
+        apply_tree(plan, live, policy)
+
+    assert swapped
+    assert current.read_text(encoding="utf-8") == "external\n"
+    assert not _reserved_leftovers(live)
+
+
+def test_apply_tree_without_rename_flags_keeps_both_sides_of_racing_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    source.mkdir()
+    live.mkdir()
+    (source / "value").write_text("wanted\n", encoding="utf-8")
+    (live / "value").write_text("planned\n", encoding="utf-8")
+    policy = TreePolicy()
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        None,
+        policy,
+    )
+    _reject_rename_flags(monkeypatch)
+    original_entry_at = tree_management._entry_at
+
+    def recreate_while_isolated(parent_fd: int, name: str, relative: str) -> TreeEntry:
+        entry = original_entry_at(parent_fd, name, relative)
+        (live / "value").write_text("racer\n", encoding="utf-8")
+        return entry
+
+    monkeypatch.setattr(tree_management, "_entry_at", recreate_while_isolated)
+
+    with pytest.raises(SetforgeError, match=r"retained as \.value\.setforge-remove"):
+        apply_tree(plan, live, policy)
+
+    assert (live / "value").read_text(encoding="utf-8") == "racer\n"
+    assert (live / ".value.setforge-remove").read_text(encoding="utf-8") == "planned\n"
+
+
+def test_apply_tree_without_rename_flags_restores_directory_with_new_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    source.mkdir()
+    (live / "orphan").mkdir(parents=True)
+    (prior_root / "orphan").mkdir(parents=True)
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    _reject_rename_flags(monkeypatch)
+    original_entry_at = tree_management._entry_at
+
+    def add_child_after_isolation(
+        parent_fd: int, name: str, relative: str
+    ) -> TreeEntry:
+        entry = original_entry_at(parent_fd, name, relative)
+        (live / name / "external").write_text("keep\n", encoding="utf-8")
+        return entry
+
+    monkeypatch.setattr(tree_management, "_entry_at", add_child_after_isolation)
+
+    with pytest.raises(SetforgeError, match="unsafe managed tree removal"):
+        apply_tree(plan, live, policy)
+
+    assert (live / "orphan" / "external").read_text(encoding="utf-8") == "keep\n"
+    assert not _reserved_leftovers(live)
+
+
+def test_apply_tree_names_filesystem_without_rename_flags_or_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    source.mkdir()
+    live.mkdir()
+    (source / "value").write_text("wanted\n", encoding="utf-8")
+    policy = TreePolicy()
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        None,
+        policy,
+    )
+    _reject_rename_flags(monkeypatch)
+
+    def refuse_link(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise PermissionError(errno.EPERM, os.strerror(errno.EPERM))
+
+    monkeypatch.setattr(os, "link", refuse_link)
+
+    with pytest.raises(SetforgeError, match="neither rename flags nor hard links"):
+        apply_tree(plan, live, policy)
+
+    assert not (live / "value").exists()
+    assert not _reserved_leftovers(live)
+
+
+def test_apply_tree_falls_back_only_when_rename_flags_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    source.mkdir()
+    live.mkdir()
+    (source / "value").write_text("wanted\n", encoding="utf-8")
+    (live / "value").write_text("planned\n", encoding="utf-8")
+    policy = TreePolicy()
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        None,
+        policy,
+    )
+    _reject_rename_flags(monkeypatch, errno.EACCES)
+
+    with pytest.raises(SetforgeError, match="changed during apply"):
+        apply_tree(plan, live, policy)
+
+    assert (live / "value").read_text(encoding="utf-8") == "planned\n"
+    assert not _reserved_leftovers(live)
 
 
 def test_inventory_codec_rejects_corruption(tmp_path: Path) -> None:

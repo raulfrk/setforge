@@ -513,6 +513,50 @@ def test_mixed_file_tree_inventory_accepts_profile_order(
         assert (live / "tree/item").read_bytes() == b"tree\n"
 
 
+def test_managed_tree_lifecycle_when_filesystem_rejects_rename_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rename_flags_rejected: list[int]
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("tree", "one", "two"))
+    document = YAML().load(config.read_text())
+    document["tracked_files"]["tree"]["tree"] = {"orphans": "remove-owned"}
+    YAML().dump(document, config)
+    source = config.parent / "tracked/tree"
+    (source / "sub").mkdir()
+    (source / "sub/extra").write_text("extra\n")
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    runner = CliRunner()
+
+    created = runner.invoke(app, args)
+    assert created.exit_code == 0, (created.output, created.exception)
+    assert (live / "tree/item").read_bytes() == b"tree\n"
+    assert (live / "tree/sub/extra").read_bytes() == b"extra\n"
+
+    (source / "item").write_text("updated\n")
+    (source / "sub/extra").unlink()
+    (source / "sub").rmdir()
+    changed = runner.invoke(app, args)
+    assert changed.exit_code == 0, (changed.output, changed.exception)
+    assert (live / "tree/item").read_bytes() == b"updated\n"
+    assert not (live / "tree/sub").exists()
+
+    reverted = runner.invoke(
+        app, ["revert", "--profile=p", f"--config={config}", "--yes"]
+    )
+    assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+    assert (live / "tree/item").read_bytes() == b"tree\n"
+    assert (live / "tree/sub/extra").read_bytes() == b"extra\n"
+    assert rename_flags_rejected
+    assert sorted(path.name for path in (live / "tree").iterdir()) == ["item", "sub"]
+    assert operations.active("p") is None
+
+
 @pytest.mark.parametrize("duplicate", [False, True], ids=["missing", "duplicate"])
 def test_mixed_inventory_still_rejects_changed_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, duplicate: bool

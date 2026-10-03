@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -1245,9 +1246,24 @@ def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
         os.fsencode(destination),
         _RENAME_NOREPLACE,
     )
-    if result != 0:
-        error = ctypes.get_errno()
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
         raise OSError(error, os.strerror(error), destination)
+    # NFS rejects every rename flag. Claim the absent destination with mkdir,
+    # then rename the directory over that empty claim; nothing else is replaced.
+    os.mkdir(destination, 0o700, dir_fd=parent_fd)
+    try:
+        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except OSError as exc:
+        with suppress(OSError):
+            os.rmdir(destination, dir_fd=parent_fd)
+        if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise FileExistsError(
+                errno.EEXIST, os.strerror(errno.EEXIST), destination
+            ) from exc
+        raise
 
 
 def finish_recovery(journal: OperationJournal) -> OperationJournal:

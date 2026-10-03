@@ -20,6 +20,8 @@ single test file) so ``test_claude_plugins.py``,
 discover them via pytest's standard conftest mechanism.
 """
 
+import ctypes
+import errno
 import json
 import os
 import subprocess
@@ -229,6 +231,40 @@ def pytest_collection_modifyitems(
         "markers",
         "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
     )
+
+
+@pytest.fixture
+def rename_flags_rejected(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Make ``renameat2`` reject every flag with EINVAL, as Linux NFS does."""
+    real_cdll = ctypes.CDLL
+    rejected: list[int] = []
+
+    class _Library:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._library = real_cdll(*args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            function = getattr(self._library, name)
+            if name != "renameat2":
+                return function
+
+            def renameat2(
+                source_fd: int,
+                source: bytes,
+                destination_fd: int,
+                destination: bytes,
+                flags: int,
+            ) -> int:
+                if flags:
+                    rejected.append(flags)
+                    ctypes.set_errno(errno.EINVAL)
+                    return -1
+                return int(function(source_fd, source, destination_fd, destination, 0))
+
+            return renameat2
+
+    monkeypatch.setattr(ctypes, "CDLL", _Library)
+    return rejected
 
 
 # ---------------------------------------------------------------------------
