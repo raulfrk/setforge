@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import subprocess
+import uuid
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +19,11 @@ from typer.testing import CliRunner
 from setforge import locking, transitions
 from setforge.cli import app
 from setforge.errors import SetforgeError
-from setforge.ownership import OwnershipStore, resolve_owner_common_dir
+from setforge.ownership import (
+    OwnershipStore,
+    ownership_claim_to_json,
+    resolve_owner_common_dir,
+)
 from setforge.project_injection import ProjectFileAction
 from setforge.project_sync import (
     AutoResolution,
@@ -962,8 +967,9 @@ def test_sync_membership_add_collision_requires_resolution(
     assert stat.S_IMODE((target / "EXTRA.md").stat().st_mode) == 0o755
 
 
-def test_sync_membership_add_rejects_mismatched_released_tombstone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("foreign", [False, True])
+def test_sync_membership_add_reclaims_only_this_checkouts_released_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign: bool
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
@@ -986,10 +992,47 @@ def test_sync_membership_add_rejects_mismatched_released_tombstone(
         )
     )
 
+    store = OwnershipStore()
+    (released,) = store.list_claims()
+    claim_path = store.claim_path(released.resource_id)
+    if foreign:
+        other_owner = uuid.uuid4()
+        claim_path.write_text(
+            json.dumps(
+                ownership_claim_to_json(
+                    replace(
+                        released,
+                        owner_id=other_owner,
+                        history=tuple(
+                            replace(event, owner_id=other_owner)
+                            for event in released.history
+                        ),
+                    )
+                )
+            )
+            + "\n"
+        )
+    before = claim_path.read_bytes()
+
     plan = plan_sync(target)
-    with pytest.raises(SetforgeError, match="active ownership claim"):
-        apply_sync(plan)
-    assert not (target / "AGENTS.md").exists()
+    if foreign:
+        with pytest.raises(SetforgeError) as failure:
+            apply_sync(plan)
+        assert str(failure.value) == (
+            "a project destination has a released ownership claim from another "
+            "config checkout: AGENTS.md was injected by project profile 'demo' at "
+            f"{target} (owner {other_owner}); inject it from that checkout, or "
+            "inspect the claim with `setforge ownership list`"
+        )
+        assert not (target / "AGENTS.md").exists()
+        assert claim_path.read_bytes() == before
+    else:
+        assert apply_sync(plan)
+        assert (target / "AGENTS.md").read_text() == "other\n"
+        (claim,) = store.list_claims()
+        assert claim.lifecycle.value == "claimed"
+        assert claim.owner_id == released.owner_id
+        assert claim.declaration_refs == ("project-profile:demo:other",)
 
 
 def test_project_sync_cli_dry_run_then_apply(
@@ -1514,7 +1557,9 @@ def test_apply_sync_refuses_addition_with_surviving_project_claim(
         apply_sync(plan)
 
     assert str(failure.value) == (
-        "a project destination already has an active ownership claim"
+        "a project destination already has an active ownership claim: EXTRA.md is "
+        f"injected by project profile 'demo' at {target}; run `setforge project "
+        f"remove demo {target}` first"
     )
     assert not (target / "EXTRA.md").exists()
     assert store.read(resource) == claim

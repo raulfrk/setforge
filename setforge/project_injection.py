@@ -9,7 +9,7 @@ import os
 import stat
 import subprocess
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -387,6 +387,14 @@ def _plan_file(
     )
 
 
+def _existing_owner_id(config_root: Path) -> uuid.UUID | None:
+    """Return this checkout's owner identity without creating one."""
+    try:
+        return read_owner_id(config_root)
+    except SetforgeError:
+        return None
+
+
 def plan_injection(
     *,
     profile: str,
@@ -395,8 +403,13 @@ def plan_injection(
     config_path: Path | None = None,
     resolved: ResolvedProjectProfile,
     visibility: ProjectVisibility,
+    read_owner: Callable[[Path], uuid.UUID | None] = _existing_owner_id,
 ) -> ProjectInjectionPlan:
-    """Build a complete injection plan without changing target or state."""
+    """Build a complete injection plan without changing target or state.
+
+    ``read_owner`` lets a caller that already holds the config identity lock
+    supply the owner, which the default would try to lock a second time.
+    """
     root, git_dir, target_stat = _verified_project_target(target)
     state_path = manifest_path(root, profile)
     files = tuple(
@@ -472,7 +485,7 @@ def plan_injection(
             overlay_git_plan=overlay_git_plan,
             no_op=True,
         )
-    _refuse_claimed_destinations(plan)
+    _refuse_claimed_destinations(plan, read_owner)
     return plan
 
 
@@ -500,7 +513,40 @@ def _sibling_destinations(plan: ProjectInjectionPlan) -> dict[str, tuple[str, st
     return owners
 
 
-def _refuse_claimed_destinations(plan: ProjectInjectionPlan) -> None:
+def refuse_unavailable_claim(
+    claim: OwnershipClaim | None,
+    relative: str,
+    read_owner: Callable[[], uuid.UUID | None],
+) -> None:
+    """Refuse an active claim, or a released one that another checkout owns.
+
+    A released claim keeps only the last injected content in its fingerprint,
+    so the checkout that owns it may claim the destination again with new
+    content, another profile, or after the directory moved.
+    """
+    if claim is None:
+        return
+    reference = claim.declaration_refs[0] if claim.declaration_refs else ""
+    profile = reference.split(":")[1] if reference.count(":") >= 2 else "unknown"
+    target = claim.locator.removesuffix(f"/{relative}")
+    if claim.lifecycle is ClaimLifecycle.CLAIMED:
+        raise SetforgeError(
+            "a project destination already has an active ownership claim: "
+            f"{relative} is injected by project profile {profile!r} at {target}; "
+            f"run `setforge project remove {profile} {target}` first"
+        )
+    if claim.owner_id != read_owner():
+        raise SetforgeError(
+            "a project destination has a released ownership claim from another "
+            f"config checkout: {relative} was injected by project profile "
+            f"{profile!r} at {target} (owner {claim.owner_id}); inject it from "
+            "that checkout, or inspect the claim with `setforge ownership list`"
+        )
+
+
+def _refuse_claimed_destinations(
+    plan: ProjectInjectionPlan, read_owner: Callable[[Path], uuid.UUID | None]
+) -> None:
     """Refuse, already in the preview, a destination that something else manages.
 
     Records are consulted besides the ledger because a claim written under an
@@ -526,12 +572,8 @@ def _refuse_claimed_destinations(plan: ProjectInjectionPlan) -> None:
                 plan.target_device, plan.target_inode, item.relative_destination
             )
         )
+        refuse_unavailable_claim(claim, relative, lambda: read_owner(plan.config_root))
         owner = siblings.get(relative)
-        if claim is not None and claim.lifecycle is ClaimLifecycle.CLAIMED:
-            owner = (
-                claim.declaration_refs[0].split(":")[1],
-                claim.locator.removesuffix(f"/{relative}"),
-            )
         if owner is not None:
             raise SetforgeError(
                 "a project destination already has an active ownership claim: "
@@ -1108,6 +1150,16 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
         profile=operation_profile,
     ) as guards:
         _require_guards(guards, plan.target)
+        identity = guards.config_identity
+        if identity is None:
+            raise SetforgeError("project config identity lock is missing")
+
+        def locked_owner(config_root: Path) -> uuid.UUID | None:
+            try:
+                return read_owner_id_locked(config_root, identity.directory_fd)
+            except SetforgeError:
+                return None
+
         fresh = plan_injection(
             profile=plan.profile,
             target=plan.target,
@@ -1115,6 +1167,7 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             config_path=plan.config_path,
             resolved=_resolved_from_plan(plan),
             visibility=plan.visibility,
+            read_owner=locked_owner,
         )
         unresolved_files = tuple(
             replace(item, applied_payload=None, overlay=None)
@@ -1124,9 +1177,6 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
         )
         if fresh != replace(plan, files=unresolved_files):
             raise SetforgeError("project injection plan changed before apply; retry")
-        identity = guards.config_identity
-        if identity is None:
-            raise SetforgeError("project config identity lock is missing")
         store = OwnershipStore()
         resources = tuple(
             _resource_id(
@@ -1203,20 +1253,9 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
                 journal = operations.finish_checkpoint(journal)
                 operations.complete(journal)
             return True
-        if any(
-            claim is not None
-            and not _claim_matches_plan(
-                claim,
-                resource=resource,
-                owner_id=owner_id,
-                profile=plan.profile,
-                item=item,
-                lifecycle=ClaimLifecycle.RELEASED,
-            )
-            for item, resource, claim in zip(plan.files, resources, claims, strict=True)
-        ):
-            raise SetforgeError(
-                "a project destination already has an active ownership claim"
+        for item, claim in zip(plan.files, claims, strict=True):
+            refuse_unavailable_claim(
+                claim, item.relative_destination.as_posix(), lambda: owner_id
             )
         visibility_paths = (
             (plan.visibility_plan.exclude_path,)

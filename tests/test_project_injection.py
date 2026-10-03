@@ -2362,13 +2362,83 @@ def test_reinject_rejects_mismatched_released_tombstone(
         .exit_code
         == 0
     )
+    other_owner = uuid.uuid4()
     claim_path, _ = _rewrite_only_claim(
-        lambda claim: replace(claim, fingerprint="mismatched")
+        lambda claim: replace(
+            claim,
+            owner_id=other_owner,
+            history=tuple(
+                replace(event, owner_id=other_owner) for event in claim.history
+            ),
+        )
     )
     mismatched_claim = claim_path.read_bytes()
 
-    reinjected = CliRunner().invoke(app, command)
-    assert reinjected.exit_code == 1
+    for mode in ("--dry-run", "--yes"):
+        reinjected = CliRunner().invoke(app, [*command[:-1], mode])
+        assert reinjected.exit_code == 1
+        assert str(reinjected.exception) == (
+            "a project destination has a released ownership claim from another "
+            "config checkout: AGENTS.md was injected by project profile 'demo' at "
+            f"{target} (owner {other_owner}); inject it from that checkout, or "
+            "inspect the claim with `setforge ownership list`"
+        )
+        assert not (target / "AGENTS.md").exists()
+        assert not manifest_path(target, "demo").exists()
+        assert claim_path.read_bytes() == mismatched_claim
+
+
+@pytest.mark.parametrize("change", ["source", "profile", "moved"])
+def test_reinject_after_remove_reclaims_this_checkouts_released_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _two_profiles_one_destination(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    arguments = ["--config", str(config), "--yes"]
+    for verb in ("inject", "remove"):
+        done = runner.invoke(app, ["project", verb, "demo", str(target), *arguments])
+        assert done.exit_code == 0, done.output
+    (released,) = OwnershipStore().list_claims()
+    assert released.lifecycle is ClaimLifecycle.RELEASED
+    profile, expected = "demo", "managed instructions v2\n"
+    if change == "source":
+        (config.parent / "project" / "demo" / "AGENTS.md").write_text(expected)
+    elif change == "profile":
+        profile, expected = "other", "other instructions\n"
+    else:
+        expected = "managed instructions\n"
+        target = target.rename(tmp_path / "moved")
+
+    preview = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            profile,
+            str(target),
+            "--config",
+            str(config),
+            "--dry-run",
+        ],
+    )
+    assert preview.exit_code == 0, preview.output
+    injected = runner.invoke(
+        app, ["project", "inject", profile, str(target), *arguments]
+    )
+
+    assert injected.exit_code == 0, injected.output
+    assert (target / "AGENTS.md").read_text() == expected
+    (claim,) = OwnershipStore().list_claims()
+    assert claim.lifecycle is ClaimLifecycle.CLAIMED
+    assert claim.resource_id == released.resource_id
+    assert claim.owner_id == released.owner_id
+    assert claim.locator == str(target / "AGENTS.md")
+    file_id = "rules" if profile == "other" else "instructions"
+    assert claim.declaration_refs == (f"project-profile:{profile}:{file_id}",)
+    removed = runner.invoke(
+        app, ["project", "remove", profile, str(target), *arguments]
+    )
+    assert removed.exit_code == 0, removed.output
     assert not (target / "AGENTS.md").exists()
-    assert not manifest_path(target, "demo").exists()
-    assert claim_path.read_bytes() == mismatched_claim

@@ -103,6 +103,10 @@ resolution requires `--auto=keep-live` or `--auto=use-profile`. Both
 commands support `--dry-run`; live non-interactive use requires `--yes`.
 A project path that passes through a symbolic link is resolved first; output
 and records always name the real directory.
+After `project remove`, the same config checkout can inject that destination
+again even when the profile content or name changed; a destination that another
+profile still manages, or that another config checkout released, is refused in
+the preview and names the owner.
 
 After profile sources or membership change, `project sync <path>` reconciles
 every injection recorded for the exact target atomically—even when those

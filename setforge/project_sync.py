@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 
 from setforge import atomicio, operations
@@ -60,6 +61,7 @@ from setforge.project_injection import (
     _verified_project_target,
     _write_project_file,
     identity_remedy,
+    refuse_unavailable_claim,
 )
 from setforge.project_overlay import (
     build_overlay,
@@ -1163,18 +1165,11 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             key = (item.profile, item.relative_destination)
             claim = prior_claims[key]
             if item.kind is SyncFileKind.ADD:
-                ownership_plan = ownership_plans[key]
-                if claim is not None and not _claim_matches_plan(
+                refuse_unavailable_claim(
                     claim,
-                    resource=resources[key],
-                    owner_id=owners[item.profile],
-                    profile=item.profile,
-                    item=ownership_plan,
-                    lifecycle=ClaimLifecycle.RELEASED,
-                ):
-                    raise SetforgeError(
-                        "a project destination already has an active ownership claim"
-                    )
+                    item.relative_destination.as_posix(),
+                    partial(owners.get, item.profile),
+                )
             elif claim is None or not _claim_matches_plan(
                 claim,
                 resource=resources[key],
