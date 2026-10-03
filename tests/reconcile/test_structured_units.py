@@ -1462,3 +1462,35 @@ def test_reconstruct_of_a_reformatted_live_file_parses_a_fixed_number_of_times(
 
     assert out == base.replace(b"key7: 7\n", b"key7: 77\n")
     assert len(parses) == 4
+
+
+@pytest.mark.parametrize(
+    ("live", "expected"),
+    [
+        pytest.param(
+            b"a: 1\ns: |  # SECRET hdr\n  a # b\n  c\n",
+            b"a: 1\ns: |\n  a # b\n  c\n",
+            id="literal",
+        ),
+        pytest.param(
+            b"a: 1\ns: >-  # SECRET hdr\n  folded\n  text\n",
+            b"a: 1\ns: >-\n  folded\n  text\n",
+            id="folded",
+        ),
+        pytest.param(
+            b"a: 1\nl:\n  - |  # SECRET hdr\n    x\n",
+            b"a: 1\nl:\n- |\n  x\n",
+            id="inside-a-list",
+        ),
+    ],
+)
+def test_reconstruct_drops_the_comment_after_a_block_scalar_indicator(
+    live: bytes, expected: bytes
+) -> None:
+    base = b"a: 1\n"
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    units = [replace(unit, cls=HunkClass.SHARED) for unit in fresh]
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == expected

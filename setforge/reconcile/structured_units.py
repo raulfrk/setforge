@@ -32,6 +32,7 @@ from ruamel.yaml.comments import Comment
 from ruamel.yaml.error import ReusedAnchorWarning
 from ruamel.yaml.events import AliasEvent, ScalarEvent
 from ruamel.yaml.nodes import ScalarNode
+from ruamel.yaml.scalarstring import ScalarString
 
 from setforge.errors import (
     DraftConfinementError,
@@ -719,16 +720,19 @@ def _split_comment(line: bytes) -> tuple[bytes, bytes, bytes]:
 
 
 def _drop_yaml_comments(node: object) -> None:
-    """Remove every comment a ruamel container ``node`` carries, in place.
+    """Remove every comment a ruamel ``node`` carries, in place.
 
-    A promoted list or mapping is a copy of the LIVE node, and ruamel keeps the
-    comments written inside it on the node; only its values are shared.
+    A promoted value is a copy of the LIVE node, and ruamel keeps the comments
+    written inside a list or mapping — and the one after a block scalar's
+    ``|`` / ``>`` — on the node itself; only its values are shared.
     """
     comments = getattr(node, "ca", None)
     if isinstance(comments, Comment):
         comments.comment = None
         comments.items.clear()
         comments.end = []
+    if isinstance(node, ScalarString) and getattr(node, "comment", None) is not None:
+        node.comment = None  # type: ignore[attr-defined]
     if isinstance(node, Mapping):
         for value in node.values():
             _drop_yaml_comments(value)
