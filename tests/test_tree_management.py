@@ -945,6 +945,64 @@ def test_apply_tree_without_rename_flags_closes_staged_file_before_publishing(
     assert [path.name for path in live.iterdir()] == ["value"]
 
 
+def test_apply_tree_without_rename_flags_refuses_existing_file_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+    (live / "value").write_text("owned\n", encoding="utf-8")
+    (prior_root / "value").write_text("owned\n", encoding="utf-8")
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    leftover = live / ".value.setforge-remove"
+    leftover.write_text("earlier failure\n", encoding="utf-8")
+    _reject_rename_flags(monkeypatch)
+
+    with pytest.raises(SetforgeError, match="unsafe managed tree removal"):
+        apply_tree(plan, live, policy)
+
+    assert leftover.read_text(encoding="utf-8") == "earlier failure\n"
+    assert (live / "value").read_text(encoding="utf-8") == "owned\n"
+
+
+def test_apply_tree_without_rename_flags_refuses_existing_directory_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    source.mkdir()
+    (live / "orphan").mkdir(parents=True)
+    (prior_root / "orphan").mkdir(parents=True)
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    leftover = live / ".orphan.setforge-remove"
+    leftover.mkdir()
+    leftover.chmod(0o711)
+    identity = leftover.stat().st_ino
+    _reject_rename_flags(monkeypatch)
+
+    with pytest.raises(SetforgeError, match="unsafe managed tree removal"):
+        apply_tree(plan, live, policy)
+
+    assert leftover.stat().st_ino == identity
+    assert stat.S_IMODE(leftover.stat().st_mode) == 0o711
+    assert (live / "orphan").is_dir()
+
+
 def test_apply_tree_names_filesystem_without_rename_flags_or_hard_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

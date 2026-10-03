@@ -198,6 +198,27 @@ def test_filesystem_delta_recreation_without_rename_flags_refuses_collision(
     assert not (tmp_path / ".managed.setforge-remove").exists()
 
 
+def test_filesystem_delta_recreation_without_rename_flags_keeps_empty_collision(
+    tmp_path: Path, rename_flags_rejected: list[int]
+) -> None:
+    parent = tmp_path / "managed"
+    parent.mkdir()
+    delta = transitions.filesystem_deletion_deltas((parent,))[0]
+    parent.rmdir()
+    guards = orphan_scan.capture_parent_path_guards((parent,))
+    parent.mkdir()
+    parent.chmod(0o711)
+    identity = parent.stat().st_ino
+
+    with pytest.raises(SetforgeError, match="changed since transition"):
+        operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
+
+    assert rename_flags_rejected
+    assert parent.stat().st_ino == identity
+    assert parent.stat().st_mode & 0o777 == 0o711
+    assert not (tmp_path / ".managed.setforge-remove").exists()
+
+
 def test_filesystem_delta_directory_recreation_refuses_preidentity_staging_collision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
