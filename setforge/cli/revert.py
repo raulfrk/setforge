@@ -1047,7 +1047,7 @@ def _prepare_revert_journal(
                 json.loads(mcp_path.read_text(encoding="utf-8"))
             )
             if not delta.is_empty():
-                mcp_servers.require_inventory_context(delta.context)
+                mcp_servers.require_inventory_context(delta.context, delta.scopes)
             for name, command, scope in (*delta.added, *delta.updated):
                 endpoints = mcp_endpoints.setdefault(name, [])
                 if (command, scope) not in endpoints:
