@@ -135,6 +135,15 @@ def ownership_release(
         raise OwnershipError("ownership claim is not held by the current config owner")
     if preview.lifecycle is not ClaimLifecycle.CLAIMED:
         raise OwnershipError("ownership claim is already released")
+    if preview.resource_id.provider == "project-profile":
+        # The injection record and its Git entries would outlive the claim and
+        # could then be neither removed nor reverted.
+        profile = preview.declaration_refs[0].split(":")[1]
+        target = preview.locator.removesuffix(f"/{preview.resource_id.coordinate}")
+        raise OwnershipError(
+            "ownership claim belongs to a project injection; run "
+            f"`setforge project remove {profile} {target}` to remove it"
+        )
     typer.echo(f"release ownership only (resource is preserved): {claim_id}")
     typer.echo(f"  {preview.resource_id.canonical()}")
     _confirm("release this ownership claim?", yes=yes, operation="ownership release")

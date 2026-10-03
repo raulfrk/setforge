@@ -1245,6 +1245,45 @@ def test_stale_removal_failure_restores_record_claims_and_exclude(
     assert not list(operations.journals_root().glob("*.json"))
 
 
+def test_ownership_release_refuses_project_claim_and_names_project_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert injected.exit_code == 0, injected.output
+    store = OwnershipStore()
+    (claim,) = store.list_claims()
+
+    released = runner.invoke(
+        app,
+        [
+            "ownership",
+            "release",
+            store.claim_id(claim.resource_id),
+            "--config",
+            str(config),
+            "--yes",
+        ],
+    )
+
+    assert released.exit_code == 1
+    assert str(released.exception) == (
+        "ownership claim belongs to a project injection; run "
+        f"`setforge project remove demo {target}` to remove it"
+    )
+    assert store.list_claims() == (claim,)
+    removed = runner.invoke(
+        app, ["project", "remove", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert removed.exit_code == 0, removed.output
+    assert not (target / "AGENTS.md").exists()
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -175,6 +175,8 @@ Revert succeeds only while the recorded post-state is still current and, when
 it would restore authority, the current declaration, resource identity, and
 live fingerprint still match. Interrupted publication remains visible through
 `ownership recover`; `--apply` completes only unambiguous pending work.
+Claims held by a project injection are refused here: `setforge project remove
+<profile> <path>` releases them together with the injection record.
 
 When `install` or `stage` finds an active claim owned by a different config
 checkout, it offers an explicit inline transfer. Accepting with the prompt (or
