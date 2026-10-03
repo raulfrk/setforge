@@ -63,3 +63,4 @@ setforge.structural_merge.x__json5_scalar_value__mutmut_31  # equivalent: final 
 setforge.structural_merge.x__json5_scalar_value__mutmut_32  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
 setforge.structural_merge.x__json5_scalar_value__mutmut_33  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
 setforge.structural_merge.x__json5_scalar_value__mutmut_34  # equivalent: final fallback is unreachable for pinned scalar classes after the UnaryOp branch and primitive/string getters.
+setforge.structural_merge.xǁ_Json5Backendǁadd__mutmut_13  # equivalent: json-five whitespace runs alternate one string with one comment, so the element before the last is never a string and the isinstance filter drops it.

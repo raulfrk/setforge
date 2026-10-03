@@ -25,6 +25,8 @@ from setforge.structural_merge import (
     PathConflict,
     StructuralMergeResult,
     _json5_inner,
+    _Json5Backend,
+    _RuamelBackend,
     _to_plain,
     append_key_segment,
     encode_key_segment,
@@ -1366,6 +1368,55 @@ _JSON_LAYOUT_CASES = [
         id="add-into-an-emptied-object-keeps-ours-comment",
     ),
     pytest.param(
+        '{\n  "a": 1,\n  "z": 0\n}\n',
+        '{\n  "a": 2,\n  "z": 0\n}\n',
+        '{\n  "a": 1, // one\n  "d": 4, // four\n  "z": 0\n}\n',
+        '{\n  "a": 2,\n  "z": 0,\n  "d": 4 // four\n}\n',
+        id="add-of-a-middle-member-takes-the-comment-after-its-own-comma",
+    ),
+    pytest.param(
+        '{\n  "a": 1, "b": 2,\n    "c": 3\n}\n',
+        '{\n  "a": 2, "b": 2,\n    "c": 3\n}\n',
+        '{\n  "a": 1, "b": 2,\n    "c": 3,\n    "d": 4\n}\n',
+        '{\n  "a": 2, "b": 2,\n    "c": 3,\n    "d": 4\n}\n',
+        id="add-follows-the-last-member-not-the-second",
+    ),
+    pytest.param(
+        '{ "a": 1,\n  "b": 2\n}\n',
+        '{ "a": 2,\n  "b": 2\n}\n',
+        '{ "a": 1,\n  "b": 2,\n  "d": 4\n}\n',
+        '{ "a": 2,\n  "b": 2,\n  "d": 4\n}\n',
+        id="add-to-two-members-follows-the-second",
+    ),
+    pytest.param(
+        '{\n  "x": 1,\n}\n',
+        '{\n  "x": 1,\n}\n',
+        '{\n  "y": 2,\n  "z": 3\n}\n',
+        '{\n  "y": 2,\n  "z": 3\n}\n',
+        id="add-twice-into-an-object-emptied-of-its-trailing-comma",
+    ),
+    pytest.param(
+        '{"a":1,"b":2}',
+        '{"a":1,"b":3}',
+        '{"b":2}',
+        '{"b":3}',
+        id="delete-first-compact",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n  /* c */"b": 2\n}\n',
+        '{\n  "a": 1,\n  /* c */"b": 3\n}\n',
+        '{\n  /* c */"b": 2\n}\n',
+        '{\n  /* c */"b": 3\n}\n',
+        id="delete-first-keeps-a-comment-glued-to-the-successor",
+    ),
+    pytest.param(
+        '{\n  "a": 1,\n  "b": 2\n}\n',
+        '{\n  "a": 1,\n  "b": 3\n}\n',
+        '{\n  "a": 5 /* five */,\n  "b": 2\n}\n',
+        '{\n  "a": 5 /* five */,\n  "b": 3\n}\n',
+        id="take-theirs-non-last-keeps-theirs-comment-before-the-comma",
+    ),
+    pytest.param(
         '{ "a": 1, "b": 2 }',
         '{ "a": 9, "b": 2 }',
         '{ "a": 1, "b": 3 }',
@@ -1446,3 +1497,73 @@ def test_jsonc_spliced_members_follow_the_live_layout(
 
     assert result.clean
     assert _jdump(result.merged_model) == expected
+
+
+def test_shape_mismatch_names_the_key_path() -> None:
+    base, ours, theirs = _yload("a: 1\n"), _yload("a:\n  x: 1\n"), _yload("a: 2\n")
+
+    with pytest.raises(MergeTypeMismatch) as excinfo:
+        merge_structural(base, ours, theirs)
+
+    assert str(excinfo.value) == (
+        "type mismatch at 'a': ours is mapping, theirs is scalar"
+    )
+
+
+def test_ruamel_backend_add_brings_the_comment_of_the_side_it_adds_from() -> None:
+    base = _yload("k: 1  # base c\n")
+    ours = _yload("a: 1\n")
+    theirs = _yload("k: 1  # their c\na: 1\n")
+
+    _RuamelBackend(base, ours, theirs).add("base", "k")
+
+    assert _ydump(ours) == "a: 1\nk: 1  # base c\n"
+
+
+def _json5_backend(base: str, ours: str, theirs: str) -> _Json5Backend:
+    models = [_json5_inner(_jload(text)) for text in (base, ours, theirs)]
+    return _Json5Backend(*models)
+
+
+def test_json5_backend_add_works_before_any_lookup_in_ours() -> None:
+    backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
+
+    backend.add("theirs", "d")
+
+    assert backend.keys() == ["a", "d"]
+
+
+def test_json5_backend_finds_a_member_it_added_after_an_earlier_lookup() -> None:
+    backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
+    assert backend.has("ours", "d") is False
+
+    backend.add("theirs", "d")
+
+    assert backend.has("ours", "d") is True
+    backend.delete("d")
+    assert backend.has("ours", "d") is False
+    assert backend.keys() == ["a"]
+
+
+def test_json5_backend_looks_every_key_up_in_a_table_built_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge import structural_merge
+
+    size = 60
+    text = "{" + ", ".join(f'"k{n}": {n}' for n in range(size)) + "}"
+    theirs = text.replace('"k7": 7', '"k7": 70')
+    read: list[object] = []
+    real = structural_merge._json5_key_text
+
+    def counting(key_node: object) -> str:
+        read.append(key_node)
+        return real(key_node)
+
+    monkeypatch.setattr(structural_merge, "_json5_key_text", counting)
+
+    result = merge_structural(_jload(text), _jload(text), _jload(theirs))
+
+    assert result.clean
+    assert _jdump(result.merged_model) == theirs
+    assert len(read) <= 12 * size

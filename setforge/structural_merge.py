@@ -634,7 +634,7 @@ class _Json5Backend:
         # follows automatically on next access.
         del ours.keys[idx]
         del ours.values[idx]
-        self._positions.pop(id(ours), None)
+        del self._positions[id(ours)]
         if not ours.keys:
             closing = _json5_from_break(tail)
             leading = list(ours.leading_wsc)
@@ -674,12 +674,11 @@ class _Json5Backend:
         to it.
         """
         lead = _json5_from_break(removed_before)
-        sep = lead[0] if lead else ""
         return [
             x
             for c in lead
             if isinstance(c, Comment) and c.value not in self._gone_comments
-            for x in (sep, c)
+            for x in (lead[0], c)
         ]
 
     def _separator(self) -> str:
