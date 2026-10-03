@@ -190,6 +190,16 @@ class LocalProvisioner(Provisioner):
             chmod=pkg.chmod,
             checksum=pkg.checksum,
         )
+        target = spec.install_dir.resolve() / (spec.rename or spec.binary)
+        if (target.exists() or target.is_symlink()) and not self._receipt_owns(
+            item.identity, target
+        ):
+            detail = (
+                f"{target} already exists and was not installed by setforge; "
+                "left untouched (move it aside to let setforge install it)"
+            )
+            LOGGER.warning("local install refused for %s: %s", pkg.path, detail)
+            return ProvisionOutcome(item=item, outcome=Outcome.HARD, detail=detail)
         try:
             # Checksum optional here (bit-rot guard, not required like github_release).
             dest = install_from_bytes(data, spec, checksum_required=False)
@@ -212,6 +222,10 @@ class LocalProvisioner(Provisioner):
         return ProvisionOutcome(
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"
         )
+
+    def _receipt_owns(self, identity: Identity, target: Path) -> bool:
+        recorded = self._receipts.path_for(identity, provider=self.type)
+        return recorded is not None and recorded.resolve() == target
 
     def uninstall_one(self, identity: Identity) -> None:
         recorded = self._receipts.path_for(identity, provider=self.type)
