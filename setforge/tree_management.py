@@ -613,6 +613,7 @@ def _chmod_directory_at(
 
 def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> None:
     temporary = temporary_entry_name(name, "create")
+    descriptor: int | None = None
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -626,10 +627,15 @@ def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> Non
             view = view[written:]
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
+        # NFS keeps an unlinked name that is still open as a `.nfs*` sibling,
+        # which the post-apply scan would see; close before publishing.
+        os.close(descriptor)
+        descriptor = None
         _publish_noreplace_at(parent_fd, temporary, name)
         os.fsync(parent_fd)
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=parent_fd)
 
@@ -1058,6 +1064,7 @@ def _exchange_file_at(
     parent_fd: int, name: str, payload: bytes, mode: int, expected: TreeEntry
 ) -> None:
     temporary = temporary_entry_name(name, "update")
+    descriptor: int | None = None
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -1071,10 +1078,13 @@ def _exchange_file_at(
             view = view[written:]
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
         _exchange_verified_at(parent_fd, temporary, name, expected)
         os.fsync(parent_fd)
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=parent_fd)
 

@@ -884,6 +884,67 @@ def test_apply_tree_without_rename_flags_restores_directory_with_new_child(
     assert not _reserved_leftovers(live)
 
 
+def _descriptors_open_on(parent_fd: int, name: str) -> list[int]:
+    target = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    held: list[int] = []
+    for item in Path("/proc/self/fd").iterdir():
+        try:
+            info = os.fstat(int(item.name))
+        except OSError:
+            continue
+        if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            held.append(int(item.name))
+    return held
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_apply_tree_without_rename_flags_closes_staged_file_before_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    source.mkdir()
+    live.mkdir()
+    (source / "value").write_text("wanted\n", encoding="utf-8")
+    if operation == "update":
+        (live / "value").write_text("planned\n", encoding="utf-8")
+    policy = TreePolicy()
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        None,
+        policy,
+    )
+    _reject_rename_flags(monkeypatch)
+    original_link = os.link
+    published: list[tuple[str, list[int]]] = []
+
+    def record_open_descriptors(
+        staged: str,
+        name: str,
+        *,
+        src_dir_fd: int,
+        dst_dir_fd: int,
+        follow_symlinks: bool,
+    ) -> None:
+        published.append((staged, _descriptors_open_on(src_dir_fd, staged)))
+        original_link(
+            staged,
+            name,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(os, "link", record_open_descriptors)
+
+    apply_tree(plan, live, policy)
+
+    assert published == [(f".value.setforge-{operation}", [])]
+    assert (live / "value").read_text(encoding="utf-8") == "wanted\n"
+    assert [path.name for path in live.iterdir()] == ["value"]
+
+
 def test_apply_tree_names_filesystem_without_rename_flags_or_hard_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
