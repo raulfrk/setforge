@@ -114,6 +114,21 @@ def copy_atomic(
     return write_resolved_deploy(resolved, backup=backup)
 
 
+def read_text_exact(path: Path) -> str:
+    """Read ``path`` as text without altering a single byte.
+
+    Line endings are kept (no universal-newline translation) and bytes that are
+    not valid UTF-8 ride through as lone surrogates (``surrogateescape``), so
+    :func:`encode_text_exact` restores the file byte for byte.
+    """
+    return path.read_bytes().decode("utf-8", "surrogateescape")
+
+
+def encode_text_exact(text: str) -> bytes:
+    """Inverse of :func:`read_text_exact`."""
+    return text.encode("utf-8", "surrogateescape")
+
+
 def resolve_deploy(
     src: Path,
     dst: Path,
@@ -155,7 +170,7 @@ def resolve_deploy(
     real_dst = _resolve_for_copy(dst)
     dst_existed = real_dst.exists()
 
-    content = src.read_text(encoding="utf-8")
+    content = read_text_exact(src)
 
     return ResolvedDeploy(
         src=src,
@@ -222,7 +237,7 @@ def _write_resolved_content(
     live.
     """
     if dst_existed:
-        existing = real_dst.read_text(encoding="utf-8")
+        existing = read_text_exact(real_dst)
         action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
     else:
         action = DeployAction.CREATED
@@ -258,7 +273,7 @@ def _write_resolved_content(
     # when this UPDATE actually changes them (pre-existing dst whose mode
     # differs from the mode the write will apply). ``revert`` restores the
     # content via the patch reverse; ``prior_mode`` lets it restore perms in
-    # lockstep, since atomic_write_text fchmods to the tracked/source mode.
+    # lockstep, since atomic_write_bytes fchmods to the tracked/source mode.
     prior_mode = None
     if dst_existed:
         live_mode = stat.S_IMODE(real_dst.stat().st_mode)
@@ -311,7 +326,7 @@ def _atomic_write(
 ) -> Path | None:
     """Atomically write ``content`` to ``dst`` with explicit mode bits.
 
-    Thin wrapper over :func:`setforge.atomicio.atomic_write_text`,
+    Thin wrapper over :func:`setforge.atomicio.atomic_write_bytes`,
     which owns the tempfile + fchmod-on-fd + ``.bak``-rotation +
     ``os.replace`` dance (and pins fchmod-before-replace so the TOCTOU
     symlink-swap window stays closed). Deploy-specific semantics live
@@ -323,9 +338,9 @@ def _atomic_write(
     behavior means not adding durability silently.
     """
     effective_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
-    return atomicio.atomic_write_text(
+    return atomicio.atomic_write_bytes(
         dst,
-        content,
+        encode_text_exact(content),
         fsync=False,
         mode=effective_mode,
         backup=backup and dst_existed,
@@ -449,11 +464,7 @@ def _deploy_target_content(
     enhancement). ``mode`` rides through unchanged.
     """
     target_existed = target.exists()
-    content = (
-        source_content
-        if source_content is not None
-        else src.read_text(encoding="utf-8")
-    )
+    content = source_content if source_content is not None else read_text_exact(src)
     mode = source_mode if source_mode is not None else tracked_file.mode
     _atomic_write(content, src, target, target_existed, backup, mode)
 

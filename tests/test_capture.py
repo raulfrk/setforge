@@ -884,3 +884,45 @@ def test_changed_structured_local_has_no_reconfirm_hint(
     )
     assert not any("re-confirm" in warning for warning in result.warnings)
     assert src.read_bytes() == _SY_BASE
+
+
+def test_capture_keeps_crlf_bytes(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"a\r\nb\r\n")
+    dst.write_bytes(b"a\r\nB\r\n")
+    result = capture_tracked_file(src, dst)
+    assert result.action is CaptureAction.UPDATED
+    assert src.read_bytes() == b"a\r\nB\r\n"
+
+
+def test_capture_line_ending_only_difference_is_an_update(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"a\nb\n")
+    dst.write_bytes(b"a\r\nb\r\n")
+    assert capture_tracked_file(src, dst).action is CaptureAction.UPDATED
+    assert src.read_bytes() == b"a\r\nb\r\n"
+    assert capture_tracked_file(src, dst).action is CaptureAction.NOOP
+
+
+def test_capture_copies_undecodable_bytes_verbatim(tmp_path: Path) -> None:
+    payload = b"\x89PNG\r\n\x1a\n\x00caf\xe9\xff\n"
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    dst.write_bytes(payload)
+    assert capture_tracked_file(src, dst).action is CaptureAction.UPDATED
+    assert src.read_bytes() == payload
+    assert capture_tracked_file(src, dst).action is CaptureAction.NOOP
+
+
+def test_capture_undecodable_file_skips_host_local_strip(tmp_path: Path) -> None:
+    payload = b"caf\xe9\n"
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    dst.write_bytes(payload)
+    result = capture_tracked_file(
+        src, dst, host_local_section_names=frozenset({"private"})
+    )
+    assert result.action is CaptureAction.UPDATED
+    assert src.read_bytes() == payload

@@ -242,3 +242,19 @@ def test_install_distinct_names_not_flagged(
 
     assert result.exit_code == 0, result.output
     assert "duplicate user-section name" not in result.output
+
+
+def test_undecodable_files_are_not_scanned_for_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli import _helpers
+
+    src = tmp_path / "blob"
+    dst = tmp_path / "live"
+    src.write_bytes(b"\x89PNG\x00caf\xe9\n")
+    dst.write_bytes(b"caf\xe9\n")
+    monkeypatch.setattr(
+        _helpers, "_iter_all_tracked_files", lambda _ctx: [(None, "blob", src, dst)]
+    )
+
+    _helpers._refuse_duplicate_section_names(object(), command="compare")  # type: ignore[arg-type]

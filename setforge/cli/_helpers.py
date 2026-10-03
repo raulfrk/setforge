@@ -236,7 +236,7 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
         for role, path in (("tracked", sub_src), ("live", sub_dst)):
             try:
                 text = path.read_text(encoding="utf-8")
-            except (FileNotFoundError, IsADirectoryError):
+            except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError):
                 continue
             duplicate = detect_duplicate_section_names(text)
             if duplicate is None:

@@ -59,7 +59,7 @@ def test_write_if_changed_leaves_no_tmp_debris_on_failure(
     assert src.read_text(encoding="utf-8") == original
 
 
-def test_write_if_changed_uses_atomic_write_text(
+def test_write_if_changed_uses_atomic_write_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Routes through the shared atomic primitive, not bare write_text."""
@@ -68,35 +68,27 @@ def test_write_if_changed_uses_atomic_write_text(
     src.write_text("old\n", encoding="utf-8")
 
     called: dict[str, object] = {}
-    real = atomicio.atomic_write_text
+    real = atomicio.atomic_write_bytes
 
     def spy(
         path: Path,
-        text: str,
+        data: bytes,
         *,
-        encoding: str = "utf-8",
         fsync: bool = True,
         mode: int | None = None,
         backup: bool = False,
     ) -> Path | None:
         called["path"] = path
-        called["text"] = text
-        return real(
-            path,
-            text,
-            encoding=encoding,
-            fsync=fsync,
-            mode=mode,
-            backup=backup,
-        )
+        called["data"] = data
+        return real(path, data, fsync=fsync, mode=mode, backup=backup)
 
-    monkeypatch.setattr(capture.atomicio, "atomic_write_text", spy)
+    monkeypatch.setattr(capture.atomicio, "atomic_write_bytes", spy)
 
     result = _write_if_changed(src, "new\n")
 
     assert result.action is CaptureAction.UPDATED
     assert called["path"] == src
-    assert called["text"] == "new\n"
+    assert called["data"] == b"new\n"
     assert src.read_text(encoding="utf-8") == "new\n"
 
 

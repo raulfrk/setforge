@@ -276,3 +276,41 @@ def test_validate_srcs_exist_allows_in_tracked_src(tmp_path: Path) -> None:
     ``..`` that stays confined) still passes the containment guard."""
     repo, _, cfg, resolved = _build_profile(tmp_path, ["sub/a"], [])
     validate_srcs_exist(cfg, resolved, repo)
+
+
+def test_copy_atomic_treats_line_ending_only_difference_as_update(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"a\nb\n")
+    dst.write_bytes(b"a\r\nb\r\n")
+
+    result = copy_atomic(src, dst, mode=0o644)
+
+    assert result.action is DeployAction.UPDATED
+    assert dst.read_bytes() == b"a\nb\n"
+
+
+def test_copy_atomic_keeps_crlf_bytes(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"a\r\nb\rc\r\n")
+
+    assert copy_atomic(src, dst, mode=0o644).action is DeployAction.CREATED
+    assert dst.read_bytes() == b"a\r\nb\rc\r\n"
+    assert copy_atomic(src, dst, mode=0o644).action is DeployAction.NOOP
+
+
+def test_copy_atomic_deploys_undecodable_bytes_verbatim(tmp_path: Path) -> None:
+    payload = b"\x89PNG\r\n\x1a\n\x00caf\xe9\xff\n"
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(payload)
+
+    assert copy_atomic(src, dst, mode=0o644).action is DeployAction.CREATED
+    assert dst.read_bytes() == payload
+    assert copy_atomic(src, dst, mode=0o644).action is DeployAction.NOOP
+    src.write_bytes(payload + b"\x00")
+    assert copy_atomic(src, dst, mode=0o644).action is DeployAction.UPDATED
+    assert dst.read_bytes() == payload + b"\x00"

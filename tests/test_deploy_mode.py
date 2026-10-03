@@ -180,14 +180,14 @@ def test_identical_content_and_mode_stays_noop(tmp_path: Path) -> None:
 
 def test_atomic_write_delegates_to_atomicio() -> None:
     """:func:`_atomic_write` is a thin wrapper over
-    :func:`setforge.atomicio.atomic_write_text` — the
+    :func:`setforge.atomicio.atomic_write_bytes` — the
     fchmod-before-replace ordering invariant now lives in (and is
     AST-pinned by) the atomicio tests, so the deploy side only has to
     prove it routes through the shared primitive rather than carrying
     a hand-rolled tempfile + ``os.replace`` dance of its own.
     """
     src = inspect.getsource(deploy_mod._atomic_write)
-    assert "atomicio.atomic_write_text" in src
+    assert "atomicio.atomic_write_bytes" in src
     assert "mkstemp" not in src
 
 

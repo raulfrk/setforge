@@ -657,10 +657,15 @@ def diff_file(
     if not dst.exists():
         return ""
 
-    dst_text = dst.read_text(encoding="utf-8")
-    rendered_src = rendered_source(
-        src, tracked_file.generated if tracked_file is not None else None
-    )
+    spec = tracked_file.generated if tracked_file is not None else None
+    if spec is None and src.read_bytes() == dst.read_bytes():
+        return ""
+    try:
+        dst_text = dst.read_bytes().decode("utf-8")
+        rendered_src = rendered_source(src, spec)
+        rendered_src.encode("utf-8")
+    except UnicodeError:
+        return f"Binary files {dst} and {src} differ\n"
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),

@@ -12,6 +12,7 @@ from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 
 from setforge.config import GeneratedContent, HostInputKind
+from setforge.deploy import read_text_exact
 from setforge.errors import ConfigError
 from setforge.paths import vscode_user_dir
 
@@ -113,5 +114,12 @@ def resolve_generated(source: str, spec: GeneratedContent) -> GeneratedResolutio
 
 def rendered_source(path: Path, spec: GeneratedContent | None) -> str:
     """Read one source and render it only when generator intent is declared."""
-    source = path.read_text(encoding="utf-8")
-    return source if spec is None else resolve_generated(source, spec).rendered
+    if spec is None:
+        return read_text_exact(path)
+    try:
+        source = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(
+            f"generated tracked-file template {path} is not valid UTF-8"
+        ) from exc
+    return resolve_generated(source, spec).rendered

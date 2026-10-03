@@ -400,15 +400,20 @@ def capture_tracked_file(
             name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
         )
 
-    content = dst.read_text(encoding="utf-8")
+    content = dst.read_bytes()
     # Drop legacy host-local marker pairs + bodies injected by install (via
     # local.yaml host_local_sections) before the writeback. Name-scoped to
     # ``host_local_section_names`` so a host-local marker the user authored
     # directly in tracked passes through unchanged.
     if host_local_section_names:
-        content = sections.strip_host_local_sections(
-            content, names=host_local_section_names, allow_legacy=True
-        )
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            content = sections.strip_host_local_sections(
+                text, names=host_local_section_names, allow_legacy=True
+            ).encode("utf-8")
     if _keep_tracked_refuses(auto, src, content):
         return CaptureResult(
             name=src.name, action=CaptureAction.SKIPPED, reason="keep-tracked"
@@ -416,7 +421,9 @@ def capture_tracked_file(
     return _write_if_changed(src, content)
 
 
-def _keep_tracked_refuses(auto: "CaptureAuto | None", src: Path, content: str) -> bool:
+def _keep_tracked_refuses(
+    auto: "CaptureAuto | None", src: Path, content: str | bytes
+) -> bool:
     """Return whether ``--auto=keep-tracked`` should refuse this writeback.
 
     ``keep-tracked`` is the drift-refusal resolution: when the would-be
@@ -429,10 +436,14 @@ def _keep_tracked_refuses(auto: "CaptureAuto | None", src: Path, content: str) -
         return False
     if not src.exists():
         return False
-    return src.read_text(encoding="utf-8") != content
+    return src.read_bytes() != _content_bytes(content)
 
 
-def _write_if_changed(src: Path, content: str) -> CaptureResult:
+def _content_bytes(content: str | bytes) -> bytes:
+    return content if isinstance(content, bytes) else content.encode("utf-8")
+
+
+def _write_if_changed(src: Path, content: str | bytes) -> CaptureResult:
     """Write ``content`` to ``src`` unless it already matches; return action.
 
     Preserves the tracked file's existing permission bits across the atomic
@@ -444,10 +455,11 @@ def _write_if_changed(src: Path, content: str) -> CaptureResult:
     default, rather than the 0600 mkstemp leftover.
     """
     src.parent.mkdir(parents=True, exist_ok=True)
-    if src.exists() and src.read_text(encoding="utf-8") == content:
+    data = _content_bytes(content)
+    if src.exists() and src.read_bytes() == data:
         return CaptureResult(name=src.name, action=CaptureAction.NOOP)
     mode = stat.S_IMODE(src.stat().st_mode) if src.exists() else 0o644
-    atomicio.atomic_write_text(src, content, mode=mode)
+    atomicio.atomic_write_bytes(src, data, mode=mode)
     return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
 
 

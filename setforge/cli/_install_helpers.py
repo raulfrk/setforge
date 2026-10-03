@@ -317,7 +317,9 @@ def _planned_deploy_action(record: _PendingDeploy) -> deploy.DeployAction | None
         ):
             return deploy.DeployAction.NOOP
         return deploy.DeployAction.CREATED
-    if record.resolved.real_dst.read_text(encoding="utf-8") != record.resolved.content:
+    if record.resolved.real_dst.read_bytes() != deploy.encode_text_exact(
+        record.resolved.content
+    ):
         return deploy.DeployAction.UPDATED
     live_mode = stat.S_IMODE(record.resolved.real_dst.stat().st_mode)
     expected_mode = record.resolved.effective_mode

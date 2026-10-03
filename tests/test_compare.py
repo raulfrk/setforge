@@ -479,3 +479,23 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "+++" in result.stdout or "---" in result.stdout
+
+
+def test_diff_file_sees_line_ending_only_difference(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"a\nb\n")
+    dst.write_bytes(b"a\r\nb\r\n")
+    assert diff_file(src, dst) != ""
+    dst.write_bytes(b"a\nb\n")
+    assert diff_file(src, dst) == ""
+
+
+def test_diff_file_undecodable_bytes_do_not_raise(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.write_bytes(b"\x89PNG\x00\n")
+    dst.write_bytes(b"\x89PNG\x00\n")
+    assert diff_file(src, dst) == ""
+    dst.write_bytes(b"caf\xe9\n")
+    assert "differ" in diff_file(src, dst)
