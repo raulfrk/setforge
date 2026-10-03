@@ -432,11 +432,10 @@ def _independent_edits[T](
 ) -> tuple[list[_Edit], list[_Edit]] | None:
     """Both sides' edits of ``base`` when none of them collide, else ``None``.
 
-    An edit both sides made identically is ours alone, and an insertion is
-    dropped when the other side's edit next to it already brings the same
-    elements (:func:`_repeats`). The line 3-way calls any two NEIGHBOURING edits
-    a conflict; here only edits of the same place are. ``None`` as well when the
-    two sides have too many edits to compare, or the differ gives up.
+    An edit both sides made identically is ours alone. The line 3-way calls any
+    two NEIGHBOURING edits a conflict; here only edits of the same place are.
+    ``None`` as well when the two sides have too many edits to compare, or the
+    differ gives up.
     """
     try:
         mine, other = _edits(base, ours), _edits(base, theirs)
@@ -448,10 +447,7 @@ def _independent_edits[T](
     other = [edit for edit in other if made.get(edit[:2]) != theirs[edit[2] : edit[3]]]
     if any(_edits_collide(left, right) for left in mine for right in other):
         return None
-    return (
-        [edit for edit in mine if not _repeats(edit, ours, other, theirs)],
-        [edit for edit in other if not _repeats(edit, theirs, mine, ours)],
-    )
+    return mine, other
 
 
 def _resolve_hunk(
@@ -462,13 +458,17 @@ def _resolve_hunk(
     Deterministic, with no trial: each side's edits of the hunk's base lines
     are applied together when no two of them touch the same line. Lines both
     sides inserted at the same spot come ours first, then those of theirs that
-    ours did not insert as well. ``None`` when both sides changed the same line
-    differently (a real collision) or the hunk is too large to check.
+    ours did not insert as well, and an inserted line the other side's edit
+    beside it already brings is not written again (:func:`_repeats`; for LINES
+    only — in an array a repeated element is data). ``None`` when both sides
+    changed the same line differently (a real collision) or the hunk is too
+    large to check.
     """
     edits = _independent_edits(base, ours, theirs)
     if edits is None:
         return None
-    mine, other = edits
+    mine = [edit for edit in edits[0] if not _repeats(edit, ours, edits[1], theirs)]
+    other = [edit for edit in edits[1] if not _repeats(edit, theirs, edits[0], ours)]
     lines: list[bytes] = []
     cursor = 0
     inserted: tuple[int, list[bytes]] = (-1, [])

@@ -1464,3 +1464,62 @@ def test_resolve_hunk_treats_a_matcher_recursion_failure_as_unresolved(
     monkeypatch.setattr(reconcile_apply, "PatienceSequenceMatcher", exploding)
 
     assert reconcile_apply._resolve_hunk([b"a\n"], [b"b\n"], [b"a\n", b"c\n"]) is None
+
+
+def _array(*elements: object) -> bytes:
+    import json
+
+    body = ",\n".join("  " + json.dumps(element) for element in elements)
+    return f"[\n{body}\n]\n".encode()
+
+
+@pytest.mark.parametrize(
+    ("base", "host", "upstream", "expected"),
+    [
+        pytest.param(
+            _array("A", "B", "C"),
+            _array("A", "E", "B", "C"),
+            _array("A", "E", "C2"),
+            _array("A", "E", "E", "C2"),
+            id="host-inserts-what-upstream-turns-the-next-element-into",
+        ),
+        pytest.param(
+            _array("A", "B"),
+            _array("A", "E", "B"),
+            _array("A", "E"),
+            _array("A", "E", "E"),
+            id="host-inserts-what-upstream-turns-the-last-element-into",
+        ),
+        pytest.param(
+            _array(1, 2, "B"),
+            _array(1, 2, 2, "B"),
+            _array(2, 2, "A"),
+            _array(2, 2, 2, "A"),
+            id="host-repeats-an-element-upstream-edits-around-it",
+        ),
+    ],
+)
+def test_json_array_root_keeps_a_repeated_element_as_data(
+    base: bytes, host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("array-root-repeat")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+
+
+def test_json_array_root_upstream_append_equal_to_a_host_edit_conflicts() -> None:
+    fid = file_id("array-root-repeat-conflict")
+    base = _array(1, "A", 2)
+    host = _array(1, "A", "B")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(
+        _P, fid, live=host, tracked=_array(1, "A", 2, "B"), fmt=_JSON
+    )
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == base
