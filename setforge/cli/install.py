@@ -2625,6 +2625,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto_accept_live=auto_accept_live,
             yes=yes,
         )
+        install_helpers_mod._confirm_use_tracked_or_exit(
+            deploys=plan.deploys,
+            profile=ctx.profile,
+            section_auto=section_auto,
+            yes=yes,
+        )
         if plan.provisioning.ownership != ownership_preview:
             raise SetforgeError(
                 "package ownership inputs changed after confirmation; retry"

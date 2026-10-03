@@ -51,6 +51,7 @@ from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
+    FileChange,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
@@ -1125,6 +1126,39 @@ def _confirm_legacy_drift_or_exit(
     if not confirm_auto_operation(
         command=f"install {flag}",
         profile=ctx.profile,
+        plan=plan,
+        yes=yes,
+    ):
+        raise typer.Exit(0)
+
+
+def _confirm_use_tracked_or_exit(
+    *,
+    deploys: tuple[_PendingDeploy, ...],
+    profile: str,
+    section_auto: reconcile_apply.ReconcileAuto | None,
+    yes: bool,
+) -> None:
+    """Gate ``--auto=use-tracked`` when it would replace live file content.
+
+    Mirrors the ``sync --auto=use-live`` contract: without ``--yes`` a non-TTY
+    run fails closed, a TTY run shows the risks panel and prompts.
+    """
+    if section_auto is not reconcile_apply.ReconcileAuto.USE_TRACKED:
+        return
+    plan = AutoPlan(
+        direction=AutoDirection.TRACKED_TO_LIVE,
+        file_changes=tuple(
+            FileChange(source=record.sub_src, dest=record.sub_dst, changed=1)
+            for record in deploys
+            if record.preview_action is deploy.DeployAction.UPDATED
+        ),
+        risks=(),
+        revert_command=f"setforge revert --profile={profile}",
+    )
+    if not confirm_auto_operation(
+        command="install --auto=use-tracked",
+        profile=profile,
         plan=plan,
         yes=yes,
     ):

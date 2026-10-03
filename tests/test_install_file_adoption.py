@@ -821,3 +821,18 @@ def test_use_tracked_recreates_a_missing_file_with_local_units(
 
     assert result.exit_code == 0, result.output
     assert live.read_text(encoding="utf-8") == "shared\n"
+
+
+def test_install_use_tracked_without_yes_refuses_to_overwrite_live_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live = _setup(tmp_path, monkeypatch)
+    assert _install(config, yes=True).exit_code == 0
+    live.write_text("live edit\n", encoding="utf-8")
+    (config.parent / "tracked" / "note.md").write_text("shared v2\n", encoding="utf-8")
+
+    result = _install(config, yes=False, extra=["--auto=use-tracked"])
+
+    assert result.exit_code == 1
+    assert "--yes" in str(result.exception)
+    assert live.read_text(encoding="utf-8") == "live edit\n"
