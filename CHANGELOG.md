@@ -50,7 +50,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `install --auto=use-tracked` requires `--yes` without a terminal before it
   replaces a live file, as documented.
-- `install` exits non-zero when an extension or plugin install fails.
 - `cleanup-orphans` previews never refuse; applying still requires releasing an
   active ownership claim first and now prints the exact command.
 - `snapshot create --keep` prunes per profile. `migrate` without an action flag

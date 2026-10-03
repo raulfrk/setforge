@@ -157,6 +157,7 @@ def test_status_after_install_reports_clean_human_and_json(
     # drift all-zero and the capability rows are present.
     assert data["drift"] == {
         "drifted": 0,
+        "missing": 0,
     }, data
     assert isinstance(data["capabilities"], list), data
     assert data["capabilities"], data
