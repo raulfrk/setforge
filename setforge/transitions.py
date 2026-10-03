@@ -352,7 +352,7 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
     payload_path = transition_dir / "meta.json"
     try:
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"cannot read meta.json at {payload_path}: {exc}"
         ) from exc
@@ -942,7 +942,7 @@ def load_reconcile_outcomes(
         return ()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"cannot read reconcile_outcomes.json at {path}: {exc}"
         ) from exc
@@ -1153,7 +1153,7 @@ def _is_migrate_transition_file(path: Path, tx_root: Path) -> bool:
     meta_file = tx_root / tx_dir / "meta.json"
     try:
         payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return False
     return payload.get("profile") == MIGRATE_TRANSITION_PROFILE
 
@@ -1263,7 +1263,7 @@ def load_state_snapshots(
     manifest = snap_dir / _STATE_SNAPSHOTS_MANIFEST
     try:
         raw = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"cannot read state_snapshots manifest at {manifest}: {exc}"
         ) from exc
@@ -1317,7 +1317,7 @@ def load_file_modes(transition_dir: TransitionDir) -> dict[Path, int]:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"cannot read file_modes.json at {path}: {exc}"
         ) from exc
@@ -2277,7 +2277,7 @@ def _filter_transition_entries(
             continue
         try:
             payload = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         if payload.get("profile") != profile:
             continue
@@ -2428,7 +2428,7 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
         return None
     try:
         payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return None
     try:
         timestamp = datetime.fromisoformat(payload["timestamp"])
@@ -2450,7 +2450,7 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
             ext_count = (len(added) if isinstance(added, list) else 0) + (
                 len(removed) if isinstance(removed, list) else 0
             )
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             ext_count = 0
 
     plugin_file = transition_dir / "plugins.json"
@@ -2468,7 +2468,7 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
                 value = plugin_payload.get(key, [])
                 if isinstance(value, list):
                     plugin_count += len(value)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             plugin_count = 0
 
     codex_plugin_file = transition_dir / "codex_plugins.json"
@@ -2485,7 +2485,7 @@ def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
                 value = codex_payload.get(key, [])
                 if isinstance(value, list):
                     codex_plugin_count += len(value)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             codex_plugin_count = 0
 
     ownership_transfer_count = len(
