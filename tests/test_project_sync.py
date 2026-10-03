@@ -370,8 +370,11 @@ def test_plan_sync_three_way_preserves_independent_local_edit(
         app,
         ["project", "remove", "demo", str(target), "--config", str(config), "--yes"],
     )
-    assert removed.exit_code == 0, removed.exception
-    assert not (target / "AGENTS.md").exists()
+    assert removed.exit_code == 1
+    assert "drifted" in str(removed.exception)
+    assert (target / "AGENTS.md").read_bytes() == (
+        b"alpha-local\nbeta\ngamma-profile\n"
+    )
 
 
 def test_plan_sync_legacy_drift_uses_multiple_hunks(

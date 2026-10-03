@@ -1164,9 +1164,17 @@ def _resolved_from_plan(plan: ProjectInjectionPlan) -> ResolvedProjectProfile:
 
 
 def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
-    *, profile: str, target: Path, config_path: Path
+    *,
+    profile: str,
+    target: Path,
+    config_path: Path,
+    require_profile_content: bool = True,
 ) -> ProjectRemovePlan:
-    """Load and drift-check the exact injection to remove."""
+    """Load and drift-check the exact injection to remove.
+
+    A sync may record merged bytes that still hold local edits. Removal would
+    discard them, so by default an ordinary file must equal the profile bytes.
+    """
     root, git_dir, target_stat = _verified_project_target(target)
     canonical_config_path = config_path.resolve(strict=True)
     config_root = canonical_config_path.parent
@@ -1362,14 +1370,18 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             )
         overlay: ProjectOverlay | None = None
         live_matches_absent = info is None and applied_absent
+        if raw["schema"] == _LEGACY_MANIFEST_SCHEMA or not require_profile_content:
+            expected_digest, expected_mode = applied_digest, applied_mode
+        else:
+            expected_digest, expected_mode = source_digest, upstream_mode
         live_matches_present = (
             info is not None
             and not stat.S_ISLNK(info.st_mode)
             and stat.S_ISREG(info.st_mode)
             and live_payload is not None
-            and applied_digest is not None
-            and _sha256(live_payload) == applied_digest
-            and stat.S_IMODE(info.st_mode) == applied_mode
+            and expected_digest is not None
+            and _sha256(live_payload) == expected_digest
+            and stat.S_IMODE(info.st_mode) == expected_mode
         )
         if action is ProjectFileAction.OVERLAY:
             if (

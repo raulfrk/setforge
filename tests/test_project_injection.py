@@ -772,6 +772,51 @@ def test_remove_refuses_drift_and_preserves_manifest(
     assert (target / "AGENTS.md").read_text() == "local drift\n"
 
 
+def test_remove_refuses_local_edit_kept_by_sync_until_profile_content_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    source = config.parent / "project" / "demo" / "AGENTS.md"
+    source.write_text("alpha\nbeta\ngamma\n")
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    remove = ["project", "remove", "demo", str(target), "--config", str(config)]
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    live = target / "AGENTS.md"
+    live.write_text("alpha-local\nbeta\ngamma\n")
+    source.write_text("alpha\nbeta\ngamma-profile\n")
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+    assert synced.exit_code == 0, synced.output
+    merged = b"alpha-local\nbeta\ngamma-profile\n"
+    assert live.read_bytes() == merged
+    state = manifest_path(target, "demo")
+    record = state.read_bytes()
+
+    for arguments in ([*remove, "--dry-run"], [*remove, "--yes"]):
+        refused = runner.invoke(app, arguments)
+        assert refused.exit_code == 1
+        assert str(refused.exception) == f"injected project file has drifted: {live}"
+        assert live.read_bytes() == merged
+        assert state.read_bytes() == record
+
+    visibility = runner.invoke(
+        app, ["project", "visibility", str(target), "AGENTS.md", "--tracked", "--yes"]
+    )
+    assert visibility.exit_code == 0, visibility.output
+    assert live.read_bytes() == merged
+
+    live.write_text("alpha\nbeta\ngamma-profile\n")
+    removed = runner.invoke(app, [*remove, "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert not live.exists()
+    assert not state.exists()
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:

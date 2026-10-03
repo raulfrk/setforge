@@ -573,7 +573,12 @@ def plan_project_visibility(
         if _manifest_schema(raw) >= 2
         else (config_root / "setforge.yaml").resolve(strict=True)
     )
-    plan_removal(profile=profile, target=root, config_path=config_path)
+    plan_removal(
+        profile=profile,
+        target=root,
+        config_path=config_path,
+        require_profile_content=False,
+    )
     git_dir = Path(str(raw["git_dir"])) if raw["git_dir"] is not None else None
     if git_dir != actual_git_dir:
         raise SetforgeError("project injection Git identity does not match the target")
