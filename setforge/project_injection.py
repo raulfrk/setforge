@@ -1639,8 +1639,26 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 f"injected project file is missing: {destination}; "
                 f"{missing_file_remedy(root)}"
             )
-        if not live_matches_absent and not live_matches_present:
-            raise SetforgeError(f"injected project file has drifted: {destination}")
+        # A local file that a sync kept instead of the profile content already
+        # equals what removal restores, so removing it writes nothing.
+        live_is_baseline = (
+            action is not ProjectFileAction.OVERLAY
+            and info is not None
+            and stat.S_ISREG(info.st_mode)
+            and live_payload == previous_payload
+            and stat.S_IMODE(info.st_mode) == previous_mode
+        )
+        if (
+            not live_matches_absent
+            and not live_matches_present
+            and not live_is_baseline
+        ):
+            raise SetforgeError(
+                f"injected project file has drifted: {destination}; removal would "
+                "discard its local changes. Save them elsewhere, copy "
+                f"{entry['source']} over the file, run `setforge project sync "
+                f"{root}`, then remove again"
+            )
         if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
             claim_payload = upstream_payload
             claim_mode = upstream_mode

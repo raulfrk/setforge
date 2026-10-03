@@ -801,7 +801,11 @@ def test_remove_refuses_local_edit_kept_by_sync_until_profile_content_returns(
     for arguments in ([*remove, "--dry-run"], [*remove, "--yes"]):
         refused = runner.invoke(app, arguments)
         assert refused.exit_code == 1
-        assert str(refused.exception) == f"injected project file has drifted: {live}"
+        assert str(refused.exception) == (
+            f"injected project file has drifted: {live}; removal would discard "
+            f"its local changes. Save them elsewhere, copy {source} over the "
+            f"file, run `setforge project sync {target}`, then remove again"
+        )
         assert live.read_bytes() == merged
         assert state.read_bytes() == record
 
@@ -1686,6 +1690,40 @@ def test_sibling_without_readable_git_identity_does_not_block_other_projects(
     assert listed.exit_code == 1
     assert f"{target}  [demo]\n  hidden: AGENTS.md\n" in listed.output
     assert f"{sibling}  [demo]\n  error: " in listed.output
+
+
+def test_remove_accepts_member_whose_local_file_was_kept_at_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    assert runner.invoke(app, ["project", "inject", "demo", *arguments]).exit_code == 0
+    local = target / "EXTRA.md"
+    local.write_bytes(b"local file\n")
+    local.chmod(0o600)
+    (config.parent / "project" / "demo" / "EXTRA.md").write_text("profile file\n")
+    config.write_text(
+        config.read_text()
+        + "      extra:\n        src: EXTRA.md\n        dst: EXTRA.md\n"
+    )
+    kept = runner.invoke(
+        app, ["project", "sync", str(target), "--auto=keep-live", "--yes"]
+    )
+    assert kept.exit_code == 0, kept.output
+    assert local.read_bytes() == b"local file\n"
+    inode = local.stat().st_ino
+
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, removed.output
+    assert local.read_bytes() == b"local file\n"
+    assert local.stat().st_mode & 0o7777 == 0o600
+    assert local.stat().st_ino == inode
+    assert not (target / "AGENTS.md").exists()
+    assert not manifest_path(target, "demo").exists()
 
 
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
