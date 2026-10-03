@@ -1372,11 +1372,6 @@ def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
     if journal.command != "snapshot restore":
         return
     scoped_paths = {path for item in journal.checkpoints for path in item.paths}
-    aliases = {
-        guard.path
-        for guard in journal.path_guards
-        if guard.mode is not None and stat.S_ISLNK(guard.mode)
-    }
     checked: set[Path] = set()
     for raw_path in scoped_paths:
         path = Path(raw_path)
@@ -1385,7 +1380,7 @@ def _validate_snapshot_restore_parents(journal: OperationJournal) -> None:
                 continue
             checked.add(parent)
             try:
-                info = parent.stat() if parent in aliases else parent.lstat()
+                info = parent.lstat()
             except FileNotFoundError:
                 continue
             except OSError as exc:

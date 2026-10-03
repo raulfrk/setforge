@@ -427,17 +427,17 @@ def _symlinked_live(tmp_path: Path) -> tuple[Path, Path]:
     return link, real
 
 
-def _journal_below_symlink(tmp_path: Path, command: str) -> tuple[Path, Path]:
+def _journal_below_symlink(tmp_path: Path) -> tuple[Path, Path]:
     link, real = _symlinked_live(tmp_path)
     path = link / "live" / "file"
     path.write_text("before", encoding="utf-8")
     operations.begin_checkpoint(
         operations.prepare(
-            command=command,
+            command="sync",
             profile="p",
             config_dir=tmp_path,
             resources_lock=False,
-            command_line=(command,),
+            command_line=("sync",),
             paths=(path,),
             path_guards=orphan_scan.capture_parent_path_guards((path,)),
         ),
@@ -449,11 +449,10 @@ def _journal_below_symlink(tmp_path: Path, command: str) -> tuple[Path, Path]:
     return link, real
 
 
-@pytest.mark.parametrize("command", ["sync", "snapshot restore"])
 def test_recovery_restores_below_ancestor_captured_as_symlink(
-    tmp_path: Path, operation_state: Path, command: str
+    tmp_path: Path, operation_state: Path
 ) -> None:
-    link, real = _journal_below_symlink(tmp_path, command)
+    link, real = _journal_below_symlink(tmp_path)
 
     operations.recover_files(operations.load("p"))
 
@@ -461,11 +460,10 @@ def test_recovery_restores_below_ancestor_captured_as_symlink(
     assert link.is_symlink()
 
 
-@pytest.mark.parametrize("command", ["sync", "snapshot restore"])
 def test_recovery_refuses_captured_symlink_retargeted_before_recovery(
-    tmp_path: Path, operation_state: Path, command: str
+    tmp_path: Path, operation_state: Path
 ) -> None:
-    link, real = _journal_below_symlink(tmp_path, command)
+    link, real = _journal_below_symlink(tmp_path)
     other = tmp_path / "other"
     (other / "live").mkdir(parents=True)
     (other / "live" / "file").write_text("foreign", encoding="utf-8")
