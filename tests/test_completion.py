@@ -125,6 +125,22 @@ def test_write_wiring_appends_when_sentinel_absent(tmp_path: Path) -> None:
     assert "# <<< setforge completion <<<" in text
 
 
+def test_write_wiring_keeps_symlinked_rc_and_updates_its_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "dotfiles" / "zshrc"
+    target.parent.mkdir()
+    target.write_text("# user content\n")
+    rc = tmp_path / ".zshrc"
+    rc.symlink_to(target)
+
+    _write_wiring(rc, "fpath=(test)\n")
+
+    assert rc.is_symlink()
+    assert rc.resolve() == target
+    assert "fpath=(test)" in target.read_text()
+
+
 def test_write_wiring_replaces_existing_sentinel_block(tmp_path: Path) -> None:
     rc = tmp_path / ".zshrc"
     rc.write_text("user line\n" + _wrap_sentinel("old body\n") + "trailing\n")

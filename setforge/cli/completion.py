@@ -264,7 +264,10 @@ def _atomic_write_rc_file(rc_path: Path, content: str) -> None:
     caller has already validated that ``rc_path`` exists. On any
     exception after the tmp file is created, it is removed before
     re-raising so a failed write never leaves a stray tmp file behind.
+    A symlinked ``rc_path`` (dotfile managers) is resolved first so the
+    link target is updated and the link itself is kept.
     """
+    rc_path = rc_path.resolve()
     fd, name = tempfile.mkstemp(
         dir=rc_path.parent, prefix=f"{rc_path.name}.", suffix=".setforge-tmp"
     )
