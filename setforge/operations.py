@@ -217,13 +217,24 @@ def _load_all() -> tuple[OperationJournal, ...]:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             profile = _require_str(raw, "profile")
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise SetforgeError(f"corrupt operation journal {path}: {exc}") from exc
+        except OSError as exc:
+            raise SetforgeError(f"cannot read operation journal {path}: {exc}") from exc
+        except (ValueError, KeyError, TypeError) as exc:
+            raise _unusable_journal("corrupt", path, exc) from exc
         expected = journal_path(profile)
         if path != expected:
-            raise SetforgeError(f"operation journal has invalid identity: {path}")
+            raise _unusable_journal("corrupt", path, "it names another profile")
         journals.append(load(profile))
     return tuple(journals)
+
+
+def _unusable_journal(kind: str, path: Path, problem: object) -> SetforgeError:
+    """Describe a journal no command can use, and the only way past it."""
+    return SetforgeError(
+        f"{kind} operation journal {path}: {problem}. SetForge cannot recover the "
+        "operation it recorded; move that file aside to unblock other commands "
+        "and check the files that operation was changing"
+    )
 
 
 def snapshot_path(path: Path) -> PathSnapshot:
@@ -570,19 +581,26 @@ def load(profile: str) -> OperationJournal:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise SetforgeError(f"no unfinished operation for profile {profile!r}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SetforgeError(f"corrupt operation journal {path}: {exc}") from exc
+    except OSError as exc:
+        raise SetforgeError(f"cannot read operation journal {path}: {exc}") from exc
+    except ValueError as exc:
+        raise _unusable_journal("corrupt", path, exc) from exc
     try:
         schema_version = raw["schema_version"]
         if (
             isinstance(schema_version, bool)
             or not isinstance(schema_version, int)
-            or schema_version != JOURNAL_SCHEMA_VERSION
+            or schema_version < JOURNAL_SCHEMA_VERSION
         ):
             raise ValueError(f"unsupported schema_version {schema_version!r}")
+        if schema_version > JOURNAL_SCHEMA_VERSION:
+            raise SetforgeError(
+                f"operation journal {path} was written by a newer SetForge "
+                f"(journal schema {schema_version}); upgrade SetForge to recover it"
+            )
         journal = _from_json(raw)
     except (KeyError, TypeError, ValueError, binascii.Error) as exc:
-        raise SetforgeError(f"invalid operation journal {path}: {exc}") from exc
+        raise _unusable_journal("invalid", path, exc) from exc
     if journal.profile != profile:
         raise SetforgeError(
             f"operation journal profile mismatch: {journal.profile!r} != {profile!r}"

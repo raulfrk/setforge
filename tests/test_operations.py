@@ -1736,6 +1736,64 @@ def test_load_fails_closed_on_invalid_journal(
         operations.load("p")
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [b"", b'{"schema_version": 1, "profi', b"{}", b"[]", b"\xff\xfe\x00garbage\x80"],
+    ids=["empty", "truncated", "empty-object", "not-an-object", "not-utf8"],
+)
+def test_unusable_journal_reports_the_file_and_how_to_get_past_it(
+    tmp_path: Path, operation_state: Path, payload: bytes
+) -> None:
+    _prepare(tmp_path)
+    path = operations.journal_path("p")
+    path.write_bytes(payload)
+
+    for blocked in (
+        lambda: operations.load("p"),
+        lambda: operations.refuse_active("other"),
+    ):
+        with pytest.raises(SetforgeError) as failure:
+            blocked()
+        message = str(failure.value)
+        assert f"operation journal {path}" in message
+        assert "move that file aside" in message
+
+
+def test_journal_from_newer_setforge_asks_for_an_upgrade(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    _prepare(tmp_path)
+    path = operations.journal_path("p")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["schema_version"] = operations.JOURNAL_SCHEMA_VERSION + 1
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="upgrade SetForge") as failure:
+        operations.load("p")
+
+    assert "move that file aside" not in str(failure.value)
+
+
+def test_unreadable_journal_is_not_reported_as_corrupt(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare(tmp_path)
+    path = operations.journal_path("p")
+    read_text = Path.read_text
+
+    def stale(candidate: Path, *args: object, **kwargs: object) -> str:
+        if candidate == path:
+            raise OSError(116, "Stale file handle", str(path))
+        return read_text(candidate, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", stale)
+
+    with pytest.raises(SetforgeError, match="cannot read operation journal") as failure:
+        operations.load("p")
+
+    assert "move that file aside" not in str(failure.value)
+
+
 def _set_nested(
     raw: dict[str, object], section: str, index: int, key: str, value: object
 ) -> None:
