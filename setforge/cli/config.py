@@ -75,6 +75,7 @@ from setforge.config import (
     MarketplaceSource,
     MarketplaceSourceKind,
     _validate_config_data,
+    resolve_chain,
 )
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
@@ -270,11 +271,13 @@ def _validate_candidate(
             ) from exc
     elif scope is ConfigScope.TRACKED:
         try:
-            _validate_config_data(plain, yaml_path)
+            candidate = _validate_config_data(plain, yaml_path)
         except ValidationError as exc:
             raise SetforgeError(
                 f"setforge.yaml candidate failed validation:\n{exc}"
             ) from exc
+        for name in candidate.profiles:
+            resolve_chain(candidate, name)
     else:
         raise SetforgeError(f"_validate_candidate: unexpected scope {scope!r}")
 

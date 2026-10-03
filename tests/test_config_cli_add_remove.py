@@ -306,3 +306,20 @@ def test_tracked_edit_accepts_no_git_check(
         result = runner.invoke(app, [*argv, "--yes"])
         assert result.exit_code == 0, result.output
         assert len(git_check_calls) == expected_checks
+
+
+@pytest.mark.parametrize(
+    ("parent", "message"),
+    [("base", "profile cycle"), ("ghost", "profile not found")],
+)
+def test_add_tracked_rejects_unresolvable_extends(
+    runner: CliRunner, seed_tracked: Path, parent: str, message: str
+) -> None:
+    before = seed_tracked.read_bytes()
+
+    argv = ["config", "add", "--tracked", "-p", "base", "profiles.base.extends"]
+    result = runner.invoke(app, [*argv, parent, "--yes"])
+
+    assert result.exit_code != 0
+    assert message in str(result.exception)
+    assert seed_tracked.read_bytes() == before
