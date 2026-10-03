@@ -1588,7 +1588,7 @@ def _render_preinstall_staging(
         )
         for blocker in row.blockers:
             if "run `setforge stage" in blocker:
-                typer.echo(f"  blocked: {blocker}")
+                typer.echo(f"  kept host-only: {blocker}")
 
 
 def _fetch_upstream(

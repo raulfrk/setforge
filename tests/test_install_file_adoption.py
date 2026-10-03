@@ -836,3 +836,39 @@ def test_install_use_tracked_without_yes_refuses_to_overwrite_live_edit(
     assert result.exit_code == 1
     assert "--yes" in str(result.exception)
     assert live.read_text(encoding="utf-8") == "live edit\n"
+
+
+def test_install_pending_units_note_does_not_say_blocked_for_written_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from setforge.reconcile import hunks, store
+    from setforge.reconcile.types import HunkClass, file_id
+
+    config, live = _setup(tmp_path, monkeypatch)
+    tracked = config.parent / "tracked" / "note.md"
+    tracked.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    assert _install(config, yes=True).exit_code == 0
+    base = live.read_bytes()
+    changed = base + b"undecided\n"
+    live.write_bytes(changed)
+    units = [
+        replace(unit, cls=HunkClass.PENDING)
+        for unit in hunks.extract_hunks(base, changed)
+    ]
+    store.record(
+        "p",
+        file_id("note"),
+        base=base,
+        local=changed,
+        hunks=hunks.serialize(units),
+        staged=True,
+    )
+    tracked.write_text("ONE\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+    result = _install(config, yes=True)
+
+    assert result.exit_code == 0, result.output
+    assert "blocked:" not in result.output
+    assert "kept host-only: 1 pending unit(s)" in result.output
