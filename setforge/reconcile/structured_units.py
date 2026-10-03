@@ -62,6 +62,10 @@ from setforge.structural_merge import (
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
 _YAML_WIDTH: Final = 4096
 
+#: Most promoted keys a reconstruction places line by line; past this the model
+#: dump is used (placing a new key scans its siblings). Bounded cost, not a knob.
+_MAX_PROMOTED_LINES: Final = 512
+
 #: C0 control chars (and DEL) forbidden in a draft scalar, minus tab/newline —
 #: the same untrusted-output gate :mod:`setforge.reconcile.share_draft` applies to
 #: line drafts, here enforced on BOTH the raw draft bytes and the parsed scalar.
@@ -868,9 +872,10 @@ def _render_reconstruction(
     if fmt is StructuredFormat.YAML:
         if not promoted:
             return base
-        text = _promoted_lines(texts, promoted, base_model, live_model)
-        if text is not None and _holds(text, model, fmt):
-            return text
+        if len(promoted) <= _MAX_PROMOTED_LINES:
+            text = _promoted_lines(texts, promoted, base_model, live_model)
+            if text is not None and _holds(text, model, fmt):
+                return text
     return _dump_model(model, fmt, like=base)
 
 

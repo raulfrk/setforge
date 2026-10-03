@@ -1263,3 +1263,78 @@ def test_checking_a_candidate_with_a_reused_anchor_does_not_warn() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert _parses(b"a: &d 1\nb: &d 2\nc: *d\n", _FMT) is True
+
+
+@pytest.mark.parametrize(
+    ("base", "ours", "theirs", "expected"),
+    [
+        pytest.param(
+            [],
+            [b"h: 1\n", b"same: 0\n"],
+            [b"same: 0\n", b"t: 1\n"],
+            [b"h: 1\n", b"same: 0\n", b"t: 1\n"],
+            id="both-insert-at-one-spot",
+        ),
+        pytest.param(
+            [b"b: 2\n"],
+            [b"# above\n", b"b: 2\n", b"# below\n"],
+            [b"b: 3\n", b"t: 1\n"],
+            [b"# above\n", b"b: 3\n", b"t: 1\n", b"# below\n"],
+            id="one-side-only-adds-around-the-base-lines",
+        ),
+        pytest.param(
+            [b"x: 1\n", b"y: 2\n", b"z: 3\n"],
+            [b"x: 5\n", b"y: 2\n", b"z: 9\n"],
+            [b"x: 1\n", b"y: 7\n", b"z: 9\n"],
+            [b"x: 5\n", b"y: 7\n", b"z: 9\n"],
+            id="line-by-line-with-one-identical-change",
+        ),
+        pytest.param(
+            [b"x: 1\n", b"y: 2\n"],
+            [b"y: 2\n", b"h: 1\n"],
+            [b"x: 1\n", b"y: 3\n"],
+            [b"y: 3\n", b"h: 1\n"],
+            id="delete-edit-and-insert-on-different-lines",
+        ),
+        pytest.param(
+            [b"x: 1\n"], [b"x: 2\n"], [b"x: 3\n"], None, id="same-line-changed-twice"
+        ),
+        pytest.param(
+            [b"x: 1\n", b"y: 2\n", b"z: 3\n"],
+            [b"x: 1\n", b"h: 1\n", b"y: 2\n", b"z: 3\n"],
+            [b"new: 0\n"],
+            None,
+            id="insertion-inside-a-replaced-run",
+        ),
+    ],
+)
+def test_resolve_hunk_applies_edits_that_do_not_touch_the_same_line(
+    base: list[bytes],
+    ours: list[bytes],
+    theirs: list[bytes],
+    expected: list[bytes] | None,
+) -> None:
+    from setforge.reconcile_apply import _resolve_hunk
+
+    assert _resolve_hunk(base, ours, theirs) == expected
+
+
+@pytest.mark.parametrize(("pairs", "resolved"), [(64, True), (65, False)])
+def test_resolve_hunk_gives_up_past_a_fixed_number_of_edit_pairs(
+    pairs: int, resolved: bool
+) -> None:
+    from setforge.reconcile_apply import _resolve_hunk
+
+    base = [b"k%d: 0\n" % n for n in range(2 * pairs)]
+    ours = [line.replace(b"0", b"1") if n % 2 else line for n, line in enumerate(base)]
+    theirs = [
+        line if n % 2 else line.replace(b"0", b"2") for n, line in enumerate(base)
+    ]
+
+    merged = _resolve_hunk(base, ours, theirs)
+
+    assert (merged is not None) is resolved
+    if resolved:
+        assert merged == [
+            line.replace(b"0", b"1" if n % 2 else b"2") for n, line in enumerate(base)
+        ]

@@ -1494,3 +1494,31 @@ def test_reconstruct_drops_the_comment_after_a_block_scalar_indicator(
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
     assert out == expected
+
+
+@pytest.mark.parametrize(("added", "placed"), [(512, 512), (513, 0)])
+def test_reconstruct_places_keys_line_by_line_only_up_to_a_bound(
+    monkeypatch: pytest.MonkeyPatch, added: int, placed: int
+) -> None:
+    from setforge.reconcile import structured_units
+
+    base = b"a: 1\n"
+    live = base + b"".join(b"k%d: %d\n" % (n, n) for n in range(added))
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+    units = [replace(unit, cls=HunkClass.SHARED) for unit in fresh]
+    calls: list[str] = []
+    real = structured_units._insertion_line
+
+    def counting(base_model: object, live_model: object, path: str) -> int | None:
+        calls.append(path)
+        return real(base_model, live_model, path)
+
+    monkeypatch.setattr(structured_units, "_insertion_line", counting)
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert _load_model(out, StructuredFormat.YAML) == _load_model(
+        live, StructuredFormat.YAML
+    )
+    assert (out == live) is bool(placed)
+    assert len(calls) == placed
