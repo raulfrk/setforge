@@ -10,7 +10,10 @@ from scripts.check_e2e_manifest import (
     MAX_PR_SMOKE_TESTS,
     MAX_TOTAL_E2E_TESTS,
     PR_SMOKE_EXPR,
+    REQUIRED_SMOKE_VERBS,
+    SMOKE_TEST_VERBS,
     gate_suite_budgets,
+    gate_verb_smoke_coverage,
     run_all_gates,
 )
 
@@ -50,16 +53,7 @@ def test_run_all_gates_collects_exact_ci_lane_expressions(
         expressions.append(extra_marker_expr)
         return [] if extra_marker_expr == PR_SMOKE_EXPR else ["test"]
 
-    manifest = {
-        "test": {
-            "verdict": "keep",
-            "smoke": False,
-            "signal": "test signal",
-            "verbs": ["install"],
-        }
-    }
     monkeypatch.setattr("scripts.check_e2e_manifest._collect_node_ids", _collect)
-    monkeypatch.setattr("scripts.check_e2e_manifest._load_manifest", lambda: manifest)
     run_all_gates()
     assert expressions == [ALL_E2E_EXPR, DETERMINISTIC_E2E_EXPR, PR_SMOKE_EXPR]
 
@@ -81,15 +75,28 @@ def test_run_all_gates_labels_lane_collection_failures(
             raise RuntimeError("collection failed")
         return ["test"]
 
-    manifest = {
-        "test": {
-            "verdict": "keep",
-            "smoke": True,
-            "signal": "test signal",
-            "verbs": ["install"],
-        }
-    }
     monkeypatch.setattr("scripts.check_e2e_manifest._collect_node_ids", _collect)
-    monkeypatch.setattr("scripts.check_e2e_manifest._load_manifest", lambda: manifest)
     violations = run_all_gates()
     assert any(violation.startswith(label) for violation in violations)
+
+
+def test_every_required_verb_has_a_smoke_golden_path() -> None:
+    assert gate_verb_smoke_coverage(list(SMOKE_TEST_VERBS)) == []
+    assert set().union(*SMOKE_TEST_VERBS.values()) == REQUIRED_SMOKE_VERBS
+
+
+def test_verb_smoke_coverage_reports_each_uncovered_verb() -> None:
+    install_only = ["tests/docker/test_e2e_docker.py::test_install_minimal_floor"]
+    violations = gate_verb_smoke_coverage(install_only)
+    uncovered = REQUIRED_SMOKE_VERBS - {"install"}
+    assert len(violations) == len(uncovered)
+    assert all(
+        f"verb {verb!r}" in text
+        for verb, text in zip(sorted(uncovered), violations, strict=True)
+    )
+
+
+def test_verb_smoke_coverage_ignores_unlisted_smoke_tests() -> None:
+    assert len(gate_verb_smoke_coverage(["tests/docker/other.py::test_new"])) == len(
+        REQUIRED_SMOKE_VERBS
+    )
