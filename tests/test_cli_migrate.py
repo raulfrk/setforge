@@ -775,12 +775,13 @@ def test_pin_accepts_current_known_version(tmp_path: Path) -> None:
 
 def test_bare_migrate_prints_check_report_and_specify_hint(tmp_path: Path) -> None:
     """Bare ``setforge migrate`` (no --check/--apply/--pin) prints the
-    check report PLUS the ``specify --check, --apply, or --pin`` hint."""
+    check report PLUS the ``specify --check, --apply, or --pin`` hint and
+    exits 2 like any other usage error."""
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 2, result.output
     assert "specify --check, --apply, or --pin" in result.output
 
 

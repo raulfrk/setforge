@@ -377,6 +377,7 @@ class TestResolveSourcePrecedence:
         assert "3." in msg
         assert "source:" in msg
         assert "4. CWD fallback" in msg
+        assert "setforge init" in msg
 
 
 # ---------------------------------------------------------------------------

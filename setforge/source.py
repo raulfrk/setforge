@@ -865,7 +865,8 @@ def resolve_source(
         f"  1. CLI flag {CLI_FLAG} PATH (not provided)\n"
         f"  2. env {ENV_VAR}=PATH (unset or empty)\n"
         f"  3. {local_config_path} `source:` block (absent or missing key)\n"
-        f"  4. CWD fallback {cwd_yaml} (file not found)"
+        f"  4. CWD fallback {cwd_yaml} (file not found)\n"
+        "First time here? Run `setforge init` to set up a config source."
     )
 
 

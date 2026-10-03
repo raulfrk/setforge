@@ -246,7 +246,12 @@ def _dispatch_check(
         cfg_path=cfg_path, current=current, expected=expected, chain=chain
     )
     if bare:
-        typer.echo("specify --check, --apply, or --pin=X.Y.")
+        typer.secho(
+            "error: specify --check, --apply, or --pin=X.Y.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
 
 
 def _chain_owns_transition(chain: Sequence[Migration]) -> bool:
