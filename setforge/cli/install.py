@@ -143,6 +143,7 @@ from setforge.provision.dispatch import (
     resolve_provision_items,
     validate_provisioning,
 )
+from setforge.provision.local import set_manifest_tracked_root
 from setforge.provision.lock_apply import extension_pins, plugin_pins
 from setforge.provision.ownership import (
     PackageAction,
@@ -2484,6 +2485,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     # locking, config loading, and input snapshots across two repositories.
     config_is_explicit = config is not None
     config = _resolve_config_arg(config).resolve()
+    set_manifest_tracked_root(config.parent / "tracked")
     # Mutual-exclusivity guard for the legacy unexpected-drift flags.
     if auto_accept_tracked and auto_accept_live:
         typer.secho(

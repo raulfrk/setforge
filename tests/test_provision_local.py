@@ -541,3 +541,21 @@ def test_archive_sourced_package_tracks_the_archive_bytes(tmp_path: Path) -> Non
     assert prov.plan([item], prov.probe()).installed == (item.identity,)
     assert prov.apply_one(item).outcome is Outcome.OK
     assert (install_dir / "tool").read_bytes() == b"inner-two"
+
+
+def test_unresolvable_source_is_a_hard_outcome_not_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.errors import NoSourceConfigured
+
+    def no_source() -> None:
+        raise NoSourceConfigured("no config source configured")
+
+    monkeypatch.setattr(loc, "get_resolved_source", no_source)
+    pkg = _pkg(tmp_path / "out", path="bin/tool", binary="tool", extract=False)
+    prov = loc.LocalProvisioner(receipts=ReceiptStore(tmp_path / "receipts"))
+
+    outcome = prov.apply_one(_item(pkg))
+
+    assert outcome.outcome is Outcome.HARD
+    assert "no config source configured" in outcome.detail

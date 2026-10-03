@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from setforge.config import LocalPackage
+from setforge.errors import SetforgeError
 from setforge.provision.installer import (
     InstallError,
     InstallSpec,
@@ -34,6 +35,15 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 
 class LocalSourceError(Exception):
     pass
+
+
+_manifest_tracked_root: Path | None = None
+
+
+def set_manifest_tracked_root(root: Path | None) -> None:
+    """Pin the ``tracked/`` directory of the manifest being installed."""
+    global _manifest_tracked_root
+    _manifest_tracked_root = root
 
 
 def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
@@ -124,7 +134,7 @@ class LocalProvisioner(Provisioner):
         try:
             source = _resolve_tracked_source(self._resolve_tracked_root(), pkg.path)
             return hashlib.sha256(source.read_bytes()).hexdigest()
-        except (LocalSourceError, OSError):
+        except (LocalSourceError, SetforgeError, OSError):
             return None
 
     def _is_stale(self, item: ProvisionItem) -> bool:
@@ -163,7 +173,7 @@ class LocalProvisioner(Provisioner):
         try:
             source = _resolve_tracked_source(self._resolve_tracked_root(), pkg.path)
             data = source.read_bytes()
-        except LocalSourceError as exc:
+        except (LocalSourceError, SetforgeError) as exc:
             # Escape or missing file: both HARD, never silently skipped (repro gate).
             LOGGER.warning("local source rejected for %s: %s", pkg.path, exc)
             return ProvisionOutcome(item=item, outcome=Outcome.HARD, detail=str(exc))
@@ -213,5 +223,7 @@ class LocalProvisioner(Provisioner):
         # Lazy: mirrors install.py's tracked_root derivation via the source layer.
         if self._tracked_root is not None:
             return self._tracked_root
+        if _manifest_tracked_root is not None:
+            return _manifest_tracked_root
         source_dir = resolve_source_dir(get_resolved_source())
         return source_dir / "tracked"
