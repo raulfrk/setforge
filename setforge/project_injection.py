@@ -153,6 +153,27 @@ class ProjectStaleRemovalPlan:
     overlay_git_plan: OverlayGitPlan | None
 
 
+def identity_remedy(
+    raw: dict[str, object], target: Path, inode: int, git_dir: Path | None
+) -> str | None:
+    """Say how a record differs from its live directory and what resolves it.
+
+    A replaced directory can only have its record dropped. A changed Git
+    directory in the same directory still allows a normal removal.
+    """
+    remove = f"`setforge project remove {raw['profile']} {target}`"
+    if raw["target_inode"] != inode:
+        return f"run {remove} to drop the stale record"
+    live = str(git_dir) if git_dir is not None else None
+    if raw["git_dir"] != live:
+        return (
+            "the Git directory changed since injection (recorded "
+            f"{raw['git_dir'] or 'none'}, now {live or 'none'}); run {remove} to "
+            "remove the injection, then inject again"
+        )
+    return None
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -898,13 +919,17 @@ def _validate_existing_injection(  # noqa: C901 - one fail-closed record compari
     plan: ProjectInjectionPlan,
 ) -> dict[str, object]:
     raw = _load_manifest(plan.manifest_path)
-    if raw["target_inode"] != plan.target_inode or raw["git_dir"] != (
-        str(plan.git_dir) if plan.git_dir is not None else None
-    ):
+    if raw["target_inode"] != plan.target_inode:
         raise SetforgeError(
             f"a stale injection record exists for {plan.target}; run "
             f"`setforge project remove {plan.profile} {plan.target}` to drop it, "
             "then inject again"
+        )
+    remedy = identity_remedy(raw, plan.target, plan.target_inode, plan.git_dir)
+    if remedy is not None:
+        raise SetforgeError(
+            f"project profile {plan.profile!r} is already injected at "
+            f"{plan.target}, but {remedy}"
         )
     if (
         raw["profile"] != plan.profile
@@ -1331,7 +1356,6 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         raw["profile"] != profile
         or raw["target"] != str(root)
         or raw["target_inode"] != target_stat.st_ino
-        or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
         or raw["config_root"] != str(config_root)
         or (
             raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
@@ -1585,12 +1609,21 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 overlay=overlay,
             )
         )
+    # The same directory may have gained, lost, or changed its Git directory
+    # since injection. Claims are keyed by the recorded one, and only entries
+    # the live repository still holds can be released.
+    recorded_git_dir = raw["git_dir"]
+    claim_git_dir = (
+        Path(recorded_git_dir)
+        if git_dir is not None and isinstance(recorded_git_dir, str)
+        else None
+    )
     hidden_to_remove: tuple[VisibilityClaim, ...] = ()
-    if git_dir is not None:
+    if claim_git_dir is not None:
         expected_claims = tuple(
             VisibilityClaim(
                 claim_id=claim_id(
-                    target_git_dir=git_dir,
+                    target_git_dir=claim_git_dir,
                     profile=profile,
                     relative_path=item.relative_destination.as_posix(),
                 ),
@@ -1615,24 +1648,30 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     overlay_to_remove = tuple(
         OverlayClaim(
             overlay_claim_id(
-                git_dir=git_dir,
+                git_dir=claim_git_dir,
                 profile=profile,
                 relative_path=item.relative_destination.as_posix(),
             ),
             item.relative_destination.as_posix(),
         )
         for item in files
-        if git_dir is not None
+        if claim_git_dir is not None
         and item.action is ProjectFileAction.OVERLAY
         and (
             schema < _MANIFEST_SCHEMA
             or file_visibilities[item.relative_destination] is ProjectVisibility.HIDDEN
         )
     )
+    if visibility_plan is not None and claim_git_dir != git_dir:
+        attributes = visibility_plan.exclude_path.with_name("attributes")
+        held = set(
+            _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[
+                1
+            ]
+        )
+        overlay_to_remove = tuple(claim for claim in overlay_to_remove if claim in held)
     overlay_git_plan = (
-        plan_overlay_git(root, remove=overlay_to_remove)
-        if git_dir is not None and overlay_to_remove
-        else None
+        plan_overlay_git(root, remove=overlay_to_remove) if overlay_to_remove else None
     )
     recorded_device = raw["target_device"]
     assert isinstance(recorded_device, int)
@@ -1849,13 +1888,17 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
 
 
 def _stale_record_claims(
-    raw: dict[str, object], live: os.stat_result | None, git_dir: str | None
+    raw: dict[str, object], live: os.stat_result | None
 ) -> tuple[str, tuple[ResourceId, ...]] | None:
-    """Return why a record no longer matches its directory, and its claim keys."""
+    """Return why a record's directory is gone for good, and its claim keys.
+
+    Only a missing or replaced directory qualifies. The same directory with a
+    changed Git directory still holds the injected files and is removed normally.
+    """
     if live is None:
         reason = "project directory no longer exists"
-    elif raw["target_inode"] != live.st_ino or raw["git_dir"] != git_dir:
-        reason = "project directory no longer matches the injection record"
+    elif raw["target_inode"] != live.st_ino:
+        reason = "project directory was replaced since injection"
     else:
         return None
     device, inode, raw_files = raw["target_device"], raw["target_inode"], raw["files"]
@@ -1944,7 +1987,7 @@ def plan_stale_removal(  # noqa: C901 - record-backed and record-less leftovers
         raw = _load_manifest(state_path)
         if raw["profile"] != profile or raw["target"] != str(root):
             return None
-        stale = _stale_record_claims(raw, live, claim_git_dir)
+        stale = _stale_record_claims(raw, live)
         if stale is None:
             return None
         if raw["config_root"] != str(canonical_config_path.parent) or (

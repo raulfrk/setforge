@@ -109,7 +109,11 @@ def _render_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
         typer.echo(
             f"  release private filter claims: {plan.overlay_git_plan.attributes_path}"
         )
-    typer.echo("project files are left unchanged")
+    typer.echo(
+        "warning: the record's saved pre-injection contents are discarded and the "
+        "injection cannot be removed normally afterwards; project files are left "
+        "unchanged"
+    )
 
 
 def _render_sync(plan: ProjectSyncPlan) -> None:

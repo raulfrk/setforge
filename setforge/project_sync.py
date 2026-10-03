@@ -59,6 +59,7 @@ from setforge.project_injection import (
     _unlink_project_file,
     _verified_project_target,
     _write_project_file,
+    identity_remedy,
 )
 from setforge.project_overlay import (
     build_overlay,
@@ -189,13 +190,11 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
             continue
         target_device = raw["target_device"]
         assert isinstance(target_device, int)
-        if raw["target_inode"] != target_stat.st_ino or raw["git_dir"] != (
-            str(git_dir) if git_dir is not None else None
-        ):
+        remedy = identity_remedy(raw, root, target_stat.st_ino, git_dir)
+        if remedy is not None:
             raise SetforgeError(
                 f"project injection state does not match target identity: {path}; "
-                f"run `setforge project remove {raw['profile']} {root}` to drop "
-                "the stale record"
+                f"{remedy}"
             )
         profile = raw["profile"]
         if not isinstance(profile, str) or not profile or profile in profiles:

@@ -1112,7 +1112,9 @@ def test_moved_project_record_is_reported_and_dropped_without_blocking_others(
         f"target: {target}\n"
         "stale injection: project directory no longer exists\n"
         "  release ownership: AGENTS.md\n"
-        "project files are left unchanged\n"
+        "warning: the record's saved pre-injection contents are discarded and "
+        "the injection cannot be removed normally afterwards; project files are "
+        "left unchanged\n"
         "dry run: no changes applied\n"
     )
     assert stale_record.exists()
@@ -1165,11 +1167,12 @@ def test_replaced_project_directory_drops_record_claims_and_exclude_entries(
     assert dropped.output == (
         "project profile: demo\n"
         f"target: {target}\n"
-        "stale injection: project directory no longer matches the injection "
-        "record\n"
+        "stale injection: project directory was replaced since injection\n"
         "  release ownership: AGENTS.md\n"
         f"  release private exclude claims: {exclude}\n"
-        "project files are left unchanged\n"
+        "warning: the record's saved pre-injection contents are discarded and "
+        "the injection cannot be removed normally afterwards; project files are "
+        "left unchanged\n"
         "stale injection dropped\n"
     )
     assert not state.exists()
@@ -1504,6 +1507,103 @@ def test_project_messages_carry_no_internal_milestone_names(module: str) -> None
     source = (Path(__file__).parents[1] / "setforge" / f"{module}.py").read_text()
 
     assert re.findall(r"\bG[0-9]\b", source) == []
+
+
+@pytest.mark.parametrize("change", ["git-init", "git-removed"])
+def test_remove_restores_saved_contents_after_the_git_directory_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = tmp_path / "target"
+    if change == "git-removed":
+        _git_repo(target)
+    else:
+        target.mkdir()
+    destination = target / "AGENTS.md"
+    destination.write_bytes(b"USER ORIGINAL\n")
+    destination.chmod(0o640)
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config)]
+    injected = runner.invoke(app, ["project", "inject", "demo", *arguments, "--yes"])
+    assert injected.exit_code == 0, injected.output
+    assert "replace-untracked: AGENTS.md" in injected.output
+    state = manifest_path(target, "demo")
+    record = state.read_bytes()
+    if change == "git-removed":
+        shutil.rmtree(target / ".git")
+        recorded, live = str(target / ".git"), "none"
+    else:
+        subprocess.run(["git", "init", "-q", str(target)], check=True)
+        recorded, live = "none", str(target / ".git")
+    remedy = (
+        f"the Git directory changed since injection (recorded {recorded}, now "
+        f"{live}); run `setforge project remove demo {target}` to remove the "
+        "injection, then inject again"
+    )
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert listed.output == (
+        f"{target}  [demo]\n"
+        f"  error: project target identity does not match the record; {remedy} "
+        f"({state.name})\n"
+    )
+    reinjected = runner.invoke(app, ["project", "inject", "demo", *arguments, "--yes"])
+    assert reinjected.exit_code == 1
+    assert str(reinjected.exception) == (
+        f"project profile 'demo' is already injected at {target}, but {remedy}"
+    )
+    synced = runner.invoke(app, ["project", "sync", str(target), "--dry-run"])
+    assert synced.exit_code == 1
+    assert str(synced.exception) == (
+        f"project injection state does not match target identity: {state}; {remedy}"
+    )
+    assert state.read_bytes() == record
+    assert _claim_lifecycles() == [ClaimLifecycle.CLAIMED]
+
+    preview = runner.invoke(app, ["project", "remove", "demo", *arguments, "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert "stale injection" not in preview.output
+    assert "  restore replace-untracked: AGENTS.md\n" in preview.output
+    assert destination.read_bytes() == b"managed instructions\n"
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments, "--yes"])
+
+    assert removed.exit_code == 0, removed.output
+    assert "\nremoval complete\n" in removed.output
+    assert destination.read_bytes() == b"USER ORIGINAL\n"
+    assert destination.stat().st_mode & 0o7777 == 0o640
+    assert not state.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+
+
+def test_remove_restores_tracked_overlay_after_the_git_directory_was_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", *arguments, "--auto=use-profile"]
+    )
+    assert injected.exit_code == 0, injected.output
+    shutil.rmtree(target / ".git")
+
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, removed.output
+    assert destination.read_text() == "team instructions\n"
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
 
 
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(

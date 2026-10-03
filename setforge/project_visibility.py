@@ -37,6 +37,7 @@ from setforge.project_injection import (
     _require_compatible_visibility,
     _sha256,
     _verified_project_target,
+    identity_remedy,
     plan_removal,
 )
 from setforge.project_overlay import clean_content, read_overlay
@@ -280,20 +281,19 @@ def _validated_record(
     record: Path, raw: dict[str, object], payload: bytes
 ) -> tuple[RecordedProjectInjection, tuple[StoredProjectFile, ...]]:
     target = Path(str(raw["target"]))
-    remedy = (
-        f"run `setforge project remove {raw['profile']} {target}` "
-        "to drop the stale record"
-    )
     if not target.is_dir():
-        raise SetforgeError(f"project directory no longer exists; {remedy}")
+        raise SetforgeError(
+            "project directory no longer exists; run "
+            f"`setforge project remove {raw['profile']} {target}` "
+            "to drop the stale record"
+        )
     root, git_dir, target_info = _verified_project_target(target)
     target_device = raw["target_device"]
     assert isinstance(target_device, int)
-    if (
-        str(root) != raw["target"]
-        or raw["target_inode"] != target_info.st_ino
-        or raw["git_dir"] != (str(git_dir) if git_dir is not None else None)
-    ):
+    if str(root) != raw["target"]:
+        raise SetforgeError("project target identity does not match the record")
+    remedy = identity_remedy(raw, root, target_info.st_ino, git_dir)
+    if remedy is not None:
         raise SetforgeError(
             f"project target identity does not match the record; {remedy}"
         )

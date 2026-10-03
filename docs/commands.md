@@ -115,8 +115,12 @@ otherwise inconsistent records stay visible as errors and make the command
 exit nonzero. A record whose project directory was moved, deleted, or replaced
 names the command that drops it: `setforge project remove <profile> <path>`
 releases that record's ownership claims and private Git entries without
-touching project files. The same command clears claims left behind when the
+touching project files. Dropping discards the pre-injection contents saved in
+the record, so the preview warns that the injection cannot be removed normally
+afterwards. The same command clears claims left behind when the
 record itself was lost. A stale record never blocks injecting other projects.
+A directory that is still the same one but gained, lost, or changed its Git
+directory is not stale: `project remove` restores it normally.
 
 `setforge project visibility <path> <file>` changes one normalized,
 target-relative destination. `--tracked` exposes an injected hunk as an
