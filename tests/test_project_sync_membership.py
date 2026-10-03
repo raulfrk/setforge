@@ -546,7 +546,9 @@ def test_sync_refuses_new_member_with_opposing_linked_worktree_visibility(
     )
 
     assert synced.exit_code == 1, synced.output
-    assert "conflicts across linked worktrees" in str(synced.exception)
+    assert "conflicts with another injection in this repository" in str(
+        synced.exception
+    )
     assert {
         path: path.read_bytes() if path.exists() else None for path in preserved_paths
     } == before

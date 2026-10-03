@@ -244,7 +244,9 @@ def test_visibility_refuses_linked_worktree_intent_conflict(tmp_path: Path) -> N
         ["project", "visibility", str(target), "AGENTS.md", "--tracked", "--yes"],
     )
     assert changed.exit_code == 1
-    assert "conflicts across linked worktrees" in str(changed.exception)
+    assert "conflicts with another injection in this repository" in str(
+        changed.exception
+    )
     assert _git(target, "check-ignore", "AGENTS.md").strip() == "AGENTS.md"
 
 

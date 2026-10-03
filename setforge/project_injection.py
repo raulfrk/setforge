@@ -210,7 +210,7 @@ def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
         git_dir_raw = _run_git(resolved, ["rev-parse", "--git-dir"]).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise SetforgeError(
-            f"project target must be an existing Git worktree root in G2: {resolved}"
+            f"project target must be an existing Git worktree root: {resolved}"
         ) from exc
     if top != resolved:
         raise SetforgeError(
@@ -593,7 +593,7 @@ def _plan_injection_visibility(
     profile: str,
     files: tuple[ProjectFilePlan, ...],
     visibilities: tuple[ProjectVisibility, ...],
-) -> tuple[VisibilityPlan, OverlayGitPlan]:
+) -> tuple[VisibilityPlan, OverlayGitPlan | None]:
     for requested in ProjectVisibility:
         relative_paths = {
             item.relative_destination.as_posix()
@@ -635,7 +635,7 @@ def _plan_injection_visibility(
     )
     return (
         plan_claims(target, add=visibility_claims),
-        plan_overlay_git(target, add=overlay_claims),
+        plan_overlay_git(target, add=overlay_claims) if overlay_claims else None,
     )
 
 
@@ -656,8 +656,8 @@ def _require_compatible_visibility(  # noqa: C901 - one fail-closed sibling scan
     if visibility is ProjectVisibility.TRACKED and relative_paths & hidden_paths:
         conflict = sorted(relative_paths & hidden_paths)[0]
         raise SetforgeError(
-            f"project visibility conflicts across linked worktrees for {conflict}: "
-            "the repository already has a hidden claim"
+            "project visibility conflicts with another injection in this "
+            f"repository for {conflict}: it is already hidden"
         )
     records = state_root() / "project-injections"
     if not records.is_dir():
@@ -703,8 +703,8 @@ def _require_compatible_visibility(  # noqa: C901 - one fail-closed sibling scan
         if mismatched is not None:
             other_visibility = other_visibilities[mismatched]
             raise SetforgeError(
-                "project visibility conflicts across linked worktrees for "
-                f"{mismatched}: "
+                "project visibility conflicts with another injection in this "
+                f"repository for {mismatched}: "
                 f"recorded {other_visibility.value}, requested {visibility.value}"
             )
 
@@ -894,7 +894,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
     return raw
 
 
-def _validate_existing_injection(
+def _validate_existing_injection(  # noqa: C901 - one fail-closed record comparison
     plan: ProjectInjectionPlan,
 ) -> dict[str, object]:
     raw = _load_manifest(plan.manifest_path)
@@ -914,11 +914,18 @@ def _validate_existing_injection(
             raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
             and raw["config_path"] != str(plan.config_path)
         )
-        or raw["visibility"] != plan.visibility.value
     ):
         raise SetforgeError(
-            "project injection request differs from recorded state; use project "
-            "sync when G4 is available"
+            f"project profile {plan.profile!r} is already injected at {plan.target} "
+            f"from another config ({raw['config_root']}); remove it with that "
+            "config first"
+        )
+    if raw["visibility"] != plan.visibility.value:
+        raise SetforgeError(
+            f"project profile {plan.profile!r} is already injected at {plan.target} "
+            f"with {raw['visibility']} Git visibility; change one file with "
+            "`setforge project visibility`, or run `setforge project remove` and "
+            "inject again"
         )
     raw_files = raw["files"]
     assert isinstance(raw_files, list)
@@ -933,8 +940,8 @@ def _validate_existing_injection(
     ]
     if observed != expected:
         raise SetforgeError(
-            "project profile or source changed since injection; use project sync "
-            "when G4 is available"
+            "project profile or source changed since injection; run "
+            f"`setforge project sync {plan.target}`"
         )
     for item, record in zip(plan.files, raw_files, strict=True):
         assert isinstance(record, dict)
@@ -1870,8 +1877,12 @@ def _stale_git_plans(
     root: Path, recorded_git_dir: Path, profile: str, relatives: tuple[str, ...]
 ) -> tuple[VisibilityPlan | None, OverlayGitPlan | None]:
     """Plan releasing only the private Git entries this injection still holds."""
-    hidden = set(read_claims(root)[3])
-    filtered = set(_parse_attributes(plan_overlay_git(root).attributes_before)[1])
+    exclude_path, _, _, hidden_claims = read_claims(root)
+    hidden = set(hidden_claims)
+    attributes = exclude_path.with_name("attributes")
+    filtered = set(
+        _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[1]
+    )
     hidden_to_remove = tuple(
         claim
         for claim in (

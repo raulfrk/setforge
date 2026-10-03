@@ -137,7 +137,9 @@ hidden files therefore remain absent from normal `git status`.
 SetForge applies either hidden or tracked visibility (`--git-hidden` or
 `--git-tracked`) while injecting. Hidden files receive exact, root-anchored
 claims in the repository's private `.git/info/exclude`; they do not appear in
-normal `git status`, and no hide metadata is committed. Tracked files remain
+normal `git status`, and no hide metadata is committed. A repository without
+`.git/info` gets that directory created; a symlinked `info/exclude` is refused
+rather than followed. Tracked files remain
 ordinary untracked Git content until you stage them—SetForge never stages them.
 Removal releases only that injection's private claims and preserves both user
 exclude text and claims still used by sibling linked worktrees.

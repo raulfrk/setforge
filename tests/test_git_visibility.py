@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -152,7 +153,7 @@ def test_transition_refuses_committed_and_unrepresentable_paths(tmp_path: Path) 
     target = _repo(tmp_path / "repo")
     (target / "tracked.txt").write_text("team")
     _git(target, "add", "tracked.txt")
-    with pytest.raises(SetforgeError, match="G5"):
+    with pytest.raises(SetforgeError, match="cannot hide an already-committed file"):
         plan_file_visibility(
             target,
             claim=VisibilityClaim("d" * 64, "tracked.txt"),
@@ -244,8 +245,12 @@ def test_exclude_symlink_fails_closed_without_writing_target(tmp_path: Path) -> 
     exclude.unlink()
     exclude.symlink_to(external)
 
-    with pytest.raises(SetforgeError, match="cannot be read"):
+    with pytest.raises(SetforgeError) as failure:
         plan_claims(target, add=(VisibilityClaim("f" * 64, "private.txt"),))
+    assert str(failure.value) == (
+        f"Git visibility state cannot be read: {exclude} is a symbolic link; "
+        "replace it with a regular file or inject with --git-tracked"
+    )
     assert external.read_text() == "do not touch\n"
 
 
@@ -293,3 +298,49 @@ def test_apply_rejects_replaced_info_parent_with_identical_exclude(
         apply_claims(plan)
 
     assert replacement.read_bytes() == plan.before
+
+
+@pytest.mark.parametrize("missing", ["info", "exclude"])
+def test_missing_info_directory_or_exclude_reads_as_empty_and_is_created_on_apply(
+    tmp_path: Path, missing: str
+) -> None:
+    target = _repo(tmp_path / "repo")
+    info = target / ".git" / "info"
+    exclude = info / "exclude"
+    if missing == "info":
+        shutil.rmtree(info)
+    else:
+        exclude.unlink()
+    claim = VisibilityClaim("f" * 64, "private.txt")
+
+    assert read_claims(target) == (exclude, b"", 0o644, ())
+    plan = plan_claims(target, add=(claim,))
+    assert (plan.before, plan.before_mode) == (b"", 0o644)
+    assert plan.create_parent is (missing == "info")
+    assert not exclude.exists()
+    assert info.exists() is (missing == "exclude")
+    apply_claims(plan_claims(target))
+    assert not exclude.exists()
+
+    apply_claims(plan)
+
+    assert info.stat().st_mode & 0o7777 == 0o755
+    assert exclude.stat().st_mode & 0o7777 == 0o644
+    assert read_claims(target)[3] == (claim,)
+    assert _git(target, "check-ignore", "private.txt").strip() == "private.txt"
+    apply_claims(plan_claims(target, remove=(claim,)))
+    assert exclude.read_bytes() == b""
+
+
+def test_apply_refuses_info_directory_created_after_planning(tmp_path: Path) -> None:
+    target = _repo(tmp_path / "repo")
+    info = target / ".git" / "info"
+    shutil.rmtree(info)
+    plan = plan_claims(target, add=(VisibilityClaim("f" * 64, "private.txt"),))
+    info.mkdir()
+
+    with pytest.raises(SetforgeError) as failure:
+        apply_claims(plan)
+
+    assert str(failure.value) == "Git visibility state changed before apply; retry"
+    assert list(info.iterdir()) == []

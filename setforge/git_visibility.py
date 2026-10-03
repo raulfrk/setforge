@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ _BEGIN = b"\n# >>> setforge project visibility v1 >>>\n"
 _END = b"# <<< setforge project visibility v1 <<<\n"
 _CLAIM = re.compile(rb"# claim ([0-9a-f]{64}) (.+)\n")
 _CLAIM_ID = re.compile(r"[0-9a-f]{64}")
+_DEFAULT_MODE = 0o644
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -40,6 +42,7 @@ class VisibilityPlan:
     after: bytes
     added: tuple[VisibilityClaim, ...]
     removed: tuple[VisibilityClaim, ...]
+    create_parent: bool = False
 
     @property
     def changed(self) -> bool:
@@ -83,7 +86,7 @@ def info_exclude_path(target: Path) -> Path:
         if not common.is_absolute():
             common = target / common
         expected = common.resolve(strict=True) / "info" / "exclude"
-        resolved_parent = path.parent.resolve(strict=True)
+        resolved_parent = path.parent.resolve()
     except OSError as exc:
         raise SetforgeError(f"Git visibility path cannot be resolved: {path}") from exc
     resolved = resolved_parent / path.name
@@ -205,6 +208,8 @@ def _open_exclude_parent(path: Path) -> tuple[int, os.stat_result]:
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
         )
         info = os.fstat(descriptor)
+    except FileNotFoundError:
+        raise
     except OSError as exc:
         raise SetforgeError(
             f"Git visibility parent cannot be opened safely: {path.parent}: {exc}"
@@ -249,7 +254,14 @@ def _read_exclude_at(parent_fd: int, path: Path) -> tuple[bytes, int]:
             payload = handle.read(16 * 1024 * 1024 + 1)
         if len(payload) > 16 * 1024 * 1024:
             raise SetforgeError("Git visibility state is too large")
+    except FileNotFoundError:
+        return b"", _DEFAULT_MODE
     except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise SetforgeError(
+                f"Git visibility state cannot be read: {path} is a symbolic link; "
+                "replace it with a regular file or inject with --git-tracked"
+            ) from exc
         raise SetforgeError(
             f"Git visibility state cannot be read: {path}: {exc}"
         ) from exc
@@ -259,18 +271,42 @@ def _read_exclude_at(parent_fd: int, path: Path) -> tuple[bytes, int]:
     return payload, stat.S_IMODE(info.st_mode)
 
 
-def read_claims(
-    target: Path,
-) -> tuple[Path, bytes, int, tuple[VisibilityClaim, ...]]:
-    """Read and strictly validate SetForge claims without changing Git state."""
-    path = info_exclude_path(target)
-    parent_fd, parent_info = _open_exclude_parent(path)
+def _read_state(path: Path) -> tuple[bytes, int, os.stat_result, bool]:
+    """Read the exclude bytes and the directory identity that binds a plan.
+
+    Git ignores a missing ``info`` directory or exclude file, so both read as
+    empty. Without ``info`` the Git common directory binds the plan instead and
+    the last value tells apply to create ``info`` there.
+    """
+    try:
+        parent_fd, parent_info = _open_exclude_parent(path)
+    except FileNotFoundError:
+        try:
+            return (
+                b"",
+                _DEFAULT_MODE,
+                path.parent.parent.stat(follow_symlinks=False),
+                True,
+            )
+        except OSError as exc:
+            raise SetforgeError(
+                f"Git visibility parent cannot be opened safely: {path.parent}: {exc}"
+            ) from exc
     try:
         _require_parent_identity(path, parent_info)
         payload, mode = _read_exclude_at(parent_fd, path)
         _require_parent_identity(path, parent_info)
     finally:
         os.close(parent_fd)
+    return payload, mode, parent_info, False
+
+
+def read_claims(
+    target: Path,
+) -> tuple[Path, bytes, int, tuple[VisibilityClaim, ...]]:
+    """Read and strictly validate SetForge claims without changing Git state."""
+    path = info_exclude_path(target)
+    payload, mode, _, _ = _read_state(path)
     _, claims, _ = _parse(payload)
     return path, payload, mode, claims
 
@@ -283,13 +319,7 @@ def plan_claims(
 ) -> VisibilityPlan:
     """Plan an exact claim update against the current exclude bytes."""
     path = info_exclude_path(target)
-    parent_fd, parent_info = _open_exclude_parent(path)
-    try:
-        _require_parent_identity(path, parent_info)
-        before, before_mode = _read_exclude_at(parent_fd, path)
-        _require_parent_identity(path, parent_info)
-    finally:
-        os.close(parent_fd)
+    before, before_mode, parent_info, create_parent = _read_state(path)
     _, current, _ = _parse(before)
     prefix, parsed, suffix = _parse(before)
     assert parsed == current
@@ -320,6 +350,7 @@ def plan_claims(
         after=_render(prefix, claims, suffix),
         added=tuple(added),
         removed=tuple(removed),
+        create_parent=create_parent,
     )
 
 
@@ -349,9 +380,7 @@ def plan_file_visibility(
         check=False,
     )
     if tracked.returncode == 0:
-        raise SetforgeError(
-            "Git visibility for an already-committed file is planned for G5"
-        )
+        raise SetforgeError("Git visibility cannot hide an already-committed file")
     if tracked.returncode != 1:
         detail = tracked.stderr.strip() or "unknown Git error"
         raise SetforgeError(f"cannot classify Git visibility destination: {detail}")
@@ -377,11 +406,48 @@ def plan_file_visibility(
     return plan_claims(target, remove=(claim,) if own is not None else ())
 
 
+def _create_exclude_parent(plan: VisibilityPlan) -> None:
+    """Create the missing ``info`` directory inside the bound common directory."""
+    try:
+        common_fd = os.open(
+            plan.exclude_path.parent.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+    except OSError as exc:
+        raise SetforgeError(
+            "Git visibility parent changed before apply; retry"
+        ) from exc
+    try:
+        info = os.fstat(common_fd)
+        if (info.st_dev, info.st_ino) != (plan.parent_device, plan.parent_inode):
+            raise SetforgeError("Git visibility parent changed before apply; retry")
+        try:
+            os.mkdir(plan.exclude_path.parent.name, mode=0o755, dir_fd=common_fd)
+        except FileExistsError as exc:
+            raise SetforgeError(
+                "Git visibility state changed before apply; retry"
+            ) from exc
+        os.fsync(common_fd)
+    finally:
+        os.close(common_fd)
+
+
 def apply_claims(plan: VisibilityPlan) -> None:
     """Apply a byte-bound visibility plan atomically."""
-    parent_fd, parent_info = _open_exclude_parent(plan.exclude_path)
+    if plan.create_parent:
+        if not plan.changed:
+            return
+        _create_exclude_parent(plan)
     try:
-        expected = (plan.parent_device, plan.parent_inode)
+        parent_fd, parent_info = _open_exclude_parent(plan.exclude_path)
+    except FileNotFoundError as exc:
+        raise SetforgeError(
+            "Git visibility parent changed before apply; retry"
+        ) from exc
+    try:
+        expected = (
+            None if plan.create_parent else (plan.parent_device, plan.parent_inode)
+        )
         _require_parent_identity(plan.exclude_path, parent_info, expected=expected)
         current, current_mode = _read_exclude_at(parent_fd, plan.exclude_path)
         if current != plan.before or current_mode != plan.before_mode:

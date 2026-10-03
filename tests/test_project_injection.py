@@ -1393,6 +1393,119 @@ def test_tracked_overlay_removal_restores_git_private_files_exactly(
     assert destination.read_text() == "team instructions\n"
 
 
+def test_hidden_injection_works_in_repository_without_info_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    shutil.rmtree(target / ".git" / "info")
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config)]
+
+    preview = runner.invoke(app, ["project", "inject", "demo", *arguments, "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert not (target / ".git" / "info").exists()
+    injected = runner.invoke(app, ["project", "inject", "demo", *arguments, "--yes"])
+    assert injected.exit_code == 0, injected.output
+    status = subprocess.run(
+        ["git", "-C", str(target), "status", "--short"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == ""
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == f"{target}  [demo]\n  hidden: AGENTS.md\n"
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments, "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert not (target / "AGENTS.md").exists()
+    assert (target / ".git" / "info" / "exclude").read_bytes() == b""
+
+
+def test_reinjection_errors_name_the_command_that_applies_the_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _two_profiles_one_destination(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    assert runner.invoke(app, inject).exit_code == 0
+
+    other_flag = runner.invoke(app, [*inject, "--git-tracked"])
+    assert other_flag.exit_code == 1
+    assert str(other_flag.exception) == (
+        f"project profile 'demo' is already injected at {target} with hidden Git "
+        "visibility; change one file with `setforge project visibility`, or run "
+        "`setforge project remove` and inject again"
+    )
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text("updated\n")
+    changed = runner.invoke(app, inject)
+    assert changed.exit_code == 1
+    assert str(changed.exception) == (
+        "project profile or source changed since injection; run "
+        f"`setforge project sync {target}`"
+    )
+
+
+def test_visibility_conflict_between_profiles_does_not_blame_linked_worktrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _two_profiles_one_destination(tmp_path)
+    config.write_text(config.read_text().replace("dst: AGENTS.md\n", "dst: A.md\n", 1))
+    config.write_text(
+        config.read_text()
+        + "      shared:\n        src: AGENTS.md\n        dst: A.md\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    hidden = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert hidden.exit_code == 0, hidden.output
+
+    tracked = runner.invoke(
+        app,
+        [
+            "project",
+            "inject",
+            "other",
+            str(target),
+            "--config",
+            str(config),
+            "--git-tracked",
+            "--dry-run",
+        ],
+    )
+
+    assert tracked.exit_code == 1
+    assert str(tracked.exception) == (
+        "project visibility conflicts with another injection in this repository "
+        "for A.md: it is already hidden"
+    )
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "project_injection",
+        "project_sync",
+        "project_visibility",
+        "project_overlay",
+        "git_overlay",
+        "git_visibility",
+    ],
+)
+def test_project_messages_carry_no_internal_milestone_names(module: str) -> None:
+    import re
+
+    source = (Path(__file__).parents[1] / "setforge" / f"{module}.py").read_text()
+
+    assert re.findall(r"\bG[0-9]\b", source) == []
+
+
 def test_dry_run_and_noninteractive_confirmation_do_not_mutate(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1680,7 +1793,9 @@ def test_linked_hidden_claims_release_independently_and_conflict_with_tracked(
     )
     assert tracked_conflict.exit_code == 1
     assert tracked_conflict.exception is not None
-    assert "linked worktrees" in str(tracked_conflict.exception)
+    assert "conflicts with another injection in this repository" in str(
+        tracked_conflict.exception
+    )
     assert not (target / "AGENTS.md").exists()
 
     remove_linked = CliRunner().invoke(
