@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
+from json5.model import Node
+from json5.model import walk as json5_walk
 from patiencediff import PatienceSequenceMatcher
 
 from setforge.errors import (
@@ -379,28 +381,32 @@ def _line_merge_agreeing(
     return text if agrees else None
 
 
-def _is_strict_json(data: bytes) -> bool:
-    """Whether ``data`` parses with the standard (non-JSON5) JSON grammar."""
+def _has_trailing_comma(data: bytes) -> bool:
+    """Whether a JSON text closes any object or array after a comma."""
     try:
-        json.loads(data)
-    except ValueError:
+        model = _load_model(data, StructuredFormat.JSONC)
+    except StructuredParseError:
         return False
-    return True
+    return any(
+        getattr(node, "trailing_comma", None) is not None
+        for node in json5_walk(cast("Node", model))
+    )
 
 
 def _loses_strictness(
     text: bytes, live: bytes, tracked: bytes, fmt: StructuredFormat
 ) -> bool:
-    """Whether ``text`` needs JSON5 syntax neither strict-JSON source uses.
+    """Whether ``text`` has a JSON trailing comma that neither source uses.
 
-    Lines joined from two strict JSON files can leave a trailing comma, which
-    the json5 loader accepts but a strict consumer of the file rejects.
+    Lines joined from two files can leave a comma before a closing brace. The
+    json5 loader accepts it, but a strict consumer of the file rejects it, and
+    in a commented file it is still syntax nobody wrote.
     """
     return (
         fmt is StructuredFormat.JSONC
-        and _is_strict_json(live)
-        and _is_strict_json(tracked)
-        and not _is_strict_json(text)
+        and _has_trailing_comma(text)
+        and not _has_trailing_comma(live)
+        and not _has_trailing_comma(tracked)
     )
 
 

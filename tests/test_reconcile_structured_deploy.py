@@ -1110,3 +1110,17 @@ def test_de_aliased_key_keeps_the_value_its_side_wrote(
     assert out.content == expected
     assert out.new_base == upstream
     _assert_converged(fid, out, upstream, _FMT)
+
+
+def test_commented_json_does_not_gain_a_trailing_comma_either() -> None:
+    fid = file_id("jsonc-trailing-comma")
+    base = b'{\n  "k0": 4,\n  "k4": 3,\n  "k5": 4\n}\n'
+    host = b'{\n  "k0": 4,\n  "k4": 3,\n  // h note\n  "k5": 4\n}\n'
+    upstream = b'{\n  "k0": 4,\n  "k4": 3\n}\n'
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b'{\n  "k0": 4,\n  "k4": 3\n  // h note\n}\n'
+    _assert_converged(fid, out, upstream, _JSON)
