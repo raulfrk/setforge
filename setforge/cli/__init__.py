@@ -510,6 +510,24 @@ def _handle_setforge_error(exc: SetforgeError) -> None:
     sys.exit(1)
 
 
+def _handle_os_error(exc: OSError) -> None:
+    """Render an escaped OS failure as its reason and path and exit non-zero.
+
+    The traceback stays available under ``-vv`` so an unexpected failure can
+    still be located; notes attached during rollback are printed as well.
+    """
+    LOGGER.debug("unhandled %s", type(exc).__name__, exc_info=exc)
+    paths = [str(name) for name in (exc.filename, exc.filename2) if name is not None]
+    message = (
+        f"{exc.strerror or exc}: {' -> '.join(paths)}"
+        if paths
+        else f"{type(exc).__name__}: {exc}"
+    )
+    _handle_setforge_error(
+        SetforgeError("\n".join((message, *getattr(exc, "__notes__", ()))))
+    )
+
+
 def main() -> None:
     """Entry point that wraps ``app`` with :class:`SetforgeError` handling."""
     global _INVOCATION_FORMAT
@@ -520,3 +538,5 @@ def main() -> None:
         _handle_setforge_error(exc)
     except ValidationError as exc:
         _handle_config_validation_error(exc)
+    except OSError as exc:
+        _handle_os_error(exc)

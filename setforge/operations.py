@@ -197,10 +197,12 @@ def journal_path(profile: str) -> Path:
 @contextmanager
 def _registry_lock() -> Iterator[None]:
     """Serialize global journal discovery and creation across processes."""
+    from setforge.locking import _acquire_fd
+
     root = journals_root()
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".registry.lock").open("a") as fd:
-        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        _acquire_fd(fd, timeout=None, timeout_message="")
         try:
             yield
         finally:

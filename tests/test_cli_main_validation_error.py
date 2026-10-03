@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -177,3 +178,66 @@ def test_main_human_domain_error_stays_on_stderr(
     assert captured.out == ""
     assert "error: profile not found: missing" in captured.err
     assert code == 1
+
+
+def _raise_from_app(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> int:
+    def _fail() -> None:
+        raise error
+
+    monkeypatch.setattr("setforge.cli.app", _fail)
+    return _run_main(["setforge", "install"], monkeypatch)
+
+
+def test_main_renders_escaped_os_error_as_reason_and_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    error = PermissionError(13, "Permission denied", "/live/.note.txt.tmp")
+    error.add_note("automatic recovery failed; the journal was retained: boom")
+
+    code = _raise_from_app(monkeypatch, error)
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        "error: Permission denied: /live/.note.txt.tmp",
+        "automatic recovery failed; the journal was retained: boom",
+    ]
+    assert "Traceback" not in captured.out + captured.err
+    assert code == 1
+
+
+def test_main_names_the_exception_when_an_os_error_has_no_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = _raise_from_app(monkeypatch, OSError(116, "Stale file handle"))
+
+    assert capsys.readouterr().err == "error: OSError: [Errno 116] Stale file handle\n"
+    assert code == 1
+
+
+def test_main_keeps_os_error_traceback_for_debug_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = OSError(5, "Input/output error", "/live/note.txt")
+
+    with caplog.at_level(logging.DEBUG, logger="setforge.cli"):
+        _raise_from_app(monkeypatch, error)
+
+    assert [record.exc_info[1] for record in caplog.records if record.exc_info] == [
+        error
+    ]
+
+
+def test_main_still_lets_programming_errors_escape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail() -> None:
+        raise AttributeError("bug")
+
+    monkeypatch.setattr("setforge.cli.app", _fail)
+    monkeypatch.setattr(sys, "argv", ["setforge", "install"])
+
+    with pytest.raises(AttributeError, match="bug"):
+        main()

@@ -1,6 +1,7 @@
 """Tests for SetForge's profile, lockfile, and global resource locks."""
 
 import ast
+import errno
 import fcntl
 import inspect
 import os
@@ -90,6 +91,47 @@ def test_timeout_raises_on_contention(state_dir: Path) -> None:
     finally:
         fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
         holder.close()
+
+
+@pytest.mark.parametrize("timeout", [None, 0.2])
+def test_lock_refused_by_the_filesystem_names_the_lock_file(
+    monkeypatch: pytest.MonkeyPatch, timeout: float | None
+) -> None:
+    def no_locks(fd: int, operation: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(fcntl, "flock", no_locks)
+
+    with (
+        pytest.raises(SetforgeError) as failure,
+        profile_lock("p", timeout=timeout),
+    ):
+        pytest.fail("lock body ran without the lock")
+
+    message = str(failure.value)
+    assert f"cannot lock {_profile_lock_path('p')}: No locks available" in message
+    assert "filesystem refused the lock" in message
+
+
+def test_journal_registry_lock_refusal_is_a_clean_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge import operations
+
+    def no_locks(fd: int, operation: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(fcntl, "flock", no_locks)
+
+    with pytest.raises(SetforgeError, match=r"cannot lock .*\.registry\.lock"):
+        operations.prepare(
+            command="sync",
+            profile="p",
+            config_dir=None,
+            resources_lock=False,
+            command_line=("sync",),
+            paths=(),
+        )
 
 
 def test_different_profiles_do_not_block_each_other(state_dir: Path) -> None:

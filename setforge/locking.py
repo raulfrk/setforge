@@ -542,18 +542,25 @@ def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[No
 def _acquire_fd(fd: object, *, timeout: float | None, timeout_message: str) -> None:
     """Acquire one flock, optionally with the shared bounded-poll contract."""
     fileno = fd.fileno()  # type: ignore[attr-defined]
-    if timeout is None:
-        fcntl.flock(fileno, fcntl.LOCK_EX)
-        return
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            fcntl.flock(fileno, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        if timeout is None:
+            fcntl.flock(fileno, fcntl.LOCK_EX)
             return
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                raise SetforgeError(timeout_message) from None
-            time.sleep(_POLL_INTERVAL)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fileno, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SetforgeError(timeout_message) from None
+                time.sleep(_POLL_INTERVAL)
+    except OSError as exc:
+        raise SetforgeError(
+            f"cannot lock {getattr(fd, 'name', 'lock file')}: "
+            f"{exc.strerror or exc}; the filesystem refused the lock request "
+            "(on a network filesystem its lock service must be reachable)"
+        ) from exc
 
 
 @contextmanager
