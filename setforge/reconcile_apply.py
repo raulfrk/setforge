@@ -373,8 +373,19 @@ def reconcile_structured_file(
             seed_prompt=seed_prompt,
         )
 
-    # Clean-fast-path: a key-aware 3-way over comment-preserving models.
     if base_raw is not None and isinstance(live, bytes):
+        # Nothing to merge: one side did not move, or both already agree. The
+        # source bytes stand verbatim — a model round-trip would reformat them.
+        if live == tracked or tracked == base_raw:
+            if base_raw == tracked:
+                return ReconcileOutcome(ReconcileKind.NOOP)
+            return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
+        if live == base_raw:
+            return ReconcileOutcome(
+                ReconcileKind.WRITE, content=tracked, new_base=tracked
+            )
+
+        # Clean-fast-path: a key-aware 3-way over comment-preserving models.
         try:
             result = merge_structural(
                 _load_model(base_raw, fmt),

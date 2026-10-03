@@ -173,3 +173,105 @@ def test_mapping_live_with_non_mapping_other_roots_auto_selects_raw_bytes(
     assert out.kind is ReconcileKind.WRITE
     assert out.content == (host if side is AutoSide.OURS else upstream)
     assert out.new_base == upstream
+
+
+_JSON = StructuredFormat.JSONC
+
+_NOTHING_TO_MERGE_TRACKED_SIDE = [
+    pytest.param(
+        _FMT,
+        b"top: 1\nl:\n  - a   # c\n  - b\nz: 2\ny: null\n",
+        b"top: 1\nl:\n  - a   # c\n  - b\nz: 9\ny: null\n",
+        id="yaml-indented-sequence",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  // old comment\n  "a": 1,\n  "b": 2\n}\n',
+        b'{\n  // new comment\n  "a": 1,\n  "b": 2\n}\n',
+        id="json-comment-only",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "a": 1,\n  "b": 2\n}\n',
+        b'{\n    "a": 1,\n    "b": 2\n}\n',
+        id="json-reindent",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}\n',
+        b'{\n  "z": 0,\n  "a": 1,\n  "b": 2,\n  "c": 3,\n  "d": 4\n}\n',
+        id="json-keys-added",
+    ),
+    pytest.param(
+        _JSON,
+        b'{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}\n',
+        b'{\n  "b": 2,\n  "c": 3\n}\n',
+        id="json-key-deleted",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fmt", "base", "upstream"), _NOTHING_TO_MERGE_TRACKED_SIDE)
+def test_untouched_live_takes_tracked_bytes_verbatim(
+    fmt: StructuredFormat, base: bytes, upstream: bytes
+) -> None:
+    fid = file_id("untouched-live")
+    _seed(fid, base=base, local=base)
+
+    out = reconcile_structured_file(_P, fid, live=base, tracked=upstream, fmt=fmt)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == upstream
+    assert out.new_base == upstream
+
+
+@pytest.mark.parametrize(
+    ("fmt", "base", "host"),
+    [
+        pytest.param(
+            _FMT,
+            b"# c\nshared: 1\nl:\n  - a\n  - b\nsib: 1\n",
+            b"# c\nshared: 2  # mine\nl:\n  - a\n  - b\nsib: 1\n",
+            id="yaml",
+        ),
+        pytest.param(
+            _JSON,
+            b'{\n  "a": 1 // one\n}\n',
+            b'{\n  "a": 1, // one\n  "host": true\n}\n',
+            id="json",
+        ),
+    ],
+)
+def test_unchanged_tracked_leaves_edited_live_alone(
+    fmt: StructuredFormat, base: bytes, host: bytes
+) -> None:
+    fid = file_id("unchanged-tracked")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=base, fmt=fmt)
+
+    assert out.kind is ReconcileKind.NOOP
+    assert out.content is None
+
+
+def test_unchanged_yaml_with_indented_sequence_is_noop() -> None:
+    fid = file_id("indented")
+    doc = b"# top comment\na: 1\nnested:\n  x:\n    - 1\n    - 2\n  y: null\n"
+    _seed(fid, base=doc, local=doc)
+
+    out = reconcile_structured_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.NOOP
+
+
+def test_live_already_equal_to_new_tracked_only_advances_base() -> None:
+    fid = file_id("converged")
+    base = b"l:\n  - a\nz: 2\n"
+    both = b"l:\n  - a\nz: 9\n"
+    _seed(fid, base=base, local=both)
+
+    out = reconcile_structured_file(_P, fid, live=both, tracked=both, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == both
+    assert out.new_base == both
