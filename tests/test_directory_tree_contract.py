@@ -44,6 +44,22 @@ def test_tree_destination_overlap_is_rejected(tmp_path: Path) -> None:
         resolve_and_expand(config, "p", tmp_path)
 
 
+def test_plain_file_destination_nested_under_another_is_rejected(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "tracked").mkdir()
+    config_path = _write_config(
+        tmp_path,
+        "tracked_files:\n"
+        "  outer: {src: outer, dst: /tmp/root/dir}\n"
+        "  inner: {src: inner, dst: /tmp/root/dir/file}\n"
+        "profiles: {p: {tracked_files: [outer, inner]}}\n",
+    )
+    config = load_config(config_path)
+    with pytest.raises(ConfigError, match=r"destination overlap.*'outer'.*'inner'"):
+        resolve_and_expand(config, "p", tmp_path)
+
+
 def test_tree_capture_and_named_stage_refuse_one_way_output(tmp_path: Path) -> None:
     source = tmp_path / "tracked" / "tools"
     source.mkdir(parents=True)

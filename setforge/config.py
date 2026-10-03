@@ -1937,9 +1937,14 @@ def validate_tree_destination_boundaries(
                     f"duplicate deploy dst {left_path}"
                 )
             nested = left_path in right_path.parents or right_path in left_path.parents
-            if nested and (left.tree is not None or right.tree is not None):
+            if nested:
+                kind = (
+                    "managed tree"
+                    if left.tree is not None or right.tree is not None
+                    else "tracked file"
+                )
                 raise ConfigError(
-                    f"managed tree destination overlap: {left_name!r} targets "
+                    f"{kind} destination overlap: {left_name!r} targets "
                     f"{left_path}, while {right_name!r} targets {right_path}"
                 )
 
