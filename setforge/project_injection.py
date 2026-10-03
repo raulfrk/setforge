@@ -1400,6 +1400,9 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
 
     A sync may record merged bytes that still hold local edits. Removal would
     discard them, so by default an ordinary file must equal the profile bytes.
+    A missing file holds nothing to discard: removal leaves it absent or writes
+    the saved pre-injection content back. Only that default mode allows it;
+    a caller validating the record for another purpose still gets an error.
     """
     root, git_dir, target_stat = _verified_project_target(target)
     canonical_config_path = config_path.resolve(strict=True)
@@ -1607,17 +1610,23 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             and _sha256(live_payload) == expected_digest
             and stat.S_IMODE(info.st_mode) == expected_mode
         )
+        removable_missing = info is None and require_profile_content
         if action is ProjectFileAction.OVERLAY:
             if (
                 raw["schema"] == _LEGACY_MANIFEST_SCHEMA
-                or info is None
-                or stat.S_ISLNK(info.st_mode)
-                or not stat.S_ISREG(info.st_mode)
-                or live_payload is None
                 or applied_payload is None
                 or previous_payload is None
                 or applied_mode is None
-                or stat.S_IMODE(info.st_mode) != applied_mode
+                or (
+                    not removable_missing
+                    and (
+                        info is None
+                        or live_payload is None
+                        or stat.S_ISLNK(info.st_mode)
+                        or not stat.S_ISREG(info.st_mode)
+                        or stat.S_IMODE(info.st_mode) != applied_mode
+                    )
+                )
             ):
                 raise SetforgeError(
                     f"tracked project overlay has invalid state: {destination}"
@@ -1632,9 +1641,10 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                     f"tracked project overlay state is missing or mismatched: "
                     f"{destination}"
                 )
-            clean_content(overlay, live_payload)
+            if live_payload is not None:
+                clean_content(overlay, live_payload)
             live_matches_present = True
-        if info is None and not live_matches_absent:
+        if info is None and not live_matches_absent and not removable_missing:
             raise SetforgeError(
                 f"injected project file is missing: {destination}; "
                 f"{missing_file_remedy(root)}"
@@ -1652,12 +1662,14 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             not live_matches_absent
             and not live_matches_present
             and not live_is_baseline
+            and not removable_missing
         ):
+            mode = f"{expected_mode:04o}" if expected_mode is not None else "none"
             raise SetforgeError(
-                f"injected project file has drifted: {destination}; removal would "
-                "discard its local changes. Save them elsewhere, copy "
-                f"{entry['source']} over the file, run `setforge project sync "
-                f"{root}`, then remove again"
+                f"injected project file has drifted: {destination}; its content or "
+                f"mode (expected {mode}) differs from what was injected and removal "
+                "would discard the difference. Save your changes elsewhere, delete "
+                "the file, then remove again"
             )
         if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
             claim_payload = upstream_payload
@@ -1791,8 +1803,14 @@ def _restore_planned_files(
         elif item.action is ProjectFileAction.OVERLAY:
             if item.overlay is None:
                 raise SetforgeError("tracked project overlay state is missing")
-            overlay_live_payload = item.destination.read_bytes()
-            restored = clean_content(item.overlay, overlay_live_payload)
+            overlay_live_payload = (
+                item.destination.read_bytes() if item.destination.exists() else None
+            )
+            restored = (
+                clean_content(item.overlay, overlay_live_payload)
+                if overlay_live_payload is not None
+                else item.overlay.base
+            )
             _write_project_file(
                 guards.targets[0],
                 item.relative_destination,

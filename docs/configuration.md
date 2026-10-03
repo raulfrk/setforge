@@ -135,7 +135,8 @@ an implicit replacement. Removed members
 reconcile toward the exact pre-injection state and release only their ownership
 and visibility claims. `project remove` refuses while an ordinary injected file
 differs from the profile bytes, including local edits that a sync kept, so it
-never discards them. Existing members keep their visibility throughout sync;
+never discards them. An injected file that is missing holds nothing to lose:
+removal leaves it absent or writes the saved pre-injection content back. Existing members keep their visibility throughout sync;
 hidden files therefore remain absent from normal `git status`.
 
 SetForge applies either hidden or tracked visibility (`--git-hidden` or

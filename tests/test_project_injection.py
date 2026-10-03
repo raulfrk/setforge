@@ -802,9 +802,10 @@ def test_remove_refuses_local_edit_kept_by_sync_until_profile_content_returns(
         refused = runner.invoke(app, arguments)
         assert refused.exit_code == 1
         assert str(refused.exception) == (
-            f"injected project file has drifted: {live}; removal would discard "
-            f"its local changes. Save them elsewhere, copy {source} over the "
-            f"file, run `setforge project sync {target}`, then remove again"
+            f"injected project file has drifted: {live}; its content or mode "
+            "(expected 0644) differs from what was injected and removal would "
+            "discard the difference. Save your changes elsewhere, delete the "
+            "file, then remove again"
         )
         assert live.read_bytes() == merged
         assert state.read_bytes() == record
@@ -1640,12 +1641,11 @@ def test_recreated_project_at_the_same_path_names_a_working_remedy(
     assert (
         f"  error: AGENTS.md: injected project file is missing; {remedy} "
     ) in listed.output
-    for verb in ("inject", "remove"):
-        refused = runner.invoke(app, ["project", verb, "demo", *arguments])
-        assert refused.exit_code == 1
-        assert str(refused.exception) == (
-            f"injected project file is missing: {destination}; {remedy}"
-        )
+    refused = runner.invoke(app, ["project", "inject", "demo", *arguments])
+    assert refused.exit_code == 1
+    assert str(refused.exception) == (
+        f"injected project file is missing: {destination}; {remedy}"
+    )
     assert not destination.exists()
 
     restored = runner.invoke(
@@ -1723,6 +1723,97 @@ def test_remove_accepts_member_whose_local_file_was_kept_at_sync(
     assert local.stat().st_mode & 0o7777 == 0o600
     assert local.stat().st_ino == inode
     assert not (target / "AGENTS.md").exists()
+    assert not manifest_path(target, "demo").exists()
+
+
+@pytest.mark.parametrize("before", ["absent", "user-file", "tracked-file"])
+def test_remove_completes_when_git_directory_changed_and_a_member_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, before: str
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    config = _config(tmp_path)
+    target = tmp_path / "target"
+    destination = target / "AGENTS.md"
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    if before == "tracked-file":
+        (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+            "team instructions\nmanaged instructions\n"
+        )
+        _git_repo(target)
+        destination.write_bytes(b"team instructions\n")
+        destination.chmod(0o640)
+        subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+        arguments.append("--auto=use-profile")
+    else:
+        target.mkdir()
+        if before == "user-file":
+            destination.write_bytes(b"USER ORIGINAL\n")
+            destination.chmod(0o640)
+    injected = runner.invoke(app, ["project", "inject", "demo", *arguments])
+    assert injected.exit_code == 0, injected.output
+    destination.unlink()
+    if before == "tracked-file":
+        shutil.rmtree(target / ".git")
+    else:
+        subprocess.run(["git", "init", "-q", str(target)], check=True)
+    for refused in (
+        runner.invoke(app, ["project", "sync", str(target), "--yes"]),
+        runner.invoke(app, ["project", "inject", "demo", *arguments]),
+    ):
+        assert refused.exit_code == 1
+        assert f"run `setforge project remove demo {target}`" in str(refused.exception)
+
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments[:3], "-y"])
+
+    assert removed.exit_code == 0, removed.output
+    assert "\nremoval complete\n" in removed.output
+    if before == "absent":
+        assert not destination.exists()
+    else:
+        assert destination.read_bytes() == (
+            b"USER ORIGINAL\n" if before == "user-file" else b"team instructions\n"
+        )
+        assert destination.stat().st_mode & 0o7777 == 0o640
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == "no project injections recorded\n"
+
+
+@pytest.mark.parametrize("drift", ["content", "mode"])
+def test_drift_remedy_works_even_after_the_git_directory_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--yes"]
+    assert runner.invoke(app, ["project", "inject", "demo", *arguments]).exit_code == 0
+    destination = target / "AGENTS.md"
+    if drift == "content":
+        destination.write_text("local edit\n")
+    else:
+        destination.chmod(0o600)
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+
+    refused = runner.invoke(app, ["project", "remove", "demo", *arguments])
+    assert refused.exit_code == 1
+    assert str(refused.exception) == (
+        f"injected project file has drifted: {destination}; its content or mode "
+        "(expected 0644) differs from what was injected and removal would "
+        "discard the difference. Save your changes elsewhere, delete the "
+        "file, then remove again"
+    )
+    destination.unlink()
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, removed.output
+    assert not destination.exists()
     assert not manifest_path(target, "demo").exists()
 
 
