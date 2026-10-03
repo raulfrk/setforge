@@ -31,6 +31,7 @@ from setforge.reconcile.structured_units import (
     parse_scalar_draft,
     reconstruct_structured,
     serialize_structured,
+    uses_aliases,
 )
 from setforge.reconcile.types import HunkClass, UnitRef
 
@@ -1176,3 +1177,39 @@ def test_reconstruct_one_line_with_mixed_intent_falls_back_to_the_model() -> Non
     out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
 
     assert out == b"m: {x: 5, y: 2}\nz: 0\n"
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    [
+        (b"a: &x 1\nb: 2\n", False),
+        (b"a: &x 1\nb: *x\n", True),
+        (b"l:\n- &i one\n- *i\n", True),
+        (b"d: &d {r: 1}\ns:\n  <<: *d\n", True),
+        (b"s:\n  <<: {a: 1}\n  b: 2\n", True),
+        (b"s:\n  '<<': 1\n  t: 'a *b'\n", False),
+        (b"", False),
+    ],
+)
+def test_uses_aliases_detects_shared_nodes(document: bytes, expected: bool) -> None:
+    assert uses_aliases(document) is expected
+
+
+def test_uses_aliases_wraps_a_parse_failure() -> None:
+    with pytest.raises(StructuredParseError, match="not parseable"):
+        uses_aliases(b"a: [1\n")
+
+
+def test_reconstruct_keeps_anchors_and_merge_keys_byte_identical() -> None:
+    base = (
+        b"top: 1\ndefaults: &d\n  retries: 3\n  tags: [a, b]\n"
+        b"svc1:\n  <<: *d\n  name: one\nz: 1\n"
+    )
+    live = base.replace(b"top: 1", b"top: 5").replace(b"name: one", b"name: uno")
+    units = _classified(
+        base, live, {"top": HunkClass.LOCAL, "svc1.name": HunkClass.SHARED}
+    )
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == base.replace(b"name: one", b"name: uno")

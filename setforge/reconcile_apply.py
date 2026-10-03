@@ -60,6 +60,7 @@ from setforge.reconcile.structured_units import (
     _load_model,
     models_equal,
     splice_lines_toward,
+    uses_aliases,
 )
 from setforge.reconcile.types import Absent
 from setforge.structural_merge import merge_structural
@@ -377,10 +378,14 @@ def _key_merge(
 
     ``None`` on a same-key conflict and for a side the key engine cannot model
     (unparseable, multi-document, duplicate or non-string keys, a non-mapping
-    root) — the caller line-merges those. Each side is parsed FRESH because
-    ``merge_structural`` mutates ``ours`` (live) in place.
+    root, YAML aliases / merge keys) — the caller line-merges those. Each side
+    is parsed FRESH because ``merge_structural`` mutates ``ours`` (live) in place.
     """
     try:
+        if fmt is StructuredFormat.YAML and any(
+            uses_aliases(side) for side in (base, live, tracked)
+        ):
+            return None
         result = merge_structural(
             _load_model(base, fmt), _load_model(live, fmt), _load_model(tracked, fmt)
         )

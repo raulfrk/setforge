@@ -26,6 +26,7 @@ from typing import Final
 
 from patiencediff import PatienceSequenceMatcher
 from ruamel.yaml import YAML
+from ruamel.yaml.events import AliasEvent, ScalarEvent
 from ruamel.yaml.nodes import ScalarNode
 
 from setforge.errors import (
@@ -163,6 +164,26 @@ def _load_model(data: bytes, fmt: StructuredFormat) -> object:
         return _json5_loads(text, loader=ModelLoader())
     except Exception as err:
         raise StructuredParseError(f"structured input is not parseable: {err}") from err
+
+
+def uses_aliases(data: bytes) -> bool:
+    """Whether YAML ``data`` carries an alias (``*name``) or a ``<<`` merge key.
+
+    Such a document shares one node between several keys. The key merge works
+    on each key's resolved value and re-serialises copies, which would inline
+    the shared node, invent anchors and break the reference.
+    """
+    try:
+        events = list(YAML().parse(io.StringIO(data.decode("utf-8"))))
+    except Exception as err:
+        raise StructuredParseError(f"structured input is not parseable: {err}") from err
+    return any(
+        isinstance(event, AliasEvent)
+        or (
+            isinstance(event, ScalarEvent) and event.value == "<<" and event.implicit[0]
+        )
+        for event in events
+    )
 
 
 def _dump_model(model: object, fmt: StructuredFormat) -> bytes:

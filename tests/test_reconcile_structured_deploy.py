@@ -564,3 +564,91 @@ def test_two_keys_merged_on_one_line_are_re_serialised() -> None:
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"m: {x: 5, y: 7}\nz: 0\n"
+
+
+_ANCHORED = (
+    b"top: 1\ndefaults: &d\n  retries: 3\n  tags: [a, b]\n"
+    b"svc1:\n  <<: *d\n  name: one\nz: 1\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("host", "upstream", "expected"),
+    [
+        pytest.param(
+            _ANCHORED.replace(b"top: 1", b"top: 5"),
+            _ANCHORED.replace(b"retries: 3", b"retries: 9"),
+            _ANCHORED.replace(b"top: 1", b"top: 5").replace(
+                b"retries: 3", b"retries: 9"
+            ),
+            id="upstream-changes-anchored-value",
+        ),
+        pytest.param(
+            _ANCHORED.replace(b"top: 1", b"top: 5"),
+            _ANCHORED.replace(b"z: 1", b"z: 2"),
+            _ANCHORED.replace(b"top: 1", b"top: 5").replace(b"z: 1", b"z: 2"),
+            id="unrelated-keys",
+        ),
+        pytest.param(
+            _ANCHORED.replace(b"top: 1", b"top: 5"),
+            _ANCHORED + b"svc3:\n  <<: *d\n  name: three\n",
+            _ANCHORED.replace(b"top: 1", b"top: 5")
+            + b"svc3:\n  <<: *d\n  name: three\n",
+            id="upstream-adds-merge-key-user",
+        ),
+    ],
+)
+def test_anchors_and_merge_keys_survive_a_merge(
+    host: bytes, upstream: bytes, expected: bytes
+) -> None:
+    fid = file_id("anchors")
+    _seed(fid, base=_ANCHORED, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == expected
+    assert out.new_base == upstream
+
+
+_ALIAS_ONE_LINE = [
+    pytest.param(
+        b"defaults: &d\n  tags: [a, b]\nsvc1: {<<: *d, name: one, port: 1}\n",
+        id="merge-key",
+    ),
+    pytest.param(
+        b"tags: &t [a, b]\nsvc1: {tags: *t, name: one, port: 1}\n",
+        id="alias",
+    ),
+]
+
+
+@pytest.mark.parametrize("base", _ALIAS_ONE_LINE)
+def test_alias_bearing_yaml_is_never_re_serialised(base: bytes) -> None:
+    fid = file_id("anchors-one-line")
+    host = base.replace(b"name: one", b"name: uno")
+    upstream = base.replace(b"port: 1", b"port: 2")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+
+    assert out.kind is ReconcileKind.DEFERRED
+    assert read_base(_P, fid) == base
+
+
+@pytest.mark.parametrize("base", _ALIAS_ONE_LINE)
+@pytest.mark.parametrize("side", [AutoSide.OURS, AutoSide.THEIRS])
+def test_alias_bearing_yaml_conflict_auto_takes_exact_side(
+    base: bytes, side: AutoSide
+) -> None:
+    fid = file_id(f"anchors-one-line-{side}")
+    host = base.replace(b"name: one", b"name: uno")
+    upstream = base.replace(b"port: 1", b"port: 2")
+    _seed(fid, base=base, local=host)
+
+    out = reconcile_structured_file(
+        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
+    )
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == (host if side is AutoSide.OURS else upstream)
