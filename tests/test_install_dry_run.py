@@ -746,28 +746,3 @@ def test_profile_summary_emits_renamed_provisioning_labels(
     assert "  cargo:          0" in result.output
     assert "claude_plugins:" not in result.output
     assert "cargo_binaries:" not in result.output
-
-
-def test_immutable_preview_does_not_reload_host_local_store(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rendering consumes the store projection captured while planning."""
-    calls = 0
-
-    def once(_profile: str) -> dict:
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            raise AssertionError("immutable preview re-read host-local state")
-        return {}
-
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers.host_local_sections_from_store", once
-    )
-
-    _invoke_dry_run(fixture_repo)
-
-    assert calls == 1

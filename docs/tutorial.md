@@ -218,8 +218,6 @@ unexpected drift in 0 file(s)
 === would-be deploy ===
   WOULD install   ~/.config/sample/gitconfig
   WOULD install   ~/.config/sample/notes.md
-=== would-be host-local section inject ===
-  no host-local sections to inject
 === would-be plugin reconcile ===
   nothing declared
 === would-be extension reconcile ===

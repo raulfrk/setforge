@@ -71,8 +71,6 @@ from setforge.compare import (
     warn_if_dst_outside_home,
 )
 from setforge.config import (
-    Config,
-    ResolvedProfile,
     TrackedFile,
 )
 from setforge.errors import (
@@ -81,7 +79,6 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.generated import GeneratedResolution, resolve_generated
-from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.provision.dispatch import ProvisioningPlan
 from setforge.reconcile import FileId
 from setforge.reconcile import store as reconcile_store
@@ -89,50 +86,13 @@ from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
 )
-from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
 from setforge.secrets import SecretsScanResult
-from setforge.source import (
-    HostLocalSection,
-    HostLocalSectionName,
-)
 from setforge.ui.diffview import to_fragments, two_way_lines
 
 if TYPE_CHECKING:
     from setforge.cli.stage import StageSummary
 from setforge.ui.primitives import CANCEL, Button, Cancelled
-
-
-def _load_validated_host_local_sections(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, profile: str
-) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
-    """Project host-local sections from the reconcile store for ``profile``.
-
-    Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
-    every tracked_file in the resolved profile that carries at least one
-    host-local section. tracked_files NOT in the resolved profile are
-    dropped silently (no error — the user may target a different profile on
-    a different host). Ignore stale relocation markers on non-Markdown files:
-    older staging could mint one from a ``#`` comment in a TOML file.
-
-    STAGE B retires the local.yaml ``host_local_sections`` declaration: the
-    sections now live as LOCAL units in the reconcile store, read back by
-    :func:`setforge.reconcile.host_local_view.host_local_sections_from_store`.
-    Shared between :mod:`setforge.cli.install` and :mod:`setforge.cli.compare`
-    so both surfaces read the same store-backed projection.
-    """
-    overlay = host_local_sections_from_store(profile)
-    result: dict[str, dict[HostLocalSectionName, HostLocalSection]] = {}
-    profile_ids = set(resolved.tracked_files)
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        tracked_file = cfg.tracked_files[tf_id]
-        src = resolve_src(tracked_file, repo_root)
-        if src.suffix.lower() not in {".md", ".markdown"}:
-            continue
-        result[tf_id] = sections_map
-    return result
 
 
 def _gated_drift_count(drift_report: compare_mod.CompareReport) -> int:
@@ -202,9 +162,6 @@ def _want_interactive_reconcile(
 def _plan_tracked_files(
     ctx: ProfileContext,
     *,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ],
     section_auto: reconcile_apply.ReconcileAuto | None = None,
     interactive: bool = False,
 ) -> tuple[_PendingDeploy, ...]:
@@ -214,7 +171,6 @@ def _plan_tracked_files(
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is not None:
             continue
-        host_local = host_local_sections_map.get(name) or None
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
@@ -225,7 +181,6 @@ def _plan_tracked_files(
                 sub_src,
                 sub_dst,
                 tracked_file,
-                host_local=host_local,
                 section_auto=section_auto,
                 interactive=interactive,
             )
@@ -474,7 +429,6 @@ def _pending_from_reconcile(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=None,
             resolved=scaffold,
             reconcile=(fid, outcome),
         )
@@ -486,7 +440,6 @@ def _pending_from_reconcile(
         sub_src=sub_src,
         sub_dst=sub_dst,
         tracked_file=tracked_file,
-        host_local=None,
         resolved=replace(scaffold, content=new_content),
         reconcile=(fid, outcome),
     )
@@ -499,7 +452,6 @@ def _resolve_one_pending(
     sub_dst: Path,
     tracked_file: TrackedFile,
     *,
-    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
 ) -> _PendingDeploy:
@@ -528,7 +480,6 @@ def _resolve_one_pending(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=host_local,
             resolved=None,
             symlink_content=(
                 generated.rendered
@@ -553,7 +504,6 @@ def _resolve_one_pending(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=None,
             resolved=replace(resolved, content=generated.rendered),
             generated=generated,
         )
@@ -596,7 +546,6 @@ def _resolve_one_pending(
         sub_src=sub_src,
         sub_dst=sub_dst,
         tracked_file=tracked_file,
-        host_local=host_local,
         resolved=resolved,
     )
 
@@ -614,7 +563,6 @@ class _PendingDeploy:
     sub_src: Path
     sub_dst: Path
     tracked_file: TrackedFile
-    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None
     resolved: deploy.ResolvedDeploy | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
     preview_action: deploy.DeployAction | None = None
@@ -753,7 +701,6 @@ def _execute_pending_deploys(
             typer.echo(
                 f"{result.action.value:>8}  {record.sub_dst} -> {tracked_file.symlink}"
             )
-            _echo_host_local_sections_provenance(record.host_local)
             continue
         if record.resolved is None:
             raise AssertionError(
@@ -782,7 +729,6 @@ def _execute_pending_deploys(
             # so revert's chmod target lines up with its content restore.
             prior_modes[result.dst] = result.prior_mode
         typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
-        _echo_host_local_sections_provenance(record.host_local)
         # ADVANCE the reconcile store only AFTER the live write (the same
         # lockstep, same safe-failure-direction reasoning as the disposition
         # byte base below): a base that lags live re-merges safely next run.
@@ -859,27 +805,6 @@ def _honor_reconcile_removal(record: _PendingDeploy) -> None:
         )
         return
     typer.echo(f"{deploy.DeployAction.REMOVED.value:>8}  {record.sub_dst}")
-
-
-def _echo_host_local_sections_provenance(
-    host_local_sections: Mapping[HostLocalSectionName, HostLocalSection] | None,
-) -> None:
-    """Print a per-section ``injected ... <HOST_LOCAL_PROVENANCE_TAG>`` line.
-
-    No-op when ``host_local_sections`` is ``None`` or empty. The
-    provenance tag (see ``HOST_LOCAL_PROVENANCE_TAG`` in
-    :mod:`setforge.host_local_inject`) matches the mockup in
-    SPEC 1 so users grepping install output can locate
-    every host-local injection at a glance.
-    """
-    if not host_local_sections:
-        return
-    names = ", ".join(sorted(host_local_sections))
-    plural = "s" if len(host_local_sections) != 1 else ""
-    typer.echo(
-        f"    injected {len(host_local_sections)} host-local section{plural} "
-        f"{HOST_LOCAL_PROVENANCE_TAG}: {names}"
-    )
 
 
 def _install_recorded_nothing(
@@ -1201,8 +1126,8 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 #   are all unreachable).
 # - No parallel diff or merge implementation: planned deploy records and the
 #   shared compare report are the preview inputs.
-# - WOULD only on mutating verbs (``deploy`` / ``inject`` / ``install`` /
-#   ``uninstall`` / ``enable`` / ``disable``); section headers and read
+# - WOULD only on mutating verbs (``deploy`` / ``install`` / ``uninstall`` /
+#   ``enable`` / ``disable``); section headers and read
 #   counts go unprefixed.
 # - No ``confirm_auto_operation`` call from the dry-run path: the call
 #   site in :func:`_confirm_legacy_drift_or_exit` is inside
@@ -1223,7 +1148,7 @@ updating the spec + every consumer."""
 def _dry_run_pipeline(
     *,
     ctx: ProfileContext,
-    drift_report: compare_mod.CompareReport | None = None,
+    drift_report: compare_mod.CompareReport,
     staging: tuple[StageSummary, ...] = (),
     deploys: tuple[_PendingDeploy, ...] | None = None,
     provisioning: ProvisioningPlan | None = None,
@@ -1233,10 +1158,6 @@ def _dry_run_pipeline(
     immutable_plan: bool = False,
     record_transition: bool = True,
     secrets_scan: SecretsScanResult | None = None,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ]
-    | None = None,
 ) -> None:
     """Simulate every install phase without mutating filesystem or state.
 
@@ -1250,20 +1171,6 @@ def _dry_run_pipeline(
     _dry_run_emit_profile_summary(ctx)
     _dry_run_emit_staging(staging)
     # NOT profile_lock'd: acquiring it would create the lock file, a dry-run mutation.
-    if host_local_sections_map is None:
-        host_local_sections_map = _load_validated_host_local_sections(
-            ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
-        )
-    if drift_report is None:
-        drift_report = compare_mod.compare_profile(
-            ctx.cfg,
-            ctx.profile,
-            ctx.repo_root,
-            host_local_sections={
-                name: dict(sections)
-                for name, sections in host_local_sections_map.items()
-            },
-        )
     if deploys is not None and len(deploys) != len(tuple(_iter_all_tracked_files(ctx))):
         raise SetforgeError(
             "dry-run: immutable deploy plan does not match the drift report"
@@ -1278,7 +1185,6 @@ def _dry_run_pipeline(
             f"{len(secrets_scan.findings)} finding(s) require a decision"
         )
     _dry_run_emit_deploys(ctx, drift_report, deploys=deploys)
-    _dry_run_emit_host_local_inject(ctx, overlay=host_local_sections_map)
     _dry_run_emit_plugin_reconcile(ctx, plan=plugins, planned=immutable_plan)
     _dry_run_emit_extension_reconcile(ctx, plan=extensions, planned=immutable_plan)
     typer.echo("=== would-be MCP server reconcile ===")
@@ -1450,40 +1356,6 @@ def _dry_run_emit_deploys(
         path = Path(str(raw)).expanduser()
         if not path.exists():
             typer.echo(f"  WOULD bootstrap {path}")
-
-
-def _dry_run_emit_host_local_inject(
-    ctx: ProfileContext,
-    *,
-    overlay: Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]]
-    | None = None,
-) -> None:
-    """Emit the ``=== would-be host-local section inject ===`` block.
-
-    Per SPEC 1's mockup, each ``WOULD inject`` line carries
-    a ``HOST_LOCAL_PROVENANCE_TAG`` so users can identify host-local
-    injections in the dry-run output. No-op when local.yaml is absent or
-    declares no host-local sections for tracked_files in this profile.
-    """
-    typer.echo("=== would-be host-local section inject ===")
-    if overlay is None:
-        overlay = host_local_sections_from_store(ctx.profile)
-    profile_ids = set(ctx.resolved.tracked_files)
-    matched: list[tuple[str, HostLocalSectionName, Path]] = []
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        dst = resolve_dst(ctx.cfg.tracked_files[tf_id])
-        for section_name in sections_map:
-            matched.append((tf_id, section_name, dst))
-    if not matched:
-        typer.echo("  no host-local sections to inject")
-        return
-    for tf_id, section_name, dst in matched:
-        typer.echo(
-            f"  WOULD inject  '{section_name}' into {dst} "
-            f"{HOST_LOCAL_PROVENANCE_TAG} (tracked_file {tf_id!r})"
-        )
 
 
 def _dry_run_emit_plugin_reconcile(

@@ -185,9 +185,6 @@ class InstallPlan:
     """Read-only install decisions consumed by preview and apply."""
 
     ctx: ProfileContext
-    host_local_sections: Mapping[
-        str, Mapping[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
-    ]
     drift_report: compare_mod.CompareReport
     staging: tuple[StageSummary, ...]
     deploys: tuple[_PendingDeploy, ...]
@@ -338,30 +335,6 @@ class SecretPlan:
 
     hashes: tuple[str, ...]
     allowlist_path: Path
-
-
-def _load_validated_host_local_sections(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    profile: str,
-) -> dict[str, dict[source_mod.HostLocalSectionName, source_mod.HostLocalSection]]:
-    """Compatibility seam delegating to the shared overlay loader."""
-    return install_helpers_mod._load_validated_host_local_sections(
-        cfg, resolved, repo_root, profile
-    )
-
-
-def _freeze_host_local_sections(
-    sections: dict[
-        str, dict[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
-    ],
-) -> Mapping[
-    str, Mapping[source_mod.HostLocalSectionName, source_mod.HostLocalSection]
-]:
-    return MappingProxyType(
-        {name: MappingProxyType(dict(values)) for name, values in sections.items()}
-    )
 
 
 def _snapshot_inputs(paths: set[Path]) -> tuple[tuple[Path, bytes | None], ...]:
@@ -652,10 +625,6 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             )
         )
     )
-    host_local = _load_validated_host_local_sections(
-        ctx.cfg, ctx.file_profile, ctx.repo_root, ctx.profile
-    )
-    frozen_host_local = _freeze_host_local_sections(host_local)
     deploy.validate_srcs_exist(ctx.cfg, ctx.file_profile, ctx.repo_root)
     if transition:
         transitions.validate_state_dir_writable()
@@ -663,7 +632,6 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         ctx.cfg,
         ctx.profile,
         ctx.repo_root,
-        host_local_sections=host_local,
         ownership_authorized={
             **_file_ownership_authorization(tracked_entries, file_ownership),
             **{
@@ -675,7 +643,6 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     )
     deploys = install_helpers_mod._plan_tracked_files(
         ctx,
-        host_local_sections_map=frozen_host_local,
         section_auto=section_auto,
         interactive=interactive,
     )
@@ -769,7 +736,6 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         raise SetforgeError("file ownership changed during planning; retry")
     return InstallPlan(
         ctx=ctx,
-        host_local_sections=frozen_host_local,
         drift_report=drift_report,
         staging=staging,
         deploys=deploys,
@@ -1557,7 +1523,6 @@ def _render_install_plan(
         plugins=plan.plugins,
         immutable_plan=True,
         secrets_scan=scan_result,
-        host_local_sections_map=plan.host_local_sections,
         record_transition=transition and not _install_plan_recorded_nothing(plan),
     )
     changed_codex = [codex for codex in plan.codex_configs if codex.changed]

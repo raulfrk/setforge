@@ -56,7 +56,6 @@ _EXPECTED_HEADERS: tuple[str, ...] = (
     "=== would-be drift gate ===",
     "=== would-be secrets gate ===",
     "=== would-be deploy ===",
-    "=== would-be host-local section inject ===",
     "=== would-be plugin reconcile ===",
     "=== would-be extension reconcile ===",
     "=== would-be MCP server reconcile ===",

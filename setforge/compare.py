@@ -60,11 +60,7 @@ from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.operations import journals_root
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
-from setforge.source import (
-    HostLocalSection,
-    HostLocalSectionName,
-    load_local_codex_overlay,
-)
+from setforge.source import load_local_codex_overlay
 from setforge.transitions import state_root
 from setforge.tree_management import plan_tree, read_inventory, scan_tree
 
@@ -715,9 +711,6 @@ def compare_profile(
     *,
     transitions_dir: Path | None = None,
     ignored: frozenset[str] = frozenset(),
-    host_local_sections: (
-        Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
-    ) = None,
     ownership_authorized: Mapping[str, bool] | None = None,
     resolved: ResolvedProfile | None = None,
 ) -> CompareReport:
@@ -731,16 +724,6 @@ def compare_profile(
     ``None`` the orphans list is empty — preserves the pre-orphan call
     shape for callers that don't have a transitions dir handy.
 
-    ``host_local_sections`` is the validated local.yaml overlay shaped
-    ``{tracked_file_id: {section_name: HostLocalSection}}`` (SPEC 1). It is
-    threaded through to :func:`_compare_one` for caller symmetry but no longer
-    alters the diff: host-local content is now owned by the reconcile engine,
-    so :func:`diff_file` performs a plain verbatim comparison. The CLI surface
-    (:func:`setforge.cli.compare.compare`) loads + validates the map
-    via :func:`setforge.cli._install_helpers._load_validated_host_local_sections`
-    before passing it in; callers that don't carry an overlay (e.g.
-    the orphan-detection and status commands) pass ``None``.
-
     The CLI resolves the effective profile first, mutating ``config`` with
     host-local tracked-file paths. This helper re-expands the tracked-file list
     idempotently and reads those already-effective definitions; plugin and
@@ -749,13 +732,11 @@ def compare_profile(
     resolved = resolved or resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
-    overlay = host_local_sections or {}
 
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        host_local = overlay.get(name) or None
 
         if tracked_file.tree is not None:
             desired = scan_tree(src, tracked_file.tree, capture_payloads=True)
@@ -814,7 +795,6 @@ def compare_profile(
                 sub_dst,
                 tracked_file,
                 profile=profile_name,
-                host_local_sections=host_local,
                 ownership_authorized=(
                     ownership_authorized.get(sub_name, False)
                     if ownership_authorized is not None
@@ -968,7 +948,6 @@ def _compare_one(
     tracked_file: TrackedFile,
     *,
     profile: str | None = None,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     ownership_authorized: bool = True,
 ) -> tuple[FileCompare, bool]:
 
@@ -984,7 +963,6 @@ def _compare_one(
             dst,
             tracked_file,
             profile=profile,
-            host_local_sections=host_local_sections,
         )
 
     if not dst.exists():
@@ -1298,7 +1276,6 @@ def _compare_symlinked(
     tracked_file: TrackedFile,
     *,
     profile: str | None = None,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
 
