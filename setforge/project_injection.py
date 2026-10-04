@@ -13,7 +13,9 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from setforge import atomicio, operations
 from setforge.config import (
@@ -23,13 +25,14 @@ from setforge.config import (
 )
 from setforge.errors import SetforgeError
 from setforge.file_ownership import file_resource_id, refuse_active_file_claims
+from setforge.git_info import run_git
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
-    _parse_attributes,
     apply_overlay_git,
     overlay_claim_id,
     plan_overlay_git,
+    read_overlay_claims,
 )
 from setforge.git_visibility import (
     VisibilityClaim,
@@ -66,6 +69,9 @@ from setforge.project_overlay import (
     write_overlay,
 )
 from setforge.transitions import state_root
+
+if TYPE_CHECKING:
+    from setforge.project_sync import AutoResolution
 
 _MANIFEST_SCHEMA = 3
 _PRIOR_MANIFEST_SCHEMA = 2
@@ -174,8 +180,16 @@ def identity_remedy(
     return None
 
 
-def missing_file_remedy(target: Path) -> str:
-    """Name the commands that settle a recorded file missing from the project."""
+def missing_file_remedy(target: Path, profile: object, action: object) -> str:
+    """Name the commands that settle a recorded file missing from the project.
+
+    Sync cannot restore a member overlaid on a file Git tracks.
+    """
+    if action == ProjectFileAction.OVERLAY:
+        return (
+            f"run `setforge project remove {profile} {target}` to remove the "
+            "injection, or restore the file with Git"
+        )
     return (
         f"run `setforge project sync {target} --auto=use-profile` to restore it, "
         f"or `setforge project sync {target}` to keep it deleted"
@@ -202,26 +216,6 @@ def manifest_path(target: Path, profile: str) -> Path:
     )
 
 
-def _run_git(
-    target: Path, args: list[str], *, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    environment = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "Never",
-        "LANG": "C",
-        "LC_ALL": "C",
-    }
-    return subprocess.run(
-        ["git", "-C", str(target), *args],
-        check=check,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        env=environment,
-    )
-
-
 def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
     lexical = path.expanduser().absolute()
     try:
@@ -234,9 +228,9 @@ def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
         top = Path(
-            _run_git(resolved, ["rev-parse", "--show-toplevel"]).stdout.strip()
+            run_git(resolved, ["rev-parse", "--show-toplevel"]).stdout.strip()
         ).resolve()
-        git_dir_raw = _run_git(resolved, ["rev-parse", "--git-dir"]).stdout.strip()
+        git_dir_raw = run_git(resolved, ["rev-parse", "--git-dir"]).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise SetforgeError(
             f"project target must be an existing Git worktree root: {resolved}"
@@ -272,7 +266,7 @@ def _verified_project_target(
     if not resolved.is_dir():
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
-        result = _run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
+        result = run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         # A missing git binary or a hung git must not escape as a raw traceback.
         raise SetforgeError(
@@ -288,7 +282,7 @@ def _verified_project_target(
 
 def _is_tracked(target: Path, relative: Path) -> bool:
     try:
-        result = _run_git(
+        result = run_git(
             target,
             ["ls-files", "--error-unmatch", "--", relative.as_posix()],
             check=False,
@@ -594,12 +588,12 @@ def _refuse_claimed_destinations(
 def resolve_injection_plan(
     plan: ProjectInjectionPlan,
     *,
-    auto: str | None,
+    auto: AutoResolution | None,
     interactive: bool,
 ) -> ProjectInjectionPlan | None:
     """Resolve initial tracked-file collisions without mutating state."""
-    from setforge.project_sync import legacy_two_way_merge
-    from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
+    from setforge.project_sync import resolve_automatically, two_way_merge
+    from setforge.reconcile.merge_model import Conflict
     from setforge.reconcile.types import FileId
     from setforge.ui.primitives import CANCEL
 
@@ -609,19 +603,11 @@ def resolve_injection_plan(
             resolved_files.append(item)
             continue
         assert item.previous_payload is not None
-        result = legacy_two_way_merge(item.previous_payload, item.source_payload)
+        result = two_way_merge(item.previous_payload, item.source_payload)
         if result.clean:
             merged = result.merged()
         elif auto is not None:
-            if auto not in {"keep-live", "use-profile"}:
-                raise SetforgeError(f"unknown project injection resolution: {auto}")
-            segments = tuple(
-                segment
-                if isinstance(segment, Clean)
-                else Clean(segment.ours if auto == "keep-live" else segment.theirs)
-                for segment in result.segments
-            )
-            merged = MergeResult(segments).merged()
+            merged = resolve_automatically(result, auto).merged()
         elif interactive:
             from setforge.reconcile.claude_merge import make_claude_merge_fn
             from setforge.reconcile.wizard import resolve_conflicts
@@ -1032,9 +1018,11 @@ def _validate_existing_injection(  # noqa: C901 - one fail-closed record compari
         try:
             info = item.destination.lstat()
         except FileNotFoundError as exc:
+            remedy = missing_file_remedy(
+                plan.target, plan.profile, record.get("action")
+            )
             raise SetforgeError(
-                f"injected project file is missing: {item.destination}; "
-                f"{missing_file_remedy(plan.target)}"
+                f"injected project file is missing: {item.destination}; {remedy}"
             ) from exc
         live_payload = item.destination.read_bytes()
         valid_payload = _sha256(live_payload) == str(record.get("applied_digest"))
@@ -1064,6 +1052,70 @@ def _require_guards(guards: MutationLockGuards, target: Path) -> None:
     if len(guards.targets) != 1 or guards.targets[0].target != target:
         raise SetforgeError("project target lock binding is invalid")
     guards.verify_targets()
+
+
+def _config_identity_fd(guards: MutationLockGuards) -> int:
+    identity = guards.config_identity
+    if identity is None:
+        raise SetforgeError("project config identity lock is missing")
+    return identity.directory_fd
+
+
+def _require_config_owner(
+    guards: MutationLockGuards, config_root: Path, expected: uuid.UUID
+) -> None:
+    if read_owner_id_locked(config_root, _config_identity_fd(guards)) != expected:
+        raise SetforgeError("project injection belongs to a different config checkout")
+
+
+def _exclude_paths(plan: VisibilityPlan | None) -> tuple[Path, ...]:
+    return (plan.exclude_path,) if plan is not None else ()
+
+
+def _overlay_git_paths(plan: OverlayGitPlan | None) -> tuple[Path, ...]:
+    return (plan.config_path, plan.attributes_path) if plan is not None else ()
+
+
+@contextmanager
+def _project_transaction(
+    *,
+    command: str,
+    profile: str,
+    config_dir: Path | None,
+    config_dirs: tuple[Path, ...] = (),
+    command_line: tuple[str, ...],
+    paths: tuple[Path, ...],
+    checkpoint: str,
+    recovery: str,
+) -> Iterator[None]:
+    """Journal the caller's mutations of ``paths`` as one reversible checkpoint.
+
+    Runs under the caller's mutation locks. A failure inside the block rolls
+    every path back before the exception continues.
+    """
+    journal = operations.prepare(
+        command=command,
+        profile=profile,
+        config_dir=config_dir,
+        config_dirs=config_dirs,
+        resources_lock=True,
+        command_line=command_line,
+        paths=paths,
+        path_guards=capture_parent_path_guards(paths),
+    )
+    with operations.recover_on_error(profile, command):
+        journal = operations.begin_checkpoint(
+            journal,
+            name=checkpoint,
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery=recovery,
+            paths=paths,
+            restore_state=False,
+            restore_transitions=False,
+        )
+        yield
+        journal = operations.finish_checkpoint(journal)
+        operations.complete(journal)
 
 
 @contextmanager
@@ -1168,13 +1220,11 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
         profile=operation_profile,
     ) as guards:
         _require_guards(guards, plan.target)
-        identity = guards.config_identity
-        if identity is None:
-            raise SetforgeError("project config identity lock is missing")
+        identity_fd = _config_identity_fd(guards)
 
         def locked_owner(config_root: Path) -> uuid.UUID | None:
             try:
-                return read_owner_id_locked(config_root, identity.directory_fd)
+                return read_owner_id_locked(config_root, identity_fd)
             except SetforgeError:
                 return None
 
@@ -1217,11 +1267,18 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
                 "ownership claim"
             )
         owner_id = (
-            read_owner_id_locked(plan.config_root, identity.directory_fd)
+            read_owner_id_locked(plan.config_root, identity_fd)
             if fresh.no_op
             else load_or_create_owner_id_locked(
-                plan.config_root, identity.directory_fd, uuid.uuid4()
+                plan.config_root, identity_fd, uuid.uuid4()
             )
+        )
+        transaction = partial(
+            _project_transaction,
+            command="project-inject",
+            profile=operation_profile,
+            config_dir=plan.config_root,
+            command_line=("project", "inject", plan.profile, str(plan.target)),
         )
         if fresh.no_op:
             if any(
@@ -1247,82 +1304,39 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
                 or not mutate_visibility
             ):
                 return False
-            visibility_paths: tuple[Path, ...] = (fresh.visibility_plan.exclude_path,)
-            journal = operations.prepare(
-                command="project-inject",
-                profile=operation_profile,
-                config_dir=plan.config_root,
-                resources_lock=True,
-                command_line=("project", "inject", plan.profile, str(plan.target)),
-                paths=visibility_paths,
-                path_guards=capture_parent_path_guards(visibility_paths),
-            )
-            with operations.recover_on_error(operation_profile, "project-inject"):
-                journal = operations.begin_checkpoint(
-                    journal,
-                    name="activate-project-visibility",
-                    kind=operations.CheckpointKind.REVERSIBLE,
-                    recovery="restore the repository-private Git visibility file",
-                    paths=visibility_paths,
-                    restore_state=False,
-                    restore_transitions=False,
-                )
+            with transaction(
+                paths=(fresh.visibility_plan.exclude_path,),
+                checkpoint="activate-project-visibility",
+                recovery="restore the repository-private Git visibility file",
+            ):
                 apply_claims(fresh.visibility_plan)
-                journal = operations.finish_checkpoint(journal)
-                operations.complete(journal)
             return True
         for item, claim in zip(plan.files, claims, strict=True):
             refuse_unavailable_claim(
                 claim, item.relative_destination.as_posix(), lambda: owner_id
             )
-        visibility_paths = (
-            (plan.visibility_plan.exclude_path,)
-            if plan.visibility_plan is not None
-            else ()
-        )
-        overlay_paths = tuple(
-            overlay_path(plan.target, item.relative_destination)
-            for item in plan.files
-            if item.action is ProjectFileAction.OVERLAY
-        )
-        overlay_git_paths = (
-            (plan.overlay_git_plan.config_path, plan.overlay_git_plan.attributes_path)
-            if plan.overlay_git_plan is not None
-            else ()
-        )
         paths = (
             *(item.destination for item in plan.files),
-            *overlay_paths,
-            *overlay_git_paths,
+            *(
+                overlay_path(plan.target, item.relative_destination)
+                for item in plan.files
+                if item.action is ProjectFileAction.OVERLAY
+            ),
+            *_overlay_git_paths(plan.overlay_git_plan),
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
-            *visibility_paths,
+            *_exclude_paths(plan.visibility_plan),
         )
         _require_writable_parents(
             item.destination
             for item in plan.files
             if item.action is not ProjectFileAction.RETAIN
         )
-        path_guards = capture_parent_path_guards(paths)
-        journal = operations.prepare(
-            command="project-inject",
-            profile=operation_profile,
-            config_dir=plan.config_root,
-            resources_lock=True,
-            command_line=("project", "inject", plan.profile, str(plan.target)),
+        with transaction(
             paths=paths,
-            path_guards=path_guards,
-        )
-        with operations.recover_on_error(operation_profile, "project-inject"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="materialize-project-files-and-state",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery="restore project files, manifest, and ownership claims",
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="materialize-project-files-and-state",
+            recovery="restore project files, manifest, and ownership claims",
+        ):
             for item, resource, prior_claim in zip(
                 plan.files, resources, claims, strict=True
             ):
@@ -1369,8 +1383,6 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             atomicio.atomic_write_bytes(
                 plan.manifest_path, _manifest_payload(plan, owner_id), mode=0o600
             )
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
     return True
 
 
@@ -1641,13 +1653,14 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                     f"tracked project overlay state is missing or mismatched: "
                     f"{destination}"
                 )
-            if live_payload is not None:
+            # Content Git checked out without the filter is already clean.
+            if live_payload is not None and live_payload != overlay.base:
                 clean_content(overlay, live_payload)
             live_matches_present = True
         if info is None and not live_matches_absent and not removable_missing:
             raise SetforgeError(
                 f"injected project file is missing: {destination}; "
-                f"{missing_file_remedy(root)}"
+                f"{missing_file_remedy(root, profile, action)}"
             )
         # A local file that a sync kept instead of the profile content already
         # equals what removal restores, so removing it writes nothing.
@@ -1755,11 +1768,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         )
     )
     if visibility_plan is not None and claim_git_dir != git_dir:
-        attributes = visibility_plan.exclude_path.with_name("attributes")
         held = set(
-            _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[
-                1
-            ]
+            read_overlay_claims(visibility_plan.exclude_path.with_name("attributes"))
         )
         overlay_to_remove = tuple(claim for claim in overlay_to_remove if claim in held)
     overlay_git_plan = (
@@ -1784,6 +1794,24 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     )
 
 
+def _overlay_removal_content(
+    item: ProjectFilePlan, *, git_worktree: bool
+) -> bytes | None:
+    """Return what removal writes to a tracked overlay file, ``None`` for nothing.
+
+    A file missing from a Git worktree was removed through Git, which tracks
+    it; only a directory that is no longer one gets the saved content back.
+    """
+    if item.overlay is None:
+        raise SetforgeError("tracked project overlay state is missing")
+    if item.destination.exists():
+        live = item.destination.read_bytes()
+        if live == item.overlay.base:
+            return live
+        return clean_content(item.overlay, live)
+    return None if git_worktree else item.overlay.base
+
+
 def _restore_planned_files(
     plan: ProjectRemovePlan,
     resources: tuple[ResourceId, ...],
@@ -1801,26 +1829,20 @@ def _restore_planned_files(
             else:
                 _unlink_project_file(guards.targets[0], item.relative_destination)
         elif item.action is ProjectFileAction.OVERLAY:
-            if item.overlay is None:
-                raise SetforgeError("tracked project overlay state is missing")
-            overlay_live_payload = (
-                item.destination.read_bytes() if item.destination.exists() else None
+            restored = _overlay_removal_content(
+                item, git_worktree=plan.visibility_plan is not None
             )
-            restored = (
-                clean_content(item.overlay, overlay_live_payload)
-                if overlay_live_payload is not None
-                else item.overlay.base
-            )
-            _write_project_file(
-                guards.targets[0],
-                item.relative_destination,
-                restored,
-                (
-                    item.previous_mode
-                    if item.previous_mode is not None
-                    else item.source_mode
-                ),
-            )
+            if restored is not None:
+                _write_project_file(
+                    guards.targets[0],
+                    item.relative_destination,
+                    restored,
+                    (
+                        item.previous_mode
+                        if item.previous_mode is not None
+                        else item.source_mode
+                    ),
+                )
         else:
             if item.previous_payload is None or item.previous_mode is None:
                 raise SetforgeError("project injection restoration baseline is corrupt")
@@ -1884,14 +1906,7 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
         if fresh != plan:
             raise SetforgeError("project removal plan changed before apply; retry")
         refuse_active_file_claims(item.destination for item in plan.files)
-        identity = guards.config_identity
-        if identity is None:
-            raise SetforgeError("project config identity lock is missing")
-        actual_owner = read_owner_id_locked(config_root, identity.directory_fd)
-        if actual_owner != plan.owner_id:
-            raise SetforgeError(
-                "project injection belongs to a different config checkout"
-            )
+        _require_config_owner(guards, config_root, plan.owner_id)
         store = OwnershipStore()
         resources = tuple(
             _resource_id(
@@ -1915,29 +1930,19 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
             raise SetforgeError(
                 "project injection ownership state is missing or mismatched"
             )
-        visibility_paths = (
-            (plan.visibility_plan.exclude_path,)
-            if plan.visibility_plan is not None
-            else ()
-        )
         overlay_paths = tuple(
             overlay_path(plan.target, item.relative_destination)
             for item in plan.files
             if item.action is ProjectFileAction.OVERLAY
         )
-        overlay_git_paths = (
-            (plan.overlay_git_plan.config_path, plan.overlay_git_plan.attributes_path)
-            if plan.overlay_git_plan is not None
-            else ()
-        )
         paths = (
             *(item.destination for item in plan.files),
             *overlay_paths,
-            *overlay_git_paths,
+            *_overlay_git_paths(plan.overlay_git_plan),
             *plan.created_parents,
             plan.manifest_path,
             *(store.claim_path(resource) for resource in resources),
-            *visibility_paths,
+            *_exclude_paths(plan.visibility_plan),
         )
         _require_writable_parents(
             (
@@ -1949,26 +1954,15 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
                 *(parent for parent in plan.created_parents if parent.exists()),
             )
         )
-        path_guards = capture_parent_path_guards(paths)
-        journal = operations.prepare(
+        with _project_transaction(
             command="project-remove",
             profile=operation_profile,
             config_dir=config_root,
-            resources_lock=True,
             command_line=("project", "remove", plan.profile, str(plan.target)),
             paths=paths,
-            path_guards=path_guards,
-        )
-        with operations.recover_on_error(operation_profile, "project-remove"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="restore-project-files-and-retire-state",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery="restore injected files, manifest, and ownership claims",
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="restore-project-files-and-retire-state",
+            recovery="restore injected files, manifest, and ownership claims",
+        ):
             _restore_planned_files(plan, resources, claims, store, guards)
             if plan.visibility_plan is not None:
                 apply_claims(plan.visibility_plan)
@@ -1981,8 +1975,6 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
                     guards.targets[0], parent.relative_to(plan.target)
                 )
             plan.manifest_path.unlink()
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
 
 
 def _stale_record_claims(
@@ -2020,10 +2012,7 @@ def _stale_git_plans(
     """Plan releasing only the private Git entries this injection still holds."""
     exclude_path, _, _, hidden_claims = read_claims(root)
     hidden = set(hidden_claims)
-    attributes = exclude_path.with_name("attributes")
-    filtered = set(
-        _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[1]
-    )
+    filtered = set(read_overlay_claims(exclude_path.with_name("attributes")))
     hidden_to_remove = tuple(
         claim
         for claim in (
@@ -2072,11 +2061,15 @@ def plan_stale_removal(  # noqa: C901 - record-backed and record-less leftovers
     is left. Project files are never touched: their identity is unverifiable.
     A caller that already holds the config identity lock passes ``owner_id``.
     """
-    root = target.expanduser().resolve()
+    lexical = Path(os.path.normpath(target.expanduser().absolute()))
+    root = lexical.resolve()
     canonical_config_path = config_path.resolve(strict=True)
     git_dir: Path | None = None
     live: os.stat_result | None = None
-    if root.is_dir():
+    if root != lexical and manifest_path(lexical, profile).exists():
+        # The recorded directory is gone: its path now leads elsewhere.
+        root = lexical
+    elif root.is_dir():
         root, git_dir, live = _verified_project_target(root)
     claim_git_dir = str(git_dir) if git_dir is not None else None
     state_path = manifest_path(root, profile)
@@ -2169,22 +2162,19 @@ def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
         resources=True,
         config_identity_dir=resolve_owner_common_dir(config_root),
         config_dir=config_root,
-        target_roots=(plan.target,) if plan.target.is_dir() else (),
+        target_roots=(
+            (plan.target,)
+            if plan.target.is_dir() and plan.target.resolve() == plan.target
+            else ()
+        ),
         profile=operation_profile,
     ) as guards:
-        identity = guards.config_identity
-        if identity is None:
-            raise SetforgeError("project config identity lock is missing")
-        actual_owner = read_owner_id_locked(config_root, identity.directory_fd)
-        if actual_owner != plan.owner_id:
-            raise SetforgeError(
-                "project injection belongs to a different config checkout"
-            )
+        _require_config_owner(guards, config_root, plan.owner_id)
         fresh = plan_stale_removal(
             profile=plan.profile,
             target=plan.target,
             config_path=plan.config_path,
-            owner_id=actual_owner,
+            owner_id=plan.owner_id,
         )
         if fresh != plan:
             raise SetforgeError("project removal plan changed before apply; retry")
@@ -2193,39 +2183,18 @@ def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
             *((plan.manifest_path,) if plan.manifest_path is not None else ()),
             *plan.overlay_paths,
             *(store.claim_path(claim.resource_id) for claim in plan.claims),
-            *(
-                (plan.visibility_plan.exclude_path,)
-                if plan.visibility_plan is not None
-                else ()
-            ),
-            *(
-                (
-                    plan.overlay_git_plan.config_path,
-                    plan.overlay_git_plan.attributes_path,
-                )
-                if plan.overlay_git_plan is not None
-                else ()
-            ),
+            *_exclude_paths(plan.visibility_plan),
+            *_overlay_git_paths(plan.overlay_git_plan),
         )
-        journal = operations.prepare(
+        with _project_transaction(
             command="project-remove",
             profile=operation_profile,
             config_dir=config_root,
-            resources_lock=True,
             command_line=("project", "remove", plan.profile, str(plan.target)),
             paths=paths,
-            path_guards=capture_parent_path_guards(paths),
-        )
-        with operations.recover_on_error(operation_profile, "project-remove"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="retire-stale-project-state",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery="restore the manifest, ownership claims, and Git state",
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="retire-stale-project-state",
+            recovery="restore the manifest, ownership claims, and Git state",
+        ):
             for claim in plan.claims:
                 store.release_locked(
                     claim.resource_id,
@@ -2240,5 +2209,3 @@ def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
                 overlay_state.unlink()
             if plan.manifest_path is not None:
                 plan.manifest_path.unlink()
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)

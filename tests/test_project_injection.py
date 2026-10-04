@@ -43,6 +43,7 @@ from setforge.project_injection import (
     _verified_project_target,
     manifest_path,
 )
+from tests.project_helpers import _git_repo
 
 
 def _raise_missing_git(*_args: object, **_kwargs: object) -> None:
@@ -93,12 +94,6 @@ def _candidate_filter_entrypoint(
     entrypoint.chmod(0o755)
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1]))
-
-
-def _git_repo(path: Path) -> Path:
-    path.mkdir()
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
-    return path
 
 
 def _config(tmp_path: Path) -> Path:
@@ -1504,6 +1499,7 @@ def test_visibility_conflict_between_profiles_does_not_blame_linked_worktrees(
         "project_overlay",
         "git_overlay",
         "git_visibility",
+        "git_info",
     ],
 )
 def test_project_messages_carry_no_internal_milestone_names(module: str) -> None:
@@ -2653,3 +2649,210 @@ def test_reinject_after_remove_reclaims_this_checkouts_released_claim(
     )
     assert removed.exit_code == 0, removed.output
     assert not (target / "AGENTS.md").exists()
+
+
+def _injected_tracked_overlay(tmp_path: Path) -> tuple[Path, list[str]]:
+    """Inject over a committed ``AGENTS.md``; return the target and CLI arguments."""
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    (target / "AGENTS.md").write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "team file",
+        ],
+        check=True,
+    )
+    arguments = [str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(
+        app, ["project", "inject", "demo", *arguments, "--auto=use-profile"]
+    )
+    assert injected.exit_code == 0, injected.output
+    assert (target / "AGENTS.md").read_text() == (
+        "team instructions\nmanaged instructions\n"
+    )
+    return target, arguments
+
+
+def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(target), "rm", "-q", "-f", "AGENTS.md"], check=True
+    )
+    destination = target / "AGENTS.md"
+    assert not destination.exists()
+
+    removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert not destination.exists()
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert not (target / ".git" / "info" / "attributes").exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    status = subprocess.run(
+        ["git", "-C", str(target), "status", "--short"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == "D  AGENTS.md\n"
+
+
+def test_missing_tracked_overlay_file_names_project_remove_not_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    destination = target / "AGENTS.md"
+    destination.unlink()
+    runner = CliRunner()
+    remedy = (
+        f"run `setforge project remove demo {target}` to remove the injection, or "
+        "restore the file with Git"
+    )
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert (
+        f"  error: AGENTS.md: injected project file is missing; {remedy} "
+    ) in listed.output
+    reinjected = runner.invoke(app, ["project", "inject", "demo", *arguments])
+    assert reinjected.exit_code == 1
+    assert str(reinjected.exception) == (
+        f"injected project file is missing: {destination}; {remedy}"
+    )
+    subprocess.run(
+        ["git", "-C", str(target), "checkout", "--", "AGENTS.md"], check=True
+    )
+    assert destination.read_text() == "team instructions\nmanaged instructions\n"
+    assert runner.invoke(app, ["project", "list"]).output == (
+        f"{target}  [demo]\n  tracked-overlay: AGENTS.md\n"
+    )
+
+
+def test_remove_accepts_tracked_overlay_file_that_holds_only_the_committed_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+
+    removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert destination.read_text() == "team instructions\n"
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert not (target / ".git" / "info" / "attributes").exists()
+
+
+def test_tracked_overlay_injects_into_repository_without_info_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    (config.parent / "project" / "demo" / "NOTES.md").write_text("private notes\n")
+    config.write_text(
+        config.read_text()
+        + "      notes:\n        src: NOTES.md\n        dst: NOTES.md\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    info = target / ".git" / "info"
+    shutil.rmtree(info)
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--auto=use-profile"]
+
+    preview = runner.invoke(app, ["project", "inject", "demo", *arguments, "--dry-run"])
+    assert preview.exit_code == 0, (preview.output, preview.exception)
+    assert not info.exists()
+    injected = runner.invoke(app, ["project", "inject", "demo", *arguments, "--yes"])
+
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    assert destination.read_text() == "team instructions\nmanaged instructions\n"
+    assert b"/AGENTS.md filter=setforge-project\n" in (info / "attributes").read_bytes()
+    assert b"/NOTES.md\n" in (info / "exclude").read_bytes()
+    diff = subprocess.run(
+        ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert diff == ""
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == (
+        f"{target}  [demo]\n  tracked-overlay: AGENTS.md\n  hidden: NOTES.md\n"
+    )
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments[:3], "--yes"])
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert destination.read_text() == "team instructions\n"
+    assert not (target / "NOTES.md").exists()
+    assert not (info / "attributes").exists()
+    assert (info / "exclude").read_bytes() == b""
+
+
+def test_moved_project_whose_old_path_is_now_a_symlink_drops_its_stale_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    moved = tmp_path / "moved"
+    runner = CliRunner()
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert injected.exit_code == 0, injected.output
+    stale_record = manifest_path(target, "demo")
+    target.rename(moved)
+    target.symlink_to(moved, target_is_directory=True)
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert listed.output == (
+        f"{target}  [demo]\n"
+        "  error: project directory no longer exists; run "
+        f"`setforge project remove demo {target}` to drop the stale record "
+        f"({stale_record.name})\n"
+    )
+
+    dropped = runner.invoke(
+        app, ["project", "remove", "demo", str(target), "--config", str(config), "-y"]
+    )
+
+    assert dropped.exit_code == 0, (dropped.output, dropped.exception)
+    assert f"target: {target}\n" in dropped.output
+    assert "stale injection: project directory no longer exists\n" in dropped.output
+    assert dropped.output.endswith("stale injection dropped\n")
+    assert not stale_record.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    assert (moved / "AGENTS.md").read_text() == "managed instructions\n"
+    assert target.is_symlink()
+    assert runner.invoke(app, ["project", "list"]).output == (
+        "no project injections recorded\n"
+    )

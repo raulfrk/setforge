@@ -2,34 +2,38 @@
 
 from __future__ import annotations
 
-import json
+import contextlib
 import os
-import re
-import stat
-import subprocess
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from setforge import atomicio
 from setforge.errors import SetforgeError
+from setforge.git_info import (
+    ClaimBlock,
+    GitClaim,
+    claim_identity,
+    open_directory,
+    open_info,
+    read_bounded_at,
+    require_directory_identity,
+    run_git,
+)
 
-_BEGIN = b"\n# >>> setforge project overlays v1 >>>\n"
-_END = b"# <<< setforge project overlays v1 <<<\n"
-_CLAIM = re.compile(rb"# claim ([0-9a-f]{64}) (.+)\n")
-_CLAIM_ID = re.compile(r"[0-9a-f]{64}")
 _DRIVER = "setforge-project"
 _PROCESS = "setforge project filter-process"
 _OWNED_KEY = f"filter.{_DRIVER}.setforgeOwned"
 _CREATED_ATTRIBUTES_KEY = f"filter.{_DRIVER}.setforgeCreatedAttributes"
-_MAX_SHARED_FILE = 16 * 1024 * 1024
+_DIRECTORY = "Git overlay directory"
+_run_git = partial(run_git, failure="cannot manage tracked project Git filter")
+_require_directory_identity = partial(require_directory_identity, what=_DIRECTORY)
+_read_bounded_at = partial(read_bounded_at, label="Git overlay")
 
 
 @dataclass(frozen=True, slots=True, order=True)
-class OverlayClaim:
+class OverlayClaim(GitClaim):
     """One injection's shared attribute claim for an exact path."""
-
-    claim_id: str
-    relative_path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,7 @@ class OverlayGitPlan:
     remove_driver: bool
     create_attributes: bool = False
     created_attributes: bool = False
+    create_info: bool = False
 
     @property
     def changed(self) -> bool:
@@ -74,18 +79,13 @@ class OverlayGitPlan:
 
 def overlay_claim_id(*, git_dir: Path, profile: str, relative_path: str) -> str:
     """Return a stable identity for one worktree/profile/path overlay claim."""
-    payload = json.dumps(
-        {
-            "git_dir": str(git_dir),
-            "profile": profile,
-            "relative_path": relative_path,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
-    import hashlib
+    return claim_identity(git_dir, profile, relative_path)
 
-    return hashlib.sha256(payload).hexdigest()
+
+def read_overlay_claims(attributes_path: Path) -> tuple[OverlayClaim, ...]:
+    """Return the claims a shared attributes file holds; none when it is missing."""
+    payload = attributes_path.read_bytes() if attributes_path.is_file() else b""
+    return _BLOCK.parse(payload)[1]
 
 
 def plan_overlay_git(
@@ -98,16 +98,16 @@ def plan_overlay_git(
     common_dir = _git_common_dir(target)
     config_path = common_dir / "config"
     attributes_path = common_dir / "info" / "attributes"
-    common_fd, common_info = _open_directory(common_dir)
-    info_fd, info_info = _open_directory(attributes_path.parent)
+    common_fd, common_info = open_directory(common_dir, _DIRECTORY)
+    info_fd, info_info = _open_info(attributes_path.parent, common_info)
     try:
         _require_directory_identity(common_dir, common_info)
-        _require_directory_identity(attributes_path.parent, info_info)
+        _require_info_identity(attributes_path.parent, info_fd, info_info)
         config_before, config_mode = _read_bounded_at(
-            common_fd, "config", config_path, missing_mode=0o600
+            common_fd, config_path, missing_mode=0o600
         )
-        attributes_before, attributes_mode = _read_bounded_at(
-            info_fd, "attributes", attributes_path, missing_mode=0o644
+        attributes_before, attributes_mode = _read_attributes_at(
+            info_fd, attributes_path, missing_mode=0o644
         )
         process = _config_values_at(target, common_fd, f"filter.{_DRIVER}.process")
         required = _config_values_at(target, common_fd, f"filter.{_DRIVER}.required")
@@ -115,37 +115,22 @@ def plan_overlay_git(
         created_attributes = _config_values_at(
             target, common_fd, _CREATED_ATTRIBUTES_KEY
         ) == ("true",)
-        attributes_missing = not _exists_at(info_fd, "attributes")
+        attributes_missing = info_fd is None or not _exists_at(info_fd, "attributes")
         _require_directory_identity(common_dir, common_info)
-        _require_directory_identity(attributes_path.parent, info_info)
-        if _read_bounded_at(common_fd, "config", config_path, missing_mode=0o600) != (
+        _require_info_identity(attributes_path.parent, info_fd, info_info)
+        if _read_bounded_at(common_fd, config_path, missing_mode=0o600) != (
             config_before,
             config_mode,
-        ) or _read_bounded_at(
-            info_fd, "attributes", attributes_path, missing_mode=0o644
-        ) != (attributes_before, attributes_mode):
+        ) or _read_attributes_at(info_fd, attributes_path, missing_mode=0o644) != (
+            attributes_before,
+            attributes_mode,
+        ):
             raise SetforgeError("Git overlay state changed while planning; retry")
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
-    prefix, current, suffix = _parse_attributes(attributes_before)
-    by_id = {claim.claim_id: claim for claim in current}
-    removed: list[OverlayClaim] = []
-    for claim in remove:
-        _validate_claim(claim)
-        if by_id.get(claim.claim_id) != claim:
-            raise SetforgeError("Git overlay claim is missing or mismatched")
-        removed.append(by_id.pop(claim.claim_id))
-    added: list[OverlayClaim] = []
-    for claim in add:
-        _validate_claim(claim)
-        observed = by_id.get(claim.claim_id)
-        if observed is not None and observed != claim:
-            raise SetforgeError("Git overlay claim identity collides")
-        if observed is None:
-            by_id[claim.claim_id] = claim
-            added.append(claim)
-    remaining = tuple(sorted(by_id.values()))
+        _close(info_fd, common_fd)
+    attributes_after, added, removed, remaining = _BLOCK.update(
+        attributes_before, add=add, remove=remove
+    )
     config_pair = (process, required)
     if (
         config_pair not in {((), ()), ((_PROCESS,), ("true",))}
@@ -169,7 +154,9 @@ def plan_overlay_git(
         config_before=config_before,
         config_mode=config_mode,
         attributes_path=attributes_path,
-        info_identity=(info_info.st_dev, info_info.st_ino),
+        info_identity=(
+            (info_info.st_dev, info_info.st_ino) if info_fd is not None else None
+        ),
         attributes_before=attributes_before,
         attributes_mode=attributes_mode,
     )
@@ -190,39 +177,42 @@ def plan_overlay_git(
         attributes_path=attributes_path,
         attributes_before=attributes_before,
         attributes_mode=attributes_mode,
-        attributes_after=_render_attributes(prefix, remaining, suffix),
-        added=tuple(added),
-        removed=tuple(removed),
+        attributes_after=attributes_after,
+        added=added,
+        removed=removed,
         configure_driver=configure,
         remove_driver=remove_driver,
         create_attributes=configure and attributes_missing,
         created_attributes=created_attributes,
+        create_info=info_fd is None,
     )
 
 
 def apply_overlay_git(plan: OverlayGitPlan) -> None:
     """Apply a byte-bound shared Git plan after revalidating both files."""
-    common_fd, common_info = _open_directory(plan.common_dir)
-    info_fd, info_info = _open_directory(plan.attributes_path.parent)
+    if plan.create_info and not plan.changed:
+        return
+    common_fd, common_info = open_directory(plan.common_dir, _DIRECTORY)
+    info_fd: int | None = None
     try:
         _require_directory_identity(
             plan.common_dir,
             common_info,
             expected=(plan.common_device, plan.common_inode),
         )
+        info_fd, info_info = _open_planned_info(plan, common_fd)
         _require_directory_identity(
             plan.attributes_path.parent,
             info_info,
-            expected=(plan.info_device, plan.info_inode),
+            expected=(
+                None if plan.create_info else (plan.info_device, plan.info_inode)
+            ),
         )
         current_config, current_config_mode = _read_bounded_at(
-            common_fd, "config", plan.config_path, missing_mode=plan.config_mode
+            common_fd, plan.config_path, missing_mode=plan.config_mode
         )
         current_attributes, current_attributes_mode = _read_bounded_at(
-            info_fd,
-            "attributes",
-            plan.attributes_path,
-            missing_mode=plan.attributes_mode,
+            info_fd, plan.attributes_path, missing_mode=plan.attributes_mode
         )
         if (
             current_config != plan.config_before
@@ -261,39 +251,7 @@ def apply_overlay_git(plan: OverlayGitPlan) -> None:
             )
         _require_directory_identity(plan.attributes_path.parent, info_info)
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
-
-
-def _run_git(
-    target: Path,
-    args: list[str],
-    *,
-    check: bool = True,
-    pass_fds: tuple[int, ...] = (),
-) -> subprocess.CompletedProcess[str]:
-    environment = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "Never",
-        "LANG": "C",
-        "LC_ALL": "C",
-    }
-    try:
-        return subprocess.run(
-            ["git", "-C", str(target), *args],
-            check=check,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            env=environment,
-            pass_fds=pass_fds,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        detail = getattr(exc, "stderr", None) or str(exc)
-        raise SetforgeError(
-            f"cannot manage tracked project Git filter: {detail}"
-        ) from exc
+        _close(info_fd, common_fd)
 
 
 def _git_common_dir(target: Path) -> Path:
@@ -305,35 +263,49 @@ def _git_common_dir(target: Path) -> Path:
     return common
 
 
-def _open_directory(path: Path) -> tuple[int, os.stat_result]:
-    try:
-        descriptor = os.open(
-            path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-        )
-        return descriptor, os.fstat(descriptor)
-    except OSError as exc:
-        raise SetforgeError(
-            f"Git overlay directory cannot be opened: {path}: {exc}"
-        ) from exc
+def _open_info(
+    path: Path, common_info: os.stat_result
+) -> tuple[int | None, os.stat_result]:
+    """Open ``info``, or bind the plan to the common directory when it is missing."""
+    opened = open_info(path, _DIRECTORY)
+    return (None, common_info) if opened is None else opened
 
 
-def _require_directory_identity(
-    path: Path, info: os.stat_result, *, expected: tuple[int, int] | None = None
+def _open_planned_info(
+    plan: OverlayGitPlan, common_fd: int
+) -> tuple[int, os.stat_result]:
+    """Open ``info``, first creating one the plan found missing."""
+    if plan.create_info:
+        # The private exclude update of the same change may have made it.
+        with contextlib.suppress(FileExistsError):
+            os.mkdir("info", mode=0o755, dir_fd=common_fd)
+        os.fsync(common_fd)
+    return open_directory(plan.attributes_path.parent, _DIRECTORY)
+
+
+def _require_info_identity(
+    path: Path,
+    info_fd: int | None,
+    info: os.stat_result,
+    *,
+    expected: tuple[int, int] | None = None,
 ) -> None:
-    identity = (info.st_dev, info.st_ino)
-    if expected is not None and identity != expected:
-        raise SetforgeError("Git overlay directory changed before apply; retry")
-    try:
-        current = path.stat(follow_symlinks=False)
-    except OSError as exc:
-        raise SetforgeError(
-            "Git overlay directory changed before apply; retry"
-        ) from exc
-    if (
-        not stat.S_ISDIR(current.st_mode)
-        or (current.st_dev, current.st_ino) != identity
-    ):
-        raise SetforgeError("Git overlay directory changed before apply; retry")
+    if info_fd is not None:
+        _require_directory_identity(path, info, expected=expected)
+
+
+def _close(*descriptors: int | None) -> None:
+    for descriptor in descriptors:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_attributes_at(
+    info_fd: int | None, path: Path, *, missing_mode: int
+) -> tuple[bytes, int]:
+    if info_fd is None:
+        return b"", missing_mode
+    return _read_bounded_at(info_fd, path, missing_mode=missing_mode)
 
 
 def _exists_at(parent_fd: int, name: str) -> bool:
@@ -344,34 +316,6 @@ def _exists_at(parent_fd: int, name: str) -> bool:
     return True
 
 
-def _read_bounded_at(
-    parent_fd: int, name: str, path: Path, *, missing_mode: int
-) -> tuple[bytes, int]:
-    try:
-        descriptor = os.open(
-            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd
-        )
-    except FileNotFoundError:
-        return b"", missing_mode
-    except OSError as exc:
-        raise SetforgeError(
-            f"Git overlay state cannot be opened: {path}: {exc}"
-        ) from exc
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_SHARED_FILE:
-            raise SetforgeError(f"Git overlay state is not a bounded file: {path}")
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            payload = handle.read(_MAX_SHARED_FILE + 1)
-            if len(payload) > _MAX_SHARED_FILE:
-                raise SetforgeError(f"Git overlay state is not a bounded file: {path}")
-            return payload, stat.S_IMODE(info.st_mode)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
 def _revalidate_plan_state(
     *,
     common_dir: Path,
@@ -380,29 +324,28 @@ def _revalidate_plan_state(
     config_before: bytes,
     config_mode: int,
     attributes_path: Path,
-    info_identity: tuple[int, int],
+    info_identity: tuple[int, int] | None,
     attributes_before: bytes,
     attributes_mode: int,
 ) -> None:
-    common_fd, common_info = _open_directory(common_dir)
-    info_fd, info_info = _open_directory(attributes_path.parent)
+    common_fd, common_info = open_directory(common_dir, _DIRECTORY)
+    info_fd, info_info = _open_info(attributes_path.parent, common_info)
     try:
         _require_directory_identity(common_dir, common_info, expected=common_identity)
-        _require_directory_identity(
-            attributes_path.parent, info_info, expected=info_identity
+        if (info_fd is None) != (info_identity is None):
+            raise SetforgeError("Git overlay state changed while planning; retry")
+        _require_info_identity(
+            attributes_path.parent, info_fd, info_info, expected=info_identity
         )
-        if _read_bounded_at(
-            common_fd, "config", config_path, missing_mode=config_mode
-        ) != (config_before, config_mode) or _read_bounded_at(
-            info_fd,
-            "attributes",
-            attributes_path,
-            missing_mode=attributes_mode,
+        if _read_bounded_at(common_fd, config_path, missing_mode=config_mode) != (
+            config_before,
+            config_mode,
+        ) or _read_attributes_at(
+            info_fd, attributes_path, missing_mode=attributes_mode
         ) != (attributes_before, attributes_mode):
             raise SetforgeError("Git overlay state changed while planning; retry")
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
+        _close(info_fd, common_fd)
 
 
 def _config_args(parent_fd: int) -> list[str]:
@@ -469,72 +412,10 @@ def _attribute_pattern(relative_path: str) -> bytes:
     return f"/{escaped} filter={_DRIVER}\n".encode()
 
 
-def _validate_claim(claim: OverlayClaim) -> None:
-    if _CLAIM_ID.fullmatch(claim.claim_id) is None:
-        raise SetforgeError("Git overlay claim has an invalid identity")
-    _attribute_pattern(claim.relative_path)
-
-
-def _claim_from_match(match: re.Match[bytes]) -> OverlayClaim:
-    try:
-        relative = json.loads(match.group(2))
-    except (json.JSONDecodeError, UnicodeError) as exc:
-        raise SetforgeError("Git overlay claim path is invalid") from exc
-    if not isinstance(relative, str):
-        raise SetforgeError("Git overlay claim path is invalid")
-    claim = OverlayClaim(match.group(1).decode("ascii"), relative)
-    _validate_claim(claim)
-    return claim
-
-
-def _parse_attributes(
-    payload: bytes,
-) -> tuple[bytes, tuple[OverlayClaim, ...], bytes]:
-    if payload.count(_BEGIN) == 0 and payload.count(_END) == 0:
-        return payload, (), b""
-    if payload.count(_BEGIN) != 1 or payload.count(_END) != 1:
-        raise SetforgeError("Git overlay attributes block is ambiguous")
-    start = payload.index(_BEGIN)
-    end_start = payload.index(_END)
-    if end_start < start:
-        raise SetforgeError("Git overlay attributes markers are out of order")
-    body = payload[start + len(_BEGIN) : end_start]
-    claims: list[OverlayClaim] = []
-    offset = 0
-    while offset < len(body):
-        match = _CLAIM.match(body, offset)
-        if match is None:
-            raise SetforgeError("Git overlay attributes block is invalid")
-        claim = _claim_from_match(match)
-        pattern = _attribute_pattern(claim.relative_path)
-        if body[match.end() : match.end() + len(pattern)] != pattern:
-            raise SetforgeError("Git overlay claim pattern is inconsistent")
-        claims.append(claim)
-        offset = match.end() + len(pattern)
-    if len({claim.claim_id for claim in claims}) != len(claims):
-        raise SetforgeError("Git overlay attributes block has duplicate claims")
-    if tuple(claims) != tuple(sorted(claims)):
-        raise SetforgeError("Git overlay attributes claims are not canonical")
-    end = end_start + len(_END)
-    return payload[:start], tuple(claims), payload[end:]
-
-
-def _render_attributes(
-    prefix: bytes, claims: tuple[OverlayClaim, ...], suffix: bytes
-) -> bytes:
-    if not claims:
-        return prefix + suffix
-    body = bytearray(_BEGIN)
-    for claim in sorted(claims):
-        body.extend(f"# claim {claim.claim_id} ".encode())
-        body.extend(
-            json.dumps(
-                claim.relative_path,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode()
-        )
-        body.extend(b"\n")
-        body.extend(_attribute_pattern(claim.relative_path))
-    body.extend(_END)
-    return prefix + bytes(body) + suffix
+_BLOCK = ClaimBlock(
+    "Git overlay",
+    b"\n# >>> setforge project overlays v1 >>>\n",
+    b"# <<< setforge project overlays v1 <<<\n",
+    OverlayClaim,
+    _attribute_pattern,
+)

@@ -173,10 +173,6 @@ Git visibility is reported as not applicable and SetForge does not initialize
 Git. Project metadata is stored in SetForge's private state directory, not in
 the target directory.
 
-Injection, synchronization, and the future optional worktree auto-carry hook have independent
-lifecycles: `project remove` never changes that hook, and disabling the hook
-will preserve existing injections.
-
 ```yaml
 project_profiles:
   base:

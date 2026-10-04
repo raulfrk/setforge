@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,18 +13,9 @@ from setforge.git_visibility import (
     claim_id,
     info_exclude_path,
     plan_claims,
-    plan_file_visibility,
     read_claims,
 )
-
-
-def _git(path: Path, *args: str, check: bool = True) -> str:
-    return subprocess.run(
-        ["git", "-C", str(path), *args],
-        check=check,
-        text=True,
-        capture_output=True,
-    ).stdout
+from tests.project_helpers import _git
 
 
 def _repo(path: Path) -> Path:
@@ -132,35 +122,17 @@ def test_transition_round_trips_untracked_file_without_staging_or_byte_change(
     destination.write_bytes(b"private\x00content")
     claim = VisibilityClaim("c" * 64, "AGENTS.md")
 
-    apply_claims(
-        plan_file_visibility(
-            target, claim=claim, hidden=True, tracked_sibling_paths=frozenset()
-        )
-    )
+    apply_claims(plan_claims(target, add=(claim,)))
     assert _git(target, "status", "--short") == ""
-    apply_claims(
-        plan_file_visibility(
-            target, claim=claim, hidden=False, tracked_sibling_paths=frozenset()
-        )
-    )
+    apply_claims(plan_claims(target, remove=(claim,)))
 
     assert destination.read_bytes() == b"private\x00content"
     assert _git(target, "status", "--short") == "?? AGENTS.md\n"
     assert _git(target, "diff", "--cached") == ""
 
 
-def test_transition_refuses_committed_and_unrepresentable_paths(tmp_path: Path) -> None:
+def test_transition_refuses_unrepresentable_paths(tmp_path: Path) -> None:
     target = _repo(tmp_path / "repo")
-    (target / "tracked.txt").write_text("team")
-    _git(target, "add", "tracked.txt")
-    with pytest.raises(SetforgeError, match="cannot hide an already-committed file"):
-        plan_file_visibility(
-            target,
-            claim=VisibilityClaim("d" * 64, "tracked.txt"),
-            hidden=True,
-            tracked_sibling_paths=frozenset(),
-        )
-
     with pytest.raises(SetforgeError, match="line break"):
         plan_claims(target, add=(VisibilityClaim("e" * 64, "bad\nname"),))
 
@@ -169,45 +141,7 @@ def test_transition_refuses_committed_and_unrepresentable_paths(tmp_path: Path) 
 def test_transition_refuses_non_normalized_paths(tmp_path: Path, relative: str) -> None:
     target = _repo(tmp_path / "repo")
     with pytest.raises(SetforgeError, match="not normalized"):
-        plan_file_visibility(
-            target,
-            claim=VisibilityClaim("e" * 64, relative),
-            hidden=True,
-            tracked_sibling_paths=frozenset(),
-        )
-
-
-def test_transition_to_tracked_refuses_a_sibling_hidden_claim(tmp_path: Path) -> None:
-    target = _repo(tmp_path / "repo")
-    (target / "shared.txt").write_text("private")
-    sibling = VisibilityClaim("a" * 64, "shared.txt")
-    requested = VisibilityClaim("b" * 64, "shared.txt")
-    apply_claims(
-        plan_file_visibility(
-            target, claim=sibling, hidden=True, tracked_sibling_paths=frozenset()
-        )
-    )
-
-    with pytest.raises(SetforgeError, match="another linked-worktree claim"):
-        plan_file_visibility(
-            target,
-            claim=requested,
-            hidden=False,
-            tracked_sibling_paths=frozenset(),
-        )
-
-
-def test_transition_requires_explicit_tracked_sibling_snapshot(tmp_path: Path) -> None:
-    target = _repo(tmp_path / "repo")
-    (target / "shared.txt").write_text("private")
-
-    with pytest.raises(SetforgeError, match="tracked linked-worktree claim"):
-        plan_file_visibility(
-            target,
-            claim=VisibilityClaim("b" * 64, "shared.txt"),
-            hidden=True,
-            tracked_sibling_paths=frozenset({"shared.txt"}),
-        )
+        plan_claims(target, add=(VisibilityClaim("e" * 64, relative),))
 
 
 def test_apply_revalidates_exclude_bytes_and_mode_independently(tmp_path: Path) -> None:

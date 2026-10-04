@@ -13,12 +13,10 @@ from setforge import operations
 from setforge.cli import app
 from setforge.ownership import resolve_owner_common_dir
 from setforge.project_injection import manifest_path
-from tests.test_project_sync import _config, _git_repo
-from tests.test_project_sync_recovery import _file_state, _private_files
-from tests.test_project_visibility import (
-    _candidate_filter_entrypoint as _candidate_filter_entrypoint,
+from tests.project_helpers import _config, _file_state, _git, _git_repo, _private_files
+from tests.project_helpers import (
+    candidate_filter_entrypoint as candidate_filter_entrypoint,
 )
-from tests.test_project_visibility import _git
 
 
 @pytest.mark.parametrize("git_target", [False, True])

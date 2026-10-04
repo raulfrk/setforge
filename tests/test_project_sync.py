@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 from setforge import locking, transitions
 from setforge.cli import app
 from setforge.errors import SetforgeError
+from setforge.locking import profile_lock
 from setforge.ownership import (
     OwnershipStore,
     ownership_claim_to_json,
@@ -31,37 +32,21 @@ from setforge.project_sync import (
     _merge_mode,
     apply_sync,
     discover_injections,
-    legacy_two_way_merge,
     merge_project_content,
     missing_locally,
     plan_sync,
     render_sync_manifests,
     resolve_automatically,
     resolve_sync_plan,
+    two_way_merge,
 )
+from setforge.reconcile import file_id as reconcile_file_id
+from setforge.reconcile import record as record_base
 from setforge.reconcile.merge_model import ABSENT, Clean, Conflict, MergeResult
+from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import WizardResult
-
-
-def _git_repo(path: Path) -> Path:
-    path.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
-    return path
-
-
-def _config(tmp_path: Path) -> Path:
-    config_root = tmp_path / "config"
-    source = config_root / "project" / "demo"
-    source.mkdir(parents=True)
-    (source / "AGENTS.md").write_text("managed\n")
-    (source / "AGENTS.md").chmod(0o644)
-    config = config_root / "setforge.yaml"
-    config.write_text(
-        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n"
-        "    files:\n      agents:\n        src: AGENTS.md\n        dst: AGENTS.md\n"
-    )
-    subprocess.run(["git", "init", "-q", "-b", "main", str(config_root)], check=True)
-    return config
+from setforge.reconcile_apply import reconcile_structured_file
+from tests.project_helpers import _config, _git_repo
 
 
 def _named_config(tmp_path: Path, name: str, destination: str) -> Path:
@@ -369,8 +354,8 @@ def test_plan_sync_reports_unrecorded_target(tmp_path: Path) -> None:
         plan_sync(target)
 
 
-def test_legacy_two_way_merge_splits_independent_differences() -> None:
-    result = legacy_two_way_merge(
+def test_two_way_merge_splits_independent_differences() -> None:
+    result = two_way_merge(
         b"one-local\nshared-a\nshared-b\nthree-local\n",
         b"one-profile\nshared-a\nshared-b\nthree-profile\n",
     )
@@ -389,10 +374,10 @@ def test_legacy_two_way_merge_splits_independent_differences() -> None:
         (AutoResolution.USE_PROFILE, b"one-profile\nshared\ntwo-profile\n"),
     ],
 )
-def test_legacy_two_way_merge_resolves_every_hunk_explicitly(
+def test_two_way_merge_resolves_every_hunk_explicitly(
     policy: AutoResolution, expected: bytes
 ) -> None:
-    result = legacy_two_way_merge(
+    result = two_way_merge(
         b"one-local\nshared\ntwo-local\n",
         b"one-profile\nshared\ntwo-profile\n",
     )
@@ -403,8 +388,8 @@ def test_legacy_two_way_merge_resolves_every_hunk_explicitly(
     assert resolved.merged() == expected
 
 
-def test_legacy_two_way_merge_is_byte_exact_without_final_newline() -> None:
-    result = legacy_two_way_merge(b"same\nlocal", b"same\nprofile")
+def test_two_way_merge_is_byte_exact_without_final_newline() -> None:
+    result = two_way_merge(b"same\nlocal", b"same\nprofile")
 
     assert result.segments == (
         Clean(b"same\n"),
@@ -420,8 +405,7 @@ def test_merge_project_content_uses_key_aware_merge_for_yaml() -> None:
         b"alpha: old\nbeta: profile\n",
     )
 
-    assert result.clean
-    assert result.merged() == b"alpha: local\nbeta: profile\n"
+    assert result.segments == (Clean(b"alpha: local\nbeta: profile\n"),)
 
 
 @pytest.mark.parametrize("suffix", ["yaml", "json"])
@@ -451,6 +435,31 @@ def test_merge_project_content_falls_back_for_incompatible_root_shapes() -> None
     )
 
     assert result.segments == (Conflict(b"base\n", b"local: keep\n", b"upstream\n"),)
+
+
+def test_merge_project_content_falls_back_for_a_duplicate_json_key() -> None:
+    result = merge_project_content(
+        Path("settings.json"), b"{}", b'{"a":1}', b'{"a":1,"a":2}'
+    )
+
+    assert result.segments == (Conflict(b"{}", b'{"a":1}', b'{"a":1,"a":2}'),)
+
+
+@pytest.mark.parametrize(
+    ("base", "local", "profile", "expected"),
+    [
+        (b"a:   1", b"a:   1", b"a: 2\n", b"a: 2\n"),
+        (b"a: 1\n", b"a:    1\n", b"a: 1\n", b"a:    1\n"),
+        (b"a: 1\n", b"a:    2\n", b"a:    2\n", b"a:    2\n"),
+    ],
+    ids=["local-unchanged", "profile-unchanged", "both-agree"],
+)
+def test_merge_project_content_keeps_the_moved_side_verbatim(
+    base: bytes, local: bytes, profile: bytes, expected: bytes
+) -> None:
+    result = merge_project_content(Path("settings.yaml"), base, local, profile)
+
+    assert result.segments == (Clean(expected),)
 
 
 def test_plan_sync_three_way_preserves_independent_local_edit(
@@ -2242,3 +2251,72 @@ def test_public_jsonc_project_sync_preserves_signed_values_and_root_replacements
         assert YAML().load(live.read_bytes()) == expected
     else:
         assert json.loads(live.read_bytes()) == expected
+
+
+@pytest.mark.parametrize(
+    ("extension", "base", "local", "profile", "expected"),
+    [
+        (
+            "yaml",
+            b"a:   1\nb:  [1,2]   # keep\nc: 'x'\n",
+            b"a:   1\nb:  [1,2]   # keep\nc: 'x'\nhost: true\n",
+            b"a:   2\nb:  [1,2]   # keep\nc: 'x'\n",
+            b"a:   2\nb:  [1,2]   # keep\nc: 'x'\nhost: true\n",
+        ),
+        (
+            "json",
+            b'{\n    "a": 1,\n    "b": [1,2],   // keep\n    "c": "x"\n}\n',
+            b'{\n    "a": 1,\n    "b": [1,2],   // keep\n    "c": "x",\n'
+            b'    "host": true\n}\n',
+            b'{\n    "a": 1,\n    "b": [1,2],   // keep\n    "c": "y"\n}\n',
+            b'{\n    "a": 1,\n    "b": [1,2],   // keep\n    "c": "y",\n'
+            b'    "host": true\n}\n',
+        ),
+        (
+            "json",
+            b'[\n  {"n": 1},\n  {"n": 2}\n]\n',
+            b'[\n  {"n": 1},\n  {"n": 2},\n  {"n": 9}\n]\n',
+            b'[\n  {"n": 7},\n  {"n": 2}\n]\n',
+            b'[\n  {"n": 7},\n  {"n": 2},\n  {"n": 9}\n]\n',
+        ),
+    ],
+    ids=["yaml", "json-object", "json-array-root"],
+)
+def test_public_sync_merges_a_structured_member_to_the_bytes_install_gives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extension: str,
+    base: bytes,
+    local: bytes,
+    profile: bytes,
+    expected: bytes,
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    config.write_text(config.read_text().replace("AGENTS.md", f"settings.{extension}"))
+    source = config.parent / f"project/demo/settings.{extension}"
+    source.write_bytes(base)
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    live = target / f"settings.{extension}"
+    live.write_bytes(local)
+    source.write_bytes(profile)
+
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert synced.exit_code == 0, (synced.output, synced.exception)
+    assert live.read_bytes() == expected
+    fid = reconcile_file_id("settings")
+    with profile_lock("install"):
+        record_base("install", fid, base=base, local=local)
+    fmt = structured_format(live)
+    assert fmt is not None
+    installed = reconcile_structured_file(
+        "install", fid, live=local, tracked=profile, fmt=fmt
+    )
+    assert installed.content == expected

@@ -13,9 +13,9 @@ from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
-from setforge import atomicio, operations
+from setforge import atomicio
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
-from setforge.errors import MergeTypeMismatch, SetforgeError, StructuredParseError
+from setforge.errors import SetforgeError
 from setforge.file_ownership import refuse_active_file_claims
 from setforge.git_overlay import (
     OverlayClaim,
@@ -31,7 +31,6 @@ from setforge.git_visibility import (
     read_claims,
 )
 from setforge.locking import mutation_locks
-from setforge.orphan_scan import capture_parent_path_guards
 from setforge.ownership import (
     ClaimLifecycle,
     OwnershipStore,
@@ -47,10 +46,13 @@ from setforge.project_injection import (
     ProjectFilePlan,
     _claim_fingerprint,
     _claim_matches_plan,
+    _exclude_paths,
     _is_tracked,
     _load_manifest,
     _load_manifest_payload,
+    _overlay_git_paths,
     _plan_file,
+    _project_transaction,
     _remove_created_parent,
     _require_compatible_visibility,
     _require_guards,
@@ -80,14 +82,10 @@ from setforge.reconcile.merge_model import (
     MergeResult,
     Segment,
 )
-from setforge.reconcile.structured_units import (
-    _dump_model,
-    _load_model,
-    structured_format,
-)
+from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.types import ABSENT
 from setforge.reconcile.types import file_id as reconcile_file_id
-from setforge.structural_merge import merge_structural
+from setforge.reconcile_apply import _key_merge
 from setforge.transitions import state_root
 from setforge.ui.primitives import CANCEL
 
@@ -477,7 +475,7 @@ def _legacy_result(
                 ),
             )
         )
-    return legacy_two_way_merge(live, desired)
+    return two_way_merge(live, desired)
 
 
 def _merge_mode(
@@ -557,7 +555,7 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                 result = (
                     _clean_result(addition.source_payload)
                     if live is ABSENT
-                    else legacy_two_way_merge(live, addition.source_payload)
+                    else two_way_merge(live, addition.source_payload)
                 )
                 result_mode, mode_conflict = _merge_mode(
                     None,
@@ -740,28 +738,25 @@ class AutoResolution(StrEnum):
 def merge_project_content(
     path: Path, base: MergeInput, ours: MergeInput, theirs: MergeInput
 ) -> MergeResult:
-    """Three-way project content, preferring key-aware clean structured merges."""
+    """Three-way project content, merging structured files by key as install does.
+
+    A side that did not move leaves the other side's bytes verbatim.
+    """
     fmt = structured_format(path)
     if (
         fmt is not None
         and isinstance(base, bytes)
         and isinstance(ours, bytes)
         and isinstance(theirs, bytes)
+        and len({base, ours, theirs}) == 3
     ):
-        try:
-            structured = merge_structural(
-                _load_model(base, fmt),
-                _load_model(ours, fmt),
-                _load_model(theirs, fmt),
-            )
-            if structured.clean:
-                return MergeResult((Clean(_dump_model(structured.merged_model, fmt)),))
-        except (MergeTypeMismatch, StructuredParseError, TypeError, ValueError):
-            pass
+        merged = _key_merge(base, ours, theirs, fmt)
+        if merged is not None:
+            return MergeResult((Clean(merged),))
     return line_merge(base, ours, theirs)
 
 
-def legacy_two_way_merge(ours: bytes, theirs: bytes) -> MergeResult:
+def two_way_merge(ours: bytes, theirs: bytes) -> MergeResult:
     """Represent a no-ancestor comparison as independently resolvable hunks.
 
     With no common ancestor, SetForge cannot safely attribute a difference to
@@ -1267,19 +1262,8 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     *(plan.target / item.relative_destination for item in plan.files),
                     *manifests,
                     *(store.claim_path(resource) for resource in resources.values()),
-                    *(
-                        (visibility_plan.exclude_path,)
-                        if visibility_plan is not None
-                        else ()
-                    ),
-                    *(
-                        (
-                            overlay_git_plan.config_path,
-                            overlay_git_plan.attributes_path,
-                        )
-                        if overlay_git_plan is not None
-                        else ()
-                    ),
+                    *_exclude_paths(visibility_plan),
+                    *_overlay_git_paths(overlay_git_plan),
                     *(
                         overlay_path(plan.target, item.relative_destination)
                         for item in plan.files
@@ -1319,29 +1303,17 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 ),
             )
         )
-        journal = operations.prepare(
+        changed = False
+        with _project_transaction(
             command="project-sync",
             profile=operation_profile,
             config_dir=None,
             config_dirs=config_roots,
-            resources_lock=True,
             command_line=("project", "sync", str(plan.target)),
             paths=paths,
-            path_guards=capture_parent_path_guards(paths),
-        )
-        changed = False
-        with operations.recover_on_error(operation_profile, "project-sync"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="synchronize-project-files-and-state",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery=(
-                    "restore all project files, manifests, ownership, and visibility"
-                ),
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="synchronize-project-files-and-state",
+            recovery="restore all project files, manifests, ownership, and visibility",
+        ):
             for item in plan.files:
                 guards.verify_targets()
                 merged = item.result.merged()
@@ -1445,8 +1417,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     _remove_created_parent(
                         guards.targets[0], parent.relative_to(plan.target)
                     )
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
         return (
             changed
             or (visibility_plan is not None and visibility_plan.changed)
