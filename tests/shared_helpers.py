@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from ruamel.yaml import YAML
 
 from setforge.migrations import MigrationRoots
-from setforge.transitions import TransitionDir, compute_patch, snapshot_paths
+from setforge.transitions import (
+    FilesystemImage,
+    FilesystemKind,
+    TransitionDir,
+    load_filesystem_deltas,
+)
 
 
 def migration_roots(tmp_path: Path) -> MigrationRoots:
@@ -30,15 +36,26 @@ def write_setforge_yaml(tmp_path: Path, body: str) -> Path:
     return cfg
 
 
-def record_transition(
-    tmp_path: Path, live: Path, before: bytes, after: bytes
-) -> TransitionDir:
-    live.parent.mkdir(parents=True, exist_ok=True)
-    live.write_bytes(before)
-    pre = snapshot_paths([live])
-    live.write_bytes(after)
-    post = snapshot_paths([live])
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(compute_patch(pre, post))
-    return transition
+def text_images(texts: Mapping[Path, str | None]) -> dict[Path, FilesystemImage]:
+    """Synthetic ``write_transition`` images of file texts; ``None`` is absent."""
+    return {
+        path: FilesystemImage(FilesystemKind.ABSENT)
+        if text is None
+        else FilesystemImage(
+            FilesystemKind.FILE,
+            payload=text.encode("utf-8", "surrogateescape"),
+            mode=0o644,
+            mtime_ns=0,
+        )
+        for path, text in texts.items()
+    }
+
+
+def file_images(
+    transition: TransitionDir,
+) -> dict[Path, tuple[bytes | None, bytes | None]]:
+    """The recorded pre/post bytes of every path; ``None`` is absent."""
+    return {
+        item.path: (item.pre.payload, item.post.payload)
+        for item in load_filesystem_deltas(transition)
+    }

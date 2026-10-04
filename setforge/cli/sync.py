@@ -499,10 +499,10 @@ def sync(
             transitions.ensure_state_dir_writable()
 
         src_paths = _sync_snapshot_paths(ctx, config)
-        file_pre = transitions.snapshot_paths(src_paths)
+        file_pre = transitions.capture_files(src_paths)
         # Snapshot the per-host store state (byte bases / spans sidecars /
         # scalar bases) BEFORE _run_capture re-baselines them, so revert
-        # restores the stores in lockstep with the tracked patch. Without
+        # restores the stores in lockstep with the tracked files. Without
         # this, a sync that re-baselines a SHARED base followed by revert
         # would leave the base AHEAD of the reverted tracked src — the
         # corruption direction the codebase guards against.
@@ -565,7 +565,7 @@ def sync(
             raise
 
         journal = operations.finish_checkpoint(journal)
-        file_post = transitions.snapshot_paths(src_paths)
+        file_post = transitions.capture_files(src_paths)
         if not no_transition:
             _write_sync_transition(
                 ctx,
@@ -649,8 +649,8 @@ def _capture_sync_store_snapshots(
 def _write_sync_transition(
     ctx: ProfileContext,
     *,
-    file_pre: dict[Path, str | None],
-    file_post: dict[Path, str | None],
+    file_pre: dict[Path, transitions.FilesystemImage],
+    file_post: dict[Path, transitions.FilesystemImage],
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
 ) -> None:
     """Write the SYNC transition record + echo the user-visible breadcrumb.
@@ -663,7 +663,7 @@ def _write_sync_transition(
 
     ``state_snapshots`` carries the pre-sync per-host store state captured
     by :func:`_capture_sync_store_snapshots` so ``revert`` restores the
-    byte bases / spans sidecars in lockstep with the tracked patch.
+    byte bases / spans sidecars in lockstep with the tracked files.
 
     Skips the write only when capture produced neither file mutations nor
     per-host store mutations. A truly empty SYNC transition would shadow a
@@ -675,7 +675,7 @@ def _write_sync_transition(
         transitions.snapshot_store_state(entry.store, entry.profile, entry.key) != entry
         for entry in state_snapshots
     )
-    if file_pre == file_post and not state_changed:
+    if not transitions.changed_paths(file_pre, file_post) and not state_changed:
         return
     target = transitions.write_transition(
         transitions.make_meta(

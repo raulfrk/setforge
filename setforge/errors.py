@@ -262,10 +262,10 @@ class ExtensionInstallFailed(SetforgeError):
 
 
 class RevertFailed(SetforgeError):
-    """Raised by ``setforge revert`` when ``patch -R`` rejects the diff
-    (drifted files), when the ``patch`` binary isn't on PATH, or when
-    an extension reverse install/uninstall fails. Message includes the
-    captured stderr or the conflicting paths."""
+    """Raised by ``setforge revert`` when a recorded file changed since the
+    transition, when the record was kept in an earlier version's text-patch
+    format, or when an extension reverse install/uninstall fails. Message
+    includes the captured stderr or the conflicting paths."""
 
 
 class ConfirmRequiresInteractive(SetforgeError):

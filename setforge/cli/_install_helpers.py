@@ -594,21 +594,12 @@ def _planned_reconcile_store_mutation(
 class DeployOutcome:
     """The pass-2 deploy outputs the caller threads into the transition.
 
-    ``prior_modes`` maps
-    each live path whose MODE this install changed to the permission bits it
-    held BEFORE the install chmod-ed it (from
-    :attr:`deploy.DeployResult.prior_mode`) — the data ``revert`` needs to
-    chmod the path back in lockstep with the content patch reverse. A deploy
-    that touched no mode (fresh CREATE, true NOOP, mode-already-matched
-    UPDATE, or a symlink record) contributes nothing.
-
     ``deferred_reconcile`` lists the live paths of plain reconcile files whose
     conflict was DEFERRED (kept live, base not advanced) — the caller gates a
     non-zero exit on them for a non-interactive run, since the install left
     real conflicts unresolved.
     """
 
-    prior_modes: dict[Path, int]
     deferred_reconcile: tuple[Path, ...] = ()
     store_mutated: bool = False
 
@@ -629,15 +620,10 @@ def _execute_pending_deploys(
     :func:`deploy.deploy_symlinked_file` with its frozen source snapshot for a
     symlink record) → echo the
     action → advance the disposition byte base → advance the spans sidecar,
-    in lockstep per file. Each write whose :class:`deploy.DeployResult`
-    reports a ``prior_mode`` (the live mode it overwrote) records that mode
-    under the deployed path, keyed by the SAME path the transition snapshots
-    — ``real_dst`` (symlink-resolved), so the revert chmod targets the file
-    the patch reverse rewrites. After the loop, prune bases keyed on the
+    in lockstep per file. After the loop, prune bases keyed on the
     executed disposition set — so a gate refusal (which never reaches this
     function) prunes nothing.
     """
-    prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
     store_mutated = False
     keep_ids = _reconcile_keep_ids(pending, preserved_ids=preserved_ids)
@@ -670,11 +656,6 @@ def _execute_pending_deploys(
             typer.echo(f"{deploy.DeployAction.NOOP.value:>8}  {record.sub_dst}")
             continue
         result = deploy.write_resolved_deploy(record.resolved)
-        if result.prior_mode is not None:
-            # ``result.dst`` is the symlink-resolved real_dst — the SAME
-            # path the transition snapshots and the patch reverse rewrites,
-            # so revert's chmod target lines up with its content restore.
-            prior_modes[result.dst] = result.prior_mode
         typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
         # ADVANCE the reconcile store only AFTER the live write (the same
         # lockstep, same safe-failure-direction reasoning as the disposition
@@ -690,7 +671,6 @@ def _execute_pending_deploys(
     if reconcile_store.prune(profile, keep_ids):
         store_mutated = True
     return DeployOutcome(
-        prior_modes=prior_modes,
         deferred_reconcile=tuple(deferred_reconcile),
         store_mutated=store_mutated,
     )
@@ -755,8 +735,8 @@ def _honor_reconcile_removal(record: _PendingDeploy) -> None:
 
 def _install_recorded_nothing(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     deploy_outcome: DeployOutcome,
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
@@ -768,13 +748,10 @@ def _install_recorded_nothing(
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> bool:
-    """True iff nothing revertable changed (ANDs the patch with every delta below)."""
-    if any(
-        file_pre.get(path) != file_post.get(path)
-        for path in set(file_pre) | set(file_post)
-    ):
+    """True iff nothing revertable changed (ANDs the files with every delta below)."""
+    if transitions.changed_paths(file_pre, file_post):
         return False
-    if deploy_outcome.store_mutated or deploy_outcome.prior_modes:
+    if deploy_outcome.store_mutated:
         return False
     if ext_delta is not None and not ext_delta.is_empty():
         return False
@@ -793,8 +770,8 @@ def _install_recorded_nothing(
 
 def _write_install_transition(
     profile: str,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
     *,
@@ -802,7 +779,6 @@ def _write_install_transition(
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     mcp_delta: transitions.MCPDelta | None = None,
-    file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
     codex_plugin_delta: transitions.CodexPluginDelta | None = None,
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
@@ -812,12 +788,9 @@ def _write_install_transition(
 
     ``state_snapshots`` carries the pre-install store state captured at
     the pass-2 barrier (:func:`_capture_store_snapshots`); ``revert``
-    restores those entries in lockstep with the ``changes.patch`` reverse.
-
-    ``file_modes`` is the per-path pre-install permission map (paths whose
-    MODE this install changed); ``revert`` chmods each reverted path back to
-    its recorded value in lockstep with the patch reverse, so a mode-only
-    install (empty content patch) is still a faithful inverse.
+    restores those entries in lockstep with the file images of
+    ``file_pre`` / ``file_post``, whose modes make a mode-only install
+    revertible too.
 
     Two arguments carry schema-bump backward-compat history: ``source_dir``
     (when set and pointing at a git repo,
@@ -851,7 +824,6 @@ def _write_install_transition(
         reconcile_outcomes=reconcile_outcomes,
         state_snapshots=state_snapshots,
         mcp_delta=mcp_delta,
-        file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
         codex_plugin_delta=codex_plugin_delta,
         ownership_transfers=ownership_transfers,

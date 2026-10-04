@@ -971,16 +971,11 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
         code: str | None = None,
         claude: str | None = None,
         gitleaks: str | None = None,
-        patch: str | None = None,
     ) -> None:
-        calls.append(
-            {"code": code, "claude": claude, "gitleaks": gitleaks, "patch": patch}
-        )
+        calls.append({"code": code, "claude": claude, "gitleaks": gitleaks})
         # Reset claude_bin cache after override change
         cp._get_claude_bin.cache_clear()
-        original_set_cli_overrides(
-            code=code, claude=claude, gitleaks=gitleaks, patch=patch
-        )
+        original_set_cli_overrides(code=code, claude=claude, gitleaks=gitleaks)
 
     # Patch the function on the binaries module itself so that
     # cli.py's `binaries.set_cli_overrides(...)` call goes through our recorder.
@@ -1613,7 +1608,7 @@ def test_revert_noop_when_no_plugin_delta(
 
     Makes the claude binary unresolvable so install's plugin reconcile
     leg is warn-and-skipped and no ``plugins.json`` sidecar lands.
-    Revert sees only ``changes.patch`` and reverses the file state
+    Revert sees only the file images and reverses the file state
     successfully. (Inline equivalent of ``test_cli_e2e``'s
     ``no_claude_bin`` fixture, which isn't auto-discovered from this
     module.)

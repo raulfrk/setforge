@@ -4,7 +4,6 @@ Each state-changing command (install, sync, revert) writes a directory
 under ``~/.local/state/setforge/transitions/`` containing:
 
 - ``meta.json`` — command, profile, UTC timestamp, host, setforge version
-- ``changes.patch`` — unified diff of file changes (omitted if no edits)
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
   added / removed marketplaces (omitted if no plugin delta)
@@ -12,34 +11,30 @@ under ``~/.local/state/setforge/transitions/`` containing:
   MCP delta)
 - ``reconcile_outcomes.json`` — per-item plugin/extension reconcile
   outcomes (omitted if none)
-- ``file_modes.json`` — per-path pre-command permission bits for files
-  whose MODE (not just content) the command changed (omitted if none).
-  The content patch carries bytes only; this records the mode axis so
-  revert can chmod each reverted path back to its pre-command mode.
-- ``filesystem_deltas.json`` — optional arbitrary-byte file and symlink
-  pre/post images for mutations a unified text patch cannot represent.
+- ``filesystem_deltas.json`` — pre/post images (kind, bytes, link target,
+  mode) of every file, symlink and directory the command changed (omitted
+  if none); marked ``complete`` because it covers every file change.
 - ``state_snapshots/`` — pre-command per-host store state (byte bases,
   spans sidecars, scalar-base manifests) as a ``manifest.json`` plus
   numbered raw-byte payload files (omitted when nothing was captured)
 
 A subsequent ``setforge revert`` consumes the most recent transition for
-a profile, applies the patch in reverse via ``patch -R``, reverses the
-extension delta, reverses the plugin delta, reverses the MCP delta,
-restores the snapshotted store state, and records its own reverse
-transition.
+a profile, restores every recorded file's pre image once each still holds
+its post image, restores the snapshotted store state, reverses the
+extension, plugin and MCP deltas, and records its own reverse transition.
+Records of earlier versions kept file changes as a ``changes.patch`` text
+diff plus ``file_modes.json``; revert refuses those (see
+:func:`refuse_legacy_file_changes`).
 """
 
 import base64
 import binascii
-import difflib
 import json
 import os
 import platform
-import re
 import shutil
 import stat
 import subprocess
-import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -50,7 +45,6 @@ from typing import Any, Final, NewType
 from pydantic import ValidationError
 
 from setforge import __version__, atomicio, base_store, scalar_base_store
-from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 from setforge.ownership import (
     ClaimEvent,
@@ -62,7 +56,7 @@ from setforge.paths import state_root
 from setforge.reconcile import store as reconcile_store
 
 TransitionDir = NewType("TransitionDir", Path)
-"""A directory containing transition metadata (``meta.json``, ``changes.patch``, etc.).
+"""A directory holding one transition record (``meta.json`` and its sidecars).
 
 Constructed only by ``setforge.transitions`` factory functions. Consumers
 accepting a ``TransitionDir`` get type-check protection that raw ``Path``
@@ -440,221 +434,20 @@ def write_meta(
     _write_text_durable(transition_dir / "meta.json", payload)
 
 
-def snapshot_paths(
-    paths: Iterable[Path], *, strict: bool = False
-) -> dict[Path, str | None]:
+def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     """Read every path in ``paths``. Missing files map to ``None``.
 
-    Returns a dict so callers can pass it directly to :func:`compute_patch`.
     Decodes the raw bytes as UTF-8 with ``surrogateescape`` and no newline
-    translation, so CRLF, lone CR and undecodable bytes survive into the
-    recorded diff and can be re-encoded byte for byte (see
+    translation, so two snapshots compare equal only when the bytes do (see
     :func:`setforge.deploy.read_text_exact`).
-
-    ``strict=True`` is for configuration files (migration inputs), which are
-    text: a file that is not valid UTF-8 raises :class:`SetforgeError`.
     """
     out: dict[Path, str | None] = {}
     for p in paths:
         try:
-            data = p.read_bytes()
-            out[p] = data.decode("utf-8", "strict" if strict else "surrogateescape")
+            out[p] = p.read_bytes().decode("utf-8", "surrogateescape")
         except FileNotFoundError:
             out[p] = None
-        except UnicodeDecodeError as exc:
-            raise SetforgeError(
-                f"cannot snapshot {p}: file is not valid UTF-8"
-            ) from exc
     return out
-
-
-def _cquote_path(s: str) -> str:
-    """Wrap ``s`` in C-style quotes (git's ``quote_c_style`` form) so a
-    diff header carrying whitespace or quote/backslash chars round-trips
-    through GNU ``patch``.
-
-    GNU patch only unquotes a C-quoted header when it appears in a
-    *git-style* diff (one preceded by a ``diff --git`` line); a plain
-    unified-diff header is taken verbatim and terminates the filename at
-    the first whitespace. :func:`compute_patch` therefore emits the
-    ``diff --git`` sentinel whenever any quoting is needed.
-    """
-    out = ['"']
-    for ch in s:
-        if ch in '"\\':
-            out.append("\\" + ch)
-        elif ch == "\n":
-            out.append("\\n")
-        elif ch == "\t":
-            out.append("\\t")
-        else:
-            out.append(ch)
-    out.append('"')
-    return "".join(out)
-
-
-def _needs_quoting(s: str) -> bool:
-    return any(c.isspace() or c in '"\\' for c in s)
-
-
-def _cunquote_path(s: str) -> str:
-    """Inverse of :func:`_cquote_path`.
-
-    If ``s`` is wrapped in C-style quotes (as emitted for spaced/special
-    paths), strip the quotes and unescape ``\\"``, ``\\\\``, ``\\n``,
-    ``\\t``. Otherwise return ``s`` unchanged — most diff headers carry a
-    plain root-relative path with no quoting at all.
-    """
-    if len(s) < 2 or not (s.startswith('"') and s.endswith('"')):
-        return s
-    inner = s[1:-1]
-    out = []
-    i = 0
-    while i < len(inner):
-        ch = inner[i]
-        if ch == "\\" and i + 1 < len(inner):
-            nxt = inner[i + 1]
-            if nxt == "n":
-                out.append("\n")
-            elif nxt == "t":
-                out.append("\t")
-            elif nxt in '"\\':
-                out.append(nxt)
-            else:
-                out.append(nxt)
-            i += 2
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out)
-
-
-def _root_relative(path: Path) -> str:
-    """Return ``path`` with any leading ``/`` stripped."""
-    s = str(path)
-    return s.lstrip("/") if s.startswith("/") else s
-
-
-def _diff_path(path: Path) -> str:
-    """Format a Path for a diff header.
-
-    GNU patch's safe-paths feature rejects absolute paths as "potentially
-    dangerous." Workaround: emit paths root-relative (no leading ``/``),
-    and apply with ``patch -p0 -d /`` so the relative path resolves
-    absolute. ``/dev/null`` is the standard sentinel for missing files
-    and must NOT be stripped.
-
-    A root-relative form containing whitespace (or a quote/backslash) is
-    C-quoted so the header round-trips through GNU ``patch`` — which
-    otherwise terminates the filename at the first whitespace and reports
-    "can't find file to patch". The quoting is only honored inside a
-    *git-style* diff, so :func:`compute_patch` pairs a quoted header with
-    a ``diff --git`` sentinel line. Space-free paths are emitted verbatim
-    (unquoted, no sentinel), byte-identical to the historical format.
-    """
-    rel = _root_relative(path)
-    return _cquote_path(rel) if _needs_quoting(rel) else rel
-
-
-def compute_patch(
-    pre: Mapping[Path, str | None],
-    post: Mapping[Path, str | None],
-) -> str:
-    """Return one combined unified diff covering every path that
-    differs between ``pre`` and ``post``.
-
-    Missing files appear as ``/dev/null`` so ``patch`` can apply
-    creations on forward (``+++ a/b``) and deletions on reverse
-    (``--- a/b`` paired with ``+++ /dev/null``). Real paths are emitted
-    root-relative (leading ``/`` stripped) so :func:`apply_patch_reverse`
-    can invoke ``patch -p0 -d /`` and bypass GNU patch's safe-paths
-    check.
-
-    A destination whose root-relative path contains whitespace (or a
-    quote/backslash) gets C-quoted headers plus a leading ``diff --git``
-    sentinel line, which is what makes GNU patch unquote the header (a
-    plain unified-diff header is taken verbatim and would terminate the
-    filename at the first space, breaking revert). Space-free paths emit
-    the historical unquoted, sentinel-free form unchanged.
-    """
-    chunks: list[str] = []
-    for path in sorted(set(pre) | set(post), key=str):
-        before = pre.get(path)
-        after = post.get(path)
-        if before == after:
-            continue
-        before_lines = _split_lines(before or "")
-        after_lines = _split_lines(after or "")
-        diff_path = _diff_path(path)
-        from_path = "/dev/null" if before is None else diff_path
-        to_path = "/dev/null" if after is None else diff_path
-        diff_lines = list(
-            difflib.unified_diff(
-                before_lines,
-                after_lines,
-                fromfile=from_path,
-                tofile=to_path,
-            )
-        )
-        chunk = _annotate_no_newline(diff_lines)
-        # The git-style sentinel makes GNU patch honor the C-quoted
-        # header; only needed (and only emitted) when the path is quoted.
-        if _needs_quoting(_root_relative(path)):
-            chunk = f"diff --git {diff_path} {diff_path}\n" + chunk
-        chunks.append(chunk)
-    return "".join(chunks)
-
-
-_NO_NEWLINE_MARKER = "\\ No newline at end of file\n"
-
-
-def _split_lines(text: str) -> list[str]:
-    """Split ``text`` at ``\\n`` only, keeping the terminators.
-
-    ``str.splitlines`` also breaks at ``\\r``, form feed, ``\\x1c``-``\\x1e``,
-    ``\\x85`` and U+2028/2029, none of which GNU ``patch`` treats as a line
-    end, so the recorded diff would not match the file it describes.
-    """
-    lines = text.split("\n")
-    out = [line + "\n" for line in lines[:-1]]
-    if lines[-1]:
-        out.append(lines[-1])
-    return out
-
-
-def _annotate_no_newline(diff_lines: list[str]) -> str:
-    """Insert GNU patch's ``\\ No newline at end of file`` marker so the
-    diff round-trips under ``patch`` (forward and ``-R`` reverse).
-
-    :func:`difflib.unified_diff` never emits this marker, so a hunk line
-    drawn from content without a trailing newline lacks its own ``\\n``
-    and concatenates with whatever follows (``-beta+GAMMA``), which GNU
-    patch rejects as a malformed patch. For every body line (``' '``,
-    ``'-'``, ``'+'``) that does not end in ``\\n`` we append the marker on
-    its own line; the marker applies to the immediately preceding line per
-    the unified-diff format.
-    """
-    out: list[str] = []
-    # Tracked positionally: body content can itself start with "---"/"+++".
-    in_header = True
-    header_lines_seen = 0
-    for line in diff_lines:
-        is_header = False
-        if in_header and header_lines_seen < 2 and line.startswith(("--- ", "+++ ")):
-            is_header = True
-            header_lines_seen += 1
-        elif line.startswith("@@ "):
-            is_header = True
-        if is_header:
-            in_header = False
-            out.append(line)
-            continue
-        if line[:1] in (" ", "-", "+") and not line.endswith("\n"):
-            out.append(line + "\n")
-            out.append(_NO_NEWLINE_MARKER)
-        else:
-            out.append(line)
-    return "".join(out)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1295,73 +1088,6 @@ def load_state_snapshots(
     return tuple(_validate_one_state_snapshot(entry, snap_dir) for entry in entries)
 
 
-_FILE_MODES_FILENAME: Final[str] = "file_modes.json"
-
-
-def _serialize_file_modes(file_modes: Mapping[Path, int]) -> str | None:
-    """Return the ``file_modes.json`` body, or ``None`` when empty.
-
-    Records the pre-command permission bits of every path whose MODE the
-    command changed (a content-NOOP mode-only fixup, or a content UPDATE
-    whose tracked mode differed from live). The content patch carries
-    bytes only, so this sibling is the ONLY reversible record of the mode
-    axis; ``revert`` chmods each reverted path back to its recorded value.
-    Modes serialize as decimal ints (``json.dumps`` has no octal literal);
-    :func:`load_file_modes` reads them back verbatim. Empty map → ``None``
-    so no file is written (omit-when-empty, backward-compat-safe).
-    """
-    if not file_modes:
-        return None
-    body = {str(path): mode for path, mode in file_modes.items()}
-    return json.dumps(body, indent=2, sort_keys=True) + "\n"
-
-
-def load_file_modes(transition_dir: TransitionDir) -> dict[Path, int]:
-    """Return the per-path pre-command mode map for a transition directory.
-
-    Returns ``{}`` when ``file_modes.json`` is absent — the backward-compat
-    path for transitions written before this schema bump, so an older record
-    reverts with NO mode change (treat missing map as no-op). Raises
-    :class:`InvalidTransitionRecord` when the file exists but its shape is
-    corrupt (non-dict top level, non-str key, or non-int / out-of-range
-    mode value).
-    """
-    path = transition_dir / _FILE_MODES_FILENAME
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise InvalidTransitionRecord(
-            f"cannot read file_modes.json at {path}: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        raise InvalidTransitionRecord(
-            f"file_modes.json at {path}: top-level must be a dict, got "
-            f"{type(raw).__name__}"
-        )
-    out: dict[Path, int] = {}
-    for key, value in raw.items():
-        if not isinstance(key, str):
-            raise InvalidTransitionRecord(
-                f"file_modes.json at {path}: key must be str, got {type(key).__name__}"
-            )
-        # JSON has no bool/int distinction at the type level for our needs,
-        # but ``True``/``False`` ARE ``int`` instances in Python — reject
-        # them explicitly so a hand-edited ``true`` never chmods to 0o1.
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise InvalidTransitionRecord(
-                f"file_modes.json at {path}: mode for {key!r} must be int, "
-                f"got {type(value).__name__}"
-            )
-        if not 0 <= value <= 0o7777:
-            raise InvalidTransitionRecord(
-                f"file_modes.json at {path}: mode for {key!r} out of range: {value!r}"
-            )
-        out[Path(key)] = value
-    return out
-
-
 def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
     """Return a validated ``list[str]`` built from ``raw``.
 
@@ -1539,19 +1265,6 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     )
 
 
-def _touched_paths(
-    pre: Mapping[Path, str | None], post: Mapping[Path, str | None]
-) -> list[Path]:
-    """Return the sorted set of paths whose content differs between pre
-    and post snapshots. Used to populate ``meta.json``'s ``paths`` field
-    so ``revert`` doesn't need to parse diff headers to know what was
-    touched."""
-    return sorted(
-        (p for p in (set(pre) | set(post)) if pre.get(p) != post.get(p)),
-        key=str,
-    )
-
-
 _FILESYSTEM_DELTAS_FILENAME: Final[str] = "filesystem_deltas.json"
 _OWNERSHIP_TRANSFERS_FILENAME: Final[str] = "ownership_transfers.json"
 
@@ -1705,11 +1418,80 @@ def filesystem_deletion_deltas(paths: Iterable[Path]) -> tuple[FilesystemDelta, 
     )
 
 
+_ABSENT: Final[FilesystemImage] = FilesystemImage(FilesystemKind.ABSENT)
+
+
+def capture_files(
+    paths: Iterable[Path], *, strict: bool = False
+) -> dict[Path, FilesystemImage]:
+    """Capture what each path shows, keyed by the path as given.
+
+    The image is taken at the symlink-resolved location, where a write through
+    the path lands. ``strict=True`` is for configuration files (migration
+    inputs), which are text: a file that is not valid UTF-8 raises
+    :class:`SetforgeError`.
+    """
+    out: dict[Path, FilesystemImage] = {}
+    for path in paths:
+        image = snapshot_filesystem_image(Path(os.path.realpath(path)))
+        if strict and image.payload is not None:
+            try:
+                image.payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise SetforgeError(
+                    f"cannot snapshot {path}: file is not valid UTF-8"
+                ) from exc
+        out[path] = image
+    return out
+
+
+def images_match(left: FilesystemImage, right: FilesystemImage) -> bool:
+    """Whether two images agree on kind, bytes, link target and mode."""
+    return replace(left, mtime_ns=None) == replace(right, mtime_ns=None)
+
+
+def changed_paths(
+    pre: Mapping[Path, FilesystemImage], post: Mapping[Path, FilesystemImage]
+) -> list[Path]:
+    """Return the sorted paths whose image differs between ``pre`` and ``post``."""
+    return sorted(
+        (
+            path
+            for path in set(pre) | set(post)
+            if not images_match(pre.get(path, _ABSENT), post.get(path, _ABSENT))
+        ),
+        key=str,
+    )
+
+
+def _file_deltas(
+    pre: Mapping[Path, FilesystemImage], post: Mapping[Path, FilesystemImage]
+) -> tuple[FilesystemDelta, ...]:
+    """Deltas of the changed paths, recorded where each path resolves."""
+    return tuple(
+        dict.fromkeys(
+            FilesystemDelta(
+                Path(os.path.realpath(path)),
+                pre.get(path, _ABSENT),
+                post.get(path, _ABSENT),
+            )
+            for path in changed_paths(pre, post)
+        )
+    )
+
+
 def reverse_filesystem_deltas(
     deltas: tuple[FilesystemDelta, ...],
 ) -> tuple[FilesystemDelta, ...]:
-    """Return the exact inverse records for a redo transition."""
-    return tuple(FilesystemDelta(item.path, item.post, item.pre) for item in deltas)
+    """Record reversing ``deltas``: each path from its post image to what it holds now.
+
+    Called once the reversal is complete, so a redo restores exactly the
+    state the reversal replaced.
+    """
+    return tuple(
+        FilesystemDelta(item.path, item.post, snapshot_filesystem_image(item.path))
+        for item in deltas
+    )
 
 
 def stat_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -1754,36 +1536,6 @@ def _canonicalize_filesystem_deltas(
     return canonical
 
 
-def _encode_empty_file_creations(
-    pre: Mapping[Path, str | None],
-    post: Mapping[Path, str | None],
-    filesystem_deltas: tuple[FilesystemDelta, ...],
-) -> tuple[FilesystemDelta, ...]:
-    """Encode zero-byte creations that unified diff cannot represent."""
-    encoded = list(filesystem_deltas)
-    covered = {_canonical_filesystem_path(item.path) for item in encoded}
-    for path in _touched_paths(pre, post):
-        if pre.get(path) is not None or post.get(path) != "":
-            continue
-        canonical = _canonical_filesystem_path(path)
-        if canonical in covered:
-            continue
-        current = snapshot_filesystem_image(canonical)
-        if current.kind is not FilesystemKind.FILE or current.payload != b"":
-            raise SetforgeError(
-                f"empty-file transition snapshot does not match live path: {canonical}"
-            )
-        encoded.append(
-            FilesystemDelta(
-                canonical,
-                FilesystemImage(FilesystemKind.ABSENT),
-                current,
-            )
-        )
-        covered.add(canonical)
-    return tuple(encoded)
-
-
 def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | None:
     if not deltas:
         return None
@@ -1792,6 +1544,7 @@ def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | N
         json.dumps(
             {
                 "schema_version": 1,
+                "complete": True,
                 "entries": [
                     {
                         "path": str(item.path),
@@ -1812,9 +1565,21 @@ def load_filesystem_deltas(
     transition_dir: TransitionDir,
 ) -> tuple[FilesystemDelta, ...]:
     """Load and validate optional arbitrary-filesystem transition deltas."""
+    return _load_filesystem_deltas(transition_dir)[0]
+
+
+def file_images_complete(transition_dir: TransitionDir) -> bool:
+    """Whether the record's ``filesystem_deltas.json`` covers every file change."""
+    return _load_filesystem_deltas(transition_dir)[1]
+
+
+def _load_filesystem_deltas(
+    transition_dir: TransitionDir,
+) -> tuple[tuple[FilesystemDelta, ...], bool]:
+    """Return the deltas and whether they cover every file the record changed."""
     path = transition_dir / _FILESYSTEM_DELTAS_FILENAME
     if not path.exists():
-        return ()
+        return (), False
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict) or raw.get("schema_version") != 1:
@@ -1826,7 +1591,7 @@ def load_filesystem_deltas(
         paths = [item.path for item in deltas]
         if len(paths) != len(set(paths)):
             raise ValueError("duplicate filesystem delta path")
-        return deltas
+        return deltas, raw.get("complete") is True
     except (
         OSError,
         json.JSONDecodeError,
@@ -1912,33 +1677,45 @@ def _validate_filesystem_image(image: FilesystemImage) -> None:
         raise ValueError("invalid directory image")
 
 
-def validate_filesystem_deltas_reverse(deltas: tuple[FilesystemDelta, ...]) -> None:
-    """Refuse drift before any inverse filesystem effect begins."""
-    for item in deltas:
-        try:
-            current = snapshot_filesystem_image(item.path)
-        except SetforgeError as exc:
-            raise RevertFailed(
-                f"filesystem path changed since transition: {item.path}"
-            ) from exc
-        if current != item.post:
-            raise RevertFailed(f"filesystem path changed since transition: {item.path}")
+def validate_filesystem_deltas_reverse(*steps: tuple[FilesystemDelta, ...]) -> None:
+    """Refuse drift before any inverse filesystem effect begins.
+
+    ``steps`` are reversed in order: each path must hold the post image of the
+    first step that touches it, and each later step is checked against the
+    pre image the steps before it restore. Modification times are ignored.
+    """
+    expected: dict[Path, FilesystemImage] = {}
+    for deltas in steps:
+        for item in deltas:
+            current = expected.get(item.path)
+            if current is None:
+                try:
+                    current = snapshot_filesystem_image(item.path)
+                except SetforgeError as exc:
+                    raise RevertFailed(
+                        f"filesystem path changed since transition: {item.path}"
+                    ) from exc
+            if not images_match(current, item.post):
+                raise RevertFailed(
+                    f"filesystem path changed since transition: {item.path}"
+                )
+        expected.update((item.path, item.pre) for item in deltas)
 
 
 def write_transition(
     meta: TransitionMeta,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, FilesystemImage],
+    file_post: Mapping[Path, FilesystemImage],
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
     state_snapshots: tuple[StateSnapshotEntry, ...] = (),
     mcp_delta: MCPDelta | None = None,
-    file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[FilesystemDelta, ...] = (),
     codex_plugin_delta: CodexPluginDelta | None = None,
     ownership_transfers: tuple[OwnershipTransferDelta, ...] = (),
     tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
+    paths: Sequence[Path] | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1952,11 +1729,11 @@ def write_transition(
     commit marker — is written and fsynced STRICTLY LAST, with nothing
     payload-related written after it.
 
-    Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
-    (if delta non-empty), ``plugins.json`` (if delta non-empty),
-    ``mcp.json`` (if delta non-empty), ``reconcile_outcomes.json`` (if
-    non-empty), ``file_modes.json`` (if non-empty), and ``state_snapshots/``
-    (if non-empty) into a ``.pending-<dirname>/``
+    Write order: stage ``extensions.json`` (if delta non-empty),
+    ``plugins.json`` (if delta non-empty), ``mcp.json`` (if delta
+    non-empty), ``reconcile_outcomes.json`` (if non-empty),
+    ``filesystem_deltas.json`` (if any file changed), and
+    ``state_snapshots/`` (if non-empty) into a ``.pending-<dirname>/``
     staging dir; ``pending.rename(target)`` — atomic POSIX ``Path.rename``,
     same fs; write ``meta.json`` inside the now-real ``target/`` dir as
     the commit point. A crash before that final ``meta.json`` write
@@ -1970,14 +1747,11 @@ def write_transition(
     ``state_snapshots`` writes no ``state_snapshots/`` dir at all, which
     :func:`load_state_snapshots` reads back as its ``None`` sentinel.
 
-    ``file_modes`` is the per-path pre-command permission map (paths whose
-    MODE the command changed). ``None`` / empty writes no ``file_modes.json``
-    at all, which :func:`load_file_modes` reads back as ``{}`` (the
-    no-mode-change backward-compat path for pre-bump records).
-
-    ``filesystem_deltas`` is additive: old transitions omit the payload and
-    load as an empty tuple; cleanup-orphans uses it for exact binary/symlink
-    undo and redo without changing other transition producers.
+    ``file_pre`` / ``file_post`` are :func:`capture_files` images; every path
+    whose image changed becomes a ``filesystem_deltas.json`` entry next to the
+    caller's ``filesystem_deltas``, and the file marks itself complete.
+    ``meta.json`` ``paths`` lists the paths as given whose content changed plus
+    the caller's delta paths, unless ``paths`` names them.
 
     Returns the absolute path of the committed directory.
 
@@ -1990,10 +1764,27 @@ def write_transition(
             source dict with a non-str value (caller bypassed
             ``MarketplaceSource.model_dump(mode="json")``).
     """
-    filesystem_deltas = _encode_empty_file_creations(
-        file_pre, file_post, filesystem_deltas
+    touched = (
+        list(paths)
+        if paths is not None
+        else sorted(
+            {
+                *(
+                    path
+                    for path in changed_paths(file_pre, file_post)
+                    if not images_match(
+                        replace(file_pre.get(path, _ABSENT), mode=None),
+                        replace(file_post.get(path, _ABSENT), mode=None),
+                    )
+                ),
+                *(_canonical_filesystem_path(item.path) for item in filesystem_deltas),
+            },
+            key=str,
+        )
     )
-    filesystem_deltas = _canonicalize_filesystem_deltas(filesystem_deltas)
+    filesystem_deltas = _canonicalize_filesystem_deltas(
+        (*filesystem_deltas, *_file_deltas(file_pre, file_post))
+    )
     filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
     ownership_transfer_payload = _serialize_ownership_transfers(ownership_transfers)
     root = transitions_root()
@@ -2011,10 +1802,6 @@ def write_transition(
     # 4. fsync the root dir (target's new dir entry durable),
     # 5. write + fsync meta.json (the commit marker),
     # 6. fsync the target dir (meta.json's dir entry durable) — last.
-    patch = compute_patch(file_pre, file_post)
-    if patch:
-        _write_text_durable(pending / "changes.patch", patch)
-
     ext_payload = _serialize_ext_payload(ext_delta)
     if ext_payload is not None:
         _write_text_durable(pending / "extensions.json", ext_payload)
@@ -2035,10 +1822,6 @@ def write_transition(
     if outcomes_payload is not None:
         _write_text_durable(pending / "reconcile_outcomes.json", outcomes_payload)
 
-    file_modes_payload = _serialize_file_modes(file_modes or {})
-    if file_modes_payload is not None:
-        _write_text_durable(pending / _FILE_MODES_FILENAME, file_modes_payload)
-
     if filesystem_payload is not None:
         _write_text_durable(pending / _FILESYSTEM_DELTAS_FILENAME, filesystem_payload)
 
@@ -2053,19 +1836,28 @@ def write_transition(
     pending.rename(target)
     atomicio.fsync_dir(root)
 
-    touched = sorted(
-        {
-            *_touched_paths(file_pre, file_post),
-            *(item.path for item in filesystem_deltas),
-        },
-        key=str,
-    )
     write_meta(
         target, meta, paths=touched, tracked_file_destinations=tracked_file_destinations
     )
     atomicio.fsync_dir(target)
 
     return target
+
+
+def rewrite_file_changes(
+    transition_dir: TransitionDir,
+    file_pre: Mapping[Path, FilesystemImage],
+    file_post: Mapping[Path, FilesystemImage],
+) -> None:
+    """Replace a committed record's file changes with ``file_pre`` -> ``file_post``."""
+    payload = _serialize_filesystem_deltas(
+        _canonicalize_filesystem_deltas(_file_deltas(file_pre, file_post))
+    )
+    if payload is None:
+        raise SetforgeError(f"no file changes to record in {transition_dir}")
+    target = transition_dir / _FILESYSTEM_DELTAS_FILENAME
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+    atomicio.atomic_write_text(target, payload, mode=mode)
 
 
 def _serialize_ext_payload(ext_delta: ExtensionDelta | None) -> str | None:
@@ -2278,8 +2070,8 @@ class TransitionRecord:
     meta: TransitionMeta
     paths: tuple[Path, ...]
     tracked_file_destinations: Mapping[str, tuple[Path, ...]]
-    file_modes: Mapping[Path, int]
     filesystem_deltas: tuple[FilesystemDelta, ...]
+    files_complete: bool
     ownership_transfers: tuple[OwnershipTransferDelta, ...]
     state_snapshots: tuple[StateSnapshotEntry, ...] | None
     extensions: ExtensionDelta | None
@@ -2315,6 +2107,7 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
         raise InvalidTransitionRecord(
             f"invalid tracked_file_destinations in {meta_file}"
         )
+    filesystem_deltas, files_complete = _load_filesystem_deltas(transition_dir)
     return TransitionRecord(
         directory=transition_dir,
         meta=_meta_from_payload(payload, meta_file),
@@ -2323,14 +2116,52 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
             name: tuple(Path(os.path.normpath(path)) for path in paths)
             for name, paths in attribution.items()
         },
-        file_modes=load_file_modes(transition_dir),
-        filesystem_deltas=load_filesystem_deltas(transition_dir),
+        filesystem_deltas=filesystem_deltas,
+        files_complete=files_complete,
         ownership_transfers=load_ownership_transfers(transition_dir),
         state_snapshots=load_state_snapshots(transition_dir),
         extensions=load_extension_delta(transition_dir),
         plugins=load_plugin_delta(transition_dir),
         codex_plugins=load_codex_plugin_delta(transition_dir),
         mcp=load_mcp_delta(transition_dir),
+    )
+
+
+def refuse_legacy_file_changes(record: TransitionRecord) -> None:
+    """Refuse a record whose file changes an earlier version kept as a text patch.
+
+    Such a record holds no pre-image for those files, so it cannot be reverted
+    exactly; it is refused before anything is changed.
+    """
+    if record.files_complete:
+        return
+    directory = record.directory
+    patch = directory / "changes.patch"
+    modes = directory / "file_modes.json"
+    try:
+        mode_paths = list(json.loads(modes.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        mode_paths = []
+    covered = {str(item.path) for item in record.filesystem_deltas}
+    uncovered = [
+        path
+        for path in dict.fromkeys((*map(str, record.paths), *map(str, mode_paths)))
+        if path not in covered
+    ]
+    if (
+        not uncovered
+        and not (patch.exists() and patch.stat().st_size)
+        and not modes.exists()
+    ):
+        return
+    shown = ", ".join(uncovered[:3]) + (
+        f" and {len(uncovered) - 3} more" if len(uncovered) > 3 else ""
+    )
+    raise RevertFailed(
+        f"transition {directory.name} was recorded by an earlier version in a "
+        "format this version cannot revert; nothing was changed. Revert it with "
+        f"setforge {record.meta.version}, which recorded it"
+        + (f", or restore by hand: {shown}" if shown else "")
     )
 
 
@@ -2434,237 +2265,6 @@ def _pick_latest_transition(candidates: list[Path]) -> Path | None:
     if not candidates:
         return None
     return max(candidates, key=lambda d: d.name)
-
-
-_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
-
-
-def _patch_header_indices(lines: Sequence[str]) -> list[int]:
-    """Indices of the ``--- `` lines that open a file section.
-
-    Hunk bodies are skipped by their declared line counts, so a body line
-    such as ``--- x`` (a removed ``-- x``) is never mistaken for a header.
-    """
-    found: list[int] = []
-    i = 0
-    count = len(lines)
-    while i < count:
-        if not (
-            lines[i].startswith("--- ")
-            and i + 2 < count
-            and lines[i + 1].startswith("+++ ")
-            and lines[i + 2].startswith("@@ ")
-        ):
-            i += 1
-            continue
-        found.append(i)
-        i += 2
-        while i < count and (match := _HUNK_HEADER.match(lines[i])):
-            old = int(match.group(1) or 1)
-            new = int(match.group(2) or 1)
-            i += 1
-            while i < count and (old > 0 or new > 0):
-                marker = lines[i][:1]
-                if marker == " ":
-                    old -= 1
-                    new -= 1
-                elif marker == "-":
-                    old -= 1
-                elif marker == "+":
-                    new -= 1
-                i += 1
-            while i < count and lines[i].startswith("\\"):
-                i += 1
-    return found
-
-
-def _resolve_header_path(field: str) -> str:
-    """Rewrite one ``---``/``+++`` path with symlinks resolved.
-
-    GNU patch refuses to traverse an absolute symlink and refuses to patch a
-    symlink leaf, so the lexical path recorded at install time is replaced by
-    its real location when the revert is applied.
-    """
-    name, sep, tail = field.partition("\t")
-    unquoted = _cunquote_path(name)
-    if unquoted == "/dev/null":
-        return field
-    resolved = os.path.realpath("/" + unquoted)
-    if resolved == "/" + unquoted:
-        return field
-    return _diff_path(Path(resolved)) + sep + tail
-
-
-def _resolve_patch_symlinks(patch_bytes: bytes) -> bytes:
-    lines = patch_bytes.decode("utf-8", "surrogateescape").split("\n")
-    headers = set(_patch_header_indices(lines))
-    out: list[str] = []
-    changed = False
-    for index, line in enumerate(lines):
-        if index - 1 in headers:
-            continue
-        if index not in headers:
-            out.append(line)
-            continue
-        old_from, old_to = line[4:], lines[index + 1][4:]
-        new_from, new_to = _resolve_header_path(old_from), _resolve_header_path(old_to)
-        if (new_from, new_to) == (old_from, old_to):
-            out.extend((line, lines[index + 1]))
-            continue
-        changed = True
-        if out and out[-1].startswith("diff --git "):
-            out.pop()
-        real = new_to if new_from == "/dev/null" else new_from
-        if real.startswith('"'):
-            out.append(f"diff --git {real} {real}")
-        out.extend((f"--- {new_from}", f"+++ {new_to}"))
-    if not changed:
-        return patch_bytes
-    return "\n".join(out).encode("utf-8", "surrogateescape")
-
-
-def apply_patch_reverse(
-    transition_dir: TransitionDir, *, dry_run: bool = False
-) -> None:
-    """Apply ``<transition_dir>/changes.patch`` in reverse via ``patch -R``.
-
-    No-op if the patch file is absent (e.g. transition recorded only an
-    extension delta).
-
-    When ``dry_run=False`` (default, backward-compat): a ``--dry-run`` pass
-    runs first so drift on any single file aborts before any file is
-    written; on a clean dry-run, the real apply follows.
-
-    When ``dry_run=True``: only the dry-run pass runs; raises
-    :class:`RevertFailed` on failure; returns ``None`` on success without
-    modifying the live tree. Used as a building block for multi-step
-    revert chains.
-
-    The function is single-transition; multi-step coordination (including
-    the partial-state failure model) belongs to the caller (see
-    :func:`_revert_to_before` in :mod:`setforge.cli.revert`).
-
-    ``--reject-file=-`` discards rejected hunks (would otherwise leave
-    ``.rej`` siblings in the user's tree).
-
-    Raises :class:`RevertFailed` if the ``patch`` binary is missing or
-    if either pass fails. The patch's stderr is surfaced verbatim so
-    the user sees the conflicting paths.
-    """
-    patch_file = transition_dir / "changes.patch"
-    if not patch_file.exists() or patch_file.stat().st_size == 0:
-        _require_no_unpatched_changes(transition_dir)
-        return
-    patch_bin = resolve_binary("patch")
-    if patch_bin is None:
-        raise RevertFailed(
-            "`patch` binary not on PATH; revert cannot apply file diffs. "
-            "Tip: set 'binaries.patch' in ~/.config/setforge/local.yaml "
-            "to override."
-        )
-    # Run with cwd=/ and -p0 so root-relative paths in the diff
-    # (per :func:`_diff_path`) resolve to absolute targets.
-    #
-    # No $HOME/path-confinement guard here (unlike the SPANS-store and
-    # payload_file legs, which reject absolute/``..`` keys in
-    # :func:`_spans_manifest_path` and :func:`_validate_one_state_snapshot`).
-    # The patch body is machine-authored under the user-owned state dir
-    # (``~/.local/state/setforge/transitions/``): having written it already
-    # required the same privileges this revert grants, so confinement adds no
-    # boundary. The dry-run-first pass below also aborts on any drift before a
-    # byte is written. Accepted-as-safe, not an oversight.
-    original = patch_file.read_bytes()
-    resolved = _resolve_patch_symlinks(original)
-    if resolved == original:
-        _run_patch_reverse(patch_bin, patch_file.resolve(), dry_run=dry_run)
-        return
-    with tempfile.TemporaryDirectory(prefix="setforge-revert-") as scratch:
-        resolved_file = Path(scratch) / "changes.patch"
-        resolved_file.write_bytes(resolved)
-        _run_patch_reverse(patch_bin, resolved_file, dry_run=dry_run)
-
-
-def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
-    """Refuse to report success when the metadata lists file changes that a
-    missing or empty ``changes.patch`` can no longer undo."""
-    try:
-        paths = load_meta_payload(transition_dir).get("paths")
-    except InvalidTransitionRecord:
-        return
-    if not isinstance(paths, list) or not paths:
-        return
-    try:
-        covered = {str(item.path) for item in load_filesystem_deltas(transition_dir)}
-    except InvalidTransitionRecord:
-        covered = set()
-    missing = [str(path) for path in paths if str(path) not in covered]
-    if missing:
-        shown = ", ".join(missing[:3]) + (
-            f" and {len(missing) - 3} more" if len(missing) > 3 else ""
-        )
-        raise RevertFailed(
-            f"changes.patch is missing or empty but {transition_dir.name} "
-            f"recorded changes to {shown}; nothing was reverted"
-        )
-
-
-def _run_patch_reverse(patch_bin: Path, patch_file: Path, *, dry_run: bool) -> None:
-    base_args = [
-        str(patch_bin),
-        "-p0",
-        "-R",
-        "--binary",
-        "--no-backup-if-mismatch",
-        "-d",
-        "/",
-        "--reject-file=-",
-        "--input",
-        str(patch_file),
-    ]
-    try:
-        dry = subprocess.run(
-            [*base_args, "--dry-run"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RevertFailed(
-            "patch -R dry-run timed out after 60s; no files changed."
-        ) from exc
-    except OSError as exc:
-        # A resolve_binary()-validated patch can still fail to spawn
-        # (removed in the TOCTOU window, replaced by a non-executable
-        # file, broken wrapper). Convert to RevertFailed so the clean
-        # exit-1 contract holds instead of a raw traceback.
-        raise RevertFailed(f"patch binary could not be executed: {exc}") from exc
-    if dry.returncode != 0:
-        raise RevertFailed(
-            f"patch -R dry-run failed (exit {dry.returncode}); no files changed:\n"
-            f"{dry.stderr.strip() or dry.stdout.strip()}"
-        )
-    if dry_run:
-        return
-    try:
-        result = subprocess.run(
-            base_args,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RevertFailed(
-            "patch -R timed out after 60s; the live tree may be partially reverted."
-        ) from exc
-    except OSError as exc:
-        raise RevertFailed(f"patch binary could not be executed: {exc}") from exc
-    if result.returncode != 0:
-        # Should not happen after a clean dry-run; surface for forensics.
-        raise RevertFailed(
-            f"patch -R failed unexpectedly after dry-run succeeded "
-            f"(exit {result.returncode}):\n"
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2806,36 +2406,3 @@ def resolve_transition_prefix(prefix: str) -> TransitionDir:
             f"prefix {prefix!r} matches {len(matches)} transitions:\n  {joined}"
         )
     return TransitionDir(matches[0])
-
-
-def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
-    """Map every absolute path touched by ``transition_dir`` to one of
-    ``"created"``, ``"deleted"``, ``"modified"``.
-
-    Derived from the ``--- old`` / ``+++ new`` headers of every hunk in
-    ``changes.patch``. Returns an empty dict when the patch file is absent
-    (e.g. transitions that recorded only an extension delta). Pairs of
-    ``/dev/null`` indicate creation (forward) or deletion (forward); both
-    real paths indicate modification.
-
-    Path round-trip: :func:`_diff_path` strips the leading ``/`` to satisfy
-    GNU patch's safe-paths rule, so reversing means prepending ``/``. Paths
-    with whitespace/quote/backslash chars are additionally C-quoted by
-    :func:`_cquote_path`; :func:`_cunquote_path` reverses that before the
-    leading ``/`` is re-added.
-    """
-    patch_file = transition_dir / "changes.patch"
-    if not patch_file.exists():
-        return {}
-    lines = patch_file.read_bytes().decode("utf-8", "surrogateescape").split("\n")
-    out: dict[str, str] = {}
-    for i in _patch_header_indices(lines):
-        from_path = _cunquote_path(lines[i][4:].split("\t", 1)[0])
-        to_path = _cunquote_path(lines[i + 1][4:].split("\t", 1)[0])
-        if from_path == "/dev/null" and to_path != "/dev/null":
-            out["/" + to_path] = "created"
-        elif to_path == "/dev/null" and from_path != "/dev/null":
-            out["/" + from_path] = "deleted"
-        elif from_path != "/dev/null":
-            out["/" + from_path] = "modified"
-    return out

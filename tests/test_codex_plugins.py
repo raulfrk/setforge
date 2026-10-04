@@ -871,5 +871,5 @@ def test_reverse_transition_aborts_when_codex_inverse_is_unresolved(
     )
     with pytest.raises(ReconcileAborted, match="inventory unavailable"):
         _plugin_helpers._write_reverse_transition(
-            TransitionDir(transition), "team", (), {}, filesystem_deltas=()
+            TransitionDir(transition), "team", (), filesystem_deltas=()
         )

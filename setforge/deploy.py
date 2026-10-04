@@ -34,23 +34,11 @@ class DeployAction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DeployResult:
-    """Outcome of one deploy write.
-
-    ``prior_mode`` records the live file's permission bits AS THEY WERE
-    immediately before this deploy chmod-ed them, and ONLY when the deploy
-    actually changed the mode of a pre-existing file (a content-NOOP
-    mode-only fixup, or a content UPDATE whose tracked mode differs from
-    the live mode). It is ``None`` whenever the mode was untouched (fresh
-    CREATE, true NOOP, or an UPDATE whose mode already matched). The
-    install-side transition writer records this so ``revert`` can restore
-    the pre-install mode in lockstep with the content patch reverse — the
-    content patch alone never carries permission bits.
-    """
+    """Outcome of one deploy write."""
 
     dst: Path
     action: DeployAction
     backup_path: Path | None
-    prior_mode: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -168,28 +156,15 @@ def write_resolved_deploy(
     if action is DeployAction.NOOP:
         return DeployResult(dst=real_dst, action=action, backup_path=None)
 
-    # ``prior_mode`` is the live mode this write replaces, recorded only when
-    # it differs from the mode being applied. ``revert`` restores the content
-    # via the patch reverse; ``prior_mode`` lets it restore perms in lockstep.
-    prior_mode = None
-    if resolved.dst_existed:
-        live_mode = stat.S_IMODE(real_dst.stat().st_mode)
-        if live_mode != mode:
-            prior_mode = live_mode
-        if real_dst.read_bytes() == resolved.content:
-            # Mode-only drift: a path-based chmod is safe (no content swap to
-            # race, real_dst already symlink-resolved). The content patch is
-            # empty, so ``prior_mode`` is the only reversible record.
-            real_dst.chmod(mode)
-            return DeployResult(
-                dst=real_dst, action=action, backup_path=None, prior_mode=prior_mode
-            )
+    if resolved.dst_existed and real_dst.read_bytes() == resolved.content:
+        # Mode-only drift: a path-based chmod is safe (no content swap to
+        # race, real_dst already symlink-resolved).
+        real_dst.chmod(mode)
+        return DeployResult(dst=real_dst, action=action, backup_path=None)
     backup_path = _atomic_write(
         resolved.content, real_dst, resolved.dst_existed, backup, mode
     )
-    return DeployResult(
-        dst=real_dst, action=action, backup_path=backup_path, prior_mode=prior_mode
-    )
+    return DeployResult(dst=real_dst, action=action, backup_path=backup_path)
 
 
 def _resolve_for_copy(dst: Path) -> Path:

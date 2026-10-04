@@ -854,9 +854,8 @@ def test_revert_after_install_removes_new_agents_and_skill(
 ) -> None:
     """Revert after install removes all 3 prose agents + reviewing-markdown skill.
 
-    Each artifact starts absent on a fresh container, so revert's
-    `patch -R` equivalent removes them entirely (no prior content to
-    restore).
+    Each artifact starts absent on a fresh container, so revert
+    removes them entirely (no prior content to restore).
     """
     c = docker_container()
     _install(c, "test-prose-reviewers")

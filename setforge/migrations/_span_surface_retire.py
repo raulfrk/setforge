@@ -19,7 +19,7 @@ The forward :meth:`SpanSurfaceRetireMigration.apply` is fully implemented:
   (INV-1 / INV-8; see :func:`_fold_sections`).
 * **Stamp + strip.** Advances ``schema_version`` to 4.0 and drops the retired
   ``host_local_sections`` / overlay-``spans`` keys from ``local.yaml``.
-* **Transition.** Commits ONE durable ``MIGRATE`` transition (text patch for
+* **Transition.** Commits ONE durable ``MIGRATE`` transition (file record for
   ``setforge.yaml`` + ``local.yaml`` PLUS byte-exact state snapshots of every
   mutated reconcile leg) so a crash or ``setforge revert --profile=migrate``
   restores the pre-cutover state exactly.
@@ -37,7 +37,7 @@ refuses cleanly and points at the transition-based
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -174,8 +174,8 @@ class SpanSurfaceRetireMigration:
         into its unit's LOCAL store (preserving the recorded ``local`` bytes AND the
         existing hunk classifications — INV-1 / INV-8), stamp schema 4.0, strip the
         retired ``host_local_sections`` / overlay-``spans`` from ``local.yaml``, then
-        COMMIT the one durable transition (state_snapshots + the cfg/local.yaml text
-        patch). Idempotent: a section already present as a LOCAL+reloc unit is
+        COMMIT the one durable transition (state_snapshots + the cfg/local.yaml file
+        record). Idempotent: a section already present as a LOCAL+reloc unit is
         skipped, so a re-run drains to an empty residual and no-ops.
 
         No ``local.yaml`` (the frozen-fixture case) ⇒ nothing to fold: advance
@@ -186,7 +186,7 @@ class SpanSurfaceRetireMigration:
         own text transition whenever any chain step owns one
         (:func:`setforge.cli.migrate._chain_owns_transition`). So a bare early
         return would leave the 3.0 -> 4.0 stamp outside every transition, and a
-        single ``revert`` would reverse an earlier step's ``-> 3.0`` patch against
+        single ``revert`` would reverse an earlier step's ``-> 3.0`` record against
         the on-disk 4.0 config and fail (INV-5: one revert reaches the origin).
         The recorded transition threads the chain-origin ``setforge.yaml`` (and
         ``local.yaml``) from ``pre_chain_snapshot`` and carries NO state_snapshots
@@ -204,10 +204,7 @@ class SpanSurfaceRetireMigration:
 
         profiles = sorted({fold.profile for fold in folds})
         local_yaml = _local_yaml_path(roots)
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
-        local_pre = (
-            local_yaml.read_text(encoding="utf-8") if local_yaml.exists() else None
-        )
+        origin = transitions.capture_files((roots.cfg_path, local_yaml), strict=True)
 
         with contextlib.ExitStack() as locks:
             for profile in profiles:
@@ -219,7 +216,6 @@ class SpanSurfaceRetireMigration:
                 _fold_sections(fold)
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
             # Compute (don't write) the post-strip image so it can be
             # COMMITTED before the destructive strip lands (INV-5).
             local_post = _stripped_local_yaml_text(local_yaml)
@@ -227,15 +223,12 @@ class SpanSurfaceRetireMigration:
             # A chain-threaded pre_chain_snapshot becomes file_pre so the
             # reverse delta reaches the chain's ORIGIN (INV-5), not just here.
             pre = roots.pre_chain_snapshot
-            file_pre: dict[Path, str | None]
-            file_post: dict[Path, str | None]
-            if pre is not None:
-                file_pre = dict(pre)
-                file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
-                file_post[local_yaml] = local_post
-            else:
-                file_pre = {roots.cfg_path: cfg_pre, local_yaml: local_pre}
-                file_post = {roots.cfg_path: cfg_post, local_yaml: local_post}
+            file_pre = dict(pre) if pre is not None else origin
+            file_post = transitions.capture_files((*file_pre, local_yaml), strict=True)
+            if local_post is not None:
+                file_post[local_yaml] = replace(
+                    file_post[local_yaml], payload=local_post.encode("utf-8")
+                )
 
             _write_span_retire_transition(
                 file_pre=file_pre,
@@ -252,27 +245,27 @@ class SpanSurfaceRetireMigration:
 
         The no-fold path (see :meth:`apply`). Covers ONLY ``setforge.yaml`` (and
         ``local.yaml`` when the chain touched it) — never a reconcile-store leg —
-        so the text patch cannot overlap an earlier cutover's binary
+        so the file record cannot overlap an earlier cutover's binary
         state_snapshots. Threads the chain-origin image from
         ``pre_chain_snapshot`` so a single ``revert`` reaches the chain's ORIGIN,
         not the intermediate 3.0 state (INV-5).
         """
         local_yaml = _local_yaml_path(roots)
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
         _stamp_schema_version(roots.cfg_path, self.to_version)
 
         pre = roots.pre_chain_snapshot
-        file_pre: dict[Path, str | None]
+        file_pre = dict(cfg_pre)
         if pre is not None:
             # Restrict the threaded image to the user-facing config files; a
             # store leg in pre_chain is restored by an earlier cutover's
-            # state_snapshots, not by this text patch.
-            file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
-            if local_yaml in pre:
-                file_pre[local_yaml] = pre[local_yaml]
-        else:
-            file_pre = {roots.cfg_path: cfg_pre}
-        file_post = dict(transitions.snapshot_paths(tuple(file_pre), strict=True))
+            # state_snapshots, not by this file record.
+            file_pre.update(
+                (path, pre[path])
+                for path in (roots.cfg_path, local_yaml)
+                if path in pre
+            )
+        file_post = transitions.capture_files(tuple(file_pre), strict=True)
         _write_span_retire_transition(
             file_pre=file_pre,
             file_post=file_post,
@@ -606,7 +599,7 @@ def _capture_span_snapshots(
     captured ONCE, outside the fid loop, so a 2nd+ fid never records a
     post-mutation index. A never-seeded leg captures ``payload=None`` so revert
     deletes the seed; an already-present leg captures its bytes so revert restores
-    them byte-exact (winning over the text patch for any overlapping path).
+    them byte-exact (winning over the file record for any overlapping path).
     """
     entries: list[StateSnapshotEntry] = []
     for fold in folds:
@@ -628,15 +621,15 @@ def _capture_span_snapshots(
 
 def _write_span_retire_transition(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     state_snapshots: tuple[StateSnapshotEntry, ...],
 ) -> TransitionDir:
     """Record the cutover's single durable ``MIGRATE`` transition.
 
-    Carries BOTH a text patch for ``setforge.yaml`` + ``local.yaml``
+    Carries BOTH a file record for ``setforge.yaml`` + ``local.yaml``
     (``file_pre`` -> ``file_post``; the schema flip + section strip, reversed by
-    ``patch -R``) AND the binary ``state_snapshots`` of every mutated reconcile
+    revert) AND the binary ``state_snapshots`` of every mutated reconcile
     leg (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls this
     AFTER folding + stamping + stripping, so a crash or ``setforge revert`` after
     the commit restores the pre-cutover state exactly. Returns the transition dir.

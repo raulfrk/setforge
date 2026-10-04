@@ -17,6 +17,7 @@ so the recorded order never contains an ``enter`` event before ``apply``.
 
 import contextlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -63,21 +64,19 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Patch ``mutation_locks`` + patch reversal to record call order.
+    """Patch ``mutation_locks`` + the file reversal to record call order.
 
     Returns the shared event list. The recording lock wraps the real
     :func:`setforge.locking.mutation_locks`, appending ``"enter"`` /
     ``"exit"`` markers around it so the lock's serialization is exercised
-    for real while the order is observable. ``apply_patch_reverse`` is
-    wrapped to append ``"apply"`` before delegating to the real impl.
+    for real while the order is observable. The file reversal is wrapped to
+    append ``"apply"`` before delegating to the real impl.
     """
-    import setforge.transitions as transitions_module
-    from setforge import locking
-    from setforge.transitions import TransitionDir
+    from setforge import locking, operations
 
     events: list[str] = []
     real_lock = locking.mutation_locks
-    real_apply = transitions_module.apply_patch_reverse
+    real_apply = operations.apply_filesystem_deltas_reverse_anchored
 
     @contextlib.contextmanager
     def recording_lock(**scopes: object):
@@ -88,24 +87,21 @@ def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             finally:
                 events.append("exit")
 
-    def recording_apply(
-        transition_dir: TransitionDir, *, dry_run: bool = False
-    ) -> None:
-        # Only the real (mutating) reversal counts; the multi-step
-        # pre-flight passes dry_run=True and runs before the lock.
-        if not dry_run:
-            events.append("apply")
-        real_apply(transition_dir, dry_run=dry_run)
+    def recording_apply(*args: Any, **kwargs: Any) -> None:
+        events.append("apply")
+        real_apply(*args, **kwargs)
 
     monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-    monkeypatch.setattr(transitions_module, "apply_patch_reverse", recording_apply)
+    monkeypatch.setattr(
+        operations, "apply_filesystem_deltas_reverse_anchored", recording_apply
+    )
     return events
 
 
 def test_single_step_revert_holds_lock_before_mutating(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Bare ``revert`` must enter profile_lock before any patch-reverse."""
+    """Bare ``revert`` must enter profile_lock before any file reversal."""
     cfg, _dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
@@ -121,7 +117,7 @@ def test_single_step_revert_holds_lock_before_mutating(
     assert revert_result.exit_code == 0, revert_result.output
 
     assert "enter" in events, "revert never acquired the profile lock"
-    assert "apply" in events, "revert never performed a patch-reverse"
+    assert "apply" in events, "revert never reversed a file"
     assert events.index("enter") < events.index("apply"), (
         f"lock must be held before mutating; observed order: {events}"
     )
@@ -158,7 +154,7 @@ def test_revert_apply_failure_restores_real_cli_baseline(
 def test_to_before_multi_step_revert_holds_lock_before_mutating(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``revert --to-before`` must enter profile_lock before any patch-reverse."""
+    """``revert --to-before`` must enter profile_lock before any file reversal."""
     cfg, _dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
@@ -188,7 +184,7 @@ def test_to_before_multi_step_revert_holds_lock_before_mutating(
     assert revert_result.exit_code == 0, revert_result.output
 
     assert "enter" in events, "multi-step revert never acquired the profile lock"
-    assert "apply" in events, "multi-step revert never performed a patch-reverse"
+    assert "apply" in events, "multi-step revert never reversed a file"
     assert events.index("enter") < events.index("apply"), (
         f"lock must be held before mutating; observed order: {events}"
     )

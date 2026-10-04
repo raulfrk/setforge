@@ -396,11 +396,7 @@ def test_revert_yes_short_circuits_no_dialog_call(
     runner: CliRunner,
 ) -> None:
     """With --yes the wizard is not rendered and revert proceeds straight
-    to apply_patch_reverse + _write_reverse_transition."""
-    import shutil
-
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
+    to the file restore + _write_reverse_transition."""
 
     # Minimal repo + state.
     repo = tmp_path / "repo"
@@ -442,10 +438,6 @@ def test_revert_abort_leaves_files_untouched(
     runner: CliRunner,
 ) -> None:
     """When the wizard returns ABORT, revert exits 0 with no mutations."""
-    import shutil
-
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
 
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
@@ -494,10 +486,6 @@ def test_revert_apply_with_editor_opens_editor_then_reprompts(
 ) -> None:
     """APPLY_WITH_EDITOR opens the editor, then re-prompts. Second prompt
     returning APPLY must apply the revert."""
-    import shutil
-
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
 
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
@@ -555,10 +543,6 @@ def test_revert_repeated_apply_with_editor_reopens_editor_each_pass(
     """Two consecutive APPLY_WITH_EDITOR choices must each re-open the
     editor before the terminating APPLY — proving the post-editor
     re-prompt loops rather than falling through after a single pass."""
-    import shutil
-
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
 
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
@@ -637,10 +621,6 @@ def test_revert_apply_with_editor_then_abort_leaves_files(
     runner: CliRunner,
 ) -> None:
     """APPLY_WITH_EDITOR → editor → ABORT on re-prompt must leave files."""
-    import shutil
-
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
 
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)

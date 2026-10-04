@@ -1,24 +1,26 @@
 """Binary path resolution with host-local override layers.
 
-Production code resolves the four dedicated-flag binaries (``code``,
-``claude``, ``gitleaks``, ``patch``) through :func:`resolve_binary` rather
+Production code resolves the three dedicated-flag binaries (``code``,
+``claude``, ``gitleaks``) through :func:`resolve_binary` rather
 than :func:`shutil.which` directly; other tools (``git``, ``uv``, the
 ``$EDITOR``) call :func:`shutil.which` on their own. :func:`resolve_binary`
 walks four layers in order of precedence:
 
-1. CLI flags (``--code-bin``, ``--claude-bin``, ``--gitleaks-bin``,
-   ``--patch-bin``) — stored in module-level state by
+1. CLI flags (``--code-bin``, ``--claude-bin``, ``--gitleaks-bin``) —
+   stored in module-level state by
    :func:`set_cli_overrides`, which the Typer ``@app.callback()``
    invokes once at startup.
 2. Environment variables ``SETFORGE_CODE_BIN`` / ``SETFORGE_CLAUDE_BIN``
-   / ``SETFORGE_GITLEAKS_BIN`` / ``SETFORGE_PATCH_BIN``.
+   / ``SETFORGE_GITLEAKS_BIN``.
 3. Host-local config file ``~/.config/setforge/local.yaml`` with shape
-   ``binaries: {code: /p, claude: /p, gitleaks: /p, patch: /p}``.
+   ``binaries: {code: /p, claude: /p, gitleaks: /p}``. Other keys load
+   without error and are not consulted (a ``patch:`` entry from releases
+   that used GNU ``patch`` for revert is ignored).
 4. ``shutil.which(name)`` (current behavior).
 
 ``SUPPORTED_BINARIES`` also includes ``codex``, ``cargo``, ``go``, and ``uv``,
 which resolve through this same chain via the env-var, config-file,
-and ``which`` layers — but, unlike the other four, have no dedicated
+and ``which`` layers — but, unlike the other three, have no dedicated
 CLI flag.
 
 The CLI layer is set once at process start; env and config layers are
@@ -45,7 +47,6 @@ SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "codex",
     "code",
     "gitleaks",
-    "patch",
     "cargo",
     "go",
     "uv",
@@ -64,7 +65,6 @@ _STUB_TEMPLATE: Final[str] = """\
 #   claude: /opt/claude/bin/claude
 #   codex: /opt/codex/bin/codex
 #   gitleaks: /usr/local/bin/gitleaks
-#   patch: /usr/local/bin/gpatch
 #
 # Claude-specific host-local knobs. Uncomment to opt into offline-capable
 # install via locally-cloned marketplaces:
@@ -231,7 +231,6 @@ def set_cli_overrides(
     code: str | None = None,
     claude: str | None = None,
     gitleaks: str | None = None,
-    patch: str | None = None,
 ) -> None:
     """Record CLI-flag overrides; called once by the Typer app callback.
 
@@ -245,7 +244,6 @@ def set_cli_overrides(
         ("code", code),
         ("claude", claude),
         ("gitleaks", gitleaks),
-        ("patch", patch),
     ):
         if value is not None:
             _cli_overrides[name] = value

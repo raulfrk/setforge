@@ -185,7 +185,7 @@ class DispositionRetireMigration:
             return
 
         profiles = sorted({rec.profile for rec in records})
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
 
         with contextlib.ExitStack() as locks:
             for profile in profiles:
@@ -207,7 +207,7 @@ class DispositionRetireMigration:
                 )
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
+            file_post = transitions.capture_files((roots.cfg_path,), strict=True)
 
             # When the migrate driver threads its pre-chain frozen image, use its
             # cfg_path entry as file_pre so this single transition carries the
@@ -216,24 +216,21 @@ class DispositionRetireMigration:
             # (schema stamped = the 3.0 image). Applied outside the driver
             # (pre_chain_snapshot is None) keeps the prior behavior.
             #
-            # The text patch is scoped to cfg_path ALONE, never a store leg —
+            # The file record is scoped to cfg_path ALONE, never a store leg —
             # even though the threaded pre-chain image also carries this
             # cutover's own affected store paths. INV-5 depends on this: the two
-            # reverse mechanisms must NOT overlap. On revert the text patch
+            # reverse mechanisms must NOT overlap. On revert the file record
             # reverses FIRST, then restore_state_snapshots runs, so for any
             # shared path the (pre-cutover) snapshot would win and strand it at
             # the intermediate schema rather than the origin. Every store leg is
             # reversed by its binary state_snapshot alone; cfg_path is the sole
-            # text-patch path. (Mirrors _record_stamp_only_transition in
+            # file-record path. (Mirrors _record_stamp_only_transition in
             # _span_surface_retire.py.)
             pre = roots.pre_chain_snapshot
-            file_pre: dict[Path, str | None]
-            file_post: dict[Path, str | None]
-            if pre is not None:
-                file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
+            if pre is not None and roots.cfg_path in pre:
+                file_pre = {roots.cfg_path: pre[roots.cfg_path]}
             else:
-                file_pre = {roots.cfg_path: cfg_pre}
-            file_post = {roots.cfg_path: cfg_post}
+                file_pre = cfg_pre
 
             _write_cutover_transition(
                 file_pre=file_pre,
@@ -456,15 +453,15 @@ def _validate_bases(records: list[_FidLegacy]) -> None:
 
 def _write_cutover_transition(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     state_snapshots: tuple[StateSnapshotEntry, ...],
 ) -> TransitionDir:
     """Record the cutover's single durable transition (MS1 commit-before-unlink).
 
-    A ``MIGRATE``-labelled transition carrying BOTH a text patch for
+    A ``MIGRATE``-labelled transition carrying BOTH a file record for
     ``setforge.yaml`` (``file_pre`` -> ``file_post``; the schema_version flip,
-    reversed by ``patch -R``) AND the binary ``state_snapshots`` of every mutated
+    reversed by revert) AND the binary ``state_snapshots`` of every mutated
     store (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls
     this AFTER capturing the pre-state + writing the additive unified store, but
     BEFORE unlinking any legacy artifact — so a crash or ``setforge revert`` after

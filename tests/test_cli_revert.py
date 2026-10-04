@@ -5,7 +5,6 @@ profile + tmp_path live tree, with subprocess.run mocked for the code CLI.
 """
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, TypedDict
@@ -14,6 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.transitions import TransitionDir, load_filesystem_deltas
 
 
 class _ExtState(TypedDict):
@@ -60,12 +60,7 @@ def _state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `code` CLI absent (warn-and-skip for extension leg) without
-    breaking lookups for other binaries (e.g. `patch` for revert).
-
-    ``vscode_extensions.resolve_binary`` and ``transitions.resolve_binary``
-    are distinct module attributes even though they reference the same
-    function; patching one leaves the other free to hit real PATH.
-    """
+    breaking lookups for other binaries."""
     monkeypatch.setattr(
         "setforge.vscode_extensions.resolve_binary",
         lambda name: None,
@@ -88,7 +83,7 @@ def test_install_writes_transition_dir(
     assert len(children) == 1
     transition = children[0]
     assert (transition / "meta.json").exists()
-    assert (transition / "changes.patch").exists()
+    assert (transition / "filesystem_deltas.json").exists()
     # No extension delta when code CLI was absent.
     assert not (transition / "extensions.json").exists()
 
@@ -115,8 +110,8 @@ def test_install_no_transition_flag_skips_recording(
 def test_install_transition_records_stub_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A new dst file shows up as `/dev/null -> path` in changes.patch,
-    so revert can delete it."""
+    """A new dst file is recorded as absent before the install, so revert
+    can delete it."""
     cfg, dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
@@ -125,11 +120,11 @@ def test_install_transition_records_stub_creation(
     result = CliRunner().invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 0
     transition = next((state / "transitions").iterdir())
-    patch = (transition / "changes.patch").read_text()
-    assert "/dev/null" in patch
-    # Paths are root-relative (no leading /) so GNU patch's safe-paths
-    # check passes when revert applies with `-d /`.
-    assert str(dst).lstrip("/") in patch
+    recorded = {
+        item.path: (item.pre.kind.value, item.post.payload)
+        for item in load_filesystem_deltas(TransitionDir(transition))
+    }
+    assert recorded[dst] == ("absent", b"hello\n")
 
 
 def test_sync_writes_transition_dir(
@@ -163,16 +158,15 @@ def test_sync_writes_transition_dir(
     sync_transition = children[0]
     meta = json.loads((sync_transition / "meta.json").read_text())
     assert meta["command"] == "sync"
-    patch = (sync_transition / "changes.patch").read_text()
+    recorded = load_filesystem_deltas(TransitionDir(sync_transition))
     # The src under tracked/ is what changed.
-    assert "greeting.md" in patch
+    assert [item.path.name for item in recorded] == ["greeting.md"]
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_install_then_revert_restores_pre_install_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """install creates a stub file; revert deletes it (round-trip via patch -R)."""
+    """install creates a stub file; revert deletes it (round-trip via images)."""
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
@@ -208,7 +202,6 @@ def test_revert_with_no_history_exits_non_zero(
     assert "no transition history" in str(result.exception)
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_restores_extension_state_to_pre_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -247,8 +240,8 @@ def test_revert_restores_extension_state_to_pre_install(
     real_run = subprocess.run
 
     def fake_run(args, **kwargs: Any):
-        # Intercept only `code` invocations; let everything else (notably
-        # `patch -R` from apply_patch_reverse) hit the real binary.
+        # Intercept only `code` invocations; let everything else hit the
+        # real binary.
         if args[0] != "/usr/bin/code":
             return real_run(args, **kwargs)
         if args[1] == "--list-extensions":
@@ -295,7 +288,6 @@ def test_revert_restores_extension_state_to_pre_install(
     assert not dst.exists()
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_refuses_when_target_drifted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -310,7 +302,7 @@ def test_revert_refuses_when_target_drifted(
     runner = CliRunner()
     runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
 
-    # Drift the live file so patch -R can't reverse it cleanly.
+    # Drift the live file so it no longer holds what the install left.
     dst.write_text("manually edited content\n", encoding="utf-8")
     drifted_content = dst.read_text()
 
@@ -339,7 +331,6 @@ profiles:
 """
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_refused_revert_of_guarded_transition_leaves_no_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -373,7 +364,6 @@ def test_refused_revert_of_guarded_transition_leaves_no_operation(
     operations._refuse_active()
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_install_revert_revert_restores_install_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -395,7 +385,6 @@ def test_install_revert_revert_restores_install_state(
     assert dst.read_text() == "hello\n"
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_continues_after_extension_uninstall_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -516,7 +505,6 @@ def _two_install_sequence(cfg: Path, runner: CliRunner) -> tuple[Path, Path, Pat
     )
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_two_step_unwinds_chain_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -526,11 +514,9 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     Asserts:
     - exit 0, no .rej siblings, both reverse transitions recorded;
     - live file rolled back to pre-install (does not exist);
-    - via a ``subprocess.run`` call-log monkeypatch on
-      :mod:`setforge.transitions`: the step-1 (newest, transition_b)
-      dry-run fires BEFORE the step-2 (oldest, transition_a) real
-      apply — verifying the actual newest-first pre-flight semantics
-      rather than the prior false ALL-N atomicity claim.
+    - via a call log: the whole chain is checked against live (before the
+      wizard and again under the locks) BEFORE any step is applied, and the
+      steps apply newest-first, each re-checking its own files.
     """
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
@@ -540,19 +526,25 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     live, transition_a, transition_b = _two_install_sequence(cfg, runner)
     assert live.exists()
 
-    # Install up to this point: untouched real `subprocess.run`. Now wrap
-    # the symbol the revert path uses (``setforge.transitions.subprocess.run``)
-    # to capture the call sequence WITHOUT changing behavior.
     from setforge import transitions as _transitions_module
+    from setforge.cli import revert as _revert_module
 
-    call_log: list[list[str]] = []
-    real_run = _transitions_module.subprocess.run
+    call_log: list[tuple[str, object]] = []
+    real_check = _transitions_module.validate_filesystem_deltas_reverse
+    real_apply = _revert_module._apply_revert
 
-    def _logging_run(args: list[str], **kwargs: Any) -> Any:
-        call_log.append(list(args))
-        return real_run(args, **kwargs)
+    def _logging_check(*steps: Any) -> None:
+        call_log.append(("check", len(steps)))
+        real_check(*steps)
 
-    monkeypatch.setattr(_transitions_module.subprocess, "run", _logging_run)
+    def _logging_apply(record: Any, *args: Any, **kwargs: Any) -> Path:
+        call_log.append(("apply", record.directory))
+        return real_apply(record, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _transitions_module, "validate_filesystem_deltas_reverse", _logging_check
+    )
+    monkeypatch.setattr(_revert_module, "_apply_revert", _logging_apply)
 
     revert_result = runner.invoke(
         app,
@@ -578,32 +570,18 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     # No .rej leakage anywhere.
     assert list(tmp_path.rglob("*.rej")) == []
 
-    # The pre-flight dry-run on the newest step (transition_b) must run
-    # before any patch call against the older step (transition_a) — i.e.
-    # the chain unwinds newest-first, NOT all dry-runs first.
-    def _patch_calls_for(transition: Path) -> list[int]:
-        target_input = str((transition / "changes.patch").resolve())
-        return [
-            i
-            for i, args in enumerate(call_log)
-            if "--input" in args and target_input in args
-        ]
-
-    b_calls = _patch_calls_for(transition_b)
-    a_calls = _patch_calls_for(transition_a)
-    assert b_calls, "expected at least one patch call for newest step"
-    assert a_calls, "expected at least one patch call for oldest step"
-    # First call against B is the explicit pre-flight dry-run; assert it
-    # also carries --dry-run.
-    assert "--dry-run" in call_log[b_calls[0]]
-    # And every call against B precedes every call against A.
-    assert max(b_calls) < min(a_calls), (
-        f"expected all newest-step patch calls to precede oldest-step calls; "
-        f"got b_calls={b_calls} a_calls={a_calls}"
-    )
+    # The whole chain is checked before any step is applied, and the chain
+    # unwinds newest-first.
+    assert call_log == [
+        ("check", 2),
+        ("check", 2),
+        ("apply", transition_b),
+        ("check", 1),
+        ("apply", transition_a),
+        ("check", 1),
+    ]
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_dry_run_failure_aborts_with_no_live_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -642,18 +620,29 @@ def test_revert_to_before_dry_run_failure_aborts_with_no_live_changes(
     assert revert_dirs == []
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_reports_no_recorded_revert_for_a_rolled_back_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from setforge import operations
+    from setforge.errors import RevertFailed
 
     cfg, _dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
     runner = CliRunner()
     live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
-    (transition_a / "changes.patch").write_text("garbage\n", encoding="utf-8")
+    real_apply = operations.apply_filesystem_deltas_reverse_anchored
+    applied: list[object] = []
+
+    def fail_second_step(*args: Any, **kwargs: Any) -> None:
+        applied.append(args)
+        if len(applied) == 2:
+            raise RevertFailed("second step failed")
+        real_apply(*args, **kwargs)
+
+    monkeypatch.setattr(
+        operations, "apply_filesystem_deltas_reverse_anchored", fail_second_step
+    )
 
     result = runner.invoke(
         app,
@@ -675,7 +664,6 @@ def test_revert_to_before_reports_no_recorded_revert_for_a_rolled_back_chain(
     assert "rolled back 1 already reverted step(s) of this chain" in result.output
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_reports_each_recorded_revert_after_the_chain_commits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -715,7 +703,6 @@ def test_revert_help_describes_an_all_or_nothing_chain() -> None:
     assert "rolled back" in " ".join(result.output.split())
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_single_target_acts_like_bare_revert(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -770,9 +757,6 @@ def test_revert_to_before_resolves_prefix_to_full_id(
         d for d in (state / "transitions").iterdir() if "install" in d.name
     )
 
-    if shutil.which("patch") is None:
-        pytest.skip("GNU patch not on PATH")
-
     # First 12 chars of the YYYYMMDDTHHMMSS prefix should be unique
     # (only one transition exists).
     prefix = transition_dir.name[:12]
@@ -789,7 +773,6 @@ def test_revert_to_before_resolves_prefix_to_full_id(
     assert revert_result.exit_code == 0, revert_result.output
 
 
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -903,46 +886,43 @@ def test_revert_to_before_wrong_profile_errors(
     assert "for profile 'other'" in str(revert_result.exception)
 
 
-def test_diff_summary_counts_hunk_body_line_starting_with_dashdash() -> None:
-    """A hunk body that DELETES a line whose content begins ``-- `` (rendered
-    ``--- foo`` in the unified diff) must be counted as a deletion, not
-    mistaken for a ``--- `` file header.
+@pytest.mark.parametrize(
+    ("pre", "post", "expected"),
+    [
+        (b"keep line\n-- foo\n", b"keep line\nadded line\n", ("M", "+1 -1")),
+        (b"--- a\n+++ b\n", b"--- a\n+++ b\n@@ c\n", ("M", "+1 -0")),
+        (None, b"one\ntwo", ("+", "+2 -0")),
+        (b"one\n", None, ("-", "+0 -1")),
+        (b"a\r\nb", b"a\r\nb\n", ("M", "+1 -1")),
+    ],
+)
+def test_file_change_marks_and_counts_lines_of_the_images(
+    pre: bytes | None, post: bytes | None, expected: tuple[str, str]
+) -> None:
+    from setforge.cli.revert import _file_change
+    from setforge.transitions import FilesystemDelta, FilesystemImage, FilesystemKind
 
-    Regression: the old parser reset ``current_path`` on the ``--- foo``
-    body line, producing a phantom ``/foo`` entry and zeroing the real
-    file's line counts. The fix tracks whether we are inside a hunk body
-    (post-``@@``) so header detection only fires in a header region.
-    """
-    from setforge.cli.revert import _diff_summaries_from_patch
+    def image(payload: bytes | None) -> FilesystemImage:
+        if payload is None:
+            return FilesystemImage(FilesystemKind.ABSENT)
+        return FilesystemImage(FilesystemKind.FILE, payload, mode=0o644, mtime_ns=0)
 
-    # setforge emits root-relative paths (no ``a/``/``b/`` prefix). The hunk
-    # deletes a line whose content is ``-- foo`` -> renders as ``--- foo``.
-    patch = (
-        "--- root/foo.txt\n"
-        "+++ root/foo.txt\n"
-        "@@ -1,3 +1,2 @@\n"
-        " keep line\n"
-        "--- foo\n"
-        "+added line\n"
+    assert _file_change(FilesystemDelta(Path("/x"), image(pre), image(post))) == (
+        expected
     )
-    result = _diff_summaries_from_patch(patch)
-
-    # No phantom entry from the deleted ``--- foo`` body line.
-    assert "/foo" not in result
-    # Exactly one file summary, with the correct +1 -1 counts.
-    assert result == {"/root/foo.txt": "+1 -1"}
 
 
-def test_diff_summary_normalizes_leading_slash_no_double_slash() -> None:
-    """A header path that already carries a leading ``/`` must not render as
-    ``//root/...`` — the parser normalizes to exactly one leading slash.
-    """
-    from setforge.cli.revert import _diff_summaries_from_patch
+def test_file_change_of_a_symlink_has_no_line_counts() -> None:
+    from setforge.cli.revert import _file_change
+    from setforge.transitions import FilesystemDelta, FilesystemImage, FilesystemKind
 
-    patch = "--- /root/x.txt\n+++ /root/x.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n"
-    result = _diff_summaries_from_patch(patch)
+    link = FilesystemImage(
+        FilesystemKind.SYMLINK, link_target="t", mode=0o777, mtime_ns=0
+    )
 
-    assert result == {"/root/x.txt": "+1 -1"}
+    assert _file_change(
+        FilesystemDelta(Path("/x"), FilesystemImage(FilesystemKind.ABSENT), link)
+    ) == ("+", "")
 
 
 @pytest.mark.parametrize(

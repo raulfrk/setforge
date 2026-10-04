@@ -15,8 +15,8 @@ Apply to every command (`setforge [OPTIONS] COMMAND`). They must come
 
 - `--source PATH` — config source directory (overrides `SETFORGE_SOURCE` and
   `local.yaml`).
-- `--code-bin` / `--claude-bin` / `--gitleaks-bin` / `--patch-bin` — override
-  external binary paths.
+- `--code-bin` / `--claude-bin` / `--gitleaks-bin` — override external binary
+  paths.
 - `-v` / `--verbose` (`-v` → INFO, `-vv` → DEBUG with secret redaction).
 - `-q` / `--quiet` suppresses success output on the structured read-only
   commands listed below; errors remain on stderr.
@@ -390,9 +390,18 @@ the prompt; without `--yes` in a non-TTY context the command exits 1.
 ## Revert
 
 `revert` undoes the most recent `install` or `sync` for the named profile by
-replaying its transition record in reverse — file diffs via `patch -R`, plus
-uninstalling extensions that were installed (and reinstalling ones that were
-uninstalled). Drift on any touched file aborts cleanly with no partial revert.
-A second `revert` acts as redo. Transition records live under
-`~/.local/state/setforge/transitions/` and are kept indefinitely; if that
-directory grows large you can remove it.
+replaying its transition record in reverse — every changed file, symlink and
+directory is restored from the image recorded before the command (bytes, mode,
+link target), plus uninstalling extensions that were installed (and
+reinstalling ones that were uninstalled). Each file must still hold exactly what
+the command left; timestamps are ignored. A file edited since — even on a line
+the command did not touch — refuses the whole revert, naming the file, before
+anything is written; save or undo that edit first. A second `revert` acts as
+redo. Transition records live under `~/.local/state/setforge/transitions/` and
+are kept indefinitely; if that directory grows large you can remove it.
+
+Records written by earlier versions kept file changes as a text patch
+(`changes.patch`). This version cannot revert those and refuses them with a
+message naming the version that recorded them and the files involved;
+`transitions list` and `transitions show` still list them. Revert such a record
+with the version that wrote it, or restore the listed files by hand.

@@ -1221,6 +1221,22 @@ def test_span_types_retire_apply_stamps_in_place_preserving_order(
     assert data["schema_version"] == "5.0"
 
 
+def test_span_types_retire_records_the_config_change_as_images(
+    tmp_path: Path,
+) -> None:
+    from setforge import transitions
+    from tests.shared_helpers import file_images
+
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_4_0)
+    before = cfg.read_bytes()
+
+    _span_types_retire().apply(roots=_roots_for(cfg))
+
+    recorded = transitions.load_latest(transitions.MIGRATE_TRANSITION_PROFILE)
+    assert recorded is not None
+    assert file_images(recorded) == {cfg: (before, cfg.read_bytes())}
+
+
 def test_span_types_retire_reverse_restamps_four_zero_not_strips(
     tmp_path: Path,
 ) -> None:

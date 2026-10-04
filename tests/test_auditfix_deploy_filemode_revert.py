@@ -8,16 +8,14 @@ prior bytes while the file KEPT the install-applied mode — so a 0600 secret
 retracked to 0644 stayed 0644 after revert (revert was not a faithful inverse
 on the mode axis).
 
-The end-to-end fix records the pre-install mode of every mode-changed path
-on the transition (``file_modes.json``) and ``revert`` chmods each reverted
-path back. These tests drive real ``install`` / ``revert`` CLI invocations
-against a sandboxed ``$HOME`` + ``$SETFORGE_STATE_DIR`` and pin:
+The transition records each changed file's pre-install image, mode
+included, and ``revert`` restores it. These tests drive real ``install`` /
+``revert`` CLI invocations against a sandboxed ``$HOME`` +
+``$SETFORGE_STATE_DIR`` and pin:
 
 - the headline case: a content-NOOP mode-only install (0644 → 0600) writes a
   transition and ``revert`` restores live to 0644;
-- redo symmetry: a second ``revert`` (redo) re-applies the install mode;
-- backward-compat: a transition with NO ``file_modes.json`` (a pre-bump
-  record) reverts cleanly with no mode change and no crash.
+- redo symmetry: a second ``revert`` (redo) re-applies the install mode.
 """
 
 from __future__ import annotations
@@ -25,7 +23,6 @@ from __future__ import annotations
 import stat
 from pathlib import Path
 
-import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
@@ -116,8 +113,11 @@ def test_mode_only_install_is_reverted_to_prior_mode(repo: Path) -> None:
     # The transition recorded the pre-install mode for the chmod-ed path.
     latest = transitions.load_latest(_PROFILE)
     assert latest is not None
-    recorded = transitions.load_file_modes(latest)
-    assert recorded == {_live(): 0o644}
+    recorded = {
+        item.path: (item.pre.mode, item.post.mode)
+        for item in transitions.load_filesystem_deltas(latest)
+    }
+    assert recorded[_live()] == (0o644, 0o600)
 
     result = _revert(config)
     assert result.exit_code == 0, result.output
@@ -143,7 +143,7 @@ def test_revert_then_redo_round_trips_the_mode(repo: Path) -> None:
     assert _revert(config).exit_code == 0
     assert _live_mode() == 0o644
 
-    # Redo: the reverse transition's file_modes carries the install mode.
+    # Redo: the reverse transition's image carries the install mode.
     assert _revert(config).exit_code == 0
     assert _live_mode() == 0o600
 
@@ -179,32 +179,6 @@ def test_content_and_mode_install_reverts_both_axes(repo: Path) -> None:
     assert _live_mode() == 0o644
 
 
-def test_pre_bump_transition_without_file_modes_reverts_cleanly(repo: Path) -> None:
-    """A transition with NO file_modes.json reverts with no mode change.
-
-    Simulates a record written before this schema bump: the mode axis is
-    left as-is (treat missing map as no-op), the content reverts, exit 0.
-    """
-    _write_tracked(repo)
-    config = _write_config(repo, mode="0o600")
-    _seed_live(_BODY, 0o644)
-
-    assert _install(config).exit_code == 0
-    latest = transitions.load_latest(_PROFILE)
-    assert latest is not None
-    # Remove the sibling to simulate a pre-bump transition record.
-    (latest / "file_modes.json").unlink()
-    assert transitions.load_file_modes(latest) == {}
-
-    # Tamper live's mode so we can prove revert does NOT touch it.
-    _live().chmod(0o600)
-
-    result = _revert(config)
-    assert result.exit_code == 0, result.output
-    # No file_modes → mode untouched by revert (stays at the tampered 0600).
-    assert _live_mode() == 0o600
-
-
 def test_revert_preview_surfaces_mode_restore(repo: Path) -> None:
     """The revert confirm preview lists the per-file mode restore note."""
     from setforge.cli.revert import _build_revert_plan
@@ -219,45 +193,3 @@ def test_revert_preview_surfaces_mode_restore(repo: Path) -> None:
     plan = _build_revert_plan(transitions.load_record(latest), _PROFILE)
     notes = [fm.mode_restore for fm in plan.file_mutations if fm.path == _live()]
     assert notes == ["mode → 0o644"]
-
-
-def test_unit_transitions_file_modes_round_trip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``write_transition`` + ``load_file_modes`` round-trip the mode map.
-
-    A direct unit check on the serialization seam: empty map → no
-    ``file_modes.json`` (load returns ``{}``); a populated map round-trips.
-    """
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    # Empty map: no file_modes.json written.
-    meta = transitions.make_meta(transitions.TransitionCommand.INSTALL, _PROFILE)
-    empty = transitions.write_transition(meta, {}, {}, None)
-    assert not (empty / "file_modes.json").exists()
-    assert transitions.load_file_modes(empty) == {}
-
-    # Populated map round-trips byte-for-byte.
-    p = Path("/tmp/setforge-test/secret")
-    meta2 = transitions.make_meta(transitions.TransitionCommand.INSTALL, _PROFILE)
-    out = transitions.write_transition(meta2, {}, {}, None, file_modes={p: 0o600})
-    assert transitions.load_file_modes(out) == {p: 0o600}
-
-
-def test_unit_load_file_modes_rejects_corrupt_payload(tmp_path: Path) -> None:
-    """A corrupt file_modes.json raises InvalidTransitionRecord, not a chmod."""
-    from setforge.errors import InvalidTransitionRecord
-
-    td = transitions.TransitionDir(tmp_path)
-    (tmp_path / "file_modes.json").write_text('{"/x": "0644"}', encoding="utf-8")
-    with pytest.raises(InvalidTransitionRecord):
-        transitions.load_file_modes(td)
-
-    # A bool masquerading as int is rejected too (True is an int in Python).
-    (tmp_path / "file_modes.json").write_text('{"/x": true}', encoding="utf-8")
-    with pytest.raises(InvalidTransitionRecord):
-        transitions.load_file_modes(td)
-
-    # An out-of-range mode is rejected.
-    (tmp_path / "file_modes.json").write_text('{"/x": 99999}', encoding="utf-8")
-    with pytest.raises(InvalidTransitionRecord):
-        transitions.load_file_modes(td)

@@ -3,7 +3,6 @@
 import contextlib
 import json
 import os
-import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,18 +11,18 @@ from typing import TextIO
 import pytest
 
 from setforge import operations, orphan_scan
-from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+from setforge.errors import InvalidTransitionRecord, SetforgeError
 from setforge.transitions import (
     CodexPluginDelta,
     ExtensionDelta,
+    FilesystemImage,
     PluginDelta,
     TransitionCommand,
     TransitionDir,
     TransitionListing,
     TransitionMeta,
-    apply_patch_reverse,
+    capture_files,
     codex_plugin_delta_from_json,
-    compute_patch,
     extension_delta_from_json,
     list_transitions,
     load_filesystem_deltas,
@@ -35,13 +34,13 @@ from setforge.transitions import (
     resolve_transition_prefix,
     snapshot_paths,
     state_root,
-    summarize_transition,
     transition_dirname,
     transitions_root,
     validate_state_dir_writable,
     write_meta,
     write_transition,
 )
+from tests.shared_helpers import text_images
 
 
 def test_codex_plugin_delta_round_trip_is_product_separate(
@@ -387,68 +386,6 @@ def test_snapshot_paths_records_existing_and_missing(tmp_path: Path) -> None:
     assert snap == {a: "hello\n", b: None}
 
 
-def test_compute_patch_empty_when_unchanged(tmp_path: Path) -> None:
-    a = tmp_path / "a.txt"
-    snap = {a: "x\n"}
-    assert compute_patch(snap, snap) == ""
-
-
-def _root_relative(p: Path) -> str:
-    """Mirror transitions._diff_path: leading ``/`` stripped for assertions."""
-    s = str(p)
-    return s.lstrip("/") if s.startswith("/") else s
-
-
-def test_compute_patch_modified_file(tmp_path: Path) -> None:
-    a = tmp_path / "a.txt"
-    pre = {a: "before\n"}
-    post = {a: "after\n"}
-    patch = compute_patch(pre, post)
-    assert f"--- {_root_relative(a)}" in patch
-    assert f"+++ {_root_relative(a)}" in patch
-    assert "-before" in patch
-    assert "+after" in patch
-
-
-def test_compute_patch_new_file_uses_dev_null(tmp_path: Path) -> None:
-    a = tmp_path / "new.txt"
-    patch = compute_patch({a: None}, {a: "fresh\n"})
-    assert "--- /dev/null" in patch
-    assert f"+++ {_root_relative(a)}" in patch
-    assert "+fresh" in patch
-
-
-def test_compute_patch_deleted_file_uses_dev_null(tmp_path: Path) -> None:
-    a = tmp_path / "gone.txt"
-    patch = compute_patch({a: "old\n"}, {a: None})
-    assert f"--- {_root_relative(a)}" in patch
-    assert "+++ /dev/null" in patch
-    assert "-old" in patch
-
-
-def test_compute_patch_combines_multiple_files(tmp_path: Path) -> None:
-    a = tmp_path / "a.txt"
-    b = tmp_path / "b.txt"
-    pre = {a: "1\n", b: "2\n"}
-    post = {a: "1\n", b: "X\n"}  # only b changed
-    patch = compute_patch(pre, post)
-    assert f"+++ {_root_relative(b)}" in patch
-    assert f"+++ {_root_relative(a)}" not in patch  # unchanged file omitted
-
-
-def test_compute_patch_paths_are_root_relative_for_patch_safety(
-    tmp_path: Path,
-) -> None:
-    """GNU patch rejects absolute paths as dangerous; we strip the
-    leading slash and pair with `patch -d /` on apply."""
-    a = tmp_path / "a.txt"
-    patch = compute_patch({a: "x\n"}, {a: "y\n"})
-    assert f"--- {str(a)[0]}" not in patch.split("\n")[0] or not patch.startswith(
-        "--- /"
-    )
-    assert "--- /tmp" not in patch  # no leading slash on real paths
-
-
 def _make_meta(
     command: TransitionCommand = TransitionCommand.INSTALL,
 ) -> TransitionMeta:
@@ -472,23 +409,53 @@ def test_write_transition_full_shape(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     target_file = tmp_path / "live.txt"
-    pre = {target_file: "before\n"}
-    post = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
 
     out = write_transition(_make_meta(), pre, post, delta)
 
     assert out.exists()
     assert (out / "meta.json").exists()
-    assert (out / "changes.patch").exists()
+    assert (out / "filesystem_deltas.json").exists()
     assert (out / "extensions.json").exists()
-    assert "before" in (out / "changes.patch").read_text()
+    (image,) = load_filesystem_deltas(out)
+    assert (image.pre.payload, image.post.payload) == (b"before\n", b"after\n")
     payload = json.loads((out / "extensions.json").read_text())
     assert payload == {"added": ["a.x"], "removed": ["b.y"]}
     # meta.json now records touched paths so revert can read them
     # without re-parsing the diff.
     meta_payload = json.loads((out / "meta.json").read_text())
     assert meta_payload["paths"] == [str(target_file)]
+
+
+def test_write_transition_records_created_modified_and_deleted_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every changed path is one image entry; an unchanged one is omitted."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    created = tmp_path / "created.txt"
+    modified = tmp_path / "modified.txt"
+    deleted = tmp_path / "deleted.txt"
+    same = tmp_path / "same.txt"
+    out = write_transition(
+        _make_meta(),
+        text_images({created: None, modified: "1\n", deleted: "2\n", same: "3\n"}),
+        text_images({created: "4\n", modified: "5\n", deleted: None, same: "3\n"}),
+        None,
+    )
+
+    recorded = {
+        item.path: (item.pre.payload, item.post.payload)
+        for item in load_filesystem_deltas(out)
+    }
+    assert recorded == {
+        created: (None, b"4\n"),
+        modified: (b"1\n", b"5\n"),
+        deleted: (b"2\n", None),
+    }
+    meta_payload = json.loads((out / "meta.json").read_text())
+    assert meta_payload["paths"] == sorted(map(str, recorded))
 
 
 def test_write_transition_meta_paths_omits_unchanged(
@@ -501,8 +468,8 @@ def test_write_transition_meta_paths_omits_unchanged(
     b = tmp_path / "unchanged.txt"
     out = write_transition(
         _make_meta(),
-        {a: "before\n", b: "same\n"},
-        {a: "after\n", b: "same\n"},
+        text_images({a: "before\n", b: "same\n"}),
+        text_images({a: "after\n", b: "same\n"}),
         None,
     )
     meta_payload = json.loads((out / "meta.json").read_text())
@@ -513,12 +480,12 @@ def test_write_transition_omits_empty_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
-    same = {tmp_path / "x": "same\n"}
+    same = text_images({tmp_path / "x": "same\n"})
     out = write_transition(
         _make_meta(), same, same, ExtensionDelta(added=["a.x"], removed=[])
     )
     assert (out / "meta.json").exists()
-    assert not (out / "changes.patch").exists()
+    assert not (out / "filesystem_deltas.json").exists()
     assert (out / "extensions.json").exists()
 
 
@@ -529,7 +496,12 @@ def test_write_transition_encodes_empty_file_creation_for_revert(
     target_file = tmp_path / "empty.txt"
     target_file.touch()
 
-    out = write_transition(_make_meta(), {target_file: None}, {target_file: ""}, None)
+    out = write_transition(
+        _make_meta(),
+        text_images({target_file: None}),
+        capture_files([target_file]),
+        None,
+    )
 
     (delta,) = load_filesystem_deltas(out)
     assert delta.path == target_file
@@ -550,11 +522,11 @@ def test_write_transition_omits_empty_extension_delta(
     target_file = tmp_path / "live.txt"
     out = write_transition(
         _make_meta(),
-        {target_file: "a\n"},
-        {target_file: "b\n"},
+        text_images({target_file: "a\n"}),
+        text_images({target_file: "b\n"}),
         ExtensionDelta(added=[], removed=[]),
     )
-    assert (out / "changes.patch").exists()
+    assert (out / "filesystem_deltas.json").exists()
     assert not (out / "extensions.json").exists()
 
 
@@ -564,8 +536,8 @@ def test_write_transition_omits_extension_delta_when_none(
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     out = write_transition(
         _make_meta(),
-        {tmp_path / "x": "a\n"},
-        {tmp_path / "x": "b\n"},
+        text_images({tmp_path / "x": "a\n"}),
+        text_images({tmp_path / "x": "b\n"}),
         None,
     )
     assert not (out / "extensions.json").exists()
@@ -598,8 +570,8 @@ def test_write_transition_rejects_non_str_marketplace_source_value(
     with pytest.raises(TypeError, match="non-str value for key 'path'"):
         write_transition(
             _make_meta(),
-            {tmp_path / "x": "a\n"},
-            {tmp_path / "x": "a\n"},
+            text_images({tmp_path / "x": "a\n"}),
+            text_images({tmp_path / "x": "a\n"}),
             None,
             plugin_delta=bad_delta,
         )
@@ -687,150 +659,6 @@ def test_load_latest_filters_by_command(
     assert load_latest("vmh", command=TransitionCommand.REVERT) is None
 
 
-def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
-    before = sorted(tmp_path.rglob("*"))
-    apply_patch_reverse(TransitionDir(tmp_path))  # no changes.patch → silent no-op
-    assert sorted(tmp_path.rglob("*")) == before  # nothing created/removed
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
-    """Forward content edit, then apply_patch_reverse restores original."""
-    target = tmp_path / "live.txt"
-    target.write_text("after\n", encoding="utf-8")
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch({target: "before\n"}, {target: "after\n"}),
-        encoding="utf-8",
-    )
-
-    apply_patch_reverse(transition)
-
-    assert target.read_text() == "before\n"
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
-    target = tmp_path / "live.txt"
-    target.write_text("drifted-content\n", encoding="utf-8")
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch({target: "before\n"}, {target: "after\n"}),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RevertFailed):
-        apply_patch_reverse(transition)
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
-    """Multi-file diff with drift on one file: dry-run aborts before
-    any file is written. The other (clean) file must remain at its
-    post-state, and no .rej files must leak."""
-    a = tmp_path / "a.txt"
-    b = tmp_path / "b.txt"
-    a.write_text("after-a\n", encoding="utf-8")  # clean — would reverse OK
-    b.write_text("DRIFTED-b\n", encoding="utf-8")  # drifted
-
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch(
-            {a: "before-a\n", b: "before-b\n"},
-            {a: "after-a\n", b: "after-b\n"},
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RevertFailed):
-        apply_patch_reverse(transition)
-
-    # No partial revert: a stays at post-state, b stays drifted.
-    assert a.read_text() == "after-a\n"
-    assert b.read_text() == "DRIFTED-b\n"
-    # No .rej files anywhere in the tree.
-    rej_files = list(tmp_path.rglob("*.rej"))
-    assert rej_files == [], f"unexpected .rej files: {rej_files}"
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_dry_run_only_does_not_modify_live(
-    tmp_path: Path,
-) -> None:
-    """``dry_run=True`` verifies the reverse would apply cleanly but
-    leaves the live tree untouched. Used by multi-step atomic revert
-    (``revert --to-before=<id>``) which must dry-run-ALL-N FIRST then
-    apply-ALL-N.
-    """
-    target = tmp_path / "live.txt"
-    target.write_text("after\n", encoding="utf-8")
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch({target: "before\n"}, {target: "after\n"}),
-        encoding="utf-8",
-    )
-
-    apply_patch_reverse(transition, dry_run=True)
-
-    # Live tree unchanged after a successful dry-run.
-    assert target.read_text() == "after\n"
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_dry_run_failure_raises_revertfailed(
-    tmp_path: Path,
-) -> None:
-    """``dry_run=True`` raises :class:`RevertFailed` on drift, same as
-    the default mode — and the live tree stays untouched (per the
-    no-write contract of dry-run-only)."""
-    target = tmp_path / "live.txt"
-    target.write_text("drifted-content\n", encoding="utf-8")
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch({target: "before\n"}, {target: "after\n"}),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RevertFailed):
-        apply_patch_reverse(transition, dry_run=True)
-
-    # Live tree unchanged after a failed dry-run too.
-    assert target.read_text() == "drifted-content\n"
-
-
-def test_apply_patch_reverse_dry_run_no_patch_is_noop(tmp_path: Path) -> None:
-    """``dry_run=True`` matches the default-mode no-op shape when the
-    transition has no ``changes.patch`` (extension-only transitions)."""
-    before = sorted(tmp_path.rglob("*"))
-    apply_patch_reverse(TransitionDir(tmp_path), dry_run=True)
-    assert sorted(tmp_path.rglob("*")) == before  # nothing created/removed
-
-
-@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
-def test_apply_patch_reverse_default_mode_still_does_dry_then_apply(
-    tmp_path: Path,
-) -> None:
-    """Backward-compat: ``dry_run=False`` (default) preserves the
-    pre-refactor behavior — dry-run-then-real-apply on one transition."""
-    target = tmp_path / "live.txt"
-    target.write_text("after\n", encoding="utf-8")
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch({target: "before\n"}, {target: "after\n"}),
-        encoding="utf-8",
-    )
-
-    apply_patch_reverse(transition)  # default dry_run=False
-
-    assert target.read_text() == "before\n"
-
-
 def _stub_full_transition(
     target: Path,
     *,
@@ -840,7 +668,6 @@ def _stub_full_transition(
     paths: list[str] | None = None,
     extensions_added: list[str] | None = None,
     extensions_removed: list[str] | None = None,
-    patch_text: str | None = None,
 ) -> None:
     """Write a self-consistent transition directory with optional sidecars.
 
@@ -870,8 +697,6 @@ def _stub_full_transition(
             ),
             encoding="utf-8",
         )
-    if patch_text is not None:
-        (target / "changes.patch").write_text(patch_text, encoding="utf-8")
 
 
 def test_list_transitions_empty_root(
@@ -1048,36 +873,6 @@ def test_resolve_transition_prefix_root_missing(
         resolve_transition_prefix("anything")
 
 
-def test_summarize_transition_no_patch_returns_empty(tmp_path: Path) -> None:
-    """Extension-only transitions have no changes.patch — summarize is a
-    no-op for them, not an error."""
-    transition = TransitionDir(tmp_path / "extensions-only")
-    transition.mkdir()
-    assert summarize_transition(transition) == {}
-
-
-def test_summarize_transition_classifies_each_action(tmp_path: Path) -> None:
-    """One patch covering create / modify / delete in one call. Asserts
-    the path round-trip too: leading-slash strip on write must be reversed
-    when summarize reports back to the user."""
-    created = Path("/tmp/test-summarize-created.txt")
-    modified = Path("/tmp/test-summarize-modified.txt")
-    deleted = Path("/tmp/test-summarize-deleted.txt")
-    pre = {created: None, modified: "before\n", deleted: "old\n"}
-    post = {created: "fresh\n", modified: "after\n", deleted: None}
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(
-        compute_patch(pre, post), encoding="utf-8"
-    )
-
-    actions = summarize_transition(transition)
-
-    assert actions[str(created)] == "created"
-    assert actions[str(modified)] == "modified"
-    assert actions[str(deleted)] == "deleted"
-
-
 def test_transition_listing_dataclass_is_frozen() -> None:
     """The listing struct is a value object — defending the frozen invariant
     so callers don't accidentally mutate cached entries."""
@@ -1102,7 +897,10 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 def _make_transition_args(
     tmp_path: Path,
 ) -> tuple[
-    TransitionMeta, dict[Path, str | None], dict[Path, str | None], ExtensionDelta
+    TransitionMeta,
+    dict[Path, FilesystemImage],
+    dict[Path, FilesystemImage],
+    ExtensionDelta,
 ]:
     """Return a minimal set of args for write_transition suitable for crash tests."""
     target_file = tmp_path / "live.txt"
@@ -1113,8 +911,8 @@ def _make_transition_args(
         host="h",
         version="0.1.0",
     )
-    pre: dict[Path, str | None] = {target_file: "before\n"}
-    post: dict[Path, str | None] = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=[])
     return meta, pre, post, delta
 
@@ -1535,11 +1333,11 @@ def test_reconcile_outcomes_from_json_rejects_unknown_status() -> None:
 
 def _full_payload_inputs(
     tmp_path: Path,
-) -> tuple[dict[Path, str | None], dict[Path, str | None], ExtensionDelta]:
+) -> tuple[dict[Path, FilesystemImage], dict[Path, FilesystemImage], ExtensionDelta]:
     """Inputs that exercise every staged payload file (patch + extensions)."""
     target_file = tmp_path / "live.txt"
-    pre: dict[Path, str | None] = {target_file: "before\n"}
-    post: dict[Path, str | None] = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
     return pre, post, delta
 
@@ -1618,7 +1416,7 @@ def test_write_transition_durable_sequence(
         for i, (k, name) in enumerate(kinds)
         if k == "file_fsync" and i < rename_idx
     }
-    assert "changes.patch" in file_fsyncs_before
+    assert "filesystem_deltas.json" in file_fsyncs_before
     assert "extensions.json" in file_fsyncs_before
 
     # Three distinct dir fsyncs: pending before rename, root after rename,

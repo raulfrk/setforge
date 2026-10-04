@@ -1,15 +1,15 @@
 """Regression tests for the revert mutate-before-record atomicity finding.
 
-Audit finding ``revert_order``: ``_apply_revert`` reversed the content
-patch and restored stores BEFORE running the symlink-unlink pass, which
+Audit finding ``revert_order``: ``_apply_revert`` reversed the file
+contents and restored stores BEFORE running the symlink-unlink pass, which
 refuses (raises :class:`SetforgeError`) when the user retargeted a
 deployed link or replaced it with a regular file. A refusal raised after
-the content patch was already reversed left a PARTIAL, un-redoable revert
+the file contents were already reversed left a PARTIAL, un-redoable revert
 (content reverted, link untouched, no reverse transition written).
 
 Fix: ``_apply_revert`` validates the recorded link images against the live
-tree BEFORE any mutation — symmetric to ``apply_patch_reverse``'s own
-``--dry-run`` gate — so revert refuses cleanly with zero mutation.
+tree BEFORE any mutation, together with every other recorded file, so
+revert refuses cleanly with zero mutation.
 """
 
 import json

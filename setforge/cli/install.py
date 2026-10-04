@@ -2766,6 +2766,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             path: transitions.snapshot_filesystem_image(path)
             for path in tree_filesystem_paths
         }
+        file_pre_images = transitions.capture_files(
+            (*plan.dst_paths, *plan.ownership_pre)
+        )
         adapter_snapshots = _install_adapter_snapshots(plan)
         adapter_kinds = {item.kind for item in adapter_snapshots}
         if package_owner_id is not None:
@@ -2807,30 +2810,23 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             *_publish_file_adoptions_checkpoint(plan, run),
         )
 
-        # For symlink-deployed tracked_files the recorded "touched path" is
-        # the symlink's TARGET (where bytes actually land), not the link
-        # path itself: GNU patch refuses to patch a symlink as a regular
-        # file, so a transition recording the link path would brick revert.
+        # For symlink-deployed tracked_files the recorded file is the
+        # symlink's TARGET (where bytes actually land); the link itself is a
+        # tree filesystem delta. Store files (byte bases, spans sidecars,
+        # scalar-base manifests) are not recorded here: their pre-install
+        # state is captured at the pass-2 barrier (state_snapshots below) and
+        # revert restores them through that mechanism. Transfer claims have an
+        # exact, generation-checked sidecar inverse, so recording those claim
+        # files too would reverse them twice.
         transfer_claim_paths = {
             OwnershipStore().claim_path(transfer.after.resource_id)
             for transfer in ownership_transfers
         }
-        transition_ownership_pre = {
-            path: payload
-            for path, payload in plan.ownership_pre.items()
+        file_pre = {
+            path: image
+            for path, image in file_pre_images.items()
             if path not in transfer_claim_paths
         }
-        dst_paths = [*plan.dst_paths, *transition_ownership_pre]
-        # Store files (byte bases, spans sidecars, scalar-base manifests) do
-        # NOT ride this patch snapshot: their pre-install state is captured
-        # at the pass-2 barrier (state_snapshots below) and revert restores
-        # them through that mechanism — recording them here too would
-        # double-restore (Invariant I5 now lives in the snapshot path).
-
-        # Transfer claims have an exact, generation-checked sidecar inverse.
-        # Keeping those same claim files in changes.patch would reverse them
-        # once as text and then attempt the ownership CAS a second time.
-        file_pre = {**plan.file_pre, **transition_ownership_pre}
 
         _apply_capability_targets(
             plan,
@@ -2846,9 +2842,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         files_applied = run.deploy_outcome is not None
         if files_applied:
             _refresh_file_claims_checkpoint(plan, run)
-        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome(
-            prior_modes={}
-        )
+        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome()
         with run.checkpoint(
             "mcp-servers",
             operations.CheckpointKind.COMPENSATABLE,
@@ -2858,7 +2852,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         ):
             mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
 
-        file_post = transitions.snapshot_paths(dst_paths)
+        file_post = transitions.capture_files(file_pre)
         tree_post_images = {
             path: transitions.snapshot_filesystem_image(path)
             for path in tree_filesystem_paths
@@ -2931,7 +2925,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
                     state_snapshots=state_pre,
                     mcp_delta=mcp_delta,
-                    file_modes=deploy_outcome.prior_modes,
                     filesystem_deltas=tree_filesystem_deltas,
                     ownership_transfers=ownership_transfers,
                     tracked_file_destinations=tracked_file_destinations,

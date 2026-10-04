@@ -7,6 +7,7 @@ import subprocess
 import uuid
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 import pytest
 from ruamel.yaml import YAML
@@ -32,7 +33,7 @@ from setforge.config import (
     load_config,
     resolve_effective_profile,
 )
-from setforge.errors import SetforgeError
+from setforge.errors import RevertFailed, SetforgeError
 from setforge.file_ownership import file_resource_id
 from setforge.ownership import OwnershipStore, resolve_owner_common_dir
 from setforge.provision.receipt import default_receipt_root
@@ -1537,7 +1538,18 @@ def test_refused_revert_chain_rolls_back_a_directory_mode_step(
     (source / "sub").chmod(0o700)
     (source / "sub/extra").write_text("extra v2\n")
     assert runner.invoke(app, install).exit_code == 0
-    (live / "one").write_text("manually edited\n")
+    real_apply = operations.apply_filesystem_deltas_reverse_anchored
+    applied: list[object] = []
+
+    def fail_second_step(*args: Any, **kwargs: Any) -> None:
+        applied.append(args)
+        if len(applied) == 2:
+            raise RevertFailed("second step failed")
+        real_apply(*args, **kwargs)
+
+    monkeypatch.setattr(
+        operations, "apply_filesystem_deltas_reverse_anchored", fail_second_step
+    )
 
     failed = runner.invoke(
         app,
@@ -1556,8 +1568,52 @@ def test_refused_revert_chain_rolls_back_a_directory_mode_step(
     assert operations.active("p") is None
     assert stat.S_IMODE((live / "tree/sub").stat().st_mode) == 0o700
     assert (live / "tree/sub/extra").read_text() == "extra v2\n"
-    assert (live / "one").read_text() == "manually edited\n"
+    assert (live / "one").read_text() == "one v2\n"
+    monkeypatch.setattr(
+        operations, "apply_filesystem_deltas_reverse_anchored", real_apply
+    )
     assert runner.invoke(app, install).exit_code == 0
+
+
+def test_revert_chain_with_an_edited_older_file_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, live, source, install = _tree_with_restricted_subdirectory(
+        tmp_path, monkeypatch
+    )
+    runner = CliRunner()
+    assert runner.invoke(app, install).exit_code == 0
+    (config.parent / "tracked/one").write_text("one v2\n")
+    assert runner.invoke(app, install).exit_code == 0
+    target = transitions.load_latest("p")
+    assert target is not None
+    (source / "sub").chmod(0o700)
+    (source / "sub/extra").write_text("extra v2\n")
+    assert runner.invoke(app, install).exit_code == 0
+    (live / "one").write_text("manually edited\n")
+    records = sorted(transitions.transitions_root().iterdir())
+
+    failed = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=p",
+            f"--config={config}",
+            "--yes",
+            f"--to-before={target.name}",
+        ],
+    )
+
+    assert failed.exit_code != 0
+    assert "no live changes made" in str(failed.exception)
+    assert f"filesystem path changed since transition: {live / 'one'}" in str(
+        failed.exception
+    )
+    assert operations.active("p") is None
+    assert stat.S_IMODE((live / "tree/sub").stat().st_mode) == 0o700
+    assert (live / "tree/sub/extra").read_text() == "extra v2\n"
+    assert (live / "one").read_text() == "manually edited\n"
+    assert sorted(transitions.transitions_root().iterdir()) == records
 
 
 @pytest.mark.parametrize("change_child", [True, False])

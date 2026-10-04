@@ -1,11 +1,7 @@
 """Regression tests for audit finding ``transitions_patch_outcomes``.
 
-Two confirmed defects in :mod:`setforge.transitions`:
-
-1. :func:`compute_patch` produced a malformed ``changes.patch`` for files
-   without a trailing newline, because :func:`difflib.unified_diff` never
-   emits GNU patch's ``\\ No newline at end of file`` marker. GNU ``patch``
-   rejects such a diff (exit 2), so the transition could NEVER be reverted.
+1. An install whose only change is a zero-byte file creation still records a
+   transition, so revert can remove the file.
 
 2. :func:`load_reconcile_outcomes` read ``reconcile_outcomes.json`` with an
    unguarded ``json.loads``, so a truncated / hand-corrupted file raised a
@@ -14,22 +10,17 @@ Two confirmed defects in :mod:`setforge.transitions`:
 """
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from setforge.cli._install_helpers import DeployOutcome, _install_recorded_nothing
 from setforge.errors import InvalidTransitionRecord
-from setforge.transitions import (
-    TransitionDir,
-    compute_patch,
-    load_reconcile_outcomes,
-)
+from setforge.transitions import TransitionDir, load_reconcile_outcomes
+from tests.shared_helpers import text_images
 
 # ---------------------------------------------------------------------------
-# Finding 1 — no-trailing-newline files must produce a revertible patch
+# Finding 1 — a zero-byte creation is a recorded change
 # ---------------------------------------------------------------------------
 
 
@@ -39,9 +30,9 @@ def test_empty_file_creation_is_not_classified_as_no_transition(
     target = tmp_path / "empty.conf"
 
     assert not _install_recorded_nothing(
-        file_pre={target: None},
-        file_post={target: ""},
-        deploy_outcome=DeployOutcome({}),
+        file_pre=text_images({target: None}),
+        file_post=text_images({target: ""}),
+        deploy_outcome=DeployOutcome(),
         ext_delta=None,
         plugin_delta=None,
         mcp_delta=None,
@@ -50,149 +41,8 @@ def test_empty_file_creation_is_not_classified_as_no_transition(
     )
 
 
-def _apply_reverse(
-    patch_text: str, target: Path, *, dry_run: bool
-) -> subprocess.CompletedProcess[str]:
-    """Run ``patch -p0 -R`` (optionally ``--dry-run``) on ``patch_text``.
-
-    Mirrors :func:`apply_patch_reverse`'s invocation (``-p0`` + ``-d
-    <root>``) so the root-relative paths emitted by :func:`compute_patch`
-    resolve. ``target`` is the *root* the diff paths are relative to.
-    """
-    patch_bin = shutil.which("patch")
-    assert patch_bin is not None, "GNU patch not on PATH"
-    args = [patch_bin, "-p0", "-R", "-d", str(target), "--reject-file=-"]
-    if dry_run:
-        args.append("--dry-run")
-    return subprocess.run(
-        args,
-        input=patch_text,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-
-
-def test_compute_patch_no_trailing_newline_round_trips(tmp_path: Path) -> None:
-    """A file modified from content WITHOUT a trailing newline to content
-    WITH one yields a patch that ``patch -R`` accepts and that restores the
-    pre-bytes exactly.
-
-    Pre-fix the diff ended with ``-beta+GAMMA`` on one physical line and
-    GNU patch rejected it ('malformed patch', exit 2).
-    """
-    rel = "etc/example.conf"
-    pre = "alpha\nbeta"  # no trailing newline
-    post = "alpha\nGAMMA\n"  # trailing newline
-
-    target = tmp_path / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(post, encoding="utf-8")
-
-    patch_text = compute_patch(
-        {Path("/" + rel): pre},
-        {Path("/" + rel): post},
-    )
-
-    # The marker must be present so the diff is well-formed GNU patch.
-    assert "\\ No newline at end of file" in patch_text
-
-    dry = _apply_reverse(patch_text, tmp_path, dry_run=True)
-    assert dry.returncode == 0, (
-        f"dry-run -R failed (exit {dry.returncode}):\n"
-        f"{dry.stderr or dry.stdout}\n--- patch ---\n{patch_text}"
-    )
-
-    real = _apply_reverse(patch_text, tmp_path, dry_run=False)
-    assert real.returncode == 0, (
-        f"-R apply failed (exit {real.returncode}):\n{real.stderr or real.stdout}"
-    )
-    # Byte-exact restoration of the pre-state (still no trailing newline).
-    assert target.read_text(encoding="utf-8") == pre
-
-
-def test_compute_patch_marker_attaches_to_correct_side(tmp_path: Path) -> None:
-    """When only the AFTER side lacks a trailing newline, the round-trip
-    still restores a pre-state that *had* one — the marker must attach to
-    the ``+`` line, not the ``-`` line."""
-    rel = "etc/other.conf"
-    pre = "one\ntwo\n"  # trailing newline
-    post = "one\nXXX"  # no trailing newline
-
-    target = tmp_path / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(post, encoding="utf-8")
-
-    patch_text = compute_patch(
-        {Path("/" + rel): pre},
-        {Path("/" + rel): post},
-    )
-    assert "\\ No newline at end of file" in patch_text
-
-    real = _apply_reverse(patch_text, tmp_path, dry_run=False)
-    assert real.returncode == 0, (
-        f"-R apply failed (exit {real.returncode}):\n{real.stderr or real.stdout}"
-    )
-    assert target.read_text(encoding="utf-8") == pre
-
-
-def test_compute_patch_body_line_starting_with_dash_no_trailing_newline(
-    tmp_path: Path,
-) -> None:
-    rel = "etc/dashy.conf"
-    pre = "alpha\n---like-a-header"
-    post = "alpha\n+++also-like-one"
-
-    target = tmp_path / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(post, encoding="utf-8")
-
-    patch_text = compute_patch(
-        {Path("/" + rel): pre},
-        {Path("/" + rel): post},
-    )
-
-    assert patch_text.count("\\ No newline at end of file") == 2
-
-    dry = _apply_reverse(patch_text, tmp_path, dry_run=True)
-    assert dry.returncode == 0, (
-        f"dry-run -R failed (exit {dry.returncode}):\n"
-        f"{dry.stderr or dry.stdout}\n--- patch ---\n{patch_text}"
-    )
-
-    real = _apply_reverse(patch_text, tmp_path, dry_run=False)
-    assert real.returncode == 0, (
-        f"-R apply failed (exit {real.returncode}):\n{real.stderr or real.stdout}"
-    )
-    assert target.read_text(encoding="utf-8") == pre
-
-
-def test_compute_patch_with_trailing_newline_emits_no_marker(
-    tmp_path: Path,
-) -> None:
-    """Guard against over-eager annotation: when both sides end in a
-    newline, no marker is emitted and the diff still round-trips."""
-    rel = "etc/clean.conf"
-    pre = "a\nb\n"
-    post = "a\nB\n"
-
-    target = tmp_path / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(post, encoding="utf-8")
-
-    patch_text = compute_patch(
-        {Path("/" + rel): pre},
-        {Path("/" + rel): post},
-    )
-    assert "\\ No newline at end of file" not in patch_text
-
-    real = _apply_reverse(patch_text, tmp_path, dry_run=False)
-    assert real.returncode == 0
-    assert target.read_text(encoding="utf-8") == pre
-
-
 # ---------------------------------------------------------------------------
-# Finding 2 + 3 — load_reconcile_outcomes failure branches
+# Finding 2 — load_reconcile_outcomes failure branches
 # ---------------------------------------------------------------------------
 
 
