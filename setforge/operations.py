@@ -234,7 +234,7 @@ def snapshot_path(path: Path) -> PathSnapshot:
                 mtime_ns=info.st_mtime_ns,
             )
         if stat.S_ISREG(info.st_mode):
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_RDONLY | os.O_NOFOLLOW
             fd = os.open(path, flags)
             try:
                 opened = os.fstat(fd)
@@ -977,7 +977,7 @@ def _restore_directory_metadata_anchored(
         if parent_fd is None:
             raise SetforgeError(f"filesystem path parent changed: {delta.path.parent}")
         expected = guard_identities.get(delta.path)
-        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         directory_fd = os.open(delta.path.name, flags, dir_fd=parent_fd)
         try:
             info = os.fstat(directory_fd)
@@ -1058,7 +1058,7 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
 ) -> tuple[int, int, int]:
     """Validate and restore a directory through one continuously-held fd."""
     name = replacement.path.name
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_fd: int | None = None
     watch_fd: int | None = None
     try:
@@ -1558,7 +1558,7 @@ def _open_guarded_parent(  # noqa: C901
     """
     path = path.expanduser().absolute()
     follow_flags = os.O_RDONLY | os.O_DIRECTORY
-    flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
+    flags = follow_flags | os.O_NOFOLLOW
     descriptors: list[int] = []
     current_path = Path("/")
     try:
@@ -1711,7 +1711,7 @@ def _atomic_write_at(
             )
         published = os.open(
             name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
         try:
@@ -1748,7 +1748,7 @@ def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
     if stat.S_ISDIR(before.st_mode):
         descriptor = os.open(
             name,
-            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
         try:
@@ -1767,7 +1767,7 @@ def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
         raise SetforgeError(f"unsupported transition filesystem object: {path}")
     descriptor = os.open(
         name,
-        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        os.O_RDONLY | os.O_NOFOLLOW,
         dir_fd=parent_fd,
     )
     try:
@@ -1832,7 +1832,7 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
                 )
         directory_fd = os.open(
             name,
-            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
         try:

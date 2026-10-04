@@ -490,7 +490,7 @@ def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
     parent = entry.path.parent
     expected = dict(entry.parent_identities)
     follow_flags = os.O_RDONLY | os.O_DIRECTORY
-    flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
+    flags = follow_flags | os.O_NOFOLLOW
     try:
         parent_fd = os.open(Path("/"), flags)
     except OSError as exc:

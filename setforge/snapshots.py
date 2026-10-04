@@ -432,7 +432,7 @@ def _load_meta(snapshot_dir: Path) -> SnapshotMeta:
     meta_path = snapshot_dir / _META_FILENAME
     fd: int | None = None
     try:
-        fd = os.open(meta_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(meta_path, os.O_RDONLY | os.O_NOFOLLOW)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
             raise OSError("metadata is not a regular file")

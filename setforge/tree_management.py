@@ -226,7 +226,7 @@ def _excluded(spec: pathspec.PathSpec, relative: str, *, directory: bool) -> boo
 def _stable_file_at(
     directory_fd: int, name: str, before: os.stat_result, display: Path
 ) -> tuple[bytes, os.stat_result]:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NOFOLLOW
     descriptor = os.open(name, flags, dir_fd=directory_fd)
     try:
         opened = os.fstat(descriptor)
@@ -293,7 +293,7 @@ def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
         if before.st_dev != context.root_device:
             raise SetforgeError(f"managed tree crosses a filesystem boundary: {path}")
         context.entries.append(TreeEntry(relative, TreeEntryKind.DIRECTORY, mode))
-        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         child_fd = os.open(name, flags, dir_fd=directory_fd)
         try:
             opened = os.fstat(child_fd)
@@ -366,7 +366,7 @@ def scan_tree(
     if not stat.S_ISDIR(root_before.st_mode) or stat.S_ISLNK(root_before.st_mode):
         raise SetforgeError(f"managed tree root is not a real directory: {root}")
 
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, flags)
     try:
         opened = os.fstat(root_fd)
@@ -575,7 +575,7 @@ def _parts(relative: str) -> tuple[str, ...]:
 def _open_parent(root_fd: int, relative: str) -> tuple[int, str]:
     parts = _parts(relative)
     current = os.dup(root_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         for part in parts[:-1]:
             next_fd = os.open(part, flags, dir_fd=current)
@@ -600,7 +600,7 @@ def _chmod_directory_at(
     root_fd: int, relative: str, expected: TreeEntry, mode: int
 ) -> None:
     parent_fd, name = _open_parent(root_fd, relative)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         child_fd = os.open(name, flags, dir_fd=parent_fd)
         try:
@@ -629,7 +629,7 @@ def _staged_file_at(
     """
     descriptor = os.open(
         temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         mode,
         dir_fd=parent_fd,
     )
@@ -747,7 +747,7 @@ def _rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None
         os.close(
             os.open(
                 destination,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 _FILE_MODE,
                 dir_fd=parent_fd,
             )
@@ -767,7 +767,7 @@ def _open_or_create_root_at(
     anchor_fd: int, relative_parts: tuple[str, ...], *, create: bool
 ) -> int:
     current = os.dup(anchor_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         for part in relative_parts:
             if create:
@@ -871,7 +871,7 @@ def _verify_relative_binding(
     anchor_fd: int, relative_parts: tuple[str, ...], expected_fd: int
 ) -> None:
     current_fd = os.dup(anchor_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         for part in relative_parts:
             next_fd = os.open(part, flags, dir_fd=current_fd)

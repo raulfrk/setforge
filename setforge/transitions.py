@@ -1674,7 +1674,7 @@ def snapshot_filesystem_image(path: Path) -> FilesystemImage:
             )
         if not stat.S_ISREG(before.st_mode):
             raise SetforgeError(f"unsupported transition filesystem object: {path}")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | os.O_NOFOLLOW
         fd = os.open(path, flags)
         try:
             opened = os.fstat(fd)
