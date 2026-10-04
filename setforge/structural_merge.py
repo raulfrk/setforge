@@ -48,7 +48,7 @@ from json5.model import (
 from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 
 from setforge.errors import DuplicateKeyInMergeModel, MergeTypeMismatch
-from setforge.jsonc import _find_key_index, _key_text
+from setforge.jsonc import _find_key_index
 from setforge.scalar_merge import (
     ABSENT,
     ScalarOutcome,
@@ -61,15 +61,12 @@ __all__ = [
     "PathConflict",
     "StructuralMergeResult",
     "append_key_segment",
-    "deep_merge_into_node",
     "delete_node_at_path",
     "encode_key_segment",
     "get_at_path",
     "get_node_at_path",
     "join_key_segments",
-    "list_keys_at_path",
     "merge_structural",
-    "resolve_path_prefix",
     "set_at_path",
     "set_node_at_path",
     "split_key_path",
@@ -1199,58 +1196,6 @@ def delete_node_at_path(model: object, path: str) -> None:
     )
 
 
-def deep_merge_into_node(
-    target: object, live: Mapping, path: str | None = None
-) -> None:
-    """Deep-merge a PLAIN ``live`` mapping OVER the WRAPPED ``target`` node in place.
-
-    The comment-preserving analogue of a plain 2-way deep-merge: where that
-    would merge two PLAIN dicts (the result carries no comment tokens), this one
-    mutates the still-WRAPPED backend node (ruamel ``CommentedMap`` / json-five
-    ``JSONObject``) so every untouched key — and the comment tokens attached to
-    it — survives.
-
-    Semantics mirror the plain deep merge so the two paths are interchangeable:
-
-    * a live-only key is added (its plain value is wrapped by the backend setter);
-    * a key shared as mappings on both sides recurses (the wrapped child keeps its
-      interior comments);
-    * a key shared as lists is whole-replaced with live's list;
-    * a scalar/list-vs-mapping shape mismatch raises
-      :class:`~setforge.errors.MergeTypeMismatch`;
-    * any other shared key (both scalars, or whole-replaced container) takes
-      live's value, replacing the wrapped leaf in place so its OWN trailing
-      comment / leading whitespace survives.
-
-    Tracked-only keys are never iterated, so they (and their comments) are left
-    byte-identical. ``target`` MUST already be a deep copy — this seam mutates it
-    in place and the caller splices the result back via :func:`set_node_at_path`.
-    ``path`` is ``None`` at the root (see :func:`append_key_segment`); the
-    recursion threads the accumulated dotted path.
-    """
-    for key, live_value in live.items():
-        sub_path = append_key_segment(path, key)
-        child = _child_node(target, key)
-        if child is ABSENT:
-            _set_leaf(target, key, live_value, sub_path)
-            continue
-        if _is_mapping_node(child) and isinstance(live_value, Mapping):
-            deep_merge_into_node(child, live_value, sub_path)
-            continue
-        if _is_list_node(child) and isinstance(live_value, list):
-            _set_leaf(target, key, live_value, sub_path)
-            continue
-        child_shape = _shape_tag(child)
-        live_shape = _shape_tag(live_value)
-        if child_shape != live_shape:
-            raise MergeTypeMismatch(
-                f"type mismatch at {sub_path!r}: merged is {child_shape}, "
-                f"live is {live_shape}"
-            )
-        # Both scalars: live wins, replacing the wrapped leaf in place.
-        _set_leaf(target, key, live_value, sub_path)
-
-
 def get_at_path(model: object, path: str) -> object:
     """Return the value at dotted ``path`` as an UNWRAPPED plain-python value.
 
@@ -1309,77 +1254,6 @@ def get_node_at_path(model: object, path: str) -> object:
             return ABSENT
         node = child
     return copy.deepcopy(node)
-
-
-def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
-    """Resolve dotted ``path`` and report how deep navigation got.
-
-    The diagnostics sibling of :func:`get_at_path`: where that seam collapses
-    every miss to the bare :data:`~setforge.scalar_merge.ABSENT` sentinel, this
-    one tells the caller WHERE the walk stopped, so a failure message can name
-    the first missing prefix segment. ``path`` is the same DOTTED grammar
-    (``a.b.c``); a list-suffix segment (``[*]`` / ``[]``) is rejected with
-    :class:`ValueError`, matching its siblings.
-
-    A ``""`` ``path`` addresses the ROOT node and resolves trivially to
-    ``("", None)`` — the same root meaning its :func:`get_at_path` /
-    :func:`list_keys_at_path` siblings give ``""``.
-
-    Returns ``(resolved_prefix, missing_prefix)``:
-
-    * full path resolves → ``(path, None)``;
-    * a segment is absent, or an intermediate resolves to a non-mapping →
-      ``resolved_prefix`` is the deepest dotted prefix that DID resolve (``""``
-      when even the first segment misses) and ``missing_prefix`` is the first
-      prefix that did not — for a root-level miss that is the first segment
-      itself.
-
-    Pure navigation: never unwraps or copies values, never raises on a missing
-    key, and never mutates ``model``.
-    """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for resolve-path-prefix: {path!r}")
-    if not path:
-        return (path, None)
-    segments = split_key_path(path)
-    node = _json5_inner(model)
-    for depth, seg in enumerate(segments):
-        child = _child_node(node, seg) if _is_mapping_node(node) else ABSENT
-        if child is ABSENT:
-            resolved = join_key_segments(segments[:depth])
-            missing = join_key_segments(segments[: depth + 1])
-            return (resolved, missing)
-        node = child
-    return (path, None)
-
-
-def list_keys_at_path(model: object, path: str) -> list[str]:
-    """Return the child key names of the mapping at dotted ``path``.
-
-    The second diagnostics companion of :func:`get_at_path`: a caller that
-    just learned from :func:`resolve_path_prefix` WHERE a walk stopped
-    feeds the RESOLVED prefix here to enumerate the sibling candidates for
-    a did-you-mean suggestion. ``path`` ``""`` addresses the root mapping.
-    Returns ``[]`` when the node is absent or not a mapping — absence is
-    never an error on this seam. A list-suffix segment (``[*]`` / ``[]``)
-    is rejected with :class:`ValueError`, matching its siblings. Pure
-    navigation: never unwraps values, copies, or mutates ``model``.
-    """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for list-keys-at-path: {path!r}")
-    node = _json5_inner(model)
-    if path:
-        for seg in split_key_path(path):
-            if not _is_mapping_node(node):
-                return []
-            node = _child_node(node, seg)
-            if node is ABSENT:
-                return []
-    if isinstance(node, JSONObject):
-        return [_key_text(k) for k in node.keys]
-    if isinstance(node, Mapping):
-        return [str(k) for k in node]
-    return []
 
 
 def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
