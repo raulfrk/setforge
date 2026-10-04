@@ -137,6 +137,14 @@ def _manifest_schema(raw: dict[str, object]) -> int:
     return value
 
 
+def _record_config_paths(raw: dict[str, object]) -> tuple[Path, Path]:
+    """Return the record's resolved config root and config manifest path."""
+    config_root = Path(str(raw["config_root"])).resolve(strict=True)
+    if _manifest_schema(raw) >= 2:
+        return config_root, Path(str(raw["config_path"])).resolve(strict=True)
+    return config_root, (config_root / "setforge.yaml").resolve(strict=True)
+
+
 def _ordinary_actual_visibility(
     *,
     target: Path,
@@ -279,12 +287,7 @@ def _validated_record(
         raise SetforgeError(
             f"project target identity does not match the record; {remedy}"
         )
-    config_root = Path(str(raw["config_root"])).resolve(strict=True)
-    config_path = (
-        Path(str(raw["config_path"])).resolve(strict=True)
-        if _manifest_schema(raw) >= 2
-        else (config_root / "setforge.yaml").resolve(strict=True)
-    )
+    config_root, config_path = _record_config_paths(raw)
     config_path.relative_to(config_root)
     injection = RecordedProjectInjection(
         profile=str(raw["profile"]),
@@ -570,12 +573,7 @@ def plan_project_visibility(
     if raw["target_inode"] != root.stat().st_ino:
         raise SetforgeError("project target identity does not match the record")
     profile = str(raw["profile"])
-    config_root = Path(str(raw["config_root"])).resolve(strict=True)
-    config_path = (
-        Path(str(raw["config_path"])).resolve(strict=True)
-        if _manifest_schema(raw) >= 2
-        else (config_root / "setforge.yaml").resolve(strict=True)
-    )
+    config_root, config_path = _record_config_paths(raw)
     plan_removal(
         profile=profile,
         target=root,
