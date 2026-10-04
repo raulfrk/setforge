@@ -55,8 +55,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   snapshots for deletion when they sit under a managed root.
 - `cleanup` and `cleanup-orphans` write `local.yaml` atomically and keep its
   comments and layout.
-- A `type: local` package no longer overwrites a different file already at its
-  destination; an identical file is adopted.
+- A `type: local` package no longer overwrites a file it did not install at
+  its destination. A plain (non-archive) file identical to the source is
+  adopted.
 - `project sync` merges YAML and JSON members exactly as `install` does, so
   untouched lines keep their bytes and a JSON file with a duplicate key gives a
   conflict instead of a crash. `project remove` no longer recreates a file Git
@@ -85,6 +86,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prints `overlay:`, and `project inject` no longer prints the worktree
   auto-carry line.
 - The unused `diff-match-patch` dependency is removed.
+- Project overlay state written by this release is not readable by 1.3.9;
+  state written by earlier releases still reads.
 
 ## [1.3.9] - 2026-09-28
 
