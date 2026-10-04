@@ -42,7 +42,7 @@ import shutil
 import stat
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -183,23 +183,11 @@ class SnapshotMeta:
 
 
 @dataclass(slots=True, frozen=True)
-class _FrozenSnapshotFile:
-    """Stable file or symlink payload consumed by snapshot apply."""
-
-    path: Path
-    kind: operations.SnapshotKind
-    mode: int | None
-    payload: bytes | None
-    link_target: str | None
-    mtime_ns: int
-
-
-@dataclass(slots=True, frozen=True)
 class _RestorePlan:
     """Validated immutable input for one additive snapshot restore."""
 
     target: SnapshotMeta
-    files: tuple[_FrozenSnapshotFile, ...]
+    files: tuple[operations.PathSnapshot, ...]
     destination_ancestors: tuple[operations.PathGuard, ...]
     owner_id: UUID | None = None
 
@@ -327,7 +315,7 @@ def _mirror_path(snapshot_dir: Path, live_path: Path) -> Path:
     return snapshot_dir / live_path.relative_to("/")
 
 
-def _freeze_file(path: Path) -> _FrozenSnapshotFile | None:
+def _freeze_file(path: Path) -> operations.PathSnapshot | None:
     """Capture one stable regular-file or symlink payload without rereads."""
     try:
         before = path.lstat()
@@ -350,28 +338,15 @@ def _freeze_file(path: Path) -> _FrozenSnapshotFile | None:
         raise SetforgeError(
             f"snapshot source changed while planning {path}; retry"
         ) from exc
-    stable_fields = (
-        "st_dev",
-        "st_ino",
-        "st_mode",
-        "st_size",
-        "st_mtime_ns",
-        "st_ctime_ns",
-    )
-    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+    if transitions.stat_identity(before) != transitions.stat_identity(after):
         raise SetforgeError(f"snapshot source changed while planning {path}; retry")
-    return _FrozenSnapshotFile(
-        path=path,
-        kind=captured.kind,
-        mode=captured.mode,
-        payload=captured.payload,
-        link_target=captured.link_target,
-        mtime_ns=before.st_mtime_ns,
-    )
+    return replace(captured, path=path, mtime_ns=before.st_mtime_ns)
 
 
-def _write_frozen_file(source: _FrozenSnapshotFile, destination: Path) -> None:
+def _write_frozen_file(source: operations.PathSnapshot, destination: Path) -> None:
     """Write one frozen payload without consulting its source path again."""
+    if source.mtime_ns is None:
+        raise AssertionError("frozen snapshot entry is missing its mtime")
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_dir() and not destination.is_symlink():
         raise SetforgeError(
@@ -432,7 +407,7 @@ def _load_meta(snapshot_dir: Path) -> SnapshotMeta:
     meta_path = snapshot_dir / _META_FILENAME
     fd: int | None = None
     try:
-        fd = os.open(meta_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(meta_path, os.O_RDONLY | os.O_NOFOLLOW)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
             raise OSError("metadata is not a regular file")
@@ -484,7 +459,7 @@ def _capture_files(partial_dir: Path, paths: Sequence[Path]) -> list[Path]:
     skipped silently — snapshot fidelity is "files that exist now" and
     restore is additive, so absence stays absence.
     """
-    planned: list[_FrozenSnapshotFile] = []
+    planned: list[operations.PathSnapshot] = []
     for live_path in paths:
         frozen = _freeze_file(live_path)
         if frozen is not None:
@@ -784,7 +759,7 @@ def _plan_restore_snapshot(
             f"snapshot {target.snapshot_id}: metadata changed before planning; retry"
         )
     destinations = _physical_destinations(target)
-    files: list[_FrozenSnapshotFile] = []
+    files: list[operations.PathSnapshot] = []
     for live_path, destination in zip(target.files, destinations, strict=True):
         mirror = _require_safe_mirror(snapshot_dir, live_path)
         frozen = _freeze_file(mirror)
@@ -793,16 +768,7 @@ def _plan_restore_snapshot(
                 f"snapshot {target.snapshot_id}: meta references "
                 f"{live_path} but {mirror} is missing on disk"
             )
-        files.append(
-            _FrozenSnapshotFile(
-                path=destination,
-                kind=frozen.kind,
-                mode=frozen.mode,
-                payload=frozen.payload,
-                link_target=frozen.link_target,
-                mtime_ns=frozen.mtime_ns,
-            )
-        )
+        files.append(replace(frozen, path=destination))
     try:
         directory_after = snapshot_dir.lstat()
     except OSError as exc:
@@ -846,20 +812,16 @@ def _validate_restore_plan(plan: _RestorePlan) -> None:
 
 
 def _write_restored_file(
-    frozen: _FrozenSnapshotFile,
+    frozen: operations.PathSnapshot,
     guard_identities: dict[Path, tuple[int, int, int] | None],
 ) -> None:
     """Publish one frozen payload beneath descriptor-verified parents."""
     operations._restore_path(
-        operations.PathSnapshot(
-            path=frozen.path,
-            kind=frozen.kind,
+        replace(
+            frozen,
             mode=(
                 frozen.mode & _SETUID_SETGID_MASK if frozen.mode is not None else None
             ),
-            payload=frozen.payload,
-            link_target=frozen.link_target,
-            mtime_ns=frozen.mtime_ns,
         ),
         guard_identities=guard_identities,
         permit_existing_absent=False,

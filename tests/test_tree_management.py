@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import setforge.tree_management as tree_management
+from setforge import atomicio
 from setforge.config import TreeOrphanPolicy, TreePolicy, TreeSymlinkPolicy
 from setforge.errors import InvariantViolation, SetforgeError
 from setforge.tree_management import (
@@ -472,7 +473,7 @@ def test_apply_tree_final_leaf_publication_is_compare_and_swap(
         scan_tree(prior_root, policy).inventory,
         policy,
     )
-    original_renameat2 = tree_management._renameat2
+    original_renameat2 = atomicio.renameat2
     swapped = False
 
     def swap_leaf_then_rename(
@@ -490,7 +491,7 @@ def test_apply_tree_final_leaf_publication_is_compare_and_swap(
             source_fd, source_name, destination_fd, destination_name, flags
         )
 
-    monkeypatch.setattr(tree_management, "_renameat2", swap_leaf_then_rename)
+    monkeypatch.setattr(atomicio, "renameat2", swap_leaf_then_rename)
 
     with pytest.raises(SetforgeError):
         apply_tree(plan, live, policy)
@@ -550,7 +551,7 @@ def test_apply_tree_refuses_retargeted_symlink_before_owned_removal(
         scan_tree(prior_root, policy).inventory,
         policy,
     )
-    original_renameat2 = tree_management._renameat2
+    original_renameat2 = atomicio.renameat2
     swapped = False
 
     def retarget_then_rename(
@@ -569,7 +570,7 @@ def test_apply_tree_refuses_retargeted_symlink_before_owned_removal(
             source_fd, source_name, destination_fd, destination_name, flags
         )
 
-    monkeypatch.setattr(tree_management, "_renameat2", retarget_then_rename)
+    monkeypatch.setattr(atomicio, "renameat2", retarget_then_rename)
 
     with pytest.raises(SetforgeError, match="changed before removal"):
         apply_tree(plan, live, policy)
@@ -656,7 +657,7 @@ def test_apply_tree_restores_directory_when_child_appears_after_isolation(
         scan_tree(prior_root, policy).inventory,
         policy,
     )
-    original_renameat2 = tree_management._renameat2
+    original_renameat2 = atomicio.renameat2
     injected = False
 
     def add_child_after_isolation(
@@ -676,7 +677,7 @@ def test_apply_tree_restores_directory_when_child_appears_after_isolation(
                 "keep\n", encoding="utf-8"
             )
 
-    monkeypatch.setattr(tree_management, "_renameat2", add_child_after_isolation)
+    monkeypatch.setattr(atomicio, "renameat2", add_child_after_isolation)
 
     with pytest.raises(SetforgeError, match="unsafe managed tree removal"):
         apply_tree(plan, live, policy)
@@ -743,7 +744,7 @@ def _reject_rename_flags(
         del source_fd, source_name, destination_fd, flags
         raise OSError(error, os.strerror(error), destination_name)
 
-    monkeypatch.setattr(tree_management, "_renameat2", reject)
+    monkeypatch.setattr(atomicio, "renameat2", reject)
 
 
 def _reserved_leftovers(root: Path) -> list[Path]:
@@ -845,7 +846,7 @@ def test_apply_tree_without_rename_flags_keeps_concurrent_leaf_change(
             current.write_text("external\n", encoding="utf-8")
         raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), destination_name)
 
-    monkeypatch.setattr(tree_management, "_renameat2", swap_leaf_then_reject)
+    monkeypatch.setattr(atomicio, "renameat2", swap_leaf_then_reject)
 
     with pytest.raises(SetforgeError):
         apply_tree(plan, live, policy)

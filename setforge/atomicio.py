@@ -25,11 +25,21 @@ On any failure the temp file is unlinked so no ``.tmp`` debris leaks.
 """
 
 import contextlib
+import ctypes
+import errno
 import os
 import shutil
+import stat
 import tempfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from uuid import uuid4
+
+from setforge.errors import SetforgeError
+
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 
 
 def atomic_write_bytes(
@@ -132,36 +142,184 @@ def atomic_write_text(
     )
 
 
+def open_dir_at(
+    dir_fd: int,
+    parts: Iterable[str],
+    *,
+    create_mode: int | None = None,
+    follow: int = 0,
+) -> int:
+    """Open the directory ``parts`` below ``dir_fd``, one component at a time.
+
+    Every component is opened without following a symlink, except the first
+    ``follow`` ones. With ``create_mode`` a missing component is created
+    exclusively and its parent flushed. Returns a new descriptor, a duplicate
+    of ``dir_fd`` when ``parts`` is empty; failures raise ``OSError``.
+    """
+    current = os.dup(dir_fd)
+    try:
+        for index, part in enumerate(parts):
+            flags = os.O_RDONLY | os.O_DIRECTORY
+            if index >= follow:
+                flags |= os.O_NOFOLLOW
+            try:
+                child = os.open(part, flags, dir_fd=current)
+            except FileNotFoundError:
+                if create_mode is None:
+                    raise
+                os.mkdir(part, create_mode, dir_fd=current)
+                os.fsync(current)
+                child = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def names_directory(
+    path: str | Path,
+    descriptor: int,
+    *,
+    dir_fd: int | None = None,
+    follow_symlinks: bool = False,
+) -> bool:
+    """Return whether ``path`` still names the directory held as ``descriptor``.
+
+    Device and inode must match; a missing entry or a non-directory does not.
+    """
+    try:
+        live = os.stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+    except OSError:
+        return False
+    return stat.S_ISDIR(live.st_mode) and os.path.samestat(live, os.fstat(descriptor))
+
+
+@contextlib.contextmanager
+def staged_file_at(
+    parent_fd: int,
+    temporary: str,
+    data: bytes,
+    mode: int,
+    *,
+    mtime_ns: int | None = None,
+) -> Iterator[None]:
+    """Hold ``data`` at a new ``temporary`` name while the caller publishes it.
+
+    The name is created exclusively and without following a link, so a
+    pre-existing entry is refused and left alone. Mode and ``mtime_ns`` are set
+    on the descriptor and flushed with the data before the caller runs; the
+    directory is flushed after it. The staged name is removed on exit unless
+    publication moved it.
+    """
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        mode,
+        dir_fd=parent_fd,
+    )
+    try:
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                if written == 0:  # pragma: no cover - kernel contract
+                    raise OSError("short write while publishing file")
+                view = view[written:]
+            os.fchmod(descriptor, mode)
+            if mtime_ns is not None:
+                os.utime(descriptor, ns=(mtime_ns, mtime_ns))
+            os.fsync(descriptor)
+        finally:
+            # NFS keeps an unlinked name that is still open as a `.nfs*`
+            # sibling, which a later directory scan would see; close before
+            # publishing.
+            os.close(descriptor)
+        yield
+        os.fsync(parent_fd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=parent_fd)
+
+
 def atomic_write_bytes_at(
     parent_fd: int, name: str, data: bytes, *, mode: int = 0o600
 ) -> None:
     """Atomically replace a regular leaf relative to a held directory fd."""
     temporary = f".{name}.setforge-{uuid4().hex}.tmp"
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            mode,
-            dir_fd=parent_fd,
-        )
-        view = memoryview(data)
-        while view:
-            written = os.write(descriptor, view)
-            if written == 0:  # pragma: no cover - kernel contract
-                raise OSError("short write while publishing file")
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
+    with staged_file_at(parent_fd, temporary, data, mode):
         os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
+
+
+def renameat2(
+    source_fd: int, source: str, destination_fd: int, destination: str, flags: int
+) -> None:
+    """Rename between held directories with ``RENAME_*`` ``flags``."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "renameat2", None)
+    if function is None:
+        raise SetforgeError(
+            "filesystem publication requires renameat2 support on this platform"
+        )
+    result = function(
+        source_fd,
+        os.fsencode(source),
+        destination_fd,
+        os.fsencode(destination),
+        flags,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
+
+
+def rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
+    """Move ``source`` onto an absent ``destination`` inside one held directory.
+
+    An existing destination raises ``FileExistsError`` and is left alone.
+    """
+    try:
+        renameat2(parent_fd, source, parent_fd, destination, RENAME_NOREPLACE)
+    except OSError as exc:
+        if exc.errno not in RENAME_FLAGS_UNSUPPORTED:
+            raise
+        # NFS rejects every rename flag.
+        rename_onto_claim_at(parent_fd, source, destination)
+
+
+def rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None:
+    """Exclusively claim an absent destination, then rename over the claim.
+
+    The source moves atomically, an existing destination is refused, and the
+    only entry a plain rename can replace is the empty claim made here.
+    """
+    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
+    directory = stat.S_ISDIR(observed.st_mode)
+    if directory:
+        os.mkdir(destination, 0o700, dir_fd=parent_fd)
+    else:
+        os.close(
+            os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        )
+    try:
+        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            if directory:
+                os.rmdir(destination, dir_fd=parent_fd)
+            else:
+                os.unlink(destination, dir_fd=parent_fd)
+        if isinstance(exc, OSError) and exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise FileExistsError(
+                errno.EEXIST, os.strerror(errno.EEXIST), destination
+            ) from exc
+        raise
 
 
 def fsync_path(path: Path, *, strict: bool) -> None:

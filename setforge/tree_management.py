@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import ctypes
 import errno
 import hashlib
 import json
 import os
 import stat
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -25,9 +23,6 @@ from setforge.transitions import state_root
 _SCHEMA = "1.0"
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
-_RENAME_NOREPLACE = 1
-_RENAME_EXCHANGE = 2
-_RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 _HARD_LINKS_UNSUPPORTED = frozenset(
     {errno.EPERM, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK}
 )
@@ -226,7 +221,7 @@ def _excluded(spec: pathspec.PathSpec, relative: str, *, directory: bool) -> boo
 def _stable_file_at(
     directory_fd: int, name: str, before: os.stat_result, display: Path
 ) -> tuple[bytes, os.stat_result]:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NOFOLLOW
     descriptor = os.open(name, flags, dir_fd=directory_fd)
     try:
         opened = os.fstat(descriptor)
@@ -293,7 +288,7 @@ def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
         if before.st_dev != context.root_device:
             raise SetforgeError(f"managed tree crosses a filesystem boundary: {path}")
         context.entries.append(TreeEntry(relative, TreeEntryKind.DIRECTORY, mode))
-        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         child_fd = os.open(name, flags, dir_fd=directory_fd)
         try:
             opened = os.fstat(child_fd)
@@ -366,7 +361,7 @@ def scan_tree(
     if not stat.S_ISDIR(root_before.st_mode) or stat.S_ISLNK(root_before.st_mode):
         raise SetforgeError(f"managed tree root is not a real directory: {root}")
 
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, flags)
     try:
         opened = os.fstat(root_fd)
@@ -574,17 +569,7 @@ def _parts(relative: str) -> tuple[str, ...]:
 
 def _open_parent(root_fd: int, relative: str) -> tuple[int, str]:
     parts = _parts(relative)
-    current = os.dup(root_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        for part in parts[:-1]:
-            next_fd = os.open(part, flags, dir_fd=current)
-            os.close(current)
-            current = next_fd
-        return current, parts[-1]
-    except BaseException:
-        os.close(current)
-        raise
+    return atomicio.open_dir_at(root_fd, parts[:-1]), parts[-1]
 
 
 def _create_directory_at(root_fd: int, relative: str, mode: int) -> None:
@@ -600,7 +585,7 @@ def _chmod_directory_at(
     root_fd: int, relative: str, expected: TreeEntry, mode: int
 ) -> None:
     parent_fd, name = _open_parent(root_fd, relative)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         child_fd = os.open(name, flags, dir_fd=parent_fd)
         try:
@@ -618,44 +603,9 @@ def _chmod_directory_at(
         os.close(parent_fd)
 
 
-@contextmanager
-def _staged_file_at(
-    parent_fd: int, temporary: str, payload: bytes, mode: int
-) -> Iterator[None]:
-    """Hold ``payload`` at a new ``temporary`` name while the caller publishes it.
-
-    The name is created exclusively, so a pre-existing entry is refused and
-    left alone; the staged name is removed on exit unless publication moved it.
-    """
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        mode,
-        dir_fd=parent_fd,
-    )
-    try:
-        try:
-            view = memoryview(payload)
-            while view:
-                written = os.write(descriptor, view)
-                view = view[written:]
-            os.fchmod(descriptor, mode)
-            os.fsync(descriptor)
-        finally:
-            # NFS keeps an unlinked name that is still open as a `.nfs*`
-            # sibling, which the post-apply scan would see; close before
-            # publishing.
-            os.close(descriptor)
-        yield
-        os.fsync(parent_fd)
-    finally:
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
-
-
 def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> None:
     temporary = temporary_entry_name(name, "create")
-    with _staged_file_at(parent_fd, temporary, payload, mode):
+    with atomicio.staged_file_at(parent_fd, temporary, payload, mode):
         _publish_noreplace_at(parent_fd, temporary, name)
 
 
@@ -670,40 +620,21 @@ def _atomic_symlink_at(parent_fd: int, name: str, target: str) -> None:
             os.unlink(temporary, dir_fd=parent_fd)
 
 
-def _renameat2(
-    source_fd: int, source: str, destination_fd: int, destination: str, flags: int
-) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise SetforgeError(
-            "managed tree publication requires renameat2 support on this platform"
-        )
-    result = renameat2(
-        source_fd,
-        os.fsencode(source),
-        destination_fd,
-        os.fsencode(destination),
-        flags,
-    )
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
-
-
 def _publish_noreplace_at(parent_fd: int, source: str, name: str) -> None:
     """Move a journal-owned sibling onto an absent name without replacing."""
     try:
-        _renameat2(parent_fd, source, parent_fd, name, _RENAME_NOREPLACE)
+        atomicio.renameat2(
+            parent_fd, source, parent_fd, name, atomicio.RENAME_NOREPLACE
+        )
         return
     except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+        if exc.errno not in atomicio.RENAME_FLAGS_UNSUPPORTED:
             raise
     # NFS rejects every rename flag. A hard link is the atomic no-replace
     # publication there; a directory cannot be linked and takes the claim.
     observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
     if stat.S_ISDIR(observed.st_mode):
-        _rename_onto_claim_at(parent_fd, source, name)
+        atomicio.rename_onto_claim_at(parent_fd, source, name)
         return
     try:
         os.link(
@@ -723,51 +654,11 @@ def _publish_noreplace_at(parent_fd: int, source: str, name: str) -> None:
     os.unlink(source, dir_fd=parent_fd)
 
 
-def _isolate_noreplace_at(parent_fd: int, name: str, quarantine: str) -> None:
-    """Move a live entry onto its absent journal-owned sibling in one step."""
-    try:
-        _renameat2(parent_fd, name, parent_fd, quarantine, _RENAME_NOREPLACE)
-    except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
-            raise
-        _rename_onto_claim_at(parent_fd, name, quarantine)
-
-
-def _rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None:
-    """Exclusively claim an absent destination, then rename over the claim.
-
-    The source moves atomically, an existing destination is refused, and the
-    only entry a plain rename can replace is the empty claim made here.
-    """
-    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
-    directory = stat.S_ISDIR(observed.st_mode)
-    if directory:
-        os.mkdir(destination, _DIR_MODE, dir_fd=parent_fd)
-    else:
-        os.close(
-            os.open(
-                destination,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                _FILE_MODE,
-                dir_fd=parent_fd,
-            )
-        )
-    try:
-        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-    except BaseException:
-        with suppress(OSError):
-            if directory:
-                os.rmdir(destination, dir_fd=parent_fd)
-            else:
-                os.unlink(destination, dir_fd=parent_fd)
-        raise
-
-
 def _open_or_create_root_at(
     anchor_fd: int, relative_parts: tuple[str, ...], *, create: bool
 ) -> int:
     current = os.dup(anchor_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         for part in relative_parts:
             if create:
@@ -861,23 +752,12 @@ def apply_tree(
     )
 
 
-def _same_object(left_fd: int, right_fd: int) -> bool:
-    left = os.fstat(left_fd)
-    right = os.fstat(right_fd)
-    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
-
-
 def _verify_relative_binding(
     anchor_fd: int, relative_parts: tuple[str, ...], expected_fd: int
 ) -> None:
-    current_fd = os.dup(anchor_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    current_fd = atomicio.open_dir_at(anchor_fd, relative_parts)
     try:
-        for part in relative_parts:
-            next_fd = os.open(part, flags, dir_fd=current_fd)
-            os.close(current_fd)
-            current_fd = next_fd
-        if not _same_object(current_fd, expected_fd):
+        if not os.path.sameopenfile(current_fd, expected_fd):
             raise SetforgeError("managed tree root binding changed during apply")
     finally:
         os.close(current_fd)
@@ -987,7 +867,7 @@ def _entry_at(parent_fd: int, name: str, relative: str) -> TreeEntry:
 
 
 def _restore_exchange(parent_fd: int, temporary: str, name: str) -> None:
-    _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
+    atomicio.renameat2(parent_fd, temporary, parent_fd, name, atomicio.RENAME_EXCHANGE)
 
 
 def _exchange_verified_at(
@@ -995,9 +875,11 @@ def _exchange_verified_at(
 ) -> None:
     """Publish the staged sibling only while the live entry is still planned."""
     try:
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
+        atomicio.renameat2(
+            parent_fd, temporary, parent_fd, name, atomicio.RENAME_EXCHANGE
+        )
     except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+        if exc.errno not in atomicio.RENAME_FLAGS_UNSUPPORTED:
             raise
         _replace_verified_at(parent_fd, temporary, name, expected)
         return
@@ -1018,7 +900,7 @@ def _replace_verified_at(
     replacement can be overwritten.
     """
     quarantine = temporary_entry_name(name, "remove")
-    _isolate_noreplace_at(parent_fd, name, quarantine)
+    atomicio.rename_noreplace_at(parent_fd, name, quarantine)
     try:
         if _entry_at(parent_fd, quarantine, expected.path) != expected:
             raise SetforgeError(
@@ -1041,7 +923,7 @@ def _exchange_file_at(
     parent_fd: int, name: str, payload: bytes, mode: int, expected: TreeEntry
 ) -> None:
     temporary = temporary_entry_name(name, "update")
-    with _staged_file_at(parent_fd, temporary, payload, mode):
+    with atomicio.staged_file_at(parent_fd, temporary, payload, mode):
         _exchange_verified_at(parent_fd, temporary, name, expected)
 
 
@@ -1071,7 +953,7 @@ def _apply_removals(plan: TreePlan, root_fd: int) -> None:
         quarantine = temporary_entry_name(name, "remove")
         isolated = False
         try:
-            _isolate_noreplace_at(parent_fd, name, quarantine)
+            atomicio.rename_noreplace_at(parent_fd, name, quarantine)
             isolated = True
             if _entry_at(parent_fd, quarantine, entry.path) != entry:
                 raise SetforgeError(

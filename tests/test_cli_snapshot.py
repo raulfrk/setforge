@@ -288,7 +288,7 @@ def test_snapshot_restore_through_symlinked_destination_directory(
     live_writes = 0
 
     def write(
-        source: snap_mod._FrozenSnapshotFile,
+        source: snap_mod.operations.PathSnapshot,
         guard_identities: dict[Path, tuple[int, int, int] | None],
     ) -> None:
         nonlocal live_writes
@@ -423,7 +423,7 @@ def test_snapshot_restore_rolls_back_a_mid_apply_failure(
     live_writes = 0
 
     def fail_second_live_write(
-        source: snap_mod._FrozenSnapshotFile,
+        source: snap_mod.operations.PathSnapshot,
         guard_identities: dict[Path, tuple[int, int, int] | None],
     ) -> None:
         nonlocal live_writes

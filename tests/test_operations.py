@@ -1449,7 +1449,7 @@ def test_snapshot_stat_detects_same_size_write_with_restored_mtime(
     path.write_bytes(b"new")
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
 
-    assert not operations._same_snapshot_stat(before, path.stat())
+    assert transitions.stat_identity(before) != transitions.stat_identity(path.stat())
 
 
 def test_prepare_refuses_ancestor_topology_change_during_snapshot(

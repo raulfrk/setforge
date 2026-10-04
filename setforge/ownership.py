@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
+from setforge import atomicio
 from setforge.errors import (
     CorruptOwnershipState,
     OwnershipCollisionError,
@@ -942,12 +943,7 @@ def _locked_common_dir(config_dir: Path) -> Iterator[int]:
 
 def _require_common_dir_binding(config_dir: Path, common_fd: int) -> None:
     rebound = _git_common_dir(config_dir)
-    rebound_info = rebound.stat()
-    held_info = os.fstat(common_fd)
-    if (rebound_info.st_dev, rebound_info.st_ino) != (
-        held_info.st_dev,
-        held_info.st_ino,
-    ):
+    if not atomicio.names_directory(rebound, common_fd, follow_symlinks=True):
         raise OwnershipError("Git common directory changed while holding UUID lock")
 
 
@@ -1073,27 +1069,15 @@ def _open_dir_chain(root: Path, *children: str, create: bool) -> Iterator[int | 
     if descriptor is None:
         yield None
         return
-    info = os.fstat(descriptor)
-    identity = info.st_dev, info.st_ino
     try:
         yield descriptor
-        _verify_directory_binding(path, descriptor, expected=identity)
+        _verify_directory_binding(path, descriptor)
     finally:
         os.close(descriptor)
 
 
-def _verify_directory_binding(
-    path: Path, descriptor: int, *, expected: tuple[int, int] | None = None
-) -> None:
-    held = os.fstat(descriptor)
-    identity = expected or (held.st_dev, held.st_ino)
-    try:
-        live = path.lstat()
-    except OSError as exc:
-        raise CorruptOwnershipState(
-            f"ownership state directory binding changed: {path}"
-        ) from exc
-    if not stat.S_ISDIR(live.st_mode) or (live.st_dev, live.st_ino) != identity:
+def _verify_directory_binding(path: Path, descriptor: int) -> None:
+    if not atomicio.names_directory(path, descriptor):
         raise CorruptOwnershipState(
             f"ownership state directory binding changed: {path}"
         )
@@ -1102,34 +1086,24 @@ def _verify_directory_binding(
 def _open_dir_chain_fd(
     root: Path, children: tuple[str, ...], *, create: bool
 ) -> int | None:
-    follow = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
-    anchored = follow | os.O_NOFOLLOW
     absolute = root.absolute()
     leading = absolute.parent.parts
-    steps = [
-        *((part, follow) for part in leading[1:]),
-        *((part, anchored) for part in (absolute.name, *children)),
-    ]
-    descriptor = os.open(leading[0], follow)
+    anchor_fd = os.open(leading[0], os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for part, flags in steps:
-            try:
-                child = os.open(part, flags, dir_fd=descriptor)
-            except FileNotFoundError:
-                if not create:
-                    os.close(descriptor)
-                    return None
-                os.mkdir(part, mode=0o700, dir_fd=descriptor)
-                os.fsync(descriptor)
-                child = os.open(part, flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        return descriptor
+        return atomicio.open_dir_at(
+            anchor_fd,
+            (*leading[1:], absolute.name, *children),
+            create_mode=0o700 if create else None,
+            follow=len(leading) - 1,
+        )
     except OSError as exc:
-        os.close(descriptor)
+        if isinstance(exc, FileNotFoundError) and not create:
+            return None
         raise CorruptOwnershipState(
             f"ownership state directory is not trusted: {root.joinpath(*children)}"
         ) from exc
+    finally:
+        os.close(anchor_fd)
 
 
 @contextmanager
@@ -1137,28 +1111,13 @@ def _open_bound_child(
     parent_fd: int, parent_path: Path, name: str, *, create: bool
 ) -> Iterator[int | None]:
     try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-            dir_fd=parent_fd,
+        descriptor = atomicio.open_dir_at(
+            parent_fd, (name,), create_mode=0o700 if create else None
         )
-    except FileNotFoundError:
-        if not create:
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError) and not create:
             yield None
             return
-        try:
-            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
-            os.fsync(parent_fd)
-            descriptor = os.open(
-                name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                dir_fd=parent_fd,
-            )
-        except OSError as exc:
-            raise CorruptOwnershipState(
-                f"ownership state directory is not trusted: {parent_path / name}"
-            ) from exc
-    except OSError as exc:
         raise CorruptOwnershipState(
             f"ownership state directory is not trusted: {parent_path / name}"
         ) from exc
@@ -1173,17 +1132,7 @@ def _open_bound_child(
 def _verify_bound_child(
     parent_fd: int, parent_path: Path, name: str, child_fd: int
 ) -> None:
-    held = os.fstat(child_fd)
-    try:
-        live = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except OSError as exc:
-        raise CorruptOwnershipState(
-            f"ownership state directory binding changed: {parent_path / name}"
-        ) from exc
-    if not stat.S_ISDIR(live.st_mode) or (live.st_dev, live.st_ino) != (
-        held.st_dev,
-        held.st_ino,
-    ):
+    if not atomicio.names_directory(name, child_fd, dir_fd=parent_fd):
         raise CorruptOwnershipState(
             f"ownership state directory binding changed: {parent_path / name}"
         )
@@ -1218,28 +1167,8 @@ def _read_regular_at(directory_fd: int, name: str) -> bytes | None:
 
 def _atomic_write_at(directory_fd: int, name: str, payload: bytes) -> None:
     temporary = f".{name}.{uuid.uuid4().hex}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-        _FILE_MODE,
-        dir_fd=directory_fd,
-    )
-    try:
-        with os.fdopen(descriptor, "wb", closefd=False) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(
-            temporary,
-            name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
-        os.fsync(directory_fd)
-    finally:
-        os.close(descriptor)
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=directory_fd)
+    with atomicio.staged_file_at(directory_fd, temporary, payload, _FILE_MODE):
+        os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
 
 
 def ownership_claim_to_json(claim: OwnershipClaim) -> dict[str, object]:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge import operations, orphan_scan, transitions
+from setforge import atomicio, operations, orphan_scan, transitions
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 
 
@@ -332,7 +332,7 @@ def test_filesystem_delta_collision_cleanup_preserves_swapped_staging(
     parent.rmdir()
     guards = orphan_scan.capture_parent_path_guards((parent,))
     parent.mkdir()
-    original_rename = operations._rename_noreplace_at
+    original_rename = atomicio.rename_noreplace_at
 
     def swap_then_collide(parent_fd: int, source: str, destination: str) -> None:
         staged = tmp_path / source
@@ -341,7 +341,7 @@ def test_filesystem_delta_collision_cleanup_preserves_swapped_staging(
         staged.chmod(0o711)
         original_rename(parent_fd, source, destination)
 
-    monkeypatch.setattr(operations, "_rename_noreplace_at", swap_then_collide)
+    monkeypatch.setattr(atomicio, "rename_noreplace_at", swap_then_collide)
     with pytest.raises(SetforgeError, match="changed since transition"):
         operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
 
@@ -587,3 +587,72 @@ def test_anchored_reverse_refuses_parent_swap_between_validation_and_publication
     assert (attacker / "candidate").read_bytes() == b"external"
     assert not (moved / "candidate").exists()
     assert target.read_text(encoding="utf-8") == "target"
+
+
+def test_capture_by_descriptor_and_by_path_return_the_same_images(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "file").write_bytes(b"\x00payload\xff")
+    (tmp_path / "file").chmod(0o640)
+    (tmp_path / "link").symlink_to("file")
+    (tmp_path / "directory").mkdir(mode=0o750)
+    os.mkfifo(tmp_path / "fifo")
+    names = ("file", "link", "directory", "absent", "fifo")
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        anchored = [
+            transitions.capture_filesystem_image(name, dir_fd=parent_fd)
+            for name in names
+        ]
+    finally:
+        os.close(parent_fd)
+    by_path = [transitions.capture_filesystem_image(tmp_path / name) for name in names]
+
+    kinds = transitions.FilesystemKind
+    assert anchored == by_path
+    assert [image.kind if image else None for image in anchored] == [
+        kinds.FILE,
+        kinds.SYMLINK,
+        kinds.DIRECTORY,
+        kinds.ABSENT,
+        None,
+    ]
+    assert anchored[0] == transitions.FilesystemImage(
+        kinds.FILE,
+        payload=b"\x00payload\xff",
+        mode=0o640,
+        mtime_ns=(tmp_path / "file").stat().st_mtime_ns,
+    )
+    assert anchored[1] == transitions.FilesystemImage(
+        kinds.SYMLINK,
+        link_target="file",
+        mode=0o777,
+        mtime_ns=(tmp_path / "link").lstat().st_mtime_ns,
+    )
+    assert anchored[2] == transitions.FilesystemImage(
+        kinds.DIRECTORY,
+        mode=0o750,
+        mtime_ns=(tmp_path / "directory").stat().st_mtime_ns,
+    )
+
+
+def test_capture_refuses_a_file_replaced_between_stat_and_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "live"
+    path.write_bytes(b"old")
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"new")
+    real_open = os.open
+
+    def replace_then_open(target: str, flags: int, *, dir_fd: int) -> int:
+        replacement.replace(path)
+        return real_open(target, flags, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replace_then_open)
+    parent_fd = real_open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(transitions.FilesystemChanged):
+            transitions.capture_filesystem_image("live", dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
