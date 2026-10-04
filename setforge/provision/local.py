@@ -230,7 +230,7 @@ class LocalProvisioner(Provisioner):
 
     def _receipt_owns(self, identity: Identity, target: Path) -> bool:
         recorded = self._receipts.path_for(identity, provider=self.type)
-        return recorded is not None and recorded.resolve() == target
+        return recorded is not None and recorded.resolve() == target.resolve()
 
     def uninstall_one(self, identity: Identity) -> None:
         recorded = self._receipts.path_for(identity, provider=self.type)

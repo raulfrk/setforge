@@ -559,3 +559,32 @@ def test_unresolvable_source_is_a_hard_outcome_not_an_exception(
 
     assert outcome.outcome is Outcome.HARD
     assert "no config source configured" in outcome.detail
+
+
+def test_receipted_package_behind_user_symlink_reinstalls_after_source_change(
+    tmp_path: Path,
+) -> None:
+    tracked = tmp_path / "tracked"
+    _write(tracked, "bin/tool", b"v1")
+    install_dir = (tmp_path / "out").resolve()
+    install_dir.mkdir()
+    real = install_dir / "tool-real"
+    real.write_bytes(b"v1")
+    (install_dir / "tool").symlink_to(real)
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    receipts = ReceiptStore(tmp_path / "receipts")
+    prov = loc.LocalProvisioner(receipts=receipts, tracked_root=tracked)
+    item = _item(pkg)
+    receipts.record(
+        item.identity,
+        version=None,
+        checksum=None,
+        path=real,
+        source_digest=hashlib.sha256(b"v1").hexdigest(),
+        provider="local",
+    )
+    _write(tracked, "bin/tool", b"v2")
+
+    assert prov.apply_one(item).outcome is Outcome.OK
+    assert (install_dir / "tool").is_symlink()
+    assert real.read_bytes() == b"v2"
