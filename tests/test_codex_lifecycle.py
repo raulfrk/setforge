@@ -20,6 +20,7 @@ from setforge.config import (
 )
 from setforge.errors import PluginToolMissing
 from setforge.snapshots import _resolve_dst_paths
+from tests.test_snapshots import restore_through_cli
 
 
 def _context(
@@ -256,16 +257,7 @@ def test_snapshot_round_trip_restores_complete_native_codex_toml(
         b'# changed\napproval_policy = "on-request"\nmodel = "new"\n'
     )
 
-    snapshots.restore_snapshot(
-        meta.snapshot_id,
-        pre_snapshot=False,
-        pre_snapshot_ctx=snapshots.PreSnapshotCtx(
-            cfg=config,
-            resolved=resolved,
-            repo_root=tmp_path,
-            profile="default",
-        ),
-    )
+    restore_through_cli(config, resolved, tmp_path, "default", meta.snapshot_id)
 
     assert destination.read_bytes() == original
 

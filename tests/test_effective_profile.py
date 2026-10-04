@@ -46,8 +46,7 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
     ("plugins.py", "_codex_plugin_reconcile"),
     ("plugins.py", "sync_cache"),
     ("profile.py", "_run_profile_show"),
-    ("revert.py", "_revert_symlink_deployments"),
-    ("revert.py", "_transition_legacy_symlink_paths"),
+    ("revert.py", "_refuse_legacy_symlink_record"),
 )
 
 _LEGACY_RESOLVER_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(

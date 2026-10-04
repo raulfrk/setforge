@@ -10,9 +10,7 @@ import pytest
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from setforge import snapshots
 from setforge.cli import app
-from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import OwnershipError
 from setforge.file_ownership import file_resource_id, observe_file, observe_tree
 from setforge.locking import install_resources_lock
@@ -26,14 +24,12 @@ from setforge.ownership import (
 
 @pytest.mark.parametrize("claimed_tree", [False, True], ids=["file", "tree"])
 @pytest.mark.parametrize("foreign", [False, True], ids=["own", "foreign"])
-@pytest.mark.parametrize("interface", ["cli", "context", "no-context"])
 @pytest.mark.parametrize("missing", [False, True], ids=["present", "absent"])
 def test_snapshot_restore_respects_current_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     claimed_tree: bool,
     foreign: bool,
-    interface: str,
     missing: bool,
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
@@ -87,29 +83,11 @@ def test_snapshot_restore_respects_current_owner(
         first.unlink()
         second.unlink()
 
-    error: BaseException | None = None
-    if interface == "cli":
-        restored = runner.invoke(app, ["snapshot", "restore", "saved", *args, "--yes"])
-        error = restored.exception
-    else:
-        context = None
-        if interface == "context":
-            cfg = load_config(config)
-            context = snapshots.PreSnapshotCtx(
-                cfg=cfg,
-                resolved=resolve_effective_profile(cfg, "p", repo).resolved,
-                repo_root=repo,
-                profile="p",
-            )
-        try:
-            snapshots.restore_snapshot(
-                "saved", pre_snapshot=False, pre_snapshot_ctx=context
-            )
-        except OwnershipError as exc:
-            error = exc
+    restored = runner.invoke(app, ["snapshot", "restore", "saved", *args, "--yes"])
+    error = restored.exception
 
     assert store.read(claim.resource_id) == claim
-    if foreign or interface == "no-context":
+    if foreign:
         assert isinstance(error, OwnershipError)
         assert "claim" in str(error).lower()
         if missing:

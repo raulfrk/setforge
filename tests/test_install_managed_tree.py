@@ -1455,7 +1455,7 @@ def test_legacy_symlink_inverse_refuses_without_preimage(
     assert "legacy transition lacks symlink preimage" in str(reverse.exception)
     revert_module = import_module("setforge.cli.revert")
     with pytest.raises(SetforgeError, match="legacy transition lacks symlink preimage"):
-        revert_module._apply_revert(transition, "p", config)
+        revert_module._apply_revert(transitions.load_record(transition), "p", config)
     assert (
         tuple(
             (str(p.readlink()), p.lstat().st_ino, p.read_bytes())

@@ -227,7 +227,7 @@ def test_revert_preview_surfaces_mode_restore(repo: Path) -> None:
 
     latest = transitions.load_latest(_PROFILE)
     assert latest is not None
-    plan = _build_revert_plan(latest, _PROFILE)
+    plan = _build_revert_plan(transitions.load_record(latest), _PROFILE)
     notes = [fm.mode_restore for fm in plan.file_mutations if fm.path == _live()]
     assert notes == ["mode → 0o644"]
 

@@ -40,12 +40,12 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, NewType
+from typing import TYPE_CHECKING, Any, Final, NewType
 
 from pydantic import ValidationError
 
@@ -226,13 +226,11 @@ class TransitionMeta:
     repo; :meth:`to_dict` omits the key entirely when ``None`` so old
     meta.json files round-trip byte-identically through load + re-dump.
 
-    The trailing three fields (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) were added in a later schema bump so
-    ``setforge transitions show`` can display per-invocation duration,
-    the exact argv, and whether any preserve_user_keys overlay matched
-    a live key during deploy. All three follow the same omit-when-None
-    pattern as ``source_sha`` so old meta.json files (recorded before
-    the bump) still round-trip byte-identically.
+    The trailing two fields (``end_timestamp``, ``command_line``) were
+    added in a later schema bump so ``setforge transitions show`` can
+    display them. Both follow the same omit-when-None pattern as
+    ``source_sha`` so old meta.json files (recorded before the bump) still
+    round-trip byte-identically.
     """
 
     command: TransitionCommand
@@ -249,7 +247,6 @@ class TransitionMeta:
     # round-trip rationale.
     end_timestamp: str | None = None
     command_line: list[str] | None = None
-    preserve_user_keys_applied: bool | None = None
 
     def to_dict(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -268,8 +265,6 @@ class TransitionMeta:
             # ``frozen=True`` only freezes attribute *rebinding*, not
             # list mutation through the attribute reference.
             out["command_line"] = list(self.command_line)
-        if self.preserve_user_keys_applied is not None:
-            out["preserve_user_keys_applied"] = self.preserve_user_keys_applied
         return out
 
 
@@ -308,7 +303,6 @@ def make_meta(
     source_dir: Path | None = None,
     end_timestamp: str | None = None,
     command_line: list[str] | None = None,
-    preserve_user_keys_applied: bool | None = None,
 ) -> TransitionMeta:
     """Build a TransitionMeta with current host + version + UTC timestamp.
 
@@ -319,9 +313,9 @@ def make_meta(
     handy (revert, plugin reconcile sub-record) keep the pre-bump call
     shape.
 
-    The three trailing kwargs (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) are a later schema bump.
-    All default to ``None`` so pre-bump callers compile unchanged. See
+    The two trailing kwargs (``end_timestamp``, ``command_line``) are a
+    later schema bump. Both default to ``None`` so pre-bump callers compile
+    unchanged. See
     the TransitionMeta docstring for the omit-when-None round-trip
     rationale.
     """
@@ -335,22 +329,11 @@ def make_meta(
         source_sha=source_sha,
         end_timestamp=end_timestamp,
         command_line=command_line,
-        preserve_user_keys_applied=preserve_user_keys_applied,
     )
 
 
-def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
-    """Load and parse ``<transition_dir>/meta.json`` into a :class:`TransitionMeta`.
-
-    Reads the JSON payload written by :func:`write_meta` and reconstructs
-    the dataclass. Falls back to ``source_sha = None`` for transitions
-    recorded before the schema bump (no ``source_sha`` key
-    in the payload). Raises :class:`InvalidTransitionRecord` on missing
-    or malformed required fields; on ``ValueError`` from
-    :class:`TransitionCommand` membership or
-    :func:`datetime.fromisoformat`, the raised error wraps the original
-    exception so the caller sees both.
-    """
+def _load_meta_payload(transition_dir: Path) -> dict[str, Any]:
+    """Read ``<transition_dir>/meta.json`` as a JSON object or refuse it cleanly."""
     payload_path = transition_dir / "meta.json"
     try:
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
@@ -362,6 +345,10 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
         raise InvalidTransitionRecord(
             f"meta.json at {payload_path} is not a JSON object"
         )
+    return payload
+
+
+def _meta_from_payload(payload: dict[str, Any], payload_path: Path) -> TransitionMeta:
     try:
         return TransitionMeta(
             command=TransitionCommand(payload["command"]),
@@ -376,12 +363,28 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
             # omit-when-None round-trip rationale.
             end_timestamp=payload.get("end_timestamp"),
             command_line=payload.get("command_line"),
-            preserve_user_keys_applied=payload.get("preserve_user_keys_applied"),
         )
     except (KeyError, ValueError) as exc:
         raise InvalidTransitionRecord(
             f"meta.json at {payload_path} is missing or malformed: {exc}"
         ) from exc
+
+
+def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
+    """Load and parse ``<transition_dir>/meta.json`` into a :class:`TransitionMeta`.
+
+    Reads the JSON payload written by :func:`write_meta` and reconstructs
+    the dataclass. Falls back to ``source_sha = None`` for transitions
+    recorded before the schema bump (no ``source_sha`` key
+    in the payload). Raises :class:`InvalidTransitionRecord` on missing
+    or malformed required fields; on ``ValueError`` from
+    :class:`TransitionCommand` membership or
+    :func:`datetime.fromisoformat`, the raised error wraps the original
+    exception so the caller sees both.
+    """
+    return _meta_from_payload(
+        _load_meta_payload(transition_dir), transition_dir / "meta.json"
+    )
 
 
 def _write_text_durable(path: Path, text: str) -> None:
@@ -812,15 +815,12 @@ class ReconcileStatus(StrEnum):
     :class:`ReconcileKind`. ``OK`` covers first-attempt successes;
     ``RETRIED_OK`` second-attempt successes after the user picked
     RETRY at the failure prompt; ``SKIPPED`` items the user opted to
-    leave behind; ``ABORTED`` items that landed before the user picked
-    ABORT and got rolled back as part of the abort path's reverse
-    reconcile.
+    leave behind.
     """
 
     OK = "ok"
     RETRIED_OK = "retried_ok"
     SKIPPED = "skipped"
-    ABORTED = "aborted"
 
 
 @dataclass(slots=True, frozen=True)
@@ -2236,6 +2236,112 @@ def mcp_delta_from_json(raw: dict[str, object]) -> MCPDelta:
     )
 
 
+def _load_delta_payload(
+    transition_dir: Path, filename: str
+) -> dict[str, object] | None:
+    """Read one optional adapter-delta sidecar; ``None`` when it is absent."""
+    path = transition_dir / filename
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read {filename} at {path}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise InvalidTransitionRecord(f"{filename} at {path} is not a JSON object")
+    return raw
+
+
+def load_extension_delta(transition_dir: Path) -> ExtensionDelta | None:
+    """Return the recorded extension delta, or ``None`` when none was recorded."""
+    raw = _load_delta_payload(transition_dir, "extensions.json")
+    return None if raw is None else extension_delta_from_json(raw)
+
+
+def load_plugin_delta(transition_dir: Path) -> PluginDelta | None:
+    """Return the recorded plugin delta, or ``None`` when none was recorded."""
+    raw = _load_delta_payload(transition_dir, "plugins.json")
+    return None if raw is None else plugin_delta_from_json(raw)
+
+
+def load_codex_plugin_delta(transition_dir: Path) -> CodexPluginDelta | None:
+    """Return the recorded Codex plugin delta, or ``None`` when none was recorded."""
+    raw = _load_delta_payload(transition_dir, "codex_plugins.json")
+    return None if raw is None else codex_plugin_delta_from_json(raw)
+
+
+def load_mcp_delta(transition_dir: Path) -> MCPDelta | None:
+    """Return the recorded MCP delta, or ``None`` when none was recorded."""
+    raw = _load_delta_payload(transition_dir, "mcp.json")
+    return None if raw is None else mcp_delta_from_json(raw)
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionRecord:
+    """Everything revert needs from one committed transition, read once."""
+
+    directory: TransitionDir
+    meta: TransitionMeta
+    paths: tuple[Path, ...]
+    tracked_file_destinations: Mapping[str, tuple[Path, ...]]
+    file_modes: Mapping[Path, int]
+    filesystem_deltas: tuple[FilesystemDelta, ...]
+    ownership_transfers: tuple[OwnershipTransferDelta, ...]
+    state_snapshots: tuple[StateSnapshotEntry, ...] | None
+    extensions: ExtensionDelta | None
+    plugins: PluginDelta | None
+    codex_plugins: CodexPluginDelta | None
+    mcp: MCPDelta | None
+
+
+def load_record(transition_dir: TransitionDir) -> TransitionRecord:
+    """Read and validate every file of one transition directory.
+
+    Raises :class:`InvalidTransitionRecord` when any file is unreadable or
+    malformed, so a corrupt record is refused before a caller acts on it.
+    """
+    meta_file = transition_dir / "meta.json"
+    payload = _load_meta_payload(transition_dir)
+    raw_paths = payload.get("paths", [])
+    if not isinstance(raw_paths, list) or not all(
+        isinstance(path, str) for path in raw_paths
+    ):
+        raise InvalidTransitionRecord(
+            f"meta.json at {meta_file} has a non-list 'paths' field"
+        )
+    attribution = payload.get("tracked_file_destinations", {})
+    if not isinstance(attribution, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(paths, list)
+        or any(
+            not isinstance(path, str) or not Path(path).is_absolute() for path in paths
+        )
+        for name, paths in attribution.items()
+    ):
+        raise InvalidTransitionRecord(
+            f"invalid tracked_file_destinations in {meta_file}"
+        )
+    return TransitionRecord(
+        directory=transition_dir,
+        meta=_meta_from_payload(payload, meta_file),
+        paths=tuple(Path(path) for path in raw_paths),
+        tracked_file_destinations={
+            name: tuple(Path(os.path.normpath(path)) for path in paths)
+            for name, paths in attribution.items()
+        },
+        file_modes=load_file_modes(transition_dir),
+        filesystem_deltas=load_filesystem_deltas(transition_dir),
+        ownership_transfers=load_ownership_transfers(transition_dir),
+        state_snapshots=load_state_snapshots(transition_dir),
+        extensions=load_extension_delta(transition_dir),
+        plugins=load_plugin_delta(transition_dir),
+        codex_plugins=load_codex_plugin_delta(transition_dir),
+        mcp=load_mcp_delta(transition_dir),
+    )
+
+
 def load_latest(
     profile: str, *, command: TransitionCommand | None = None
 ) -> TransitionDir | None:
@@ -2285,6 +2391,17 @@ def _sweep_stale_pending(root: Path) -> None:
                 continue
 
 
+def _committed_transition_dirs(root: Path) -> Iterator[Path]:
+    """Yield committed records: real directories holding the ``meta.json`` marker."""
+    for child in root.iterdir():
+        if (
+            child.is_dir()
+            and not child.name.startswith(".pending-")
+            and (child / "meta.json").exists()
+        ):
+            yield child
+
+
 def _filter_transition_entries(
     root: Path, profile: str, *, command: TransitionCommand | None = None
 ) -> list[Path]:
@@ -2297,15 +2414,10 @@ def _filter_transition_entries(
     consistent with the broader transitions reader.
     """
     candidates: list[Path] = []
-    for d in root.iterdir():
-        if not d.is_dir() or d.name.startswith(".pending-"):
-            continue
-        meta_file = d / "meta.json"
-        if not meta_file.exists():
-            continue
+    for d in _committed_transition_dirs(root):
         try:
-            payload = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            payload = _load_meta_payload(d)
+        except InvalidTransitionRecord:
             continue
         if payload.get("profile") != profile:
             continue
@@ -2474,10 +2586,9 @@ def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
     """Refuse to report success when the metadata lists file changes that a
     missing or empty ``changes.patch`` can no longer undo."""
     try:
-        payload = json.loads((transition_dir / "meta.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        paths = _load_meta_payload(transition_dir).get("paths")
+    except InvalidTransitionRecord:
         return
-    paths = payload.get("paths") if isinstance(payload, dict) else None
     if not isinstance(paths, list) or not paths:
         return
     try:
@@ -2571,92 +2682,58 @@ class TransitionListing:
     ownership_transfer_count: int = 0
 
 
-def _load_listing(  # noqa: C901 - bounded decoding of independent sidecars
-    transition_dir: Path,
-) -> TransitionListing | None:
+def _delta_count(load: Callable[[], object | None], *fields: str) -> int:
+    """Count the entries of one adapter delta; a corrupt sidecar counts as 0."""
+    try:
+        delta = load()
+    except InvalidTransitionRecord:
+        return 0
+    if delta is None:
+        return 0
+    return sum(len(getattr(delta, field)) for field in fields)
+
+
+def _load_listing(transition_dir: Path) -> TransitionListing | None:
     """Decode one transition directory into a :class:`TransitionListing`,
     or return ``None`` if its ``meta.json`` is missing or unreadable. Used
     by :func:`list_transitions` to skip half-written / corrupted dirs
     without aborting the whole listing."""
-    meta_file = transition_dir / "meta.json"
-    if not meta_file.exists():
-        return None
     try:
-        payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    try:
+        payload = _load_meta_payload(transition_dir)
         timestamp = datetime.fromisoformat(payload["timestamp"])
         command = str(payload["command"])
         profile = str(payload["profile"])
-    except (KeyError, ValueError):
+    except (InvalidTransitionRecord, KeyError, ValueError):
         return None
 
     paths = payload.get("paths", [])
-    file_count = len(paths) if isinstance(paths, list) else 0
-
-    ext_file = transition_dir / "extensions.json"
-    ext_count = 0
-    if ext_file.exists():
-        try:
-            ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
-            added = ext_payload.get("added", [])
-            removed = ext_payload.get("removed", [])
-            ext_count = (len(added) if isinstance(added, list) else 0) + (
-                len(removed) if isinstance(removed, list) else 0
-            )
-        except (OSError, ValueError):
-            ext_count = 0
-
-    plugin_file = transition_dir / "plugins.json"
-    plugin_count = 0
-    if plugin_file.exists():
-        try:
-            plugin_payload = json.loads(plugin_file.read_text(encoding="utf-8"))
-            for key in (
-                "installed",
-                "enabled",
-                "disabled",
-                "marketplaces_added",
-                "marketplaces_removed",
-            ):
-                value = plugin_payload.get(key, [])
-                if isinstance(value, list):
-                    plugin_count += len(value)
-        except (OSError, ValueError):
-            plugin_count = 0
-
-    codex_plugin_file = transition_dir / "codex_plugins.json"
-    codex_plugin_count = 0
-    if codex_plugin_file.exists():
-        try:
-            codex_payload = json.loads(codex_plugin_file.read_text(encoding="utf-8"))
-            for key in (
-                "installed",
-                "removed",
-                "marketplaces_added",
-                "marketplaces_removed",
-            ):
-                value = codex_payload.get(key, [])
-                if isinstance(value, list):
-                    codex_plugin_count += len(value)
-        except (OSError, ValueError):
-            codex_plugin_count = 0
-
-    ownership_transfer_count = len(
-        load_ownership_transfers(TransitionDir(transition_dir))
-    )
-
     return TransitionListing(
         directory=TransitionDir(transition_dir),
         timestamp=timestamp,
         command=command,
         profile=profile,
-        file_count=file_count,
-        ext_count=ext_count,
-        plugin_count=plugin_count,
-        codex_plugin_count=codex_plugin_count,
-        ownership_transfer_count=ownership_transfer_count,
+        file_count=len(paths) if isinstance(paths, list) else 0,
+        ext_count=_delta_count(
+            lambda: load_extension_delta(transition_dir), "added", "removed"
+        ),
+        plugin_count=_delta_count(
+            lambda: load_plugin_delta(transition_dir),
+            "installed",
+            "enabled",
+            "disabled",
+            "marketplaces_added",
+            "marketplaces_removed",
+        ),
+        codex_plugin_count=_delta_count(
+            lambda: load_codex_plugin_delta(transition_dir),
+            "installed",
+            "removed",
+            "marketplaces_added",
+            "marketplaces_removed",
+        ),
+        ownership_transfer_count=len(
+            load_ownership_transfers(TransitionDir(transition_dir))
+        ),
     )
 
 
@@ -2682,11 +2759,7 @@ def list_transitions(
         return []
     keep = set(profile_filter) if profile_filter else None
     listings: list[TransitionListing] = []
-    for child in root.iterdir():
-        if child.name.startswith(".pending-"):
-            continue
-        if not child.is_dir():
-            continue
+    for child in _committed_transition_dirs(root):
         listing = _load_listing(child)
         if listing is None:
             continue
@@ -2720,11 +2793,8 @@ def resolve_transition_prefix(prefix: str) -> TransitionDir:
         return TransitionDir(exact)
     matches = sorted(
         child
-        for child in root.iterdir()
-        if child.is_dir()
-        and not child.name.startswith(".pending-")
-        and child.name.startswith(prefix)
-        and (child / "meta.json").exists()
+        for child in _committed_transition_dirs(root)
+        if child.name.startswith(prefix)
     )
     if not matches:
         raise SetforgeError(f"no transition matching prefix {prefix!r}")
