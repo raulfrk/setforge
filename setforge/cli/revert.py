@@ -112,7 +112,8 @@ def _file_change(delta: transitions.FilesystemDelta) -> tuple[str, str]:
     """Return the ``+``/``-``/``M`` marker and ``+N -M`` line delta of one file.
 
     The line delta counts the lines a unified diff of the two payloads adds
-    and removes; it is empty when neither side is a regular file.
+    and removes (difflib's default heuristics, so a display summary only); it
+    is empty when neither side is a regular file.
     """
     kinds = (delta.pre.kind, delta.post.kind)
     marker = (
@@ -126,7 +127,7 @@ def _file_change(delta: transitions.FilesystemDelta) -> tuple[str, str]:
         return marker, ""
     plus = minus = 0
     matcher = difflib.SequenceMatcher(
-        None, _lines(delta.pre.payload), _lines(delta.post.payload), autojunk=False
+        None, _lines(delta.pre.payload), _lines(delta.post.payload)
     )
     for tag, pre_start, pre_end, post_start, post_end in matcher.get_opcodes():
         if tag != "equal":

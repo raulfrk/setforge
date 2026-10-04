@@ -942,3 +942,25 @@ def test_revert_refuses_unreadable_transition_meta_cleanly(
 
     with pytest.raises(InvalidTransitionRecord, match=r"meta\.json"):
         transitions.load_record(transition)
+
+
+def test_file_change_counts_a_large_repetitive_file_quickly() -> None:
+    """The line count is a display summary; thousands of near-identical lines
+    must not stall the preview or ``transitions show``."""
+    import time
+
+    from setforge.cli.revert import _file_change
+    from setforge.transitions import FilesystemDelta, FilesystemImage, FilesystemKind
+
+    pre = b"".join(b'  "key": "value",\n' for _ in range(6000))
+    post = pre.replace(b'"value",\n', b'"other",\n', 3000)
+
+    def image(payload: bytes) -> FilesystemImage:
+        return FilesystemImage(FilesystemKind.FILE, payload, mode=0o644, mtime_ns=0)
+
+    started = time.monotonic()
+    marker, counts = _file_change(FilesystemDelta(Path("/x"), image(pre), image(post)))
+
+    assert time.monotonic() - started < 2
+    assert marker == "M"
+    assert counts.startswith("+")
