@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from setforge import reconcile, scalar_base_store, transitions
+from setforge.base_store_format import SIDECAR_NAME
 from setforge.migrations import MigrationRoots, detect_current_schema
 from setforge.migrations._disposition_retire import DispositionRetireMigration
 from setforge.reconcile import file_id
@@ -55,10 +56,21 @@ def _setup(tmp_path: Path, *, cfg: str = _CFG, deploy: bool = True) -> Migration
     )
 
 
+def _write_legacy_scalar_base() -> None:
+    """Lay down the manifest and sidecar the retired scalar-base store wrote."""
+    manifest = scalar_base_store.manifest_path("default", "conf")
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        '{\n  "editor.fontSize": {\n    "present": true,\n    "value": 12\n  }\n}\n',
+        encoding="utf-8",
+    )
+    (manifest.parent / SIDECAR_NAME).write_text("1.0\n", encoding="utf-8")
+
+
 def test_apply_seeds_unified_stamps_and_deletes_legacy(tmp_path) -> None:
     roots = _setup(tmp_path)
     fid = file_id("conf")
-    scalar_base_store.set_bases("default", "conf", {"editor.fontSize": 12})
+    _write_legacy_scalar_base()
     assert scalar_base_store.manifest_path("default", "conf").exists()
 
     DispositionRetireMigration().apply(roots=roots)
@@ -141,7 +153,7 @@ def test_fresh_empty_profile_is_a_clean_no_op_stamp(tmp_path) -> None:
 
 def test_apply_writes_one_transition_capturing_the_legacy_manifest(tmp_path) -> None:
     roots = _setup(tmp_path)
-    scalar_base_store.set_bases("default", "conf", {"editor.fontSize": 12})
+    _write_legacy_scalar_base()
     pre_bytes = scalar_base_store.manifest_path("default", "conf").read_bytes()
 
     DispositionRetireMigration().apply(roots=roots)
@@ -175,7 +187,7 @@ def test_threaded_pre_chain_text_patch_excludes_store_legs(
     from setforge.transitions import TransitionDir
 
     roots_pre = _setup(tmp_path)
-    scalar_base_store.set_bases("default", "conf", {"editor.fontSize": 12})
+    _write_legacy_scalar_base()
 
     # A pre-chain image that carries BOTH the config stamp AND a store leg,
     # exactly as the driver's ``snapshot_paths(affected)`` would (the cutover's

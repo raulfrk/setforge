@@ -42,7 +42,6 @@ __all__ = [
     "yaml_add_plugin",
     "yaml_add_plugin_to_profile",
     "yaml_remove_codex_marketplace",
-    "yaml_remove_codex_plugin",
     "yaml_remove_codex_plugin_from_profile",
     "yaml_remove_marketplace",
     "yaml_remove_plugin_from_profile",
@@ -112,17 +111,6 @@ def yaml_add_codex_plugin(config_path: Path, name: str, marketplace: str) -> boo
     doc = _load_yaml_doc(config_path)
     plugins = _ensure_top_level_block(_codex_block(doc), "plugins")
     plugins[name] = CommentedMap({"marketplace": marketplace})
-    _atomic_yaml_dump(doc, config_path)
-    return True
-
-
-def yaml_remove_codex_plugin(config_path: Path, name: str) -> bool:
-    doc = _load_yaml_doc(config_path)
-    codex = doc.get("codex")
-    plugins = codex.get("plugins") if isinstance(codex, CommentedMap) else None
-    if not isinstance(plugins, CommentedMap) or name not in plugins:
-        return False
-    del plugins[name]
     _atomic_yaml_dump(doc, config_path)
     return True
 

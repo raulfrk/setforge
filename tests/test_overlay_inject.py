@@ -1,9 +1,7 @@
-"""Unit tests for the leak-safe overlay inject / excise primitives.
+"""Unit tests for the overlay body canonicalisation and inject primitives.
 
-These exercise :mod:`setforge.body_canon` in isolation — the pure
-text functions whose identity is the exact recorded body BYTES (the needle
-set), never a re-derived anchor / structure / offset. The deploy + capture
-seams build on these; the leak gate ultimately rests here.
+These exercise :mod:`setforge.body_canon` in isolation — the pure text
+functions the host-local seed and the old-schema migrations build on.
 """
 
 from __future__ import annotations
@@ -11,9 +9,7 @@ from __future__ import annotations
 import pytest
 
 from setforge.body_canon import (
-    OverlayAmbiguousError,
     canonical_body,
-    excise_unique_needle,
     inject_body_at_anchor,
 )
 from setforge.errors import AnchorNotFoundError
@@ -52,47 +48,9 @@ def test_inject_missing_anchor_raises() -> None:
         )
 
 
-def test_excise_unique_needle_round_trips_with_inject() -> None:
-    text = "# Title\n\n## Notes\n\nshared\n"
-    body = canonical_body("HOST LOCAL")
-    injected = inject_body_at_anchor(text, AnchorAfterHeading(value="Notes"), body)
-    excised, found = excise_unique_needle(injected, [body])
-    assert found == body
-    assert "HOST LOCAL" not in excised
-    # Excision is a length-exact splice — no seam-collapse beyond the needle.
-    assert excised == text
-
-
-def test_excise_zero_occurrence_returns_none() -> None:
-    excised, found = excise_unique_needle("# Title\n", [canonical_body("absent")])
-    assert found is None
-    assert excised == "# Title\n"
-
-
-def test_excise_ambiguous_needle_raises() -> None:
-    body = canonical_body("DUP")
-    text = f"a\n{body}b\n{body}c\n"
-    with pytest.raises(OverlayAmbiguousError):
-        excise_unique_needle(text, [body])
-
-
-def test_excise_prefers_first_needle_in_sequence_order() -> None:
-    # The needle sequence is tried in order; the first unique hit wins.
-    canonical = canonical_body("CANON")
-    prior = canonical_body("PRIOR")
-    text = f"head\n{prior}tail\n"
-    excised, found = excise_unique_needle(text, [canonical, prior])
-    assert found == prior
-    assert "PRIOR" not in excised
-
-
-def test_crlf_body_round_trips_byte_exact() -> None:
-    # A CRLF-authored body canonicalises to LF and injects/excises byte-exact —
-    # a silent EOL / seam-newline drift here would leak host-local content into
-    # tracked.
+def test_crlf_body_injects_byte_exact() -> None:
+    # A CRLF-authored body canonicalises to LF and injects byte-exact.
     text = "# Title\n\n## Notes\n\nshared\n"
     body = canonical_body("HOST LOCAL\r\nBODY")
     injected = inject_body_at_anchor(text, AnchorAfterHeading(value="Notes"), body)
-    excised, found = excise_unique_needle(injected, [body])
-    assert found == body
-    assert excised == text
+    assert injected == "# Title\n\n## Notes\nHOST LOCAL\nBODY\n\nshared\n"

@@ -34,7 +34,11 @@ from setforge.reconcile._claude_ui import (
     _fenced,
     _strip_fence,
 )
-from setforge.reconcile.structured_units import StructuredFormat, parse_scalar_draft
+from setforge.reconcile.structured_units import (
+    _DRAFT_FORBIDDEN,
+    StructuredFormat,
+    parse_scalar_draft,
+)
 from setforge.ui.text import sanitize_controls
 from setforge.ui.widgets import (
     CANCEL,
@@ -62,9 +66,6 @@ _DEFAULT_REFINE: Final = (
 _INSTR_HINT: Final = (
     "Type guidance for the rewrite, or press Enter to let Claude draft it."
 )
-
-#: C0 control chars (and DEL) forbidden in an accepted draft, minus tab/newline.
-_FORBIDDEN: Final = ({chr(c) for c in range(0x20)} - {"\t", "\n"}) | {"\x7f"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +119,7 @@ def _validate(draft: str) -> str | None:
     :class:`ClaudeSession` turn returns decoded text.)
     """
     clean = _strip_fence(draft)
-    if clean.strip() == "" or any(ch in _FORBIDDEN for ch in clean):
+    if clean.strip() == "" or any(ch in _DRAFT_FORBIDDEN for ch in clean):
         return None
     return clean
 

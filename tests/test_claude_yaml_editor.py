@@ -327,7 +327,6 @@ def test_codex_plugin_editors_round_trip_and_are_idempotent(tmp_path: Path) -> N
     assert cfg.profiles["myprofile"].codex.plugins == ["review"]
 
     assert mod.yaml_remove_codex_plugin_from_profile(path, "myprofile", "review")
-    assert mod.yaml_remove_codex_plugin(path, "review")
     assert mod.yaml_remove_codex_marketplace(path, "team")
 
 

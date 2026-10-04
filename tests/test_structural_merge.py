@@ -8,7 +8,6 @@ delete-vs-edit conflict detection, and byte-stable idempotency.
 
 import io
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -26,17 +25,14 @@ from setforge.structural_merge import (
     StructuralMergeResult,
     _json5_inner,
     _Json5Backend,
-    _RuamelBackend,
+    _make_backend,
     _to_plain,
     append_key_segment,
     encode_key_segment,
     get_at_path,
     get_node_at_path,
-    is_structural,
     join_key_segments,
-    list_keys_at_path,
     merge_structural,
-    resolve_path_prefix,
     set_at_path,
     split_key_path,
 )
@@ -476,11 +472,6 @@ def test_get_at_path_present_null_distinct_from_absent() -> None:
     assert snap is not ABSENT
 
 
-def test_get_at_path_rejects_list_suffix() -> None:
-    with pytest.raises(ValueError, match="list suffix"):
-        get_at_path({"a": [1, 2]}, "a[*]")
-
-
 def test_get_at_path_snapshot_is_deep_copy_plain_dict() -> None:
     # B-S1/B-S2: a snapshot must survive a later in-place mutation of source.
     model = {"a": {"b": {"c": 1}}}
@@ -514,64 +505,6 @@ def test_get_at_path_then_merge_does_not_clobber_snapshot_jsonc() -> None:
     assert snap == 1  # snapshot untouched
 
 
-# --------------------------------------------------------------------------
-# resolve_path_prefix: deepest-resolvable-prefix navigation beside get_at_path.
-# --------------------------------------------------------------------------
-
-
-def test_resolve_path_prefix_present_path() -> None:
-    assert resolve_path_prefix({"a": {"b": {"c": 1}}}, "a.b.c") == ("a.b.c", None)
-
-
-def test_resolve_path_prefix_leaf_missing() -> None:
-    assert resolve_path_prefix({"a": {"b": 1}}, "a.z") == ("a", "a.z")
-
-
-def test_resolve_path_prefix_mid_path_missing() -> None:
-    assert resolve_path_prefix({"a": {"b": 1}}, "a.x.y") == ("a", "a.x")
-
-
-def test_resolve_path_prefix_root_segment_missing() -> None:
-    # A root-level miss: nothing resolves, the missing prefix IS the first
-    # segment itself.
-    assert resolve_path_prefix({"a": 1}, "x.y.z") == ("", "x")
-
-
-def test_resolve_path_prefix_intermediate_not_a_mapping() -> None:
-    # "a.b" resolves (to a scalar) but cannot be descended into, so the
-    # missing prefix is the next segment's prefix.
-    assert resolve_path_prefix({"a": {"b": 5}}, "a.b.c") == ("a.b", "a.b.c")
-
-
-def test_resolve_path_prefix_rejects_list_suffix() -> None:
-    with pytest.raises(ValueError, match="list suffix"):
-        resolve_path_prefix({"a": [1, 2]}, "a[*]")
-    with pytest.raises(ValueError, match="list suffix"):
-        resolve_path_prefix({"a": [1, 2]}, "a[]")
-
-
-def test_resolve_path_prefix_yaml_model() -> None:
-    model = _yload("a:\n  b: 1  # comment\n")
-    assert resolve_path_prefix(model, "a.b") == ("a.b", None)
-    assert resolve_path_prefix(model, "a.z") == ("a", "a.z")
-    assert resolve_path_prefix(model, "q.r") == ("", "q")
-    assert resolve_path_prefix(model, "a.b.c") == ("a.b", "a.b.c")
-
-
-def test_resolve_path_prefix_jsonc_model() -> None:
-    model = _jload('{\n  "a": {\n    "b": 1 // comment\n  }\n}')
-    assert resolve_path_prefix(model, "a.b") == ("a.b", None)
-    assert resolve_path_prefix(model, "a.z") == ("a", "a.z")
-    assert resolve_path_prefix(model, "q.r") == ("", "q")
-    assert resolve_path_prefix(model, "a.b.c") == ("a.b", "a.b.c")
-
-
-def test_set_at_path_rejects_list_suffix() -> None:
-    # I10: list-index pins are rejected at the set seam.
-    with pytest.raises(ValueError, match="list suffix"):
-        set_at_path({"a": [1]}, "a[*]", 9)
-
-
 def test_set_at_path_missing_parent_raises_keyerror() -> None:
     with pytest.raises(KeyError):
         set_at_path({"a": 1}, "x.y", 9)
@@ -603,66 +536,27 @@ def test_ours_deletes_container_theirs_unchanged_yaml() -> None:
     assert result.merged_model == {"keep": "yes"}
 
 
-# ---------------------------------------------------------------------------
-# list_keys_at_path — sibling-key enumeration for did-you-mean diagnostics.
-# ---------------------------------------------------------------------------
-
-
-def test_list_keys_at_path_root_yaml() -> None:
-    model = _yload("alpha: 1\nbeta: 2\n")
-    assert list_keys_at_path(model, "") == ["alpha", "beta"]
-
-
-def test_list_keys_at_path_nested_jsonc() -> None:
-    model = _jload('{"editor": {"fontSize": 12, "tabSize": 4}}')
-    assert list_keys_at_path(model, "editor") == ["fontSize", "tabSize"]
-
-
-def test_list_keys_at_path_plain_dict() -> None:
-    assert list_keys_at_path({"a": {"b": 1, "c": 2}}, "a") == ["b", "c"]
-
-
-def test_list_keys_at_path_absent_or_scalar_returns_empty() -> None:
-    model = _yload("alpha: 1\n")
-    assert list_keys_at_path(model, "missing") == []
-    assert list_keys_at_path(model, "alpha") == []
-
-
-def test_list_keys_at_path_list_suffix_raises() -> None:
-    model = _yload("alpha: [1]\n")
-    with pytest.raises(ValueError, match="list suffix"):
-        list_keys_at_path(model, "alpha.[*]")
-
-
 # --------------------------------------------------------------------------
 # Empty-path "" addresses the ROOT on every navigation seam (one meaning).
 # --------------------------------------------------------------------------
 
 
 def test_empty_path_is_root_on_all_seams_plain_dict() -> None:
-    # "" means "the root node" identically on all four seams: the get seams
-    # return the whole root mapping, resolve reports a fully-resolved root,
-    # and list_keys enumerates the root keys.
+    # "" means "the root node" on both get seams: each returns the whole root
+    # mapping.
     model = {"a": 1, "b": {"c": 2}}
     assert get_at_path(model, "") == {"a": 1, "b": {"c": 2}}
     assert get_node_at_path(model, "") == {"a": 1, "b": {"c": 2}}
-    assert resolve_path_prefix(model, "") == ("", None)
-    assert list_keys_at_path(model, "") == ["a", "b"]
 
 
 def test_empty_path_is_root_not_empty_string_key_lookup() -> None:
-    # The old ambiguity: "" was a lookup of the empty-string KEY on the get /
-    # resolve seams but ROOT on list_keys. Now "" is ROOT everywhere — even
-    # when an empty-string key is present, "" returns the whole root, NOT that
-    # key's value.
+    # "" is ROOT, never a lookup of the empty-string KEY — even when an
+    # empty-string key is present, "" returns the whole root, NOT that key's
+    # value.
     model = {"": {"a": 1}, "top": 5}
     # get seams: whole root, not {"a": 1}.
     assert get_at_path(model, "") == {"": {"a": 1}, "top": 5}
     assert get_node_at_path(model, "") == {"": {"a": 1}, "top": 5}
-    # resolve: fully resolved to root, not an empty-key hit.
-    assert resolve_path_prefix(model, "") == ("", None)
-    # list_keys: root keys (unchanged behavior).
-    assert list_keys_at_path(model, "") == ["", "top"]
 
 
 def test_empty_path_is_root_when_no_empty_string_key_present() -> None:
@@ -673,16 +567,12 @@ def test_empty_path_is_root_when_no_empty_string_key_present() -> None:
     assert get_at_path(model, "") is not ABSENT
     assert get_node_at_path(model, "") == {"top": 5}
     assert get_node_at_path(model, "") is not ABSENT
-    assert resolve_path_prefix(model, "") == ("", None)
-    assert list_keys_at_path(model, "") == ["top"]
 
 
 def test_empty_path_root_yaml_backend() -> None:
     model = _yload("alpha: 1\nbeta:\n  gamma: 2  # c\n")
     assert get_at_path(model, "") == {"alpha": 1, "beta": {"gamma": 2}}
     assert get_node_at_path(model, "") == {"alpha": 1, "beta": {"gamma": 2}}
-    assert resolve_path_prefix(model, "") == ("", None)
-    assert list_keys_at_path(model, "") == ["alpha", "beta"]
 
 
 def test_empty_path_root_jsonc_backend() -> None:
@@ -692,8 +582,6 @@ def test_empty_path_root_jsonc_backend() -> None:
     node = get_node_at_path(model, "")
     assert isinstance(node, JSONObject)
     assert _to_plain(node) == {"a": 1, "b": {"c": 2}}
-    assert resolve_path_prefix(model, "") == ("", None)
-    assert list_keys_at_path(model, "") == ["a", "b"]
 
 
 def test_empty_path_root_node_is_deep_copy() -> None:
@@ -855,31 +743,6 @@ def test_merge_flat_dotted_key_and_nested_path_do_not_collide() -> None:
 
     assert not result.clean
     assert {c.path for c in result.conflicts} == {"a\\.b", "a.b"}
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "settings.json",
-        "config.yaml",
-        "config.yml",
-    ],
-)
-def test_is_structural_true_for_json_and_yaml(name: str) -> None:
-    assert is_structural(Path("/some/dir") / name) is True
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "notes.md",
-        "plain.txt",
-        "README",
-        "archive.yaml.bak",
-    ],
-)
-def test_is_structural_false_for_non_structural(name: str) -> None:
-    assert is_structural(Path("/some/dir") / name) is False
 
 
 @pytest.mark.parametrize("backend", ["plain", "yaml", "jsonc"])
@@ -1071,6 +934,52 @@ def test_jsonc_signed_scalar_unwraps_to_exact_primitive(
     if token == "-0.0":
         assert isinstance(value, float)
         assert math.copysign(1.0, value) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("1", 1),
+        ("1.5", 1.5),
+        ("1.0", 1.0),
+        ("0x1F", 31),
+        ('"s"', "s"),
+        ("'t'", "t"),
+        ('""', ""),
+        ("true", True),
+        ("false", False),
+        ("null", None),
+        ("Infinity", float("inf")),
+    ],
+)
+def test_jsonc_unsigned_scalar_unwraps_to_exact_primitive(
+    token: str, expected: object
+) -> None:
+    from json5.model import JSONText
+
+    from setforge.structural_merge import _to_plain
+
+    model = _jload("{v: " + token + "}")
+    assert isinstance(model, JSONText)
+    parsed = _to_plain(model.value)
+    assert isinstance(parsed, dict)
+    assert type(parsed["v"]) is type(expected)
+    assert parsed["v"] == expected
+
+
+def test_jsonc_nan_unwraps_to_float_nan() -> None:
+    import math
+
+    from json5.model import JSONText
+
+    from setforge.structural_merge import _to_plain
+
+    model = _jload("{v: NaN}")
+    assert isinstance(model, JSONText)
+    parsed = _to_plain(model.value)
+    assert isinstance(parsed, dict)
+    assert type(parsed["v"]) is float
+    assert math.isnan(parsed["v"])
 
 
 @pytest.mark.parametrize("backend", ["yaml", "jsonc"])
@@ -1510,14 +1419,14 @@ def test_shape_mismatch_names_the_key_path() -> None:
     )
 
 
-def test_ruamel_backend_add_brings_the_comment_of_the_side_it_adds_from() -> None:
+def test_ruamel_backend_add_theirs_brings_the_comment_of_theirs() -> None:
     base = _yload("k: 1  # base c\n")
     ours = _yload("a: 1\n")
     theirs = _yload("k: 1  # their c\na: 1\n")
 
-    _RuamelBackend(base, ours, theirs).add("base", "k")
+    _make_backend(base, ours, theirs).add_theirs("k")
 
-    assert _ydump(ours) == "a: 1\nk: 1  # base c\n"
+    assert _ydump(ours) == "a: 1\nk: 1  # their c\n"
 
 
 def _json5_backend(base: str, ours: str, theirs: str) -> _Json5Backend:
@@ -1528,7 +1437,7 @@ def _json5_backend(base: str, ours: str, theirs: str) -> _Json5Backend:
 def test_json5_backend_add_works_before_any_lookup_in_ours() -> None:
     backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
 
-    backend.add("theirs", "d")
+    backend.add_theirs("d")
 
     assert backend.keys() == ["a", "d"]
 
@@ -1537,7 +1446,7 @@ def test_json5_backend_finds_a_member_it_added_after_an_earlier_lookup() -> None
     backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
     assert backend.has("ours", "d") is False
 
-    backend.add("theirs", "d")
+    backend.add_theirs("d")
 
     assert backend.has("ours", "d") is True
     backend.delete("d")

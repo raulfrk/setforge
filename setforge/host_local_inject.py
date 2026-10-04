@@ -40,6 +40,7 @@ import re
 from typing import Final, assert_never
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
+from setforge.migrations._frozen_markers import _EndMarker, _walk_markers
 from setforge.source import (
     Anchor,
     AnchorAfterHeading,
@@ -49,10 +50,6 @@ from setforge.source import (
     AnchorBeforeHeading,
     AnchorInSection,
     HostLocalSection,
-)
-from setforge.user_section_markers import (
-    _EndMarker,
-    _walk_markers,
 )
 
 # Provenance tag emitted by every install / install --dry-run / compare
@@ -238,7 +235,7 @@ def _find_after_section_offsets(text: str, name: str) -> list[int]:
     """Return every 0-indexed line offset immediately after a user-section
     end marker whose key equals ``name``.
 
-    Routes through :func:`setforge.user_section_markers._walk_markers` so the scan
+    Routes through :func:`setforge.migrations._frozen_markers._walk_markers` so the scan
     inherits the strict parser's validation (nested sections,
     end-without-start, etc.). End-marker key matching uses the
     canonical ``key`` (named sections by name; unnamed by string index).
@@ -324,10 +321,7 @@ def _resolve_in_section(text: str, anchor: AnchorInSection) -> tuple[int, bool]:
 def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
     """Dispatch the anchor match against ``text`` (assumed LF-normalised).
 
-    Internal helper. Callers that have ALREADY normalised the text (e.g.
-    :func:`inject_host_local_section`) skip the redundant normalisation
-    pass by calling this directly. The public :func:`resolve_anchor`
-    wraps this with :func:`_normalise_eol`.
+    Callers normalise the text first with :func:`_normalise_eol`.
 
     For an :class:`AnchorInSection` only the line offset is returned; the
     fell-back flag is dropped here so every caller keeps the ``int`` contract.
@@ -353,18 +347,6 @@ def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
             # type-check time (mypy / pyright surface ``never``'s
             # narrowed type as the unhandled variant).
             assert_never(never)
-
-
-def resolve_anchor(text: str, anchor: Anchor) -> int:
-    """Return the 0-indexed line offset in ``text`` where ``anchor`` resolves.
-
-    Dispatches on the anchor's discriminated-union shape. ``text`` is
-    EOL-normalised before the scan so a CRLF live file matches the same
-    headings as the LF tracked source. Raises :class:`AnchorNotFoundError`
-    when the anchor matches nothing and :class:`AnchorAmbiguousError`
-    when it matches more than one candidate.
-    """
-    return _resolve_anchor_lf(_normalise_eol(text), anchor)
 
 
 def _read_body(section: HostLocalSection) -> str:

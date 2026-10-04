@@ -32,7 +32,6 @@ dependencies = [
     "packaging>=21",
     "merge3>=0.0.16",
     "patiencediff>=0.2.18",
-    "diff-match-patch>=20241021",
     "tomli-w>=1.0",
     "wcwidth>=0.2.13",
     "tomlkit>=0.13",
@@ -95,17 +94,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# yaml_merge.py overlays ruamel.yaml CommentedMap / CommentedSeq / scalar
-# trees at the YAML-document boundary. ruamel does not ship public-API
-# type stubs, so the merge helpers accept and return `typing.Any`
-# per the json-five-style untyped seam. Tightening to a union over
-# ruamel's private node types would import third-party internals into
-# our annotation surface without buying mypy coverage that callers can
-# verify. ANN401 is the right per-file allow here.
-"setforge/yaml_merge.py" = ["ANN401"]
-# jsonc.py wraps json-five's untyped AST (model + lib_json). Same
-# untyped-seam reasoning as yaml_merge.py: the third-party type surface
-# is the constraint, not our annotation discipline.
+# jsonc.py reads json-five's untyped AST (key nodes). The third-party type
+# surface is the constraint, not our annotation discipline, so the helpers
+# accept `typing.Any` at that seam.
 "setforge/jsonc.py" = ["ANN401"]
 # tests/ holds pytest fixture parameters (`monkeypatch`, `tmp_path`,
 # `capsys`, …) whose types are obvious from naming and whose explicit
@@ -194,10 +185,8 @@ also_copy = ["scripts"]
 # so `mutmut run` collects a clean sandbox suite instead of aborting on a
 # missing test file.)
 only_mutate = [
-    "setforge/markdown_merge.py",
     "setforge/scalar_merge.py",
     "setforge/structural_merge.py",
-    "setforge/yaml_merge.py",
     "setforge/base_store.py",
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
@@ -224,16 +213,12 @@ only_mutate = [
 # verbs without the `integration_subprocess` guard (unmocked real subprocess),
 # which is fragile in the sandbox. See docs/mutation-baseline.md.
 pytest_add_cli_args_test_selection = [
-    "tests/test_markdown_merge.py",
-    "tests/test_markdown_merge_segments.py",
     "tests/test_scalar_merge.py",
     "tests/test_structural_merge.py",
     "tests/test_structural_set_at_path.py",
     "tests/reconcile/test_structured_units.py",
-    "tests/reconcile/test_structural_deep_merge_node.py",
     "tests/test_reconcile_structured_deploy.py",
     "tests/test_stage_structured.py",
-    "tests/test_yaml_merge.py",
     "tests/test_base_store.py",
     "tests/test_base_store_format.py",
     "tests/test_scalar_base_store.py",
@@ -272,15 +257,6 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["json5", "json5.*"]
 follow_imports = "skip"
-
-# diff-match-patch ships neither stubs nor a ``py.typed`` marker, so its
-# ``match_main`` import is an [import-untyped] miss. The span relocation
-# fuzzy stage uses a single, narrow surface (``match_main`` + two scalar
-# threshold attrs); treat the module as the untyped seam rather than
-# vendoring stubs for one call.
-[[tool.mypy.overrides]]
-module = ["diff_match_patch", "diff_match_patch.*"]
-ignore_missing_imports = true
 
 [dependency-groups]
 dev = [

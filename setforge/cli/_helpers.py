@@ -25,8 +25,6 @@ from setforge.compare import (
     resolve_src,
 )
 from setforge.config import Config, ResolvedProfile, TrackedFile
-from setforge.errors import SetforgeError
-from setforge.user_section_markers import detect_duplicate_section_names
 
 if TYPE_CHECKING:
     from setforge.reconcile_apply import ReconcileAuto
@@ -201,51 +199,3 @@ def _resolve_drift_paths(
             sub_src, sub_dst = paths
         resolved_entries.append((entry, sub_src, sub_dst))
     return resolved_entries
-
-
-def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> None:
-    """Raise :class:`SetforgeError` when a tracked/live markdown file repeats
-    a user-section name across two start markers.
-
-    Two ``<!-- setforge:user-section start ... NAME -->`` regions sharing one
-    NAME used to collapse silently in the dict-keyed section primitives: only
-    the last body survived, ``merge_sections`` spliced it into BOTH regions
-    (the first region's distinct content permanently lost), and
-    ``set_marker_hashes`` stamped one hash onto both end markers (corrupting
-    the first region's ``hash=`` segment). The core parse/merge/hash
-    primitives now raise :class:`~setforge.errors.MarkerError` on the second
-    pair, but that surfaces partway through a strict parse as an opaque
-    ``line N: duplicate user-section name 'NAME'`` message.
-
-    This pre-check runs
-    :func:`setforge.user_section_markers.detect_duplicate_section_names`
-    (regex-only; no strict parse) on every line-based tracked_file's tracked
-    SRC and live DST, raising a single user-actionable error naming the
-    duplicated section BEFORE any strict parse happens. Structural files
-    (JSON / JSONC / YAML) carry no inline markers and are skipped.
-
-    ``command`` is the user-facing command name (``compare`` / ``sync`` /
-    ``install``) used in the error message so the user sees which entry point
-    refused.
-    """
-    from setforge import structural_merge
-
-    for _tracked_file, _sub_name, sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if structural_merge.is_structural(sub_dst):
-            continue
-        for role, path in (("tracked", sub_src), ("live", sub_dst)):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError):
-                continue
-            duplicate = detect_duplicate_section_names(text)
-            if duplicate is None:
-                continue
-            raise SetforgeError(
-                f"{path}: duplicate user-section name {duplicate!r} on the "
-                f"{role} side. Two '<!-- setforge:user-section start ... "
-                f"{duplicate} -->' regions share one name, so 'setforge "
-                f"{command}' would silently collapse the first region's body "
-                f"and corrupt its end-marker hash. Rename one of the two "
-                f"sections so every user-section name is unique."
-            )

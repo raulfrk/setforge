@@ -8,9 +8,9 @@ section-merge, never stored in ``local.yaml``). Increment 2 made ``deploy``
 blanket-strip every host-local marker pair, so unless those bodies are first
 captured into ``local.yaml`` OVERLAY spans they are permanently deleted.
 
-This module performs the READ + the on-disk ``local.yaml`` write. It never
-touches the live file (``deploy`` strips it) and never mutates the in-memory
-config (the install re-resolves the overlay from the rewritten ``local.yaml``).
+This module performs the on-disk ``local.yaml`` write; the old-schema
+migrations read the bodies. It never touches the live file and never mutates
+the in-memory config.
 """
 
 from __future__ import annotations
@@ -20,51 +20,7 @@ from pathlib import Path
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from setforge.body_canon import canonical_body
-from setforge.errors import MarkerError
-from setforge.migrations._frozen_markers import (
-    SectionSemantics,
-    _BodyLine,
-    _EndMarker,
-    _StartMarker,
-    _walk_markers,
-)
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-
-
-def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
-    """Return ``{name: body}`` for every HOST_LOCAL marker region in ``text``.
-
-    Body is the exact bytes between the markers (trailing newline included, up
-    to but not including the end-marker line), matching
-    :func:`setforge.migrations._frozen_markers.extract_sections`. Shared regions
-    are ignored.
-
-    Raises :class:`~setforge.errors.MarkerError` on a duplicate host-local name
-    (silently dropping one — the dict last-wins of ``extract_sections`` — would
-    lose a per-host body before it could be captured) AND, via
-    :func:`setforge.migrations._frozen_markers._walk_markers`, on any malformed /
-    unclosed / nested / name-mismatched marker in ``text``. ``MarkerError`` is a
-    :class:`~setforge.errors.SetforgeError`, so the CLI surfaces it as a clean
-    ``error: ...`` exit rather than a traceback.
-    """
-    bodies: dict[str, str] = {}
-    current: str | None = None
-    lines: list[str] = []
-    for event in _walk_markers(text, allow_legacy=True):
-        match event:
-            case _StartMarker(semantics=SectionSemantics.HOST_LOCAL, name=name):
-                current = name
-                lines = []
-            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, key=key):
-                if key in bodies:
-                    raise MarkerError(f"duplicate host-local section name {key!r}")
-                bodies[key] = "".join(lines)
-                current = None
-            case _BodyLine(line=line) if current is not None:
-                lines.append(line)
-            case _:
-                pass
-    return bodies
 
 
 def build_overlay_span_node(name: str, body: str) -> CommentedMap:

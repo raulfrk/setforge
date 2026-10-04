@@ -9,69 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from setforge.body_canon import canonical_body
-from setforge.errors import MarkerError
 from setforge.host_local_marker_migration import (
     append_overlay_spans,
     build_overlay_span_node,
-    extract_host_local_marker_bodies,
 )
 from setforge.source import HostLocalSectionName, load_local_host_local_sections
-
-_H = "a" * 64
-
-
-def _pair(name: str, body: str, *, semantics: str = "host-local") -> str:
-    return (
-        f"<!-- setforge:user-section start {semantics} {name} -->\n"
-        f"{body}"
-        f"<!-- setforge:user-section end {semantics} {name} hash={_H} -->\n"
-    )
-
-
-# --- Task 1: extract_host_local_marker_bodies -------------------------------
-
-
-def test_extracts_only_host_local_bodies_by_name() -> None:
-    text = (
-        "# T\n\n"
-        + _pair("notes", "host notes\n")
-        + "\n"
-        + _pair("shared-x", "shared body\n", semantics="shared")
-    )
-    out = extract_host_local_marker_bodies(text)
-    assert out == {"notes": "host notes\n"}  # shared region excluded
-
-
-def test_empty_host_local_body_kept_as_empty_string() -> None:
-    text = "# T\n\n" + _pair("blank", "")
-    assert extract_host_local_marker_bodies(text) == {"blank": ""}
-
-
-def test_multi_section_preserves_top_to_bottom_order() -> None:
-    text = (
-        "# T\n\n"
-        + _pair("a", "aa\n")
-        + "\n"
-        + _pair("b", "bb\n")
-        + "\n"
-        + _pair("c", "cc\n")
-    )
-    assert list(extract_host_local_marker_bodies(text)) == ["a", "b", "c"]
-
-
-def test_duplicate_host_local_name_refuses() -> None:
-    text = _pair("dup", "a\n") + _pair("dup", "b\n")
-    # MarkerError (a SetforgeError) so the CLI exits clean, not a raw traceback.
-    with pytest.raises(MarkerError, match="duplicate host-local"):
-        extract_host_local_marker_bodies(text)
-
-
-def test_no_markers_returns_empty() -> None:
-    assert extract_host_local_marker_bodies("# just text\n") == {}
-
 
 # --- Task 2: build_overlay_span_node + append_overlay_spans ------------------
 

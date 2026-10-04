@@ -51,7 +51,6 @@ from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
     _parse_capture_auto,
-    _refuse_duplicate_section_names,
 )
 from setforge.compare import container_authorized
 from setforge.config import (
@@ -186,8 +185,6 @@ def _load_capture_preview(
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    if verb == "sync":
-        _refuse_duplicate_section_names(ctx, command="sync")
     ownership, authorized = _capture_ownership(ctx, owner_id)
     preview = list(
         capture_mod.preview_capture_profile(

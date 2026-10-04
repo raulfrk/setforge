@@ -1,4 +1,4 @@
-"""Unit tests for setforge.host_local_inject.resolve_anchor.
+"""Unit tests for setforge.host_local_inject._resolve_anchor_lf.
 
 Covers the 5 anchor kinds plus error paths (not found, ambiguous,
 fenced-code-block skipping, CRLF normalisation, after-section against
@@ -11,9 +11,10 @@ import pytest
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.host_local_inject import (
+    _normalise_eol,
+    _resolve_anchor_lf,
     _resolve_in_section,
     heading_level,
-    resolve_anchor,
 )
 from setforge.source import (
     AnchorAfterHeading,
@@ -30,24 +31,24 @@ class TestResolveAnchor:
 
     def test_after_heading_returns_offset_below_heading(self) -> None:
         text = "# Title\n\n## Workflow\n\nbody\n"
-        offset = resolve_anchor(text, AnchorAfterHeading(value="Workflow"))
+        offset = _resolve_anchor_lf(text, AnchorAfterHeading(value="Workflow"))
         # Heading is line idx 2 (0-indexed); offset is one below.
         assert offset == 3
 
     def test_before_heading_returns_offset_of_heading_line(self) -> None:
         text = "# Title\n\n## Workflow\n\nbody\n"
-        offset = resolve_anchor(text, AnchorBeforeHeading(value="Workflow"))
+        offset = _resolve_anchor_lf(text, AnchorBeforeHeading(value="Workflow"))
         # Heading is line idx 2; before-heading splices at the heading line.
         assert offset == 2
 
     def test_at_start_of_file_returns_zero(self) -> None:
         text = "# Title\n\nbody\n"
-        assert resolve_anchor(text, AnchorAtStartOfFile()) == 0
+        assert _resolve_anchor_lf(text, AnchorAtStartOfFile()) == 0
 
     def test_at_end_of_file_returns_line_count(self) -> None:
         text = "# Title\n\nbody\n"
         # 3 lines: "# Title", "", "body"
-        assert resolve_anchor(text, AnchorAtEndOfFile()) == 3
+        assert _resolve_anchor_lf(text, AnchorAtEndOfFile()) == 3
 
     def test_after_heading_skips_fenced_code_blocks(self) -> None:
         text = (
@@ -60,27 +61,29 @@ class TestResolveAnchor:
             "## Workflow\n"  # real heading
             "body\n"
         )
-        offset = resolve_anchor(text, AnchorAfterHeading(value="Workflow"))
+        offset = _resolve_anchor_lf(text, AnchorAfterHeading(value="Workflow"))
         # The real heading is at line idx 6; offset is 7.
         assert offset == 7
 
     def test_after_heading_not_found_raises(self) -> None:
         text = "# Title\n\n## Other\nbody\n"
         with pytest.raises(AnchorNotFoundError) as exc_info:
-            resolve_anchor(text, AnchorAfterHeading(value="Workflow"))
+            _resolve_anchor_lf(text, AnchorAfterHeading(value="Workflow"))
         assert "Workflow" in str(exc_info.value)
 
     def test_after_heading_duplicate_raises_ambiguous(self) -> None:
         text = "# Title\n## Workflow\nA\n## Workflow\nB\n"
         with pytest.raises(AnchorAmbiguousError) as exc_info:
-            resolve_anchor(text, AnchorAfterHeading(value="Workflow"))
+            _resolve_anchor_lf(text, AnchorAfterHeading(value="Workflow"))
         msg = str(exc_info.value)
         assert "2" in msg
         assert "4" in msg
 
     def test_crlf_input_normalises_to_lf(self) -> None:
         text = "# Title\r\n\r\n## Workflow\r\nbody\r\n"
-        offset = resolve_anchor(text, AnchorAfterHeading(value="Workflow"))
+        offset = _resolve_anchor_lf(
+            _normalise_eol(text), AnchorAfterHeading(value="Workflow")
+        )
         assert offset == 3
 
 
@@ -97,7 +100,7 @@ class TestAfterSectionAnchor:
             "hash=ee013d9917ee8d6e0fc3dcdee31d77c2f47f7e9fc85f7063e02ae69eb9215385 -->\n"  # noqa: E501 — explanatory long literal
             "trailing\n"
         )
-        offset = resolve_anchor(text, AnchorAfterSection(name="notes"))
+        offset = _resolve_anchor_lf(text, AnchorAfterSection(name="notes"))
         # The end marker is at line 4 (1-indexed); offset is the same value
         # (line after the end marker, 0-indexed).
         assert offset == 4
@@ -105,7 +108,16 @@ class TestAfterSectionAnchor:
     def test_after_section_not_found_raises(self) -> None:
         text = "# Title\nbody\n"
         with pytest.raises(AnchorNotFoundError):
-            resolve_anchor(text, AnchorAfterSection(name="missing"))
+            _resolve_anchor_lf(text, AnchorAfterSection(name="missing"))
+
+    def test_after_section_duplicated_name_raises(self) -> None:
+        pair = (
+            "<!-- setforge:user-section start shared notes -->\n"
+            "body\n"
+            "<!-- setforge:user-section end shared notes -->\n"
+        )
+        with pytest.raises(AnchorAmbiguousError, match="lines 3, 6"):
+            _resolve_anchor_lf(pair + pair, AnchorAfterSection(name="notes"))
 
     def test_strip_host_local_sections_drops_named_pairs(self) -> None:
         """``strip_host_local_sections`` removes named host-local pairs only.
@@ -163,7 +175,7 @@ class TestAfterSectionAnchor:
             "body\n"
             "<!-- setforge:user-section end shared notes -->\n"
         )
-        offset = resolve_anchor(text, AnchorAfterSection(name="notes"))
+        offset = _resolve_anchor_lf(text, AnchorAfterSection(name="notes"))
         assert offset == 3
 
 

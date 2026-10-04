@@ -4,8 +4,8 @@
 3-way structural merge records a :class:`PathConflict`, the install driver writes
 the chosen (tracked / theirs) value back at that conflict's dotted path. The
 write must preserve sibling comments and the replaced leaf's own preceding
-whitespace/comment across all three backends (ruamel YAML, json-five JSONC,
-plain dict), and never auto-vivify a missing parent.
+whitespace/comment on a ruamel YAML model and a plain dict, never auto-vivify a
+missing parent, and refuse a json-five parent (JSON is staged whole-document).
 """
 
 import copy
@@ -19,10 +19,14 @@ from json5.dumper import ModelDumper
 from json5.dumper import dumps as json5_dumps
 from json5.loader import ModelLoader
 from json5.loader import loads as json5_loads
-from json5.model import JSONObject
 from ruamel.yaml import YAML
 
-from setforge.structural_merge import set_at_path, set_node_at_path
+from setforge.errors import MergeTypeMismatch
+from setforge.structural_merge import (
+    delete_node_at_path,
+    set_at_path,
+    set_node_at_path,
+)
 
 
 def _yaml() -> YAML:
@@ -49,13 +53,6 @@ def _jdump(model: object) -> str:
     return json5_dumps(model, dumper=ModelDumper())
 
 
-def _jtop(model: object) -> JSONObject:
-    """Return the top ``JSONObject`` for a loaded json-five model (unwraps text)."""
-    top = model if isinstance(model, JSONObject) else getattr(model, "value", model)
-    assert isinstance(top, JSONObject)
-    return top
-
-
 # ---------------------------------------------------------------------------
 # 1. New scalar leaf at an existing parent; siblings' comments survive.
 # ---------------------------------------------------------------------------
@@ -69,16 +66,6 @@ def test_yaml_new_leaf_preserves_sibling_comments() -> None:
     assert "# keep me" in out
     assert "# also keep" in out
     assert "c: 3" in out
-
-
-def test_jsonc_new_leaf_preserves_sibling_comments() -> None:
-    """A new JSONC leaf appears; sibling comments survive."""
-    model = _jload('{\n  "a": 1, // keep me\n  "b": 2 // also keep\n}\n')
-    set_at_path(model, "c", 3)
-    out = _jdump(model)
-    assert "// keep me" in out
-    assert "// also keep" in out
-    assert '"c"' in out
 
 
 def test_plain_dict_new_leaf() -> None:
@@ -100,23 +87,6 @@ def test_yaml_replace_leaf_preserves_own_comment() -> None:
     out = _ydump(doc)
     assert "a: 99" in out
     assert "# leaf comment" in out
-
-
-def test_jsonc_replace_leaf_preserves_wsc_before() -> None:
-    """Replacing a JSONC leaf preserves its wsc_before (leading whitespace)."""
-    model = _jload('{\n  "a": 1,\n  "b": 2\n}\n')
-    parent = _jtop(model)
-    idx = next(
-        i for i, k in enumerate(parent.keys) if getattr(k, "characters", None) == "a"
-    )
-    before = list(parent.values[idx].wsc_before)
-    set_at_path(model, "a", 99)
-    idx2 = next(
-        i for i, k in enumerate(parent.keys) if getattr(k, "characters", None) == "a"
-    )
-    assert list(parent.values[idx2].wsc_before) == before
-    out = _jdump(model)
-    assert '"a": 99' in out
 
 
 def test_plain_dict_replace_leaf() -> None:
@@ -141,15 +111,6 @@ def test_yaml_set_list_value() -> None:
     assert list(reloaded["items"]) == [1, 2, 3]
 
 
-def test_jsonc_set_list_value() -> None:
-    """A list value dumps as a JSONC array."""
-    model = _jload('{\n  "a": 1\n}\n')
-    set_at_path(model, "items", [1, 2, 3])
-    out = _jdump(model)
-    reloaded = json5_loads(out)
-    assert reloaded["items"] == [1, 2, 3]
-
-
 def test_plain_dict_set_list_value() -> None:
     """A list value lands on a plain dict."""
     doc: dict[str, object] = {"a": 1}
@@ -158,20 +119,42 @@ def test_plain_dict_set_list_value() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. json-five keys/values stay length-consistent (spliced, not derived prop).
+# 4. A json-five parent is refused: JSON files are staged as one whole-document
+#    unit, so nothing writes into them by path.
 # ---------------------------------------------------------------------------
 
 
-def test_jsonc_keys_values_consistent_after_set() -> None:
-    """After a set the parent's .keys and .values stay equal-length."""
-    model = _jload('{\n  "a": 1,\n  "b": 2\n}\n')
-    set_at_path(model, "c", 3)
-    parent = _jtop(model)
-    assert len(parent.keys) == len(parent.values)
-    assert len(parent.keys) == 3
-    # Replace too -> still consistent.
-    set_at_path(model, "a", 7)
-    assert len(parent.keys) == len(parent.values)
+_JSON_DOC = '{\n  "a": 1, // keep me\n  "b": {"n": 2}\n}\n'
+
+
+def test_jsonc_set_at_path_refuses_and_leaves_document_unchanged() -> None:
+    model = _jload(_JSON_DOC)
+    with pytest.raises(
+        MergeTypeMismatch,
+        match=r"^cannot set leaf at 'c': parent is JSONObject, not a mapping$",
+    ):
+        set_at_path(model, "c", 3)
+    assert _jdump(model) == _JSON_DOC
+
+
+def test_jsonc_set_node_at_path_refuses_and_leaves_document_unchanged() -> None:
+    model = _jload(_JSON_DOC)
+    with pytest.raises(
+        MergeTypeMismatch,
+        match=r"^cannot set node at 'b\.n': parent is JSONObject, not a mapping$",
+    ):
+        set_node_at_path(model, "b.n", {"x": 1})
+    assert _jdump(model) == _JSON_DOC
+
+
+def test_jsonc_delete_node_at_path_refuses_and_leaves_document_unchanged() -> None:
+    model = _jload(_JSON_DOC)
+    with pytest.raises(
+        MergeTypeMismatch,
+        match=r"^cannot delete leaf at 'a': parent is JSONObject, not a mapping$",
+    ):
+        delete_node_at_path(model, "a")
+    assert _jdump(model) == _JSON_DOC
 
 
 # ---------------------------------------------------------------------------
@@ -216,19 +199,6 @@ def test_yaml_noop_set_is_byte_stable() -> None:
     assert after == before
 
 
-def test_jsonc_set_existing_keeps_siblings_byte_stable() -> None:
-    """Replacing one JSONC leaf leaves the other members' bytes unchanged."""
-    text = '{\n  "a": 1, // c1\n  "b": 2, // c2\n  "c": 3 // c3\n}\n'
-    model = _jload(text)
-    set_at_path(model, "b", 2)
-    out = _jdump(model)
-    assert "// c1" in out
-    assert "// c2" in out
-    assert "// c3" in out
-    assert '"a": 1' in out
-    assert '"c": 3' in out
-
-
 # ---------------------------------------------------------------------------
 # 7. set_node_at_path: splice a WRAPPED subtree node (comments-on-the-node
 #    preserved), the comment-preserving whole-subtree re-assert seam.
@@ -241,15 +211,6 @@ def _ynode_at(doc: object, key: str) -> object:
     return doc[key]
 
 
-def _jnode_at(model: object, key: str) -> object:
-    """Return the still-wrapped json-five value node at top-level ``key``."""
-    top = _jtop(model)
-    idx = next(
-        i for i, k in enumerate(top.keys) if getattr(k, "characters", None) == key
-    )
-    return top.values[idx]
-
-
 def test_yaml_set_node_preserves_subtree_internal_comments() -> None:
     """Splicing a wrapped CommentedMap carries its OWN interior comments."""
     src = _yload("pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n")
@@ -260,36 +221,6 @@ def test_yaml_set_node_preserves_subtree_internal_comments() -> None:
     assert "# x comment" in out
     assert "# y comment" in out
     assert "other: keep" in out
-
-
-def test_jsonc_set_node_preserves_subtree_internal_comments() -> None:
-    """Splicing a wrapped JSONObject carries its OWN interior // comments."""
-    src = _jload(
-        '{\n  "pinned": {\n    "x": 1, // x comment\n    "y": 2 // y comment\n  },\n'
-        '  "other": "keep"\n}\n'
-    )
-    node = copy.deepcopy(_jnode_at(src, "pinned"))
-    dst = _jload('{\n  "pinned": {\n    "x": 9\n  },\n  "other": "keep"\n}\n')
-    set_node_at_path(dst, "pinned", node)
-    out = _jdump(dst)
-    assert "// x comment" in out
-    assert "// y comment" in out
-    assert '"other": "keep"' in out
-    # keys / values stayed in lockstep (the derived zip re-reads them on dump).
-    top = _jtop(dst)
-    assert len(top.keys) == len(top.values)
-
-
-def test_jsonc_set_node_keys_values_stay_in_lockstep() -> None:
-    """A whole-value swap edits parent.keys[idx]/parent.values[idx] in lockstep."""
-    src = _jload('{\n  "a": {"n": 1},\n  "b": 2,\n  "c": 3\n}\n')
-    node = copy.deepcopy(_jnode_at(src, "a"))
-    dst = _jload('{\n  "a": {"n": 9},\n  "b": 2,\n  "c": 3\n}\n')
-    set_node_at_path(dst, "a", node)
-    top = _jtop(dst)
-    assert len(top.keys) == len(top.values) == 3
-    out = _jdump(dst)
-    assert json5_loads(out) == {"a": {"n": 1}, "b": 2, "c": 3}
 
 
 def test_yaml_set_node_dedups_colliding_anchor() -> None:
@@ -342,17 +273,6 @@ def test_yaml_set_node_anchored_subtree_byte_stable_on_noop() -> None:
     assert after == before
     assert "&shared" in after
     assert "*shared" in after
-
-
-def test_jsonc_set_node_byte_stable_on_noop() -> None:
-    """Swapping a json-five node for a deep-copy of itself is byte-stable."""
-    text = '{\n  "pinned": {\n    "x": 1 // x comment\n  },\n  "other": "keep"\n}\n'
-    dst = _jload(text)
-    before = _jdump(dst)
-    node = copy.deepcopy(_jnode_at(dst, "pinned"))
-    set_node_at_path(dst, "pinned", node)
-    after = _jdump(dst)
-    assert after == before
 
 
 def test_set_node_missing_parent_raises_keyerror() -> None:

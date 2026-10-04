@@ -186,21 +186,6 @@ def test_reconstruct_promoted_shared_deleted_leaf_drops_key_yaml() -> None:
     assert b"b: 2  # keep me" in out  # sibling + its inline comment survive
 
 
-def test_reconstruct_promoted_shared_deleted_leaf_drops_key_jsonc() -> None:
-    """The JSONC backend drops a promoted-SHARED deleted leaf, sibling intact."""
-    import json
-
-    base = b'{\n  "a": 1,\n  "b": 2\n}\n'
-    live = b'{\n  "b": 2\n}\n'  # key 'a' deleted live
-    units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x")]
-
-    out = reconstruct_structured(base, live, units, {}, StructuredFormat.JSONC)
-
-    # Re-parse to pin key/value integrity (a non-lockstep delete would desync
-    # keys/values and corrupt the object), not just byte-substrings.
-    assert json.loads(out) == {"b": 2}
-
-
 def test_reconstruct_promoted_shared_absent_in_both_fails_closed() -> None:
     """A promoted SHARED unit whose path resolves in NEITHER base nor live
     fails closed (StructuredParseError) rather than silently no-op — the

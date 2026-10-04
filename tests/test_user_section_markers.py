@@ -1,25 +1,22 @@
-"""Tests for the reconcile-native user-section marker reader.
+"""Tests for the readers of the retired user-section markers.
 
-``setforge.user_section_markers`` is the live, non-legacy home for the
-marker-READING machinery the current engine still needs after the schema-2.1
-marker retirement — a byte-faithful port of the grammar frozen in
-``setforge._legacy_markers``. It backs the five live consumers:
-``host_local_inject`` (after-section anchors), ``cli.compare``
-(``extract_sections``), ``cli.validate`` (``contains_user_section_marker``),
-``cli.migrate`` (``strip_host_local_markers``), and ``cli._helpers``
-(``detect_duplicate_section_names``). These tests pin the ported surface so
-the live reader stays behaviourally identical to the frozen one.
+``setforge.user_section_markers`` holds what the live verbs still need on top
+of the grammar frozen in ``setforge.migrations._frozen_markers``:
+``cli.validate`` (``contains_user_section_marker``), ``cli.migrate``
+(``strip_host_local_markers``), ``capture`` (``strip_host_local_sections``)
+and the ``extract_sections`` re-export ``cli.compare`` reads.
 """
 
 import pytest
 
 from setforge.errors import MarkerError
-from setforge.user_section_markers import (
+from setforge.migrations._frozen_markers import (
     SectionSemantics,
     _EndMarker,
     _walk_markers,
+)
+from setforge.user_section_markers import (
     contains_user_section_marker,
-    detect_duplicate_section_names,
     extract_sections,
     strip_host_local_markers,
     strip_host_local_sections,
@@ -88,14 +85,6 @@ def test_allow_legacy_tolerates_missing_keyword_as_shared() -> None:
         "<!-- setforge:user-section start -->\nx\n<!-- setforge:user-section end -->\n"
     )
     assert extract_sections(legacy, allow_legacy=True) == {"0": "x\n"}
-
-
-def test_detect_duplicate_section_names_reports_repeat() -> None:
-    assert detect_duplicate_section_names(_SHARED_DOC + _SHARED_DOC) == "S"
-
-
-def test_detect_duplicate_section_names_none_when_distinct() -> None:
-    assert detect_duplicate_section_names(_HOST_LOCAL_DOC + _SHARED_DOC) is None
 
 
 def test_contains_user_section_marker_detects_start_and_end() -> None:

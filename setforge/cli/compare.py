@@ -16,10 +16,6 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import COMPARE_EXAMPLES
-from setforge.cli._helpers import (
-    ProfileContext,
-    _refuse_duplicate_section_names,
-)
 from setforge.cli._output import make_console, render
 from setforge.compare import CompareStatus, load_ignored_orphans
 from setforge.config import (
@@ -66,10 +62,6 @@ def compare(
     # resolved profile's tracked_files list.
     orphan_overlays = collect_orphan_overlays(cfg, resolved)
     overlay_resolution = effective.local_overlay
-    profile_ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    _refuse_duplicate_section_names(profile_ctx, command="compare")
     ownership_authorized = compare_mod.file_authorization_map(cfg, resolved, repo_root)
 
     with profile_lock(profile):
