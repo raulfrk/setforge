@@ -33,11 +33,17 @@ from setforge.reconcile._claude_ui import (
     _edit_draft,
     _fenced,
     _strip_fence,
-    _themed_style,
 )
 from setforge.reconcile.structured_units import StructuredFormat, parse_scalar_draft
 from setforge.ui.text import sanitize_controls
-from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
+from setforge.ui.widgets import (
+    CANCEL,
+    Button,
+    Cancelled,
+    button_bar,
+    text_prompt,
+    themed_style,
+)
 
 _PROMPT_HEADER: Final = (
     "Rewrite ONE region of a config file ({path}) into a SHAREABLE version for a "
@@ -206,7 +212,7 @@ def _drive_draft(
     :class:`DraftResult` (Keep-local / Adopt) or :data:`CANCEL` (only ← Back / Esc —
     a degraded failure or a gate rejection re-prompts, it does not cancel).
     """
-    style = _themed_style()
+    style = themed_style()
     session: ClaudeSession | None = None
     note = ""
     while True:

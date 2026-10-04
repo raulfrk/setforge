@@ -26,7 +26,7 @@ _LIVE = (
 def test_lazy_interactive_seams_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
     from prompt_toolkit.styles import Style
 
-    from setforge.reconcile import _claude_ui, share_draft
+    from setforge.reconcile import share_draft
     from setforge.ui import widgets
 
     sentinel = object()
@@ -42,7 +42,7 @@ def test_lazy_interactive_seams_delegate(monkeypatch: pytest.MonkeyPatch) -> Non
         return stage_mod.CANCEL
 
     monkeypatch.setattr(widgets, "button_bar", lambda *args, **kwargs: sentinel)
-    monkeypatch.setattr(_claude_ui, "_themed_style", lambda: style)
+    monkeypatch.setattr(widgets, "themed_style", lambda: style)
     monkeypatch.setattr(share_draft, "draft_hunk", fake_hunk)
     monkeypatch.setattr(share_draft, "draft_key_unit", fake_key)
 

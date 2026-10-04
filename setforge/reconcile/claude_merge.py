@@ -35,12 +35,18 @@ from setforge.reconcile._claude_ui import (
     _edit_draft,
     _fenced,
     _strip_fence,
-    _themed_style,
 )
 from setforge.reconcile.merge_model import Conflict
 from setforge.reconcile.wizard import ClaudeMergeFn
 from setforge.ui.text import sanitize_controls
-from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
+from setforge.ui.widgets import (
+    CANCEL,
+    Button,
+    Cancelled,
+    button_bar,
+    text_prompt,
+    themed_style,
+)
 
 _PROMPT_HEADER = (
     "Resolve ONE merge conflict in {path}. Three versions of the same region "
@@ -153,7 +159,7 @@ def _merge_one(conflict: Conflict, *, display_path: str) -> bytes | Cancelled:
     for every re-prompt; a failed first turn leaves it unset so the next attempt
     rebuilds the full prompt fresh.
     """
-    style = _themed_style()
+    style = themed_style()
     session: ClaudeSession | None = None
     note = ""
     while True:

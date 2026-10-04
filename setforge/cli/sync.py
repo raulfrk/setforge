@@ -19,7 +19,6 @@ from click import ClickException
 from setforge import (
     atomicio,
     codex_lifecycle,
-    deploy,
     operations,
     transitions,
     vscode_extensions,
@@ -846,34 +845,3 @@ def _run_capture(
                 )
             )
     return results
-
-
-def _restore_sync_snapshots(
-    file_pre: dict[Path, str | None],
-    state_pre: tuple[transitions.StateSnapshotEntry, ...],
-) -> None:
-    """Restore the tracked srcs / configs and stored bases to pre-sync state.
-
-    Invoked from :func:`sync`'s Ctrl-C handler so an interrupted capture
-    leaves NO partially-written tracked srcs and NO base advanced ahead
-    of its (now restored) tracked src — the corruption direction the
-    transition machinery exists to prevent. Mirrors the file+state restore
-    ``revert`` performs, but in-process from the snapshots ``sync`` took
-    before :func:`_run_capture`.
-
-    Per path in ``file_pre``: ``None`` (absent pre-sync) → unlinked;
-    text → rewritten atomically, preserving the file's current permission
-    bits (falling back to 0o644 when it was created during the aborted
-    capture) so a restore never demotes an executable or 0o644 config to
-    the 0600 mkstemp default. Store state is restored via
-    :func:`transitions.restore_state_snapshots`.
-    """
-    for path, pre_text in file_pre.items():
-        if pre_text is None:
-            path.unlink(missing_ok=True)
-            continue
-        if path.exists() and deploy.read_text_exact(path) == pre_text:
-            continue
-        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
-        atomicio.atomic_write_bytes(path, deploy.encode_text_exact(pre_text), mode=mode)
-    transitions.restore_state_snapshots(state_pre)

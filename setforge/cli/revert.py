@@ -1136,23 +1136,6 @@ def _transition_legacy_symlink_paths(
     return frozenset()
 
 
-def _revert_symlink_paths(config: Path, profile: str) -> tuple[Path, ...]:
-    cfg = load_config(config)
-    repo_root = config.resolve().parent
-    try:
-        resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    except ProfileNotFound:
-        return ()
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    return tuple(
-        sub_dst
-        for tracked_file, _name, _src, sub_dst in _iter_all_tracked_files(ctx)
-        if tracked_file.symlink is not None
-    )
-
-
 def _revert_adapter_snapshots(
     *,
     extensions: bool,

@@ -160,29 +160,3 @@ def pt_style(theme: Mapping[Role, Color] = THEME) -> dict[str, str]:
     adapter formats are never crossed).
     """
     return {f"class:{role.value}": color.truecolor for role, color in theme.items()}
-
-
-def render_demo(stream: object) -> str:
-    """The self-demo body: every role rendered as a styled sample line for
-    ``stream``. Returned (not printed) so it is unit-testable; ``_main`` writes
-    it. Resolves colour from ``stream`` like every other adapter call."""
-    lines = [
-        styled(
-            f"  {role.value:<12} sample text — {THEME[role].truecolor}",
-            role,
-            stream=stream,
-        )
-        for role in Role
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def _main() -> None:
-    """``python -m setforge.ui.theme`` — print the palette demo to stdout."""
-    import sys
-
-    sys.stdout.write(render_demo(sys.stdout))
-
-
-if __name__ == "__main__":
-    _main()

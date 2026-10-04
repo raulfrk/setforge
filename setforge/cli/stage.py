@@ -106,9 +106,9 @@ def button_bar[T](
 
 def _themed_style() -> Style:
     """Load prompt-toolkit styling on first interactive use."""
-    from setforge.reconcile._claude_ui import _themed_style as build
+    from setforge.ui.widgets import themed_style
 
-    return build()
+    return themed_style()
 
 
 class _ShareDraftProxy:
@@ -625,25 +625,6 @@ def _prepare_structured_persist(
         hunks=su_mod.serialize_structured(merged),
         drafts=drafts,
     )
-
-
-def _persist_structured(
-    profile: str,
-    stage: StructuredFileStage,
-    result: StructuredWalkResult,
-    final_live: bytes,
-    *,
-    observed_live: bytes | None = None,
-) -> None:
-    """Prepare and record a structured walk while the caller holds the lock."""
-    plan = _prepare_structured_persist(
-        profile,
-        stage,
-        result,
-        final_live,
-        observed_live=observed_live,
-    )
-    _commit_persist(profile, stage.fid, stage.base, plan)
 
 
 def counts(hunks: list[Hunk]) -> Counter[HunkClass]:
