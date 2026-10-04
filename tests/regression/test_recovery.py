@@ -32,12 +32,17 @@ def _said(result: subprocess.CompletedProcess[str]) -> str:
     return result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("update", [False, True], ids=["fresh", "update"])
 def test_killed_install_recovers_to_the_exact_pre_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, update: bool
 ) -> None:
     host = extension_host(tmp_path, monkeypatch)
+    if update:
+        assert host.proc_install().returncode == 0
+        host.tracked("note.txt").write_bytes(b"two\n")
+        (host.bin_dir / "installed").unlink()
     before = _live_tree(host)
-    expected = b"one\n"
+    expected = b"two\n" if update else b"one\n"
     host.arm("install")
 
     killed = host.proc_install()
@@ -62,6 +67,25 @@ def test_killed_install_recovers_to_the_exact_pre_state(
     assert retried.returncode == 0, retried.stderr
     assert host.live("note.txt").read_bytes() == expected
     assert host.installed_extensions() == ["pub.name"]
+
+
+def test_recovery_restores_a_backup_that_existed_before_the_killed_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = extension_host(tmp_path, monkeypatch)
+    assert host.proc_install().returncode == 0
+    host.tracked("note.txt").write_bytes(b"two\n")
+    (host.bin_dir / "installed").unlink()
+    host.live("note.txt.bak").write_bytes(b"older\n")
+    before = _live_tree(host)
+    host.arm("install")
+    assert host.proc_install().returncode != 0
+
+    recovered = host.proc("recover", "--apply", "--yes", config=False)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert _live_tree(host) == before
+    assert host.live("note.txt.bak").read_bytes() == b"older\n"
 
 
 def test_unfinished_operation_blocks_mutating_commands_until_recovered(
