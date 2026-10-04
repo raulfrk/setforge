@@ -101,6 +101,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A `--to-before` chain checks every step before the first write. `show` and
   the preview now list every recorded path, including tree entries, symlinks,
   claim files, orphan deletions and empty files.
+  `revert` also removes the directories the command created, deepest first,
+  and keeps any that gained other entries or existed before.
 - Transitions recorded by 1.3.9 or earlier 1.4 development builds in the old
   patch format cannot be reverted by this version: `revert` refuses them with a
   message naming the version that recorded them and the paths to restore by
