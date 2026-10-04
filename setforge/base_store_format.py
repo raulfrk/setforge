@@ -1,18 +1,14 @@
-"""Shared, payload-agnostic format-version sidecar for the base stores.
+"""Payload-agnostic format-version sidecar for the base store.
 
-Both per-host stored-base stores — the verbatim-bytes store
-(:mod:`setforge.base_store`) and the forked-scalar store
-(:mod:`setforge.scalar_base_store`) — persist a merge ancestor whose
-on-disk format could change in a future release. Without a marker, a
-future-format ancestor would be silently mis-parsed. This module adds one
-``.format-version`` sidecar per *store root* (a ``Path``) recording the
-``MAJOR.MINOR`` format the writer used, and a refuse-on-mismatch check.
+The per-host stored-base store (:mod:`setforge.base_store`) persists a merge
+ancestor whose on-disk format could change in a future release. Without a
+marker, a future-format ancestor would be silently mis-parsed. This module
+adds one ``.format-version`` sidecar per *store root* (a ``Path``) recording
+the ``MAJOR.MINOR`` format the writer used, and a refuse-on-mismatch check.
 
-The helper is deliberately format-agnostic: it knows nothing about bytes
-vs JSON payloads (those are orthogonal to the format version) and only
-ever touches ``root/.format-version``. Both stores call
-:func:`check_format_version` before deserializing and
-:func:`stamp_format_version` from their write path.
+The helper knows nothing about the payload and only ever touches
+``root/.format-version``. The store calls :func:`check_format_version` before
+reading and :func:`stamp_format_version` from its write path.
 
 Grandfather / refuse contract
 -----------------------------
@@ -49,19 +45,17 @@ BASE_STORE_FORMAT_VERSION: Final[str] = "1.0"
 A ``MAJOR.MINOR`` token, independent of
 :data:`setforge.migrations.current_expected_schema_version` (the *config*
 schema): the base-store payload format evolves on its own cadence. Bumped
-manually when the byte/scalar store layout changes incompatibly.
+manually when the store layout changes incompatibly.
 """
 
 
-def check_format_version(
-    root: Path, *, expected: str = BASE_STORE_FORMAT_VERSION
-) -> None:
-    """Refuse if ``root``'s sidecar records a version other than ``expected``.
+def check_format_version(root: Path) -> None:
+    """Refuse if ``root``'s sidecar records a version this engine does not write.
 
     Reads ``root/.format-version`` and tuple-compares its recorded version
-    against ``expected``. A missing sidecar is grandfathered (returns
-    silently). A present-but-unreadable or unparseable sidecar, or a
-    version that does not equal ``expected``, raises
+    against :data:`BASE_STORE_FORMAT_VERSION`. A missing sidecar is
+    grandfathered (returns silently). A present-but-unreadable or unparseable
+    sidecar, or a version that does not equal it, raises
     :class:`BaseStoreSchemaError`. Side-effect-free: never writes.
     """
     sidecar = root / SIDECAR_NAME
@@ -81,18 +75,16 @@ def check_format_version(
             f"unparseable base-store format version {recorded!r} at {sidecar}: "
             f"{err}; delete {root} to re-grandfather it (next merge is noisier)"
         ) from err
-    if found != parse_schema_version(expected):
+    if found != parse_schema_version(BASE_STORE_FORMAT_VERSION):
         raise BaseStoreSchemaError(
             f"incompatible base-store format at {root}: found {recorded!r}, "
-            f"this engine writes {expected!r}; delete {root} to re-grandfather "
-            "it (next merge is noisier)"
+            f"this engine writes {BASE_STORE_FORMAT_VERSION!r}; delete {root} "
+            "to re-grandfather it (next merge is noisier)"
         )
 
 
-def stamp_format_version(
-    root: Path, *, version: str = BASE_STORE_FORMAT_VERSION
-) -> None:
-    """Atomically record ``version`` in ``root``'s sidecar.
+def stamp_format_version(root: Path) -> None:
+    """Atomically record :data:`BASE_STORE_FORMAT_VERSION` in ``root``'s sidecar.
 
     Idempotent: re-writing the same version yields identical content. Call
     from the write path only — the single-writer-install invariant makes
@@ -100,4 +92,4 @@ def stamp_format_version(
     :func:`setforge.atomicio.atomic_write_text` (fsync-data, replace, parent
     fsync), so no ``.<name>.tmp`` debris survives a successful write.
     """
-    atomicio.atomic_write_text(root / SIDECAR_NAME, version + "\n")
+    atomicio.atomic_write_text(root / SIDECAR_NAME, BASE_STORE_FORMAT_VERSION + "\n")

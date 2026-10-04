@@ -61,6 +61,16 @@ def test_present_mismatch_refuses(tmp_path: Path) -> None:
     assert f"delete {tmp_path} to re-grandfather it (next merge is noisier)" in message
 
 
+def test_present_mismatch_message_is_exact(tmp_path: Path) -> None:
+    (tmp_path / base_store_format.SIDECAR_NAME).write_text("0.9\n", encoding="utf-8")
+    with pytest.raises(BaseStoreSchemaError) as excinfo:
+        base_store_format.check_format_version(tmp_path)
+    assert str(excinfo.value) == (
+        f"incompatible base-store format at {tmp_path}: found '0.9', this engine "
+        f"writes '1.0'; delete {tmp_path} to re-grandfather it (next merge is noisier)"
+    )
+
+
 def test_present_garbage_refuses_from_config_error(tmp_path: Path) -> None:
     (tmp_path / base_store_format.SIDECAR_NAME).write_text(
         "not-a-version\n", encoding="utf-8"
@@ -97,6 +107,11 @@ def test_stamp_writes_sidecar(tmp_path: Path) -> None:
         sidecar.read_text(encoding="utf-8").strip()
         == base_store_format.BASE_STORE_FORMAT_VERSION
     )
+
+
+def test_stamp_writes_exact_bytes(tmp_path: Path) -> None:
+    base_store_format.stamp_format_version(tmp_path)
+    assert (tmp_path / base_store_format.SIDECAR_NAME).read_bytes() == b"1.0\n"
 
 
 def test_stamp_leaves_no_tmp_debris(tmp_path: Path) -> None:
