@@ -549,14 +549,12 @@ def detect_orphans(
     skipped_unmanaged = 0
     skipped_host_local = 0
     for path in sorted(touched_paths - tracked_paths - containing_paths, key=str):
-        if _norm(path) in host_local or any(
-            path.is_relative_to(root) for root in own_state
-        ):
+        if _norm(path) in host_local:
             # setforge-written host-local state (the local.yaml/additional-content
-            # stubs + every profile's bootstrap dst) and setforge's own state
-            # trees — never a tracked deployment, excluded up front so a file
-            # that happens to live under a managed root is never reaped.
-            # Data-loss guard; see _host_local_files and _own_state_roots.
+            # stubs + every profile's bootstrap dst) — never a tracked
+            # deployment, excluded up front so a file that happens to live under
+            # a managed root is never reaped. Data-loss guard; see
+            # _host_local_files.
             skipped_host_local += 1
             continue
         if path.is_relative_to(src_root) or path in src_paths:
@@ -564,6 +562,11 @@ def detect_orphans(
             continue
         if not any(path.is_relative_to(root) for root in managed_roots):
             skipped_unmanaged += 1
+            continue
+        if any(path.is_relative_to(root) for root in own_state):
+            # setforge's own records under a managed root: same data-loss
+            # guard as the host-local files above; see _own_state_roots.
+            skipped_host_local += 1
             continue
         if not os.path.lexists(path):
             skipped_absent += 1
