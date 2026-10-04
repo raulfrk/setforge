@@ -68,6 +68,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A corrupt adapter record in a transition gives a clean error from `revert`,
   `transitions show` and `transitions list`.
 - A transition's recorded end time is no longer earlier than its start.
+- `install --dry-run` prints a `would-be refusal` block for permission-mode
+  drift and for a symlink destination occupied by a regular file, which the
+  real install refuses.
+- `sync` and `capture` refuse a staged file whose stored draft is not UTF-8
+  before prompting, instead of failing with a decode error afterwards.
 
 ### Changed
 
