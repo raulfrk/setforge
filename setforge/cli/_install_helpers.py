@@ -200,22 +200,13 @@ def _planned_deploy_action(record: _PendingDeploy) -> deploy.DeployAction | None
         and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
     ):
         return deploy.DeployAction.REMOVED
-    if not record.resolved.dst_existed:
-        if (
-            record.reconcile is not None
-            and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
-        ):
-            return deploy.DeployAction.NOOP
-        return deploy.DeployAction.CREATED
-    if record.resolved.real_dst.read_bytes() != deploy.encode_text_exact(
-        record.resolved.content
+    if (
+        not record.resolved.dst_existed
+        and record.reconcile is not None
+        and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
     ):
-        return deploy.DeployAction.UPDATED
-    live_mode = stat.S_IMODE(record.resolved.real_dst.stat().st_mode)
-    expected_mode = record.resolved.effective_mode
-    if expected_mode is not None and live_mode != expected_mode:
-        return deploy.DeployAction.UPDATED
-    return deploy.DeployAction.NOOP
+        return deploy.DeployAction.NOOP
+    return deploy.classify_write(record.resolved)
 
 
 def _apply_tracked_file_plan(
@@ -240,13 +231,10 @@ def _is_utf8(data: bytes) -> bool:
 def _plain_reconcile_content(
     outcome: reconcile_apply.ReconcileOutcome,
     live_bytes: bytes | None,
-) -> str | None:
+) -> bytes | None:
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
-        if not isinstance(outcome.content, bytes):
-            return None
-        return outcome.content.decode("utf-8")
-    live = live_bytes if live_bytes is not None else b""
-    return live.decode("utf-8")
+        return outcome.content if isinstance(outcome.content, bytes) else None
+    return live_bytes if live_bytes is not None else b""
 
 
 class _SeedButton(Enum):
@@ -482,9 +470,9 @@ def _resolve_one_pending(
             tracked_file=tracked_file,
             resolved=None,
             symlink_content=(
-                generated.rendered
+                generated.rendered.encode("utf-8")
                 if generated is not None
-                else deploy.read_text_exact(sub_src)
+                else sub_src.read_bytes()
             ),
             symlink_mode=(
                 tracked_file.mode
@@ -504,7 +492,7 @@ def _resolve_one_pending(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            resolved=replace(resolved, content=generated.rendered),
+            resolved=replace(resolved, content=generated.rendered.encode("utf-8")),
             generated=generated,
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
@@ -566,7 +554,7 @@ class _PendingDeploy:
     resolved: deploy.ResolvedDeploy | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
     preview_action: deploy.DeployAction | None = None
-    symlink_content: str | None = None
+    symlink_content: bytes | None = None
     symlink_mode: int | None = None
     generated: GeneratedResolution | None = None
 
@@ -754,7 +742,6 @@ def _deploy_pending_symlink(record: _PendingDeploy) -> deploy.DeployResult:
     if record.symlink_content is None or record.symlink_mode is None:
         raise AssertionError("symlink pending deploy lacks frozen source")
     return deploy.deploy_symlinked_file(
-        record.sub_src,
         record.sub_dst,
         record.tracked_file,
         source_content=record.symlink_content,

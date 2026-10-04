@@ -1,15 +1,18 @@
 """Call the domain verbs with the inputs the CLI computes for them."""
 
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
 from setforge import capture as capture_mod
 from setforge import compare as compare_mod
+from setforge import deploy
 from setforge.cli import sync as sync_cli
 from setforge.cli._helpers import ProfileContext
 from setforge.config import (
     Config,
     ResolvedProfile,
+    TrackedFile,
     resolve_and_expand,
     resolve_profile,
 )
@@ -66,4 +69,30 @@ def compare_profile(
         repo,
         resolved=resolved,
         ownership_authorized=compare_mod.file_authorization_map(config, resolved, repo),
+    )
+
+
+def copy_atomic(
+    src: Path, dst: Path, *, backup: bool = True, mode: int | None = None
+) -> deploy.DeployResult:
+    """Resolve then write one file, the two steps install runs per tracked file."""
+    return deploy.write_resolved_deploy(
+        deploy.resolve_deploy(src, dst, mode=mode), backup=backup
+    )
+
+
+def deploy_symlinked_file(
+    src: Path, dst: Path, tracked_file: TrackedFile, *, backup: bool = True
+) -> deploy.DeployResult:
+    """Deploy a symlinked file from the source snapshot the install plan takes."""
+    return deploy.deploy_symlinked_file(
+        dst,
+        tracked_file,
+        source_content=src.read_bytes(),
+        source_mode=(
+            tracked_file.mode
+            if tracked_file.mode is not None
+            else stat.S_IMODE(src.stat().st_mode)
+        ),
+        backup=backup,
     )

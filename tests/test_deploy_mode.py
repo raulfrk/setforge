@@ -1,4 +1,4 @@
-"""Tests for the ``mode=`` kwarg of :func:`setforge.deploy.copy_atomic`.
+"""Tests for the ``mode=`` kwarg of :func:`setforge.deploy.resolve_deploy`.
 
 The contract:
 
@@ -26,7 +26,8 @@ from pathlib import Path
 import pytest
 
 import setforge.deploy as deploy_mod
-from setforge.deploy import copy_atomic, resolve_deploy, write_resolved_deploy
+from setforge.deploy import resolve_deploy, write_resolved_deploy
+from tests.verb_calls import copy_atomic
 
 
 def test_mode_kwarg_applied_to_fresh_dst(tmp_path: Path) -> None:

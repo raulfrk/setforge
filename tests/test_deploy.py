@@ -12,10 +12,10 @@ from setforge.deploy import (
     DeployAction,
     DeployResult,
     bootstrap_local,
-    copy_atomic,
     validate_srcs_exist,
 )
 from setforge.errors import ConfigError, MissingTrackedFile
+from tests.verb_calls import copy_atomic
 
 
 def test_fresh_deploy_creates_dst(tmp_path: Path) -> None:
