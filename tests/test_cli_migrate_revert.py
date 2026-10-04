@@ -304,6 +304,7 @@ def test_migrate_revert_round_trip_is_byte_exact(
     assert file_images(recorded) == {
         cfg: (pre_cfg, cfg.read_bytes()),
         sidecar: (None, b"migrated body\n"),
+        sidecar.parent: (None, None),
     }
 
     revert = runner.invoke(
@@ -312,6 +313,7 @@ def test_migrate_revert_round_trip_is_byte_exact(
     assert revert.exit_code == 0, revert.output
     assert cfg.read_bytes() == pre_cfg
     assert not sidecar.exists(), "revert must remove the migration-created sidecar"
+    assert not sidecar.parent.exists(), "and the directory the migration created"
 
 
 def test_migrate_transition_round_trips_through_metadata_load(

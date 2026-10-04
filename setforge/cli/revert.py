@@ -58,6 +58,7 @@ from setforge.config import (
     resolve_symlink_target,
 )
 from setforge.errors import (
+    InvalidTransitionRecord,
     NoTransitionFound,
     ProfileNotFound,
     RevertFailed,
@@ -112,7 +113,8 @@ def _file_change(delta: transitions.FilesystemDelta) -> tuple[str, str]:
     """Return the ``+``/``-``/``M`` marker and ``+N -M`` line delta of one file.
 
     The line delta counts the lines a unified diff of the two payloads adds
-    and removes; it is empty when neither side is a regular file.
+    and removes (difflib's default heuristics, so a display summary only); it
+    is empty when neither side is a regular file.
     """
     kinds = (delta.pre.kind, delta.post.kind)
     marker = (
@@ -126,7 +128,7 @@ def _file_change(delta: transitions.FilesystemDelta) -> tuple[str, str]:
         return marker, ""
     plus = minus = 0
     matcher = difflib.SequenceMatcher(
-        None, _lines(delta.pre.payload), _lines(delta.post.payload), autojunk=False
+        None, _lines(delta.pre.payload), _lines(delta.post.payload)
     )
     for tag, pre_start, pre_end, post_start, post_end in matcher.get_opcodes():
         if tag != "equal":
@@ -1089,6 +1091,16 @@ def transitions_show(
     _render_ownership_transfers_show(target, console)
 
     console.print("=== reverse this transition ===")
+    try:
+        transitions.refuse_legacy_file_changes(transitions.load_record(target))
+    except RevertFailed:
+        console.print(
+            "  recorded by an earlier version in a format this version cannot "
+            f"revert; use setforge {meta.version}, which recorded it"
+        )
+        return
+    except InvalidTransitionRecord:
+        pass
     console.print(f"  setforge revert --profile={profile} --to-before={target.name}")
     console.print(
         "    (will undo this transition AND every newer transition for this profile)"

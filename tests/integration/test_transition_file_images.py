@@ -53,6 +53,9 @@ def test_install_records_every_changed_file(
     assert _file_changes(created, env.home) == {
         note: (None, note.read_bytes()),
         settings: (None, settings.read_bytes()),
+        note.parent: (None, None),
+        settings.parent: (None, None),
+        note.parent.parent: (None, None),
     }
 
     before = note.read_bytes()

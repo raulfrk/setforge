@@ -65,15 +65,6 @@ def integration_subprocess(
     if resolved is not None:
         git_bins.append(resolved)
     with FakeProcess() as process:
-        patch_bins = ["patch"]
-        resolved_patch = shutil.which("patch")
-        if resolved_patch is not None:
-            patch_bins.append(resolved_patch)
-        for patch_bin in patch_bins:
-            process.pass_command(
-                [patch_bin, process.any(min=0)],
-                occurrences=_GIT_PASSTHROUGH_OCCURRENCES,
-            )
         for git_bin in git_bins:
             for sub in _REAL_GIT_SUBCOMMANDS:
                 process.pass_command(
@@ -216,7 +207,6 @@ def integration_env(
     monkeypatch.setattr("setforge.claude_plugins.resolve_binary", _resolver)
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", _resolver)
     monkeypatch.setattr("setforge.binaries.resolve_binary", _resolver)
-    monkeypatch.setattr("setforge.transitions.resolve_binary", _resolver, raising=False)
 
     def _present(name: str) -> Path:
         path = fake_bin_dir / name

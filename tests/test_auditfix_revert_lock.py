@@ -4,7 +4,7 @@
 inside ``with profile_lock(profile):``. The deploy model relies on a
 single-serialized-process assumption to justify the resolve->write
 staleness window and the symlink-ordering window. ``revert`` previously
-mutated live files (``patch -R``), restored store state, unlinked
+mutated live files, restored store state, unlinked
 symlinks, and appended its own reverse transition entirely UNLOCKED — so
 a concurrent install/sync/revert could interleave and corrupt the live
 tree and/or the recorded base.

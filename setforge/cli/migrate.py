@@ -381,7 +381,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
             _finalize_owned_transition(
                 before=owned_transition_dirs,
                 file_pre=file_pre,
-                file_post=transitions.capture_files(affected, strict=True),
+                file_post=transitions.capture_files(file_pre, strict=True),
             )
     except BaseException as primary:
         try:
@@ -400,7 +400,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # writing a second, overlapping record would break the LIFO revert of the
     # shared setforge.yaml edit. See :func:`_chain_owns_transition`.
     if not _chain_owns_transition(chain):
-        file_post = transitions.capture_files(affected, strict=True)
+        file_post = transitions.capture_files(file_pre, strict=True)
         _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)
@@ -548,7 +548,7 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
             written_count=len(written),
             error=exc,
         )
-    file_post = transitions.capture_files(paths, strict=True)
+    file_post = transitions.capture_files(file_pre, strict=True)
     _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)

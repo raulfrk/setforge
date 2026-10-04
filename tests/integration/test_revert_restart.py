@@ -21,10 +21,13 @@ from setforge.cli import main
 expected = Path(os.environ["SETFORGE_EXPECTED_ROOT"])
 assert Path(setforge.__file__).resolve().is_relative_to(expected)
 real_apply = operations.apply_filesystem_deltas_reverse_anchored
+calls = []
 
 def crash(*args, **kwargs):
     real_apply(*args, **kwargs)
-    os._exit(79)
+    calls.append(1)
+    if len(calls) == int(os.environ["SETFORGE_CRASH_AFTER"]):
+        os._exit(79)
 
 operations.apply_filesystem_deltas_reverse_anchored = crash
 main()
@@ -54,8 +57,8 @@ def test_revert_interrupted_after_writing_files_recovers_through_the_journal(
     home.mkdir()
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
-    note = home / ".restart-revert" / "note.txt"
-    keep = home / ".restart-revert" / "keep.txt"
+    note = home / ".restart-revert" / "sub" / "note.txt"
+    keep = home / ".restart-revert" / "k" / "keep.txt"
     source = repo / "tracked" / "note.txt"
     source.write_bytes(b"one\r\ntwo")
     (repo / "tracked" / "keep.txt").write_bytes(b"keep\n")
@@ -76,6 +79,8 @@ def test_revert_interrupted_after_writing_files_recovers_through_the_journal(
         "HOME": str(home),
         "SETFORGE_STATE_DIR": str(tmp_path / "state"),
         "SETFORGE_EXPECTED_ROOT": str(repo_root),
+        # A chain crashes after its oldest step removed the created directories.
+        "SETFORGE_CRASH_AFTER": "2" if chain else "1",
     }
     install = [
         "install",
@@ -101,7 +106,16 @@ def test_revert_interrupted_after_writing_files_recovers_through_the_journal(
     crashed = _run(revert, env=env, cwd=repo_root, code=_CRASH_AFTER_FIRST_REVERSAL)
 
     assert crashed.returncode == 79, (crashed.stdout, crashed.stderr)
-    assert (note.read_bytes(), keep.stat().st_mode & 0o7777) != (after[0], after[2])
+    if chain:
+        # The update left note.txt.bak beside note.txt, so only the directory
+        # that held keep.txt alone was removed.
+        assert not keep.parent.exists()
+        assert not note.exists()
+    else:
+        assert (note.read_bytes(), keep.stat().st_mode & 0o7777) != (
+            after[0],
+            after[2],
+        )
     assert tuple((home / ".cache/setforge/operations").glob("*.json"))
 
     recovery = _run(
@@ -118,8 +132,8 @@ def test_revert_interrupted_after_writing_files_recovers_through_the_journal(
     reverted = _run(revert, env=env, cwd=repo_root)
     assert reverted.returncode == 0, (reverted.stdout, reverted.stderr)
     if chain:
+        assert not keep.parent.exists()
         assert not note.exists()
-        assert not keep.exists()
     else:
         assert note.read_bytes() == b"one\r\ntwo"
         assert keep.stat().st_mode & 0o7777 == 0o644
