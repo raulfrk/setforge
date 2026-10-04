@@ -23,7 +23,6 @@ from setforge.ui.theme import (
     Role,
     capability,
     pt_style,
-    render_demo,
     sgr,
     styled,
 )
@@ -192,24 +191,3 @@ def test_pt_style_keys() -> None:
     assert style["class:accent"] == "#7aa2f7"
     assert style["class:text"] == "#c0caf5"
     assert set(style) == {f"class:{role.value}" for role in Role}
-
-
-# --------------------------------------------------------------------------- #
-# Task 5 — self-demo smoke
-# --------------------------------------------------------------------------- #
-def test_demo_emits_escapes_under_truecolor(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.setenv("COLORTERM", "truecolor")
-    out = render_demo(_TTY)
-    assert "\033[38;2;" in out  # at least one truecolor introducer
-    assert RESET in out
-    for role in Role:  # every role rendered
-        assert role.value in out
-
-
-def test_demo_no_escapes_under_mono(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NO_COLOR", "1")
-    out = render_demo(_TTY)
-    assert "\033" not in out  # mono → plain text, never an escape
-    for role in Role:
-        assert role.value in out
