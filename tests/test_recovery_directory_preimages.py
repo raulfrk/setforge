@@ -34,7 +34,6 @@ def _removed_tree(
         profile="p",
         config_dir=None,
         resources_lock=False,
-        command_line=("install",) if command == "install" else ("project", "sync"),
         paths=paths,
         path_guards=_path_guards(leaf),
     )
@@ -175,7 +174,6 @@ def test_recovery_restores_the_mode_an_operation_changed_on_a_recorded_directory
             profile="p",
             config_dir=None,
             resources_lock=False,
-            command_line=("project", "sync"),
             paths=(parent, leaf),
             path_guards=_path_guards(leaf),
         ),

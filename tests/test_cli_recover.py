@@ -94,7 +94,6 @@ def test_public_mcp_recovery_uses_exact_evidence_before_effects(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=(),
         paths=(),
         adapters=(
             operations.AdapterSnapshot(operations.AdapterKind.MCP, json.dumps([row])),
@@ -128,7 +127,6 @@ def _prepare(tmp_path: Path, path: Path) -> operations.OperationJournal:
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("sync", "--profile=p"),
         paths=(path,),
     )
     return operations.begin_checkpoint(
@@ -196,7 +194,6 @@ def test_recover_rejects_changed_install_parent_before_adapter_effects(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("install", "--profile=p"),
         paths=(absent_path, path),
         path_guards=(
             operations.PathGuard(absent_parent, None, None, None),
@@ -276,7 +273,6 @@ def test_recover_locks_every_profile_named_by_state_snapshots(
         config_dir=tmp_path,
         config_dirs=(tmp_path / "host-local",),
         resources_lock=False,
-        command_line=("revert",),
         paths=(),
         state_snapshots=(state,),
     )

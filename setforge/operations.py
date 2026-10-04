@@ -150,7 +150,6 @@ class OperationJournal:
     resources_lock: bool
     phase: OperationPhase
     created_at: str
-    command_line: tuple[str, ...]
     paths: tuple[PathSnapshot, ...]
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
     reserved_profiles: tuple[str, ...] = ()
@@ -468,7 +467,6 @@ def prepare(
     profile: str,
     config_dir: Path | None,
     resources_lock: bool,
-    command_line: tuple[str, ...],
     paths: tuple[Path, ...],
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     adapters: tuple[AdapterSnapshot, ...] = (),
@@ -495,7 +493,6 @@ def prepare(
             resources_lock=resources_lock,
             phase=OperationPhase.PREPARED,
             created_at=datetime.now(UTC).isoformat(),
-            command_line=command_line,
             paths=_snapshot_paths_with_missing_ancestors(paths),
             state_snapshots=state_snapshots,
             reserved_profiles=tuple(
@@ -2068,7 +2065,8 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
         "resources_lock": journal.resources_lock,
         "phase": journal.phase.value,
         "created_at": journal.created_at,
-        "command_line": list(journal.command_line),
+        # Unused, but readers up to 1.3.9 reject a journal without it.
+        "command_line": [],
         "paths": [
             {
                 "path": str(item.path),
@@ -2259,7 +2257,6 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         resources_lock=resources_lock,
         phase=OperationPhase(_require_str(raw, "phase")),
         created_at=_require_str(raw, "created_at"),
-        command_line=_require_str_tuple(raw, "command_line"),
         paths=paths,
         state_snapshots=states,
         reserved_profiles=reserved_profiles,

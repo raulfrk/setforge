@@ -519,7 +519,6 @@ def sync(
             profile=profile,
             config_dir=repo_root,
             resources_lock=False,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=tuple(src_paths),
             state_snapshots=state_pre,
         )

@@ -21,7 +21,6 @@ from rich.table import Table
 
 from setforge import operations
 from setforge import snapshots as snap_mod
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -343,7 +342,6 @@ def snapshot_restore(
             config_dir=resolved_config.resolve().parent,
             config_dirs=tuple(config_dirs),
             resources_lock=True,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=tuple(file.path for file in plan.files),
             path_guards=plan.destination_ancestors,
         )

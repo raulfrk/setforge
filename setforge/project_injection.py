@@ -1085,7 +1085,6 @@ def _project_transaction(
     profile: str,
     config_dir: Path | None,
     config_dirs: tuple[Path, ...] = (),
-    command_line: tuple[str, ...],
     paths: tuple[Path, ...],
     checkpoint: str,
     recovery: str,
@@ -1101,7 +1100,6 @@ def _project_transaction(
         config_dir=config_dir,
         config_dirs=config_dirs,
         resources_lock=True,
-        command_line=command_line,
         paths=paths,
         path_guards=capture_parent_path_guards(paths),
     )
@@ -1280,7 +1278,6 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             command="project-inject",
             profile=operation_profile,
             config_dir=plan.config_root,
-            command_line=("project", "inject", plan.profile, str(plan.target)),
         )
         if fresh.no_op:
             if any(
@@ -1967,7 +1964,6 @@ def apply_removal(plan: ProjectRemovePlan) -> None:
             command="project-remove",
             profile=operation_profile,
             config_dir=config_root,
-            command_line=("project", "remove", plan.profile, str(plan.target)),
             paths=paths,
             checkpoint="restore-project-files-and-retire-state",
             recovery="restore injected files, manifest, and ownership claims",
@@ -2199,7 +2195,6 @@ def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
             command="project-remove",
             profile=operation_profile,
             config_dir=config_root,
-            command_line=("project", "remove", plan.profile, str(plan.target)),
             paths=paths,
             checkpoint="retire-stale-project-state",
             recovery="restore the manifest, ownership claims, and Git state",

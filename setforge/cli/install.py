@@ -42,7 +42,6 @@ from setforge import (
 from setforge import secrets as secrets_mod
 from setforge import source as source_mod
 from setforge import vscode_extensions as vscode_extensions_mod
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -2816,7 +2815,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             profile=profile,
             config_dir=config.parent,
             resources_lock=True,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=journal_paths,
             path_guards=install_parent_guards,
             state_snapshots=state_pre,

@@ -13,7 +13,6 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 import json
 import os
 import stat
-import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -26,7 +25,6 @@ from rich.table import Table
 
 from setforge import operations, orphan_scan, transitions
 from setforge._editor import run_editor
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -875,7 +873,6 @@ def _prepare_revert_journal(
         profile=profile,
         config_dir=config.resolve().parent,
         resources_lock=True,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=tuple(touched),
         state_snapshots=tuple(state_keys.values()),
         adapters=_revert_adapter_snapshots(

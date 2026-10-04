@@ -366,7 +366,6 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
         config_dir=cfg_path.resolve().parent,
         resources_lock=False,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=affected,
         profiles=_migration_reserved_profiles(cfg_path),
     )
@@ -520,7 +519,6 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
         config_dir=cfg_path.resolve().parent,
         resources_lock=False,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=tuple(paths),
     )
     journal = operations.begin_checkpoint(

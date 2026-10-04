@@ -1034,7 +1034,6 @@ def _commit_owned_persist(
         profile=profile,
         config_dir=config_dir,
         resources_lock=True,
-        command_line=tuple(sys.argv[1:]),
         paths=paths,
         state_snapshots=_store_snapshots(profile, stage.fid),
     )

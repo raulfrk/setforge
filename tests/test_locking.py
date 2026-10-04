@@ -129,7 +129,6 @@ def test_journal_registry_lock_refusal_is_a_clean_error(
             profile="p",
             config_dir=None,
             resources_lock=False,
-            command_line=("sync",),
             paths=(),
         )
 
@@ -389,7 +388,6 @@ def test_mutation_locks_refuse_cross_profile_active_journal(
         profile="first",
         config_dir=config_dir,
         resources_lock=journal_resources,
-        command_line=("install",),
         paths=(),
     )
 

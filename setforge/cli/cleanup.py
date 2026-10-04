@@ -530,7 +530,6 @@ def _apply_cleanup(
                 profile=profile,
                 config_dir=config_dir,
                 resources_lock=True,
-                command_line=("cleanup", "--apply"),
                 paths=(),
             )
             journal = operations.begin_checkpoint(

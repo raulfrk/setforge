@@ -349,7 +349,6 @@ def _execute_scan_cleanup(
             profile=profile,
             config_dir=config_path.resolve().parent,
             resources_lock=True,
-            command_line=("cleanup-orphans", "--scan", "--apply"),
             paths=tuple(entry.path for entry in selected),
             path_guards=_scan_path_guards(selected),
         )
@@ -613,7 +612,6 @@ def _apply_orphan_cleanup(
             profile=profile,
             config_dir=config_path.resolve().parent,
             resources_lock=True,
-            command_line=("cleanup-orphans", "--apply"),
             paths=paths,
             path_guards=orphan_scan.capture_parent_path_guards(paths),
         )
