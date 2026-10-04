@@ -42,6 +42,7 @@ from json5.model import (
     JSONObject,
     JSONText,
     LineComment,
+    String,
     UnaryOp,
     Value,
 )
@@ -353,24 +354,20 @@ class _MappingBackend(Protocol):
         """Return the raw (wrapped) node for ``key`` on ``side``."""
         ...
 
-    def take_ours(self, key: str) -> None:
-        """Keep ours' value + comment unchanged (no-op marker)."""
-        ...
-
     def take_theirs(self, key: str) -> None:
         """Replace ours' value at ``key`` with theirs' node AND comment."""
         ...
 
-    def add(self, side: str, key: str) -> None:
-        """Add ``key`` to ours from ``side``, carrying that side's comment."""
+    def add_theirs(self, key: str) -> None:
+        """Add ``key`` to ours from theirs, carrying theirs' comment."""
         ...
 
     def delete(self, key: str) -> None:
         """Delete ``key`` from ours."""
         ...
 
-    def side_keys(self, side: str) -> list[str]:
-        """Return ``side``'s keys in document order (empty if absent)."""
+    def theirs_keys(self) -> list[str]:
+        """Return theirs' keys in document order."""
         ...
 
 
@@ -408,40 +405,35 @@ class _RuamelBackend:
     comment-copy steps are silent no-ops).
     """
 
-    def __init__(self, base: object, ours: object, theirs: object) -> None:
+    def __init__(
+        self, base: Mapping[str, object], ours: object, theirs: Mapping[str, object]
+    ) -> None:
         # ours is guaranteed a MutableMapping by _make_backend's dispatch.
         self._ours: MutableMapping[str, object] = ours  # type: ignore[assignment]
-        self._sides: dict[str, Mapping[str, object]] = {"ours": self._ours}
-        if isinstance(base, Mapping):
-            self._sides["base"] = base
-        if isinstance(theirs, Mapping):
-            self._sides["theirs"] = theirs
+        self._sides: dict[str, Mapping[str, object]] = {
+            "ours": self._ours,
+            "base": base,
+            "theirs": theirs,
+        }
 
     def keys(self) -> list[str]:
         return list(self._ours.keys())
 
-    def side_keys(self, side: str) -> list[str]:
-        node = self._sides.get(side)
-        return list(node.keys()) if node is not None else []
+    def theirs_keys(self) -> list[str]:
+        return list(self._sides["theirs"].keys())
 
     def has(self, side: str, key: str) -> bool:
-        node = self._sides.get(side)
-        return node is not None and key in node
+        return key in self._sides[side]
 
     def raw(self, side: str, key: str) -> object:
         return self._sides[side][key]
-
-    def take_ours(self, key: str) -> None:
-        # ours already holds its value + comment; nothing to do.
-        return
 
     def take_theirs(self, key: str) -> None:
         self._ours[key] = self._sides["theirs"][key]
         self._copy_comment(key)
 
-    def add(self, side: str, key: str) -> None:
-        self._ours[key] = self._sides[side][key]
-        self._copy_comment(key, side)
+    def add_theirs(self, key: str) -> None:
+        self.take_theirs(key)
 
     def delete(self, key: str) -> None:
         # A DELETE outcome means "the key must be absent in the result"; when
@@ -449,14 +441,14 @@ class _RuamelBackend:
         # deletion is already satisfied, so an absent key is a no-op.
         self._ours.pop(key, None)
 
-    def _copy_comment(self, key: str, side: str = "theirs") -> None:
-        """Move ``side``'s attached comment token onto ours at ``key``.
+    def _copy_comment(self, key: str) -> None:
+        """Move theirs' attached comment token onto ours at ``key``.
 
         Only meaningful for ``CommentedMap`` on both sides; plain dicts have
         no ``ca`` table so the guard makes this a no-op.
         """
         ours = self._ours
-        src = self._sides[side]
+        src = self._sides["theirs"]
         if not (isinstance(ours, CommentedMap) and isinstance(src, CommentedMap)):
             return
         if key in src.ca.items:
@@ -497,40 +489,33 @@ class _Json5Backend:
     different position therefore has those runs re-homed, never copied as-is.
     """
 
-    def __init__(self, base: object, ours: JSONObject, theirs: object) -> None:
+    def __init__(self, base: JSONObject, ours: JSONObject, theirs: JSONObject) -> None:
         self._ours: JSONObject = ours
-        self._sides: dict[str, JSONObject] = {"ours": ours}
-        if isinstance(base, JSONObject):
-            self._sides["base"] = base
-        if isinstance(theirs, JSONObject):
-            self._sides["theirs"] = theirs
+        self._sides: dict[str, JSONObject] = {
+            "ours": ours,
+            "base": base,
+            "theirs": theirs,
+        }
         for side in self._sides.values():
             _json5_settle_cr(side)
         self._positions: dict[int, dict[str, int]] = {}
         # Read before any edit: a taken value brings theirs' runs along.
-        self._gone_comments = _json5_comment_texts(
-            self._sides.get("base")
-        ) - _json5_comment_texts(self._sides.get("theirs"))
+        self._gone_comments = _json5_comment_texts(base) - _json5_comment_texts(theirs)
 
     def keys(self) -> list[str]:
         return [_json5_key_text(k) for k in self._ours.keys]
 
-    def side_keys(self, side: str) -> list[str]:
-        node = self._sides.get(side)
-        return [_json5_key_text(k) for k in node.keys] if node is not None else []
+    def theirs_keys(self) -> list[str]:
+        return [_json5_key_text(k) for k in self._sides["theirs"].keys]
 
     def has(self, side: str, key: str) -> bool:
-        node = self._sides.get(side)
-        return node is not None and self._index(node, key) is not None
+        return self._index(self._sides[side], key) is not None
 
     def raw(self, side: str, key: str) -> object:
         node = self._sides[side]
         idx = self._index(node, key)
         assert idx is not None  # caller gates on has(); narrows for mypy
         return node.values[idx]
-
-    def take_ours(self, key: str) -> None:
-        return
 
     def take_theirs(self, key: str) -> None:
         theirs = self._sides["theirs"]
@@ -564,10 +549,10 @@ class _Json5Backend:
             ]
         ours.values[o_idx] = value
 
-    def add(self, side: str, key: str) -> None:
-        # Append ``key``'s key+value nodes from ``side`` onto ours; both lists
+    def add_theirs(self, key: str) -> None:
+        # Append ``key``'s key+value nodes from theirs onto ours; both lists
         # grow together so the derived key_value_pairs view stays consistent.
-        src = self._sides[side]
+        src = self._sides["theirs"]
         s_idx = self._index(src, key)
         assert s_idx is not None
         ours = self._ours
@@ -647,7 +632,7 @@ class _Json5Backend:
             sep = lead[-1] if lead and isinstance(lead[-1], str) else ""
             ours.leading_wsc = [
                 *ours.leading_wsc,
-                *(x for c in lead if _is_comment(c) for x in (c, sep)),
+                *(x for c in lead if isinstance(c, Comment) for x in (c, sep)),
             ]
             successor.wsc_before = []
         else:
@@ -700,10 +685,6 @@ class _Json5Backend:
 # ---------------------------------------------------------------------------
 
 
-def _is_comment(item: object) -> bool:
-    return isinstance(item, Comment)
-
-
 def _json5_runs(node: JSONObject) -> list[_Wsc]:
     """Every whitespace/comment run between the members of ``node``."""
     runs: list[_Wsc] = [node.leading_wsc]
@@ -714,10 +695,8 @@ def _json5_runs(node: JSONObject) -> list[_Wsc]:
     return runs
 
 
-def _json5_comment_texts(node: JSONObject | None) -> set[str]:
+def _json5_comment_texts(node: JSONObject) -> set[str]:
     """The text of every comment written between the members of ``node``."""
-    if node is None:
-        return set()
     return {
         item.value
         for run in _json5_runs(node)
@@ -798,24 +777,20 @@ def _is_json5_scalar(node: object) -> bool:
     return isinstance(node, Value) and not isinstance(node, JSONObject | JSONArray)
 
 
-def _json5_scalar_value(node: object) -> object:
+def _json5_scalar_value(node: Value) -> object:
     """Recover the plain-python value of a json-five scalar leaf.
 
-    Integer/Float expose a typed ``.value`` (``int`` vs ``float``, keeping
-    ``1`` distinct from ``1.0``); Boolean/Null likewise. String nodes expose
-    ``.characters``. Anything unexpected falls back to a dump+reparse, which
-    still yields the correctly-typed plain value.
+    String nodes expose ``.characters``. Every other scalar exposes a typed
+    ``.value``: Integer/Float (``int`` vs ``float``, keeping ``1`` distinct
+    from ``1.0``), Boolean, Null, Infinity and NaN.
     """
     # Signed numbers wrap another numeric model; its .value omits the sign
     # and is not a primitive. Use the existing parser for this representation.
     if isinstance(node, UnaryOp):
         return _json5_loads(_json5_dumps(node, dumper=ModelDumper()))
-    if hasattr(node, "value") and not hasattr(node, "characters"):
-        return node.value
-    characters = getattr(node, "characters", None)
-    if characters is not None:
-        return str(characters)
-    return _json5_loads(_json5_dumps(node, dumper=ModelDumper()))
+    if isinstance(node, String):
+        return node.characters
+    return node.value
 
 
 # ---------------------------------------------------------------------------
@@ -882,7 +857,7 @@ def _union_keys(backend: _MappingBackend) -> list[str]:
     from ours by definition, so a base-only delete is implicit)."""
     ordered = backend.keys()
     seen = set(ordered)
-    extra = [key for key in backend.side_keys("theirs") if key not in seen]
+    extra = [key for key in backend.theirs_keys() if key not in seen]
     return ordered + extra
 
 
@@ -922,32 +897,7 @@ def _merge_key(
         _merge_mapping(b_raw, o_raw, t_raw, path, conflicts)
         return
 
-    _check_no_shape_mismatch(b_raw, o_raw, t_raw, path)
     _resolve_opaque(backend, key, path, b_raw, o_raw, t_raw, conflicts)
-
-
-def _check_no_shape_mismatch(
-    b_raw: object, o_raw: object, t_raw: object, path: str
-) -> None:
-    """Raise when two DIVERGED sides disagree on container-vs-scalar shape.
-
-    A side that equals base never triggers a mismatch (it is not a competing
-    edit). An ABSENT side is a delete, not a shape — it is resolved by the
-    opaque take / conflict logic, never a type mismatch. Only when both
-    ``ours`` and ``theirs`` are PRESENT, both changed away from base, AND one
-    is a mapping/list while the other is a scalar do we refuse.
-    """
-    if o_raw is ABSENT or t_raw is ABSENT:
-        return
-    o_changed = not _plain_eq(_to_plain(o_raw), _to_plain(b_raw))
-    t_changed = not _plain_eq(_to_plain(t_raw), _to_plain(b_raw))
-    if not (o_changed and t_changed):
-        return
-    if _shape_tag(o_raw) != _shape_tag(t_raw):
-        raise MergeTypeMismatch(
-            f"type mismatch at {path!r}: ours is {_shape_tag(o_raw)}, "
-            f"theirs is {_shape_tag(t_raw)}"
-        )
 
 
 def _shape_tag(node: object) -> str:
@@ -975,6 +925,11 @@ def _resolve_opaque(
     Pure scalars (and the ABSENT sentinel) on all present sides delegate to
     :func:`resolve_scalar`. Containers (lists, or a mapping that is not shared
     by all three) are compared whole via :func:`_to_plain` + :func:`_plain_eq`.
+
+    Raises :class:`~setforge.errors.MergeTypeMismatch` when ours and theirs are
+    both PRESENT, both changed away from base, and differ in shape (mapping /
+    list / scalar). A side that equals base is not a competing edit, and an
+    ABSENT side is a delete, not a shape, so neither is a mismatch.
     """
     b_plain = _to_plain(b_raw)
     o_plain = _to_plain(o_raw)
@@ -984,15 +939,20 @@ def _resolve_opaque(
         _apply_scalar(backend, key, path, b_plain, o_plain, t_plain, conflicts)
         return
 
-    # Container opaque take: ours==base -> theirs; theirs==base -> ours;
-    # ours==theirs -> ours; else conflict.
+    # Container opaque take: ours==base -> theirs; theirs==base or
+    # ours==theirs -> ours stays as it is; else a shape mismatch or a conflict.
     if _plain_eq(o_plain, b_plain):
-        _apply_take(backend, key, "theirs")
-    elif _plain_eq(t_plain, b_plain):
-        _apply_take(backend, key, "ours")
-    elif _plain_eq(o_plain, t_plain):
-        backend.take_ours(key)
-    else:
+        _take_theirs(backend, key)
+    elif not _plain_eq(t_plain, b_plain) and not _plain_eq(o_plain, t_plain):
+        if (
+            o_raw is not ABSENT
+            and t_raw is not ABSENT
+            and _shape_tag(o_raw) != _shape_tag(t_raw)
+        ):
+            raise MergeTypeMismatch(
+                f"type mismatch at {path!r}: ours is {_shape_tag(o_raw)}, "
+                f"theirs is {_shape_tag(t_raw)}"
+            )
         conflicts.append(
             PathConflict(path=path, base=b_plain, ours=o_plain, theirs=t_plain)
         )
@@ -1036,38 +996,32 @@ def _apply_scalar_take(
     value matches an existing side's node (so its comment rides along)."""
     if not backend.has("ours", key):
         # ADD from theirs (ours lacked the key): splice theirs' node.
-        backend.add("theirs", key)
-        return
-    if _scalar_eq(value, o_plain):
-        backend.take_ours(key)
-    elif _scalar_eq(value, t_plain) and backend.has("theirs", key):
+        backend.add_theirs(key)
+    elif (
+        not _scalar_eq(value, o_plain)
+        and _scalar_eq(value, t_plain)
+        and backend.has("theirs", key)
+    ):
         backend.take_theirs(key)
-    else:
-        backend.take_ours(key)
 
 
-def _apply_take(backend: _MappingBackend, key: str, side: str) -> None:
-    """Apply an opaque take from ``side``, adding / deleting as the side dictates.
+def _take_theirs(backend: _MappingBackend, key: str) -> None:
+    """Apply an opaque take from theirs, adding / deleting as theirs dictates.
 
-    A take toward a side that LACKS the key is a DELETE: when ``side`` deleted a
-    container key ours kept unchanged, the result must drop the key from ours
-    rather than copy a non-existent node. Without this guard
-    a ``take_theirs`` on an absent ``theirs`` raised ``KeyError`` mid-merge — an
+    A take toward theirs when theirs LACKS the key is a DELETE: when upstream
+    deleted a container key ours kept unchanged, the result must drop the key
+    from ours rather than copy a non-existent node. Without this guard a
+    ``take_theirs`` on an absent ``theirs`` raised ``KeyError`` mid-merge — an
     install-aborting crash for the legal "upstream deleted a sub-map I left
-    untouched" case (and the seam a structural pin's missing-parent orphan needs
-    to reach its re-assert step).
+    untouched" case.
     """
-    if not backend.has(side, key):
+    if not backend.has("theirs", key):
         if backend.has("ours", key):
             backend.delete(key)
-        return
-    if not backend.has("ours", key):
-        backend.add(side, key)
-        return
-    if side == "theirs":
+    elif backend.has("ours", key):
         backend.take_theirs(key)
     else:
-        backend.take_ours(key)
+        backend.add_theirs(key)
 
 
 # ---------------------------------------------------------------------------
@@ -1080,9 +1034,8 @@ def set_at_path(model: object, path: str, value: object) -> None:
 
     The seam the take-tracked disposition uses to write a chosen value back at
     a :class:`PathConflict`'s path after the 3-way merge. ``path`` is the same
-    DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); a list-suffix
-    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError` because this
-    seam addresses mapping leaves only. ``value`` is a plain-python value — a
+    DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); this seam
+    addresses mapping leaves only. ``value`` is a plain-python value — a
     scalar, ``list`` or ``dict`` (matching :attr:`PathConflict.theirs`, which is
     already unwrapped).
 
@@ -1091,15 +1044,13 @@ def set_at_path(model: object, path: str, value: object) -> None:
     ``dict`` carries no comments, so assignment suffices.
 
     A missing intermediate PARENT raises :class:`KeyError` (no
-    auto-vivification). A list-suffix segment raises :class:`ValueError`. When
-    the resolved parent is not a mapping — a json-five object included, since
-    JSON files are staged as one whole-document unit and never written by path
-    — :class:`~setforge.errors.MergeTypeMismatch` propagates from the leaf-set
+    auto-vivification). When the resolved parent is not a mapping — a
+    json-five object included, since JSON files are staged as one
+    whole-document unit and never written by path —
+    :class:`~setforge.errors.MergeTypeMismatch` propagates from the leaf-set
     step; callers wrapping this seam must account for it alongside
-    ``KeyError`` / ``ValueError``.
+    ``KeyError``.
     """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for set-at-path: {path!r}")
     segments = split_key_path(path)
     parent = _descend_set_parent(_json5_inner(model), segments, path)
     leaf = segments[-1]
@@ -1131,14 +1082,11 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
       subtree survives a no-op re-assert byte-identical.
     * a plain ``dict`` carries no comments, so assignment suffices.
 
-    ``path`` is the same DOTTED grammar as :func:`set_at_path`; a list-suffix
-    segment raises :class:`ValueError`, a missing intermediate parent raises
-    :class:`KeyError`, and a non-mapping parent raises
+    ``path`` is the same DOTTED grammar as :func:`set_at_path`; a missing
+    intermediate parent raises :class:`KeyError`, and a non-mapping parent raises
     :class:`~setforge.errors.MergeTypeMismatch` — the same orphan postures the
     re-assert caller already wraps.
     """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for set-node-at-path: {path!r}")
     segments = split_key_path(path)
     inner = _json5_inner(model)
     parent = _descend_set_parent(inner, segments, path)
@@ -1157,13 +1105,10 @@ def delete_node_at_path(model: object, path: str) -> None:
     splice the ``ABSENT`` sentinel (which the dumper cannot serialise). Per
     backend: ruamel ``CommentedMap`` / plain ``dict`` take a plain ``del`` (the
     key's own comment tokens go with it). A no-op when the leaf is already
-    absent. Same dotted grammar as
-    :func:`set_node_at_path`: a list-suffix segment raises :class:`ValueError`,
-    a missing intermediate parent raises :class:`KeyError`, and a non-mapping
-    parent raises :class:`~setforge.errors.MergeTypeMismatch`.
+    absent. Same dotted grammar as :func:`set_node_at_path`: a missing
+    intermediate parent raises :class:`KeyError`, and a non-mapping parent
+    raises :class:`~setforge.errors.MergeTypeMismatch`.
     """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for delete-node-at-path: {path!r}")
     segments = split_key_path(path)
     inner = _json5_inner(model)
     parent = _descend_set_parent(inner, segments, path)
@@ -1186,8 +1131,7 @@ def get_at_path(model: object, path: str) -> object:
     is a deep-copied plain ``dict`` / ``list`` / scalar (via :func:`_to_plain`),
     never a held ruamel / json-five node alias — so a later in-place mutation of
     the source model cannot clobber the snapshot (B-S1, B-S2). ``path`` is the
-    same DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); a list-suffix
-    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError`. A ``""``
+    same DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``). A ``""``
     ``path`` addresses the ROOT node (whole model) on every navigation seam.
 
     Returns the :data:`setforge.scalar_merge.ABSENT` sentinel when any segment
@@ -1195,8 +1139,6 @@ def get_at_path(model: object, path: str) -> object:
     absent ``P`` stays distinct from a present ``null`` (B-S4). Never raises on
     a missing key — absence is the sentinel, not an exception.
     """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for get-at-path: {path!r}")
     node = _json5_inner(model)
     for seg in split_key_path(path) if path else []:
         if not _is_mapping_node(node):
@@ -1220,13 +1162,11 @@ def get_node_at_path(model: object, path: str) -> object:
     MANDATORY: :func:`merge_structural` mutates the source model in place, so an
     un-copied node reference would reflect post-merge state (B-S1 / B-S2).
 
-    ``path`` is the same DOTTED grammar; a list-suffix segment raises
-    :class:`ValueError`. A ``""`` ``path`` addresses the ROOT node. Returns
+    ``path`` is the same DOTTED grammar. A ``""`` ``path`` addresses the ROOT
+    node. Returns
     :data:`~setforge.scalar_merge.ABSENT` when any segment is missing (never
     raises on a miss).
     """
-    if "[*]" in path or "[]" in path:
-        raise ValueError(f"list suffix not allowed for get-node-at-path: {path!r}")
     node = _json5_inner(model)
     for seg in split_key_path(path) if path else []:
         if not _is_mapping_node(node):

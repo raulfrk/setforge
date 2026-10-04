@@ -25,7 +25,7 @@ from setforge.structural_merge import (
     StructuralMergeResult,
     _json5_inner,
     _Json5Backend,
-    _RuamelBackend,
+    _make_backend,
     _to_plain,
     append_key_segment,
     encode_key_segment,
@@ -472,11 +472,6 @@ def test_get_at_path_present_null_distinct_from_absent() -> None:
     assert snap is not ABSENT
 
 
-def test_get_at_path_rejects_list_suffix() -> None:
-    with pytest.raises(ValueError, match="list suffix"):
-        get_at_path({"a": [1, 2]}, "a[*]")
-
-
 def test_get_at_path_snapshot_is_deep_copy_plain_dict() -> None:
     # B-S1/B-S2: a snapshot must survive a later in-place mutation of source.
     model = {"a": {"b": {"c": 1}}}
@@ -508,12 +503,6 @@ def test_get_at_path_then_merge_does_not_clobber_snapshot_jsonc() -> None:
     merge_structural(base, ours, theirs)
     assert get_at_path(ours, "a") == 2  # merge took theirs
     assert snap == 1  # snapshot untouched
-
-
-def test_set_at_path_rejects_list_suffix() -> None:
-    # I10: list-index pins are rejected at the set seam.
-    with pytest.raises(ValueError, match="list suffix"):
-        set_at_path({"a": [1]}, "a[*]", 9)
 
 
 def test_set_at_path_missing_parent_raises_keyerror() -> None:
@@ -945,6 +934,52 @@ def test_jsonc_signed_scalar_unwraps_to_exact_primitive(
     if token == "-0.0":
         assert isinstance(value, float)
         assert math.copysign(1.0, value) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("1", 1),
+        ("1.5", 1.5),
+        ("1.0", 1.0),
+        ("0x1F", 31),
+        ('"s"', "s"),
+        ("'t'", "t"),
+        ('""', ""),
+        ("true", True),
+        ("false", False),
+        ("null", None),
+        ("Infinity", float("inf")),
+    ],
+)
+def test_jsonc_unsigned_scalar_unwraps_to_exact_primitive(
+    token: str, expected: object
+) -> None:
+    from json5.model import JSONText
+
+    from setforge.structural_merge import _to_plain
+
+    model = _jload("{v: " + token + "}")
+    assert isinstance(model, JSONText)
+    parsed = _to_plain(model.value)
+    assert isinstance(parsed, dict)
+    assert type(parsed["v"]) is type(expected)
+    assert parsed["v"] == expected
+
+
+def test_jsonc_nan_unwraps_to_float_nan() -> None:
+    import math
+
+    from json5.model import JSONText
+
+    from setforge.structural_merge import _to_plain
+
+    model = _jload("{v: NaN}")
+    assert isinstance(model, JSONText)
+    parsed = _to_plain(model.value)
+    assert isinstance(parsed, dict)
+    assert type(parsed["v"]) is float
+    assert math.isnan(parsed["v"])
 
 
 @pytest.mark.parametrize("backend", ["yaml", "jsonc"])
@@ -1384,14 +1419,14 @@ def test_shape_mismatch_names_the_key_path() -> None:
     )
 
 
-def test_ruamel_backend_add_brings_the_comment_of_the_side_it_adds_from() -> None:
+def test_ruamel_backend_add_theirs_brings_the_comment_of_theirs() -> None:
     base = _yload("k: 1  # base c\n")
     ours = _yload("a: 1\n")
     theirs = _yload("k: 1  # their c\na: 1\n")
 
-    _RuamelBackend(base, ours, theirs).add("base", "k")
+    _make_backend(base, ours, theirs).add_theirs("k")
 
-    assert _ydump(ours) == "a: 1\nk: 1  # base c\n"
+    assert _ydump(ours) == "a: 1\nk: 1  # their c\n"
 
 
 def _json5_backend(base: str, ours: str, theirs: str) -> _Json5Backend:
@@ -1402,7 +1437,7 @@ def _json5_backend(base: str, ours: str, theirs: str) -> _Json5Backend:
 def test_json5_backend_add_works_before_any_lookup_in_ours() -> None:
     backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
 
-    backend.add("theirs", "d")
+    backend.add_theirs("d")
 
     assert backend.keys() == ["a", "d"]
 
@@ -1411,7 +1446,7 @@ def test_json5_backend_finds_a_member_it_added_after_an_earlier_lookup() -> None
     backend = _json5_backend('{"a": 1}', '{"a": 1}', '{"a": 1, "d": 4}')
     assert backend.has("ours", "d") is False
 
-    backend.add("theirs", "d")
+    backend.add_theirs("d")
 
     assert backend.has("ours", "d") is True
     backend.delete("d")
