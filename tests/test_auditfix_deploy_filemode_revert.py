@@ -192,8 +192,9 @@ def test_pre_bump_transition_without_file_modes_reverts_cleanly(repo: Path) -> N
     assert _install(config).exit_code == 0
     latest = transitions.load_latest(_PROFILE)
     assert latest is not None
-    # Remove the sibling to simulate a pre-bump transition record.
+    # Remove the sibling (and the images) to simulate a pre-bump record.
     (latest / "file_modes.json").unlink()
+    (latest / "filesystem_deltas.json").unlink()
     assert transitions.load_file_modes(latest) == {}
 
     # Tamper live's mode so we can prove revert does NOT touch it.

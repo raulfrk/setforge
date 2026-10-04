@@ -755,8 +755,8 @@ def _honor_reconcile_removal(record: _PendingDeploy) -> None:
 
 def _install_recorded_nothing(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     deploy_outcome: DeployOutcome,
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
@@ -769,10 +769,7 @@ def _install_recorded_nothing(
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
 ) -> bool:
     """True iff nothing revertable changed (ANDs the patch with every delta below)."""
-    if any(
-        file_pre.get(path) != file_post.get(path)
-        for path in set(file_pre) | set(file_post)
-    ):
+    if transitions.changed_paths(file_pre, file_post):
         return False
     if deploy_outcome.store_mutated or deploy_outcome.prior_modes:
         return False
@@ -793,8 +790,8 @@ def _install_recorded_nothing(
 
 def _write_install_transition(
     profile: str,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
     *,

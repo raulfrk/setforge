@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from setforge import operations, transitions
 from setforge.cli import app
 from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+from tests.shared_helpers import text_images
 
 runner = CliRunner()
 
@@ -136,8 +137,7 @@ class _StoreCutoverStep:
     def apply(self, *, roots: MigrationRoots) -> None:
         from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
-        data = yaml_rt().load(cfg_pre)
+        data = yaml_rt().load(roots.cfg_path.read_text(encoding="utf-8"))
         data["schema_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
 
@@ -150,11 +150,8 @@ class _StoreCutoverStep:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"CUTOVER-MUTATED\n")
 
-        pre = roots.pre_chain_snapshot
-        file_pre: dict[Path, str | None] = (
-            dict(pre) if pre is not None else {roots.cfg_path: cfg_pre}
-        )
-        file_post = transitions.snapshot_paths(tuple(file_pre))
+        file_pre = dict(roots.pre_chain_snapshot)
+        file_post = transitions.capture_files(tuple(file_pre))
         transitions.write_transition(
             transitions.make_meta(
                 transitions.TransitionCommand.MIGRATE,
@@ -279,8 +276,8 @@ class _ConcurrentInstallStep:
                 record_end=True,
                 command_line=None,
             ),
-            {sentinel: None},
-            {sentinel: "installed\n"},
+            text_images({sentinel: None}),
+            text_images({sentinel: "installed\n"}),
             None,
         )
         if self.installed_dir_holder is not None:

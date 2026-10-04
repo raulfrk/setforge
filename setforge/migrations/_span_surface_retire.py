@@ -37,7 +37,7 @@ refuses cleanly and points at the transition-based
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -204,10 +204,7 @@ class SpanSurfaceRetireMigration:
 
         profiles = sorted({fold.profile for fold in folds})
         local_yaml = _local_yaml_path(roots)
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
-        local_pre = (
-            local_yaml.read_text(encoding="utf-8") if local_yaml.exists() else None
-        )
+        origin = transitions.capture_files((roots.cfg_path, local_yaml), strict=True)
 
         with contextlib.ExitStack() as locks:
             for profile in profiles:
@@ -219,7 +216,6 @@ class SpanSurfaceRetireMigration:
                 _fold_sections(fold)
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
             # Compute (don't write) the post-strip image so it can be
             # COMMITTED before the destructive strip lands (INV-5).
             local_post = _stripped_local_yaml_text(local_yaml)
@@ -227,15 +223,12 @@ class SpanSurfaceRetireMigration:
             # A chain-threaded pre_chain_snapshot becomes file_pre so the
             # reverse delta reaches the chain's ORIGIN (INV-5), not just here.
             pre = roots.pre_chain_snapshot
-            file_pre: dict[Path, str | None]
-            file_post: dict[Path, str | None]
-            if pre is not None:
-                file_pre = dict(pre)
-                file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
-                file_post[local_yaml] = local_post
-            else:
-                file_pre = {roots.cfg_path: cfg_pre, local_yaml: local_pre}
-                file_post = {roots.cfg_path: cfg_post, local_yaml: local_post}
+            file_pre = dict(pre) if pre is not None else origin
+            file_post = transitions.capture_files((*file_pre, local_yaml), strict=True)
+            if local_post is not None:
+                file_post[local_yaml] = replace(
+                    file_post[local_yaml], payload=local_post.encode("utf-8")
+                )
 
             _write_span_retire_transition(
                 file_pre=file_pre,
@@ -258,21 +251,21 @@ class SpanSurfaceRetireMigration:
         not the intermediate 3.0 state (INV-5).
         """
         local_yaml = _local_yaml_path(roots)
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
         _stamp_schema_version(roots.cfg_path, self.to_version)
 
         pre = roots.pre_chain_snapshot
-        file_pre: dict[Path, str | None]
+        file_pre = dict(cfg_pre)
         if pre is not None:
             # Restrict the threaded image to the user-facing config files; a
             # store leg in pre_chain is restored by an earlier cutover's
-            # state_snapshots, not by this text patch.
-            file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
-            if local_yaml in pre:
-                file_pre[local_yaml] = pre[local_yaml]
-        else:
-            file_pre = {roots.cfg_path: cfg_pre}
-        file_post = dict(transitions.snapshot_paths(tuple(file_pre), strict=True))
+            # state_snapshots, not by this file record.
+            file_pre.update(
+                (path, pre[path])
+                for path in (roots.cfg_path, local_yaml)
+                if path in pre
+            )
+        file_post = transitions.capture_files(tuple(file_pre), strict=True)
         _write_span_retire_transition(
             file_pre=file_pre,
             file_post=file_post,
@@ -628,8 +621,8 @@ def _capture_span_snapshots(
 
 def _write_span_retire_transition(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     state_snapshots: tuple[StateSnapshotEntry, ...],
 ) -> TransitionDir:
     """Record the cutover's single durable ``MIGRATE`` transition.

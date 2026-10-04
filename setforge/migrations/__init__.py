@@ -31,7 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -43,6 +43,9 @@ from setforge.migrations._yaml_ops import (
     load_yaml_mapping,
     yaml_rt,
 )
+
+if TYPE_CHECKING:
+    from setforge.transitions import FilesystemImage
 
 # A schema version is exactly ``MAJOR.MINOR`` — two non-negative integer
 # components. This is stricter than the ``--pin`` token (which tolerates
@@ -379,7 +382,7 @@ class MigrationRoots:
     cfg_path: Path
     repo_root: Path
     home: Path
-    pre_chain_snapshot: Mapping[Path, str | None] | None = None
+    pre_chain_snapshot: Mapping[Path, FilesystemImage] | None = None
 
 
 @runtime_checkable

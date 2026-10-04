@@ -12,7 +12,6 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 
 import json
 import os
-import stat
 import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -400,8 +399,16 @@ def _apply_revert(
     filesystem_deltas = record.filesystem_deltas
     ownership_transfers = record.ownership_transfers
     filesystem_paths = {item.path for item in filesystem_deltas}
-    text_paths = [path for path in record.paths if path not in filesystem_paths]
-    file_pre = transitions.snapshot_paths(text_paths)
+    text_paths = (
+        []
+        if record.files_complete
+        else [
+            path
+            for path in dict.fromkeys((*record.paths, *record.file_modes))
+            if path not in filesystem_paths
+        ]
+    )
+    file_pre = transitions.capture_files(text_paths)
 
     pre_store_state = record.state_snapshots
     reverse_store_state: tuple[transitions.StateSnapshotEntry, ...] = ()
@@ -417,8 +424,7 @@ def _apply_revert(
     # restore so the reverse transition can redo the install chmod. Empty
     # for a pre-bump transition (no file_modes.json → {}), which then
     # records no file_modes on the reverse record (omit-when-empty).
-    pre_command_modes = record.file_modes
-    reverse_modes = _recapture_modes(pre_command_modes)
+    pre_command_modes = {} if record.files_complete else record.file_modes
 
     _refuse_legacy_symlink_record(record, config, profile)
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
@@ -431,7 +437,8 @@ def _apply_revert(
         config_identity_fd=config_identity_fd,
     )
 
-    transitions.apply_patch_reverse(transition)
+    if not record.files_complete:
+        transitions.apply_patch_reverse(transition)
     operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
@@ -457,9 +464,9 @@ def _apply_revert(
         text_paths,
         file_pre,
         state_snapshots=reverse_store_state,
-        file_modes=reverse_modes,
         filesystem_deltas=transitions.reverse_filesystem_deltas(filesystem_deltas),
         ownership_transfers=tuple(reverse_ownership),
+        paths=record.paths if record.files_complete else None,
     )
     return target
 
@@ -557,26 +564,6 @@ def _ownership_transfer_identity_dir(
     if any(record.ownership_transfers for record in records):
         return resolve_owner_common_dir(config.resolve().parent)
     return None
-
-
-def _recapture_modes(recorded: Mapping[Path, int]) -> dict[Path, int]:
-    """Snapshot the CURRENT mode of every path in ``recorded`` (redo data).
-
-    Returns ``{path: live_mode}`` for each path that still exists — the
-    install-applied mode this revert is about to undo. The reverse
-    transition records this so a second revert (redo) re-applies the
-    install chmod, mirroring the store-state recapture. A path that no
-    longer exists (deleted out-of-band) is dropped: there is nothing to
-    redo a chmod onto. Must run BEFORE :func:`_restore_modes` mutates the
-    live modes.
-    """
-    out: dict[Path, int] = {}
-    for path in recorded:
-        try:
-            out[path] = stat.S_IMODE(path.stat().st_mode)
-        except FileNotFoundError:
-            continue
-    return out
 
 
 def _restore_modes(recorded: Mapping[Path, int]) -> None:
@@ -850,9 +837,9 @@ def _prepare_revert_journal(
         touched.update(transfer_claim_paths)
         generic_paths.update(transfer_claim_paths)
         touched.update(dict.fromkeys(record.paths))
-        generic_paths.update(
-            dict.fromkeys(item.path for item in record.filesystem_deltas)
-        )
+        delta_paths = dict.fromkeys(item.path for item in record.filesystem_deltas)
+        touched.update(delta_paths)
+        generic_paths.update(delta_paths)
         for snapshot in record.state_snapshots or ():
             identity = (snapshot.store, snapshot.profile, snapshot.key)
             state_keys[identity] = transitions.snapshot_store_state(*identity)

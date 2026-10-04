@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from ruamel.yaml import YAML
 
 from setforge.migrations import MigrationRoots
-from setforge.transitions import TransitionDir, compute_patch, snapshot_paths
+from setforge.transitions import (
+    FilesystemImage,
+    FilesystemKind,
+    TransitionDir,
+    compute_patch,
+    load_file_modes,
+    load_filesystem_deltas,
+    snapshot_paths,
+)
 
 
 def migration_roots(tmp_path: Path) -> MigrationRoots:
@@ -42,3 +51,55 @@ def record_transition(
     transition.mkdir()
     (transition / "changes.patch").write_text(compute_patch(pre, post))
     return transition
+
+
+def text_images(texts: Mapping[Path, str | None]) -> dict[Path, FilesystemImage]:
+    """Synthetic ``write_transition`` images of file texts; ``None`` is absent."""
+    return {
+        path: FilesystemImage(FilesystemKind.ABSENT)
+        if text is None
+        else FilesystemImage(
+            FilesystemKind.FILE,
+            payload=text.encode("utf-8", "surrogateescape"),
+            mode=0o644,
+            mtime_ns=0,
+        )
+        for path, text in texts.items()
+    }
+
+
+def file_images(
+    transition: TransitionDir,
+) -> dict[Path, tuple[bytes | None, bytes | None]]:
+    """The recorded pre/post bytes of every path; ``None`` is absent."""
+    return {
+        item.path: (item.pre.payload, item.post.payload)
+        for item in load_filesystem_deltas(transition)
+    }
+
+
+def assert_patch_matches_images(transition: TransitionDir) -> None:
+    """The record's patch and mode map say exactly what its file images say."""
+    deltas = {item.path: item for item in load_filesystem_deltas(transition)}
+    texts = [
+        {
+            path: (
+                payload.decode("utf-8", "surrogateescape")
+                if (payload := image.payload) is not None
+                else None
+            )
+            for path, image in (
+                (path, getattr(item, side)) for path, item in deltas.items()
+            )
+        }
+        for side in ("pre", "post")
+    ]
+    patch_file = transition / "changes.patch"
+    recorded = (
+        patch_file.read_bytes().decode("utf-8", "surrogateescape")
+        if patch_file.exists()
+        else ""
+    )
+    assert compute_patch(*texts) == recorded
+    for path, mode in load_file_modes(transition).items():
+        assert deltas[path].pre.mode == mode

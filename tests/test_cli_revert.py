@@ -526,11 +526,8 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     Asserts:
     - exit 0, no .rej siblings, both reverse transitions recorded;
     - live file rolled back to pre-install (does not exist);
-    - via a ``subprocess.run`` call-log monkeypatch on
-      :mod:`setforge.transitions`: the step-1 (newest, transition_b)
-      dry-run fires BEFORE the step-2 (oldest, transition_a) real
-      apply — verifying the actual newest-first pre-flight semantics
-      rather than the prior false ALL-N atomicity claim.
+    - via a call log: the step-1 (newest, transition_b) pre-flight check
+      fires BEFORE any step is applied, and the steps apply newest-first.
     """
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
@@ -540,19 +537,23 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     live, transition_a, transition_b = _two_install_sequence(cfg, runner)
     assert live.exists()
 
-    # Install up to this point: untouched real `subprocess.run`. Now wrap
-    # the symbol the revert path uses (``setforge.transitions.subprocess.run``)
-    # to capture the call sequence WITHOUT changing behavior.
     from setforge import transitions as _transitions_module
+    from setforge.cli import revert as _revert_module
 
-    call_log: list[list[str]] = []
-    real_run = _transitions_module.subprocess.run
+    call_log: list[tuple[str, Path]] = []
+    real_preflight = _transitions_module.apply_patch_reverse
+    real_apply = _revert_module._apply_revert
 
-    def _logging_run(args: list[str], **kwargs: Any) -> Any:
-        call_log.append(list(args))
-        return real_run(args, **kwargs)
+    def _logging_preflight(transition: Any, *, dry_run: bool = False) -> None:
+        call_log.append(("preflight", transition))
+        real_preflight(transition, dry_run=dry_run)
 
-    monkeypatch.setattr(_transitions_module.subprocess, "run", _logging_run)
+    def _logging_apply(record: Any, *args: Any, **kwargs: Any) -> Path:
+        call_log.append(("apply", record.directory))
+        return real_apply(record, *args, **kwargs)
+
+    monkeypatch.setattr(_transitions_module, "apply_patch_reverse", _logging_preflight)
+    monkeypatch.setattr(_revert_module, "_apply_revert", _logging_apply)
 
     revert_result = runner.invoke(
         app,
@@ -578,29 +579,13 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     # No .rej leakage anywhere.
     assert list(tmp_path.rglob("*.rej")) == []
 
-    # The pre-flight dry-run on the newest step (transition_b) must run
-    # before any patch call against the older step (transition_a) — i.e.
-    # the chain unwinds newest-first, NOT all dry-runs first.
-    def _patch_calls_for(transition: Path) -> list[int]:
-        target_input = str((transition / "changes.patch").resolve())
-        return [
-            i
-            for i, args in enumerate(call_log)
-            if "--input" in args and target_input in args
-        ]
-
-    b_calls = _patch_calls_for(transition_b)
-    a_calls = _patch_calls_for(transition_a)
-    assert b_calls, "expected at least one patch call for newest step"
-    assert a_calls, "expected at least one patch call for oldest step"
-    # First call against B is the explicit pre-flight dry-run; assert it
-    # also carries --dry-run.
-    assert "--dry-run" in call_log[b_calls[0]]
-    # And every call against B precedes every call against A.
-    assert max(b_calls) < min(a_calls), (
-        f"expected all newest-step patch calls to precede oldest-step calls; "
-        f"got b_calls={b_calls} a_calls={a_calls}"
-    )
+    # The pre-flight check on the newest step (transition_b) runs before any
+    # step is applied, and the chain unwinds newest-first.
+    assert call_log == [
+        ("preflight", transition_b),
+        ("apply", transition_b),
+        ("apply", transition_a),
+    ]
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
@@ -647,13 +632,25 @@ def test_revert_to_before_reports_no_recorded_revert_for_a_rolled_back_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from setforge import operations
+    from setforge.errors import RevertFailed
 
     cfg, _dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
     runner = CliRunner()
     live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
-    (transition_a / "changes.patch").write_text("garbage\n", encoding="utf-8")
+    real_apply = operations.apply_filesystem_deltas_reverse_anchored
+    applied: list[object] = []
+
+    def fail_second_step(*args: Any, **kwargs: Any) -> None:
+        applied.append(args)
+        if len(applied) == 2:
+            raise RevertFailed("second step failed")
+        real_apply(*args, **kwargs)
+
+    monkeypatch.setattr(
+        operations, "apply_filesystem_deltas_reverse_anchored", fail_second_step
+    )
 
     result = runner.invoke(
         app,

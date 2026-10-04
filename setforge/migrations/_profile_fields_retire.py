@@ -345,8 +345,10 @@ def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
 
 
 def _build_stamp_transition_images(
-    roots: MigrationRoots, cfg_pre: str
-) -> tuple[dict[Path, str | None], dict[Path, str | None]]:
+    roots: MigrationRoots, cfg_pre: transitions.FilesystemImage
+) -> tuple[
+    dict[Path, transitions.FilesystemImage], dict[Path, transitions.FilesystemImage]
+]:
     """Compute the terminal transition's ``file_pre`` / ``file_post`` images.
 
     Threads the driver's chain-origin image (``pre_chain_snapshot``) as
@@ -358,15 +360,16 @@ def _build_stamp_transition_images(
     """
     pre = roots.pre_chain_snapshot
     if pre is not None:
-        file_pre = dict(pre)
-        file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
-    else:
-        file_pre = {roots.cfg_path: cfg_pre}
-        file_post = {roots.cfg_path: roots.cfg_path.read_text(encoding="utf-8")}
-    return file_pre, file_post
+        return dict(pre), transitions.capture_files(tuple(pre), strict=True)
+    return (
+        {roots.cfg_path: cfg_pre},
+        transitions.capture_files((roots.cfg_path,), strict=True),
+    )
 
 
-def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> TransitionDir:
+def _write_stamp_transition(
+    roots: MigrationRoots, cfg_pre: transitions.FilesystemImage
+) -> TransitionDir:
     """Record the terminal cutover's origin-threading stamp transition.
 
     Carries NO ``state_snapshots`` — with none to override it, the threaded text
@@ -442,7 +445,7 @@ class ProfileFieldsRetireMigration:
         (INV-5).
         """
         yaml = yaml_rt()
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
 
         with roots.cfg_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
@@ -470,7 +473,7 @@ class ProfileFieldsRetireMigration:
                 roots.cfg_path.write_bytes(snapshot)
             raise
 
-        _write_stamp_transition(roots, cfg_pre)
+        _write_stamp_transition(roots, cfg_pre[roots.cfg_path])
 
 
 @dataclass(slots=True, frozen=True)

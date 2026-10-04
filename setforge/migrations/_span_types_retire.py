@@ -121,7 +121,9 @@ def _reject_stray_spans(data: object, cfg_path: Path) -> None:
         )
 
 
-def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> None:
+def _write_stamp_transition(
+    roots: MigrationRoots, cfg_pre: transitions.FilesystemImage
+) -> None:
     """Record the terminal cutover's origin-threading stamp transition.
 
     Threads the driver's chain-origin image (``pre_chain_snapshot``) as
@@ -139,14 +141,12 @@ def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> None:
     import sys
 
     pre = roots.pre_chain_snapshot
-    file_pre: dict[Path, str | None]
-    file_post: dict[Path, str | None]
     if pre is not None:
         file_pre = dict(pre)
-        file_post = dict(transitions.snapshot_paths(tuple(pre), strict=True))
+        file_post = transitions.capture_files(tuple(pre), strict=True)
     else:
         file_pre = {roots.cfg_path: cfg_pre}
-        file_post = {roots.cfg_path: roots.cfg_path.read_text(encoding="utf-8")}
+        file_post = transitions.capture_files((roots.cfg_path,), strict=True)
 
     transitions.write_transition(
         transitions.make_meta(
@@ -216,9 +216,9 @@ class SpanTypesRetireMigration:
 
     def apply(self, *, roots: MigrationRoots) -> None:
         """Confirm no stray span data, stamp 5.0, then commit the transition."""
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
         _stamp_schema_version(roots, self.to_version)
-        _write_stamp_transition(roots, cfg_pre)
+        _write_stamp_transition(roots, cfg_pre[roots.cfg_path])
 
 
 @dataclass(slots=True, frozen=True)

@@ -1271,12 +1271,12 @@ def _write_reverse_transition(
     transition: transitions.TransitionDir,
     profile: str,
     touched_paths: Sequence[Path],
-    file_pre: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
     *,
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
-    file_modes: Mapping[Path, int] | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...] = (),
+    paths: Sequence[Path] | None = None,
 ) -> Path:
     """Reverse plugin/extension deltas from ``transition`` and write the redo record.
 
@@ -1285,10 +1285,8 @@ def _write_reverse_transition(
     store-state mirror of ``file_pre``. Defaults empty for callers that
     revert snapshot-less transitions.
 
-    ``file_modes`` carries the PRE-revert (install-applied) permission bits
-    recaptured by the caller so a second revert (redo) re-applies the
-    install chmod — the file-mode mirror of ``file_pre``. ``None`` / empty
-    for callers reverting a transition that changed no file modes.
+    ``paths`` names the redo record's ``meta.json`` paths (see
+    :func:`transitions.write_transition`).
     """
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
@@ -1325,7 +1323,7 @@ def _write_reverse_transition(
             detail = "; ".join(f"{name}: {error}" for name, error in mcp_failures)
             raise ReconcileAborted(f"MCP reversal failed: {detail}")
 
-    file_post = transitions.snapshot_paths(touched_paths)
+    file_post = transitions.capture_files(touched_paths)
     reverse_meta = transitions.make_meta(
         transitions.TransitionCommand.REVERT,
         profile,
@@ -1347,8 +1345,8 @@ def _write_reverse_transition(
         plugin_delta=reverse_plugin_delta,
         state_snapshots=state_snapshots,
         mcp_delta=reverse_mcp_delta,
-        file_modes=file_modes,
         filesystem_deltas=filesystem_deltas,
         codex_plugin_delta=reverse_codex_plugin_delta,
         ownership_transfers=ownership_transfers,
+        paths=paths,
     )

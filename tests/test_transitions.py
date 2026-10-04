@@ -16,12 +16,14 @@ from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 from setforge.transitions import (
     CodexPluginDelta,
     ExtensionDelta,
+    FilesystemImage,
     PluginDelta,
     TransitionCommand,
     TransitionDir,
     TransitionListing,
     TransitionMeta,
     apply_patch_reverse,
+    capture_files,
     codex_plugin_delta_from_json,
     compute_patch,
     extension_delta_from_json,
@@ -42,6 +44,7 @@ from setforge.transitions import (
     write_meta,
     write_transition,
 )
+from tests.shared_helpers import text_images
 
 
 def test_codex_plugin_delta_round_trip_is_product_separate(
@@ -472,8 +475,8 @@ def test_write_transition_full_shape(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     target_file = tmp_path / "live.txt"
-    pre = {target_file: "before\n"}
-    post = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
 
     out = write_transition(_make_meta(), pre, post, delta)
@@ -501,8 +504,8 @@ def test_write_transition_meta_paths_omits_unchanged(
     b = tmp_path / "unchanged.txt"
     out = write_transition(
         _make_meta(),
-        {a: "before\n", b: "same\n"},
-        {a: "after\n", b: "same\n"},
+        text_images({a: "before\n", b: "same\n"}),
+        text_images({a: "after\n", b: "same\n"}),
         None,
     )
     meta_payload = json.loads((out / "meta.json").read_text())
@@ -513,7 +516,7 @@ def test_write_transition_omits_empty_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
-    same = {tmp_path / "x": "same\n"}
+    same = text_images({tmp_path / "x": "same\n"})
     out = write_transition(
         _make_meta(), same, same, ExtensionDelta(added=["a.x"], removed=[])
     )
@@ -529,7 +532,12 @@ def test_write_transition_encodes_empty_file_creation_for_revert(
     target_file = tmp_path / "empty.txt"
     target_file.touch()
 
-    out = write_transition(_make_meta(), {target_file: None}, {target_file: ""}, None)
+    out = write_transition(
+        _make_meta(),
+        text_images({target_file: None}),
+        capture_files([target_file]),
+        None,
+    )
 
     (delta,) = load_filesystem_deltas(out)
     assert delta.path == target_file
@@ -550,8 +558,8 @@ def test_write_transition_omits_empty_extension_delta(
     target_file = tmp_path / "live.txt"
     out = write_transition(
         _make_meta(),
-        {target_file: "a\n"},
-        {target_file: "b\n"},
+        text_images({target_file: "a\n"}),
+        text_images({target_file: "b\n"}),
         ExtensionDelta(added=[], removed=[]),
     )
     assert (out / "changes.patch").exists()
@@ -564,8 +572,8 @@ def test_write_transition_omits_extension_delta_when_none(
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     out = write_transition(
         _make_meta(),
-        {tmp_path / "x": "a\n"},
-        {tmp_path / "x": "b\n"},
+        text_images({tmp_path / "x": "a\n"}),
+        text_images({tmp_path / "x": "b\n"}),
         None,
     )
     assert not (out / "extensions.json").exists()
@@ -598,8 +606,8 @@ def test_write_transition_rejects_non_str_marketplace_source_value(
     with pytest.raises(TypeError, match="non-str value for key 'path'"):
         write_transition(
             _make_meta(),
-            {tmp_path / "x": "a\n"},
-            {tmp_path / "x": "a\n"},
+            text_images({tmp_path / "x": "a\n"}),
+            text_images({tmp_path / "x": "a\n"}),
             None,
             plugin_delta=bad_delta,
         )
@@ -1102,7 +1110,10 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 def _make_transition_args(
     tmp_path: Path,
 ) -> tuple[
-    TransitionMeta, dict[Path, str | None], dict[Path, str | None], ExtensionDelta
+    TransitionMeta,
+    dict[Path, FilesystemImage],
+    dict[Path, FilesystemImage],
+    ExtensionDelta,
 ]:
     """Return a minimal set of args for write_transition suitable for crash tests."""
     target_file = tmp_path / "live.txt"
@@ -1113,8 +1124,8 @@ def _make_transition_args(
         host="h",
         version="0.1.0",
     )
-    pre: dict[Path, str | None] = {target_file: "before\n"}
-    post: dict[Path, str | None] = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=[])
     return meta, pre, post, delta
 
@@ -1535,11 +1546,11 @@ def test_reconcile_outcomes_from_json_rejects_unknown_status() -> None:
 
 def _full_payload_inputs(
     tmp_path: Path,
-) -> tuple[dict[Path, str | None], dict[Path, str | None], ExtensionDelta]:
+) -> tuple[dict[Path, FilesystemImage], dict[Path, FilesystemImage], ExtensionDelta]:
     """Inputs that exercise every staged payload file (patch + extensions)."""
     target_file = tmp_path / "live.txt"
-    pre: dict[Path, str | None] = {target_file: "before\n"}
-    post: dict[Path, str | None] = {target_file: "after\n"}
+    pre = text_images({target_file: "before\n"})
+    post = text_images({target_file: "after\n"})
     delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
     return pre, post, delta
 

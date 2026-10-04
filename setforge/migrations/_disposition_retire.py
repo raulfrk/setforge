@@ -185,7 +185,7 @@ class DispositionRetireMigration:
             return
 
         profiles = sorted({rec.profile for rec in records})
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        cfg_pre = transitions.capture_files((roots.cfg_path,), strict=True)
 
         with contextlib.ExitStack() as locks:
             for profile in profiles:
@@ -207,7 +207,7 @@ class DispositionRetireMigration:
                 )
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
+            file_post = transitions.capture_files((roots.cfg_path,), strict=True)
 
             # When the migrate driver threads its pre-chain frozen image, use its
             # cfg_path entry as file_pre so this single transition carries the
@@ -227,13 +227,10 @@ class DispositionRetireMigration:
             # text-patch path. (Mirrors _record_stamp_only_transition in
             # _span_surface_retire.py.)
             pre = roots.pre_chain_snapshot
-            file_pre: dict[Path, str | None]
-            file_post: dict[Path, str | None]
-            if pre is not None:
-                file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
+            if pre is not None and roots.cfg_path in pre:
+                file_pre = {roots.cfg_path: pre[roots.cfg_path]}
             else:
-                file_pre = {roots.cfg_path: cfg_pre}
-            file_post = {roots.cfg_path: cfg_post}
+                file_pre = cfg_pre
 
             _write_cutover_transition(
                 file_pre=file_pre,
@@ -456,8 +453,8 @@ def _validate_bases(records: list[_FidLegacy]) -> None:
 
 def _write_cutover_transition(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
     state_snapshots: tuple[StateSnapshotEntry, ...],
 ) -> TransitionDir:
     """Record the cutover's single durable transition (MS1 commit-before-unlink).

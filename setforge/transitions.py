@@ -16,8 +16,10 @@ under ``~/.local/state/setforge/transitions/`` containing:
   whose MODE (not just content) the command changed (omitted if none).
   The content patch carries bytes only; this records the mode axis so
   revert can chmod each reverted path back to its pre-command mode.
-- ``filesystem_deltas.json`` — optional arbitrary-byte file and symlink
-  pre/post images for mutations a unified text patch cannot represent.
+- ``filesystem_deltas.json`` — pre/post images (kind, bytes, link target,
+  mode) of every file, symlink and directory the command changed; marked
+  ``complete`` when it covers every change, which ``revert`` then restores
+  from these images alone.
 - ``state_snapshots/`` — pre-command per-host store state (byte bases,
   spans sidecars, scalar-base manifests) as a ``manifest.json`` plus
   numbered raw-byte payload files (omitted when nothing was captured)
@@ -1539,19 +1541,6 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     )
 
 
-def _touched_paths(
-    pre: Mapping[Path, str | None], post: Mapping[Path, str | None]
-) -> list[Path]:
-    """Return the sorted set of paths whose content differs between pre
-    and post snapshots. Used to populate ``meta.json``'s ``paths`` field
-    so ``revert`` doesn't need to parse diff headers to know what was
-    touched."""
-    return sorted(
-        (p for p in (set(pre) | set(post)) if pre.get(p) != post.get(p)),
-        key=str,
-    )
-
-
 _FILESYSTEM_DELTAS_FILENAME: Final[str] = "filesystem_deltas.json"
 _OWNERSHIP_TRANSFERS_FILENAME: Final[str] = "ownership_transfers.json"
 
@@ -1705,11 +1694,80 @@ def filesystem_deletion_deltas(paths: Iterable[Path]) -> tuple[FilesystemDelta, 
     )
 
 
+_ABSENT: Final[FilesystemImage] = FilesystemImage(FilesystemKind.ABSENT)
+
+
+def capture_files(
+    paths: Iterable[Path], *, strict: bool = False
+) -> dict[Path, FilesystemImage]:
+    """Capture what each path shows, keyed by the path as given.
+
+    The image is taken at the symlink-resolved location, where a write through
+    the path lands. ``strict=True`` is for configuration files (migration
+    inputs), which are text: a file that is not valid UTF-8 raises
+    :class:`SetforgeError`.
+    """
+    out: dict[Path, FilesystemImage] = {}
+    for path in paths:
+        image = snapshot_filesystem_image(Path(os.path.realpath(path)))
+        if strict and image.payload is not None:
+            try:
+                image.payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise SetforgeError(
+                    f"cannot snapshot {path}: file is not valid UTF-8"
+                ) from exc
+        out[path] = image
+    return out
+
+
+def images_match(left: FilesystemImage, right: FilesystemImage) -> bool:
+    """Whether two images agree on kind, bytes, link target and mode."""
+    return replace(left, mtime_ns=None) == replace(right, mtime_ns=None)
+
+
+def changed_paths(
+    pre: Mapping[Path, FilesystemImage], post: Mapping[Path, FilesystemImage]
+) -> list[Path]:
+    """Return the sorted paths whose image differs between ``pre`` and ``post``."""
+    return sorted(
+        (
+            path
+            for path in set(pre) | set(post)
+            if not images_match(pre.get(path, _ABSENT), post.get(path, _ABSENT))
+        ),
+        key=str,
+    )
+
+
+def _file_deltas(
+    pre: Mapping[Path, FilesystemImage], post: Mapping[Path, FilesystemImage]
+) -> tuple[FilesystemDelta, ...]:
+    """Deltas of the changed paths, recorded where each path resolves."""
+    return tuple(
+        dict.fromkeys(
+            FilesystemDelta(
+                Path(os.path.realpath(path)),
+                pre.get(path, _ABSENT),
+                post.get(path, _ABSENT),
+            )
+            for path in changed_paths(pre, post)
+        )
+    )
+
+
 def reverse_filesystem_deltas(
     deltas: tuple[FilesystemDelta, ...],
 ) -> tuple[FilesystemDelta, ...]:
-    """Return the exact inverse records for a redo transition."""
-    return tuple(FilesystemDelta(item.path, item.post, item.pre) for item in deltas)
+    """Record reversing ``deltas``: each path from its post image to what it holds now.
+
+    Called once the reversal is complete, so a redo restores exactly the
+    state the reversal replaced.
+    """
+    return tuple(
+        FilesystemDelta(item.path, item.post, snapshot_filesystem_image(item.path))
+        for item in deltas
+    )
 
 
 def stat_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -1754,36 +1812,6 @@ def _canonicalize_filesystem_deltas(
     return canonical
 
 
-def _encode_empty_file_creations(
-    pre: Mapping[Path, str | None],
-    post: Mapping[Path, str | None],
-    filesystem_deltas: tuple[FilesystemDelta, ...],
-) -> tuple[FilesystemDelta, ...]:
-    """Encode zero-byte creations that unified diff cannot represent."""
-    encoded = list(filesystem_deltas)
-    covered = {_canonical_filesystem_path(item.path) for item in encoded}
-    for path in _touched_paths(pre, post):
-        if pre.get(path) is not None or post.get(path) != "":
-            continue
-        canonical = _canonical_filesystem_path(path)
-        if canonical in covered:
-            continue
-        current = snapshot_filesystem_image(canonical)
-        if current.kind is not FilesystemKind.FILE or current.payload != b"":
-            raise SetforgeError(
-                f"empty-file transition snapshot does not match live path: {canonical}"
-            )
-        encoded.append(
-            FilesystemDelta(
-                canonical,
-                FilesystemImage(FilesystemKind.ABSENT),
-                current,
-            )
-        )
-        covered.add(canonical)
-    return tuple(encoded)
-
-
 def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | None:
     if not deltas:
         return None
@@ -1792,6 +1820,7 @@ def _serialize_filesystem_deltas(deltas: tuple[FilesystemDelta, ...]) -> str | N
         json.dumps(
             {
                 "schema_version": 1,
+                "complete": True,
                 "entries": [
                     {
                         "path": str(item.path),
@@ -1812,9 +1841,16 @@ def load_filesystem_deltas(
     transition_dir: TransitionDir,
 ) -> tuple[FilesystemDelta, ...]:
     """Load and validate optional arbitrary-filesystem transition deltas."""
+    return _load_filesystem_deltas(transition_dir)[0]
+
+
+def _load_filesystem_deltas(
+    transition_dir: TransitionDir,
+) -> tuple[tuple[FilesystemDelta, ...], bool]:
+    """Return the deltas and whether they cover every file the record changed."""
     path = transition_dir / _FILESYSTEM_DELTAS_FILENAME
     if not path.exists():
-        return ()
+        return (), False
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict) or raw.get("schema_version") != 1:
@@ -1826,7 +1862,7 @@ def load_filesystem_deltas(
         paths = [item.path for item in deltas]
         if len(paths) != len(set(paths)):
             raise ValueError("duplicate filesystem delta path")
-        return deltas
+        return deltas, raw.get("complete") is True
     except (
         OSError,
         json.JSONDecodeError,
@@ -1921,14 +1957,14 @@ def validate_filesystem_deltas_reverse(deltas: tuple[FilesystemDelta, ...]) -> N
             raise RevertFailed(
                 f"filesystem path changed since transition: {item.path}"
             ) from exc
-        if current != item.post:
+        if not images_match(current, item.post):
             raise RevertFailed(f"filesystem path changed since transition: {item.path}")
 
 
 def write_transition(
     meta: TransitionMeta,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, FilesystemImage],
+    file_post: Mapping[Path, FilesystemImage],
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
@@ -1939,6 +1975,7 @@ def write_transition(
     codex_plugin_delta: CodexPluginDelta | None = None,
     ownership_transfers: tuple[OwnershipTransferDelta, ...] = (),
     tracked_file_destinations: Mapping[str, tuple[Path, ...]] | None = None,
+    paths: Sequence[Path] | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1975,9 +2012,11 @@ def write_transition(
     at all, which :func:`load_file_modes` reads back as ``{}`` (the
     no-mode-change backward-compat path for pre-bump records).
 
-    ``filesystem_deltas`` is additive: old transitions omit the payload and
-    load as an empty tuple; cleanup-orphans uses it for exact binary/symlink
-    undo and redo without changing other transition producers.
+    ``file_pre`` / ``file_post`` are :func:`capture_files` images; every path
+    whose image changed becomes a ``filesystem_deltas.json`` entry next to the
+    caller's ``filesystem_deltas``, and the file marks itself complete.
+    ``meta.json`` ``paths`` lists the paths as given whose content changed plus
+    the caller's delta paths, unless ``paths`` names them.
 
     Returns the absolute path of the committed directory.
 
@@ -1990,10 +2029,27 @@ def write_transition(
             source dict with a non-str value (caller bypassed
             ``MarketplaceSource.model_dump(mode="json")``).
     """
-    filesystem_deltas = _encode_empty_file_creations(
-        file_pre, file_post, filesystem_deltas
+    touched = (
+        list(paths)
+        if paths is not None
+        else sorted(
+            {
+                *(
+                    path
+                    for path in changed_paths(file_pre, file_post)
+                    if not images_match(
+                        replace(file_pre.get(path, _ABSENT), mode=None),
+                        replace(file_post.get(path, _ABSENT), mode=None),
+                    )
+                ),
+                *(_canonical_filesystem_path(item.path) for item in filesystem_deltas),
+            },
+            key=str,
+        )
     )
-    filesystem_deltas = _canonicalize_filesystem_deltas(filesystem_deltas)
+    filesystem_deltas = _canonicalize_filesystem_deltas(
+        (*filesystem_deltas, *_file_deltas(file_pre, file_post))
+    )
     filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
     ownership_transfer_payload = _serialize_ownership_transfers(ownership_transfers)
     root = transitions_root()
@@ -2011,7 +2067,7 @@ def write_transition(
     # 4. fsync the root dir (target's new dir entry durable),
     # 5. write + fsync meta.json (the commit marker),
     # 6. fsync the target dir (meta.json's dir entry durable) — last.
-    patch = compute_patch(file_pre, file_post)
+    patch = compute_patch(_patch_text(file_pre), _patch_text(file_post))
     if patch:
         _write_text_durable(pending / "changes.patch", patch)
 
@@ -2053,19 +2109,43 @@ def write_transition(
     pending.rename(target)
     atomicio.fsync_dir(root)
 
-    touched = sorted(
-        {
-            *_touched_paths(file_pre, file_post),
-            *(item.path for item in filesystem_deltas),
-        },
-        key=str,
-    )
     write_meta(
         target, meta, paths=touched, tracked_file_destinations=tracked_file_destinations
     )
     atomicio.fsync_dir(target)
 
     return target
+
+
+def rewrite_file_changes(
+    transition_dir: TransitionDir,
+    file_pre: Mapping[Path, FilesystemImage],
+    file_post: Mapping[Path, FilesystemImage],
+) -> None:
+    """Replace a committed record's file changes with ``file_pre`` -> ``file_post``."""
+    deltas = _canonicalize_filesystem_deltas(_file_deltas(file_pre, file_post))
+    for name, payload in (
+        (_FILESYSTEM_DELTAS_FILENAME, _serialize_filesystem_deltas(deltas)),
+        ("changes.patch", compute_patch(_patch_text(file_pre), _patch_text(file_post))),
+    ):
+        target = transition_dir / name
+        if payload:
+            mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+            atomicio.atomic_write_text(target, payload, mode=mode)
+        else:
+            target.unlink(missing_ok=True)
+            atomicio.fsync_dir(transition_dir)
+
+
+def _patch_text(images: Mapping[Path, FilesystemImage]) -> dict[Path, str | None]:
+    return {
+        path: (
+            image.payload.decode("utf-8", "surrogateescape")
+            if image.payload is not None
+            else None
+        )
+        for path, image in images.items()
+    }
 
 
 def _serialize_ext_payload(ext_delta: ExtensionDelta | None) -> str | None:
@@ -2280,6 +2360,7 @@ class TransitionRecord:
     tracked_file_destinations: Mapping[str, tuple[Path, ...]]
     file_modes: Mapping[Path, int]
     filesystem_deltas: tuple[FilesystemDelta, ...]
+    files_complete: bool
     ownership_transfers: tuple[OwnershipTransferDelta, ...]
     state_snapshots: tuple[StateSnapshotEntry, ...] | None
     extensions: ExtensionDelta | None
@@ -2315,6 +2396,7 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
         raise InvalidTransitionRecord(
             f"invalid tracked_file_destinations in {meta_file}"
         )
+    filesystem_deltas, files_complete = _load_filesystem_deltas(transition_dir)
     return TransitionRecord(
         directory=transition_dir,
         meta=_meta_from_payload(payload, meta_file),
@@ -2324,7 +2406,8 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
             for name, paths in attribution.items()
         },
         file_modes=load_file_modes(transition_dir),
-        filesystem_deltas=load_filesystem_deltas(transition_dir),
+        filesystem_deltas=filesystem_deltas,
+        files_complete=files_complete,
         ownership_transfers=load_ownership_transfers(transition_dir),
         state_snapshots=load_state_snapshots(transition_dir),
         extensions=load_extension_delta(transition_dir),

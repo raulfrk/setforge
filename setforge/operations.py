@@ -951,24 +951,12 @@ def _replace_filesystem_delta_anchored(
         expected = _path_snapshot_from_filesystem_image(delta.path, delta.post)
         if replacement.kind is SnapshotKind.DIRECTORY:
             directory_identity = _restore_directory_delta_at(
-                parent_fd,
-                replacement,
-                expected,
-                allow_child_metadata_drift=(
-                    expected.kind is SnapshotKind.DIRECTORY
-                    and delta.pre.kind is transitions.FilesystemKind.ABSENT
-                ),
+                parent_fd, replacement, expected
             )
             _verify_parent_binding(parent_fd, delta.path.parent)
             return directory_identity
         current = _snapshot_path_at(parent_fd, delta.path)
-        directory_after_children = (
-            replacement.kind is SnapshotKind.ABSENT
-            and current.kind is SnapshotKind.DIRECTORY
-            and expected.kind is SnapshotKind.DIRECTORY
-            and current.mode == expected.mode
-        )
-        if current != expected and not directory_after_children:
+        if replace(current, mtime_ns=None) != replace(expected, mtime_ns=None):
             raise SetforgeError(
                 f"filesystem path changed since transition: {delta.path}"
             )
@@ -988,8 +976,6 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
     parent_fd: int,
     replacement: PathSnapshot,
     expected: PathSnapshot,
-    *,
-    allow_child_metadata_drift: bool,
 ) -> tuple[int, int, int]:
     """Validate and restore a directory through one continuously-held fd."""
     name = replacement.path.name
@@ -1040,17 +1026,7 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
             os.fsync(parent_fd)
         elif expected.kind is SnapshotKind.DIRECTORY:
             directory_fd = os.open(name, flags, dir_fd=parent_fd)
-            info = os.fstat(directory_fd)
-            current = PathSnapshot(
-                replacement.path,
-                SnapshotKind.DIRECTORY,
-                mode=stat.S_IMODE(info.st_mode),
-                mtime_ns=info.st_mtime_ns,
-            )
-            metadata_matches = current == expected
-            if allow_child_metadata_drift:
-                metadata_matches = current.mode == expected.mode
-            if not metadata_matches:
+            if stat.S_IMODE(os.fstat(directory_fd).st_mode) != expected.mode:
                 raise SetforgeError(
                     f"filesystem path changed since transition: {replacement.path}"
                 )

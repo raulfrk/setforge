@@ -293,20 +293,19 @@ def _migration_transition_dirs() -> frozenset[Path]:
 def _finalize_owned_transition(
     *,
     before: frozenset[Path],
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
 ) -> None:
     """Consolidate this chain's owners into one complete terminal record."""
     created = sorted(_migration_transition_dirs() - before, key=lambda path: path.name)
     if not created:
         raise RuntimeError("migration chain owned a transition but created none")
     latest = created[-1]
-    patch_path = latest / "changes.patch"
-    patch = transitions.compute_patch(file_pre, file_post)
-    if not patch:
+    if not transitions.changed_paths(file_pre, file_post):
         raise RuntimeError("owned migration transition has no chain-final changes")
-    mode = patch_path.stat().st_mode & 0o777
-    atomicio.atomic_write_text(patch_path, patch, mode=mode)
+    transitions.rewrite_file_changes(
+        transitions.TransitionDir(latest), file_pre, file_post
+    )
     for superseded in created[:-1]:
         _remove_superseded_transition(superseded)
 
@@ -347,7 +346,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # Snapshot BEFORE any mutation: file_pre is the (UTF-8 text) image
     # ``revert`` restores to. Captured here (not aliased to file_post) so the
     # recorded patch reverses to the exact pre-migration state.
-    file_pre = transitions.snapshot_paths(affected, strict=True)
+    file_pre = transitions.capture_files(affected, strict=True)
     # Thread the pre-chain frozen image to a step that records its OWN
     # transition (the cutover). Without it, such a step captures only its
     # pre-step state, so a multi-step chain reverts to the intermediate schema
@@ -382,7 +381,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
             _finalize_owned_transition(
                 before=owned_transition_dirs,
                 file_pre=file_pre,
-                file_post=transitions.snapshot_paths(affected, strict=True),
+                file_post=transitions.capture_files(affected, strict=True),
             )
     except BaseException as primary:
         try:
@@ -401,7 +400,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # writing a second, overlapping record would break the LIFO revert of the
     # shared setforge.yaml edit. See :func:`_chain_owns_transition`.
     if not _chain_owns_transition(chain):
-        file_post = transitions.snapshot_paths(affected, strict=True)
+        file_post = transitions.capture_files(affected, strict=True)
         _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)
@@ -427,8 +426,8 @@ def _transition_affected_paths(
 
 def _write_migrate_transition(
     *,
-    file_pre: Mapping[Path, str | None],
-    file_post: Mapping[Path, str | None],
+    file_pre: Mapping[Path, transitions.FilesystemImage],
+    file_post: Mapping[Path, transitions.FilesystemImage],
 ) -> None:
     """Record a revertible ``migrate`` transition for the applied chain.
 
@@ -514,7 +513,7 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
         return
 
     paths = [src for src, _, _ in plans]
-    file_pre = transitions.snapshot_paths(paths, strict=True)
+    file_pre = transitions.capture_files(paths, strict=True)
     journal = operations.prepare(
         command="migrate-finalize",
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
@@ -550,7 +549,7 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
             written_count=len(written),
             error=exc,
         )
-    file_post = transitions.snapshot_paths(paths, strict=True)
+    file_post = transitions.capture_files(paths, strict=True)
     _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     journal = operations.finish_checkpoint(journal)
     operations.complete(journal)

@@ -28,6 +28,7 @@ from setforge.migrations import (
 )
 from setforge.reconcile import file_id
 from setforge.reconcile.host_local_view import host_local_sections_from_store
+from tests.shared_helpers import assert_patch_matches_images, file_images
 
 runner = CliRunner()
 
@@ -158,16 +159,14 @@ class _OwnTransitionStep:
     def apply(self, *, roots: MigrationRoots) -> None:
         from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
-        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
-        data = yaml_rt().load(cfg_pre)
+        cfg_pre = transitions.capture_files((roots.cfg_path,))
+        data = yaml_rt().load(roots.cfg_path.read_text(encoding="utf-8"))
         data["schema_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
 
         pre = roots.pre_chain_snapshot
-        file_pre: dict[Path, str | None] = (
-            dict(pre) if pre is not None else {roots.cfg_path: cfg_pre}
-        )
-        file_post = transitions.snapshot_paths(tuple(file_pre))
+        file_pre = dict(pre) if pre is not None else cfg_pre
+        file_post = transitions.capture_files(tuple(file_pre))
         transitions.write_transition(
             transitions.make_meta(
                 transitions.TransitionCommand.MIGRATE,
@@ -212,6 +211,10 @@ def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
     )
     assert result.exit_code == 0, result.output
     assert "3.0" in cfg.read_text()  # forward chain applied
+    recorded = _latest_migrate()
+    assert recorded is not None
+    assert file_images(recorded) == {cfg: (pre_bytes, cfg.read_bytes())}
+    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -241,6 +244,8 @@ def test_migrate_apply_records_revertible_transition(
 
     recorded = _latest_migrate()
     assert recorded is not None, "no migrate transition was recorded"
+    assert file_images(recorded) == {cfg: (pre_bytes, cfg.read_bytes())}
+    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -296,6 +301,13 @@ def test_migrate_revert_round_trip_is_byte_exact(
     )
     assert result.exit_code == 0, result.output
     assert sidecar.exists()  # forward created the sidecar
+    recorded = _latest_migrate()
+    assert recorded is not None
+    assert file_images(recorded) == {
+        cfg: (pre_cfg, cfg.read_bytes()),
+        sidecar: (None, b"migrated body\n"),
+    }
+    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -401,6 +413,13 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
 
     migrate_transitions = transitions.list_transitions(["migrate"])
     assert len(migrate_transitions) == 1
+    recorded = file_images(migrate_transitions[0].directory)
+    assert recorded[cfg] == (_CHAIN_CFG_2_1.encode(), cfg.read_bytes())
+    assert recorded[local_yaml] == (
+        _CHAIN_LOCAL_YAML.encode(),
+        local_yaml.read_bytes(),
+    )
+    assert_patch_matches_images(migrate_transitions[0].directory)
 
 
 def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(

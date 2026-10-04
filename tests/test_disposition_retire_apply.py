@@ -19,6 +19,7 @@ from setforge.migrations._disposition_retire import DispositionRetireMigration
 from setforge.reconcile import file_id
 from setforge.reconcile.types import HunkClass
 from setforge.transitions import SnapshotStore
+from tests.shared_helpers import text_images
 
 _CFG = """schema_version: "2.1"
 tracked_files:
@@ -193,10 +194,12 @@ def test_threaded_pre_chain_text_patch_excludes_store_legs(
     # exactly as the driver's ``snapshot_paths(affected)`` would (the cutover's
     # own ``affected_paths`` enumerates that leg).
     leg = scalar_base_store.manifest_path("default", "conf")
-    pre_chain = {
-        roots_pre.cfg_path: 'schema_version: "2.1"\n',
-        leg: leg.read_text(encoding="utf-8"),
-    }
+    pre_chain = text_images(
+        {
+            roots_pre.cfg_path: 'schema_version: "2.1"\n',
+            leg: leg.read_text(encoding="utf-8"),
+        }
+    )
     roots = MigrationRoots(
         cfg_path=roots_pre.cfg_path,
         repo_root=roots_pre.repo_root,

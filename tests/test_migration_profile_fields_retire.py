@@ -27,6 +27,7 @@ from setforge.migrations._profile_fields_retire import (
     _ProfileFieldsRetireReverse,
 )
 from setforge.migrations._yaml_ops import yaml_rt
+from tests.shared_helpers import file_images
 
 _CFG = """\
 schema_version: "5.0"
@@ -407,7 +408,7 @@ def test_apply_writes_terminal_transition(tmp_path: Path, state_dir: Path) -> No
         cfg_path=roots_base.cfg_path,
         repo_root=tmp_path,
         home=tmp_path,
-        pre_chain_snapshot={roots_base.cfg_path: origin},
+        pre_chain_snapshot=transitions.capture_files((roots_base.cfg_path,)),
     )
 
     ProfileFieldsRetireMigration().apply(roots=roots)
@@ -420,6 +421,9 @@ def test_apply_writes_terminal_transition(tmp_path: Path, state_dir: Path) -> No
 
     assert transitions.load_state_snapshots(latest) is None
 
+    assert file_images(latest) == {
+        roots.cfg_path: (origin.encode(), transformed.encode())
+    }
     patch = (latest / "changes.patch").read_text(encoding="utf-8")
     assert patch == transitions.compute_patch(
         {roots.cfg_path: origin}, {roots.cfg_path: transformed}

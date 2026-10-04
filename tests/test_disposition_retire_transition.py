@@ -17,6 +17,7 @@ from setforge.migrations._disposition_retire import (
     _write_cutover_transition,
 )
 from setforge.transitions import SnapshotStore, StateSnapshotEntry
+from tests.shared_helpers import text_images
 
 
 def test_plain_chain_does_not_own_transition() -> None:
@@ -48,8 +49,8 @@ def test_cutover_transition_round_trips_state_snapshots(tmp_path) -> None:
         ),
     )
     td = _write_cutover_transition(
-        file_pre={cfg: 'schema_version: "2.1"\n'},
-        file_post={cfg: 'schema_version: "3.0"\n'},
+        file_pre=text_images({cfg: 'schema_version: "2.1"\n'}),
+        file_post=text_images({cfg: 'schema_version: "3.0"\n'}),
         state_snapshots=entries,
     )
     loaded = transitions.load_state_snapshots(td)

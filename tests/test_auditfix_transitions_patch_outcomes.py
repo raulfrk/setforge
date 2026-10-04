@@ -27,6 +27,7 @@ from setforge.transitions import (
     compute_patch,
     load_reconcile_outcomes,
 )
+from tests.shared_helpers import text_images
 
 # ---------------------------------------------------------------------------
 # Finding 1 — no-trailing-newline files must produce a revertible patch
@@ -39,8 +40,8 @@ def test_empty_file_creation_is_not_classified_as_no_transition(
     target = tmp_path / "empty.conf"
 
     assert not _install_recorded_nothing(
-        file_pre={target: None},
-        file_post={target: ""},
+        file_pre=text_images({target: None}),
+        file_post=text_images({target: ""}),
         deploy_outcome=DeployOutcome({}),
         ext_delta=None,
         plugin_delta=None,
