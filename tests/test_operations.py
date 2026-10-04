@@ -2234,6 +2234,67 @@ def test_state_root_mismatch_refuses_before_adapter_recovery(
     assert calls == 0
 
 
+@pytest.mark.parametrize("target", ["real/", "./real"])
+def test_install_root_recovery_accepts_an_ancestor_alias_with_a_redundant_target(
+    tmp_path: Path, operation_state: Path, target: str
+) -> None:
+    (tmp_path / "real").mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(target)
+    root = alias / "root"
+    alias_paths, guards = operations.capture_install_parent_guards((root,), (root,))
+    journal = operations.prepare(
+        command="install",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=True,
+        command_line=("install", "--profile=p"),
+        paths=(root, *alias_paths),
+        path_guards=guards,
+    )
+    preparing = operations.begin_checkpoint(
+        journal,
+        name="prepare-target-roots",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore initially absent target roots",
+        paths=(root,),
+    )
+    root.mkdir()
+    created = root.stat()
+    bound = operations.bind_install_roots(
+        preparing, ((root, created.st_dev, created.st_ino, created.st_mode),)
+    )
+
+    assert alias_paths == (alias,)
+    assert operations.recover_automatically(bound)
+    assert not (tmp_path / "real" / "root").exists()
+    assert os.readlink(alias) == target  # noqa: PTH115 - raw target text
+    assert operations.active("p") is None
+    assert {item.path: item.link_target for item in bound.paths}[alias] == "real"
+
+
+@pytest.mark.parametrize("target", ["real/", "./real", "a//b"])
+def test_path_captures_record_the_pathlib_link_target_and_anchored_ones_the_raw(
+    tmp_path: Path, target: str
+) -> None:
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    recorded = str(Path(target))
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        anchored = operations._snapshot_path_at(parent_fd, link)
+        anchored_image = transitions.capture_filesystem_image("link", dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+    assert recorded in {"real", "a/b"}
+    assert operations.snapshot_path(link).link_target == recorded
+    assert transitions.snapshot_filesystem_image(link).link_target == recorded
+    assert anchored.link_target == target
+    assert anchored_image is not None
+    assert anchored_image.link_target == target
+
+
 def test_journal_recovers_after_config_ancestor_became_a_symlink(
     tmp_path: Path, operation_state: Path
 ) -> None:

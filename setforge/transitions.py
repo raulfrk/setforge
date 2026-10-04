@@ -1654,7 +1654,8 @@ def capture_filesystem_image(
     """Capture one entry without following it; ``None`` for an unsupported kind.
 
     ``path`` is taken relative to ``dir_fd`` when one is given. A change seen
-    during the capture raises ``FilesystemChanged``.
+    during the capture raises ``FilesystemChanged``. A symlink target is the
+    raw stored text; path-based callers normalise it as ``Path.readlink`` does.
     """
     at = {} if dir_fd is None else {"dir_fd": dir_fd}
     try:
@@ -1701,6 +1702,9 @@ def snapshot_filesystem_image(path: Path) -> FilesystemImage:
         ) from exc
     if image is None:
         raise SetforgeError(f"unsupported transition filesystem object: {path}")
+    if image.link_target is not None:
+        # Delta records hold the Path.readlink() spelling ("real/" as "real").
+        image = replace(image, link_target=str(Path(image.link_target)))
     return image
 
 

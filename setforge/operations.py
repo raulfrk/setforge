@@ -217,6 +217,10 @@ def snapshot_path(path: Path) -> PathSnapshot:
         ) from exc
     if image is None:
         raise SetforgeError(f"cannot journal unsupported filesystem object: {path}")
+    if image.link_target is not None:
+        # Journals record the Path.readlink() spelling ("real/" as "real");
+        # alias validation and older releases compare against exactly that.
+        image = replace(image, link_target=str(Path(image.link_target)))
     return _path_snapshot_from_filesystem_image(path, image)
 
 
