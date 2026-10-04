@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from setforge import transitions
+from setforge import operations, transitions
 from setforge.transitions import FilesystemKind
 from tests.shared_helpers import assert_patch_matches_images
 
@@ -95,3 +96,54 @@ def test_sync_and_its_revert_record_every_changed_file(
     redo = _records(env)[-1]
     assert _file_changes(redo, env.repo) == {tracked: (b"live edit\n", before)}
     assert transitions.load_meta_payload(redo)["paths"] == [str(tracked)]
+
+
+def test_revert_ignores_a_changed_modification_time(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+) -> None:
+    env = integration_env()
+    note = env.live(_NOTE)
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+    before = note.read_bytes()
+    env.tracked("text/note.txt").write_bytes(b"changed\n")
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+    os.utime(note, ns=(1_000_000_000, 1_000_000_000))
+
+    result = env.run_verb(["revert", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert note.read_bytes() == before
+
+
+def test_revert_refuses_a_file_edited_since_before_writing_any_file(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = integration_env()
+    note = env.live(_NOTE)
+    settings = env.live(_SETTINGS)
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+    env.tracked("text/note.txt").write_bytes(b"line 1\nline 2\nline 3\n")
+    env.tracked("json/settings.json").write_bytes(b'{"a": 2}\n')
+    assert env.run_verb(["install", "--no-git-check"]).exit_code == 0
+    # An edit far from the line the install changed is still a change; the
+    # edited file is the one the reversal would write last.
+    note.write_bytes(b"line 1\nline 2\nline 3\nmine\n")
+    records = _records(env)
+    writes: list[object] = []
+    monkeypatch.setattr(
+        operations,
+        "apply_filesystem_deltas_reverse_anchored",
+        lambda *args, **kwargs: writes.append(args),
+    )
+
+    result = env.run_verb(["revert", "--yes"])
+
+    assert writes == []
+    assert result.exit_code == 1
+    assert f"filesystem path changed since transition: {note}" in str(result.exception)
+    assert settings.read_bytes() == b'{"a": 2}\n'
+    assert note.read_bytes() == b"line 1\nline 2\nline 3\nmine\n"
+    assert _records(env) == records

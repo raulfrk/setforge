@@ -1948,17 +1948,29 @@ def _validate_filesystem_image(image: FilesystemImage) -> None:
         raise ValueError("invalid directory image")
 
 
-def validate_filesystem_deltas_reverse(deltas: tuple[FilesystemDelta, ...]) -> None:
-    """Refuse drift before any inverse filesystem effect begins."""
-    for item in deltas:
-        try:
-            current = snapshot_filesystem_image(item.path)
-        except SetforgeError as exc:
-            raise RevertFailed(
-                f"filesystem path changed since transition: {item.path}"
-            ) from exc
-        if not images_match(current, item.post):
-            raise RevertFailed(f"filesystem path changed since transition: {item.path}")
+def validate_filesystem_deltas_reverse(*steps: tuple[FilesystemDelta, ...]) -> None:
+    """Refuse drift before any inverse filesystem effect begins.
+
+    ``steps`` are reversed in order: each path must hold the post image of the
+    first step that touches it, and each later step is checked against the
+    pre image the steps before it restore. Modification times are ignored.
+    """
+    expected: dict[Path, FilesystemImage] = {}
+    for deltas in steps:
+        for item in deltas:
+            current = expected.get(item.path)
+            if current is None:
+                try:
+                    current = snapshot_filesystem_image(item.path)
+                except SetforgeError as exc:
+                    raise RevertFailed(
+                        f"filesystem path changed since transition: {item.path}"
+                    ) from exc
+            if not images_match(current, item.post):
+                raise RevertFailed(
+                    f"filesystem path changed since transition: {item.path}"
+                )
+        expected.update((item.path, item.pre) for item in deltas)
 
 
 def write_transition(
@@ -2414,6 +2426,44 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
         plugins=load_plugin_delta(transition_dir),
         codex_plugins=load_codex_plugin_delta(transition_dir),
         mcp=load_mcp_delta(transition_dir),
+    )
+
+
+def refuse_legacy_file_changes(record: TransitionRecord) -> None:
+    """Refuse a record whose file changes an earlier version kept as a text patch.
+
+    Such a record holds no pre-image for those files, so it cannot be reverted
+    exactly; it is refused before anything is changed.
+    """
+    if record.files_complete:
+        return
+    directory = record.directory
+    patch = directory / "changes.patch"
+    modes = directory / "file_modes.json"
+    try:
+        mode_paths = list(json.loads(modes.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        mode_paths = []
+    covered = {str(item.path) for item in record.filesystem_deltas}
+    uncovered = [
+        path
+        for path in dict.fromkeys((*map(str, record.paths), *map(str, mode_paths)))
+        if path not in covered
+    ]
+    if (
+        not uncovered
+        and not (patch.exists() and patch.stat().st_size)
+        and not modes.exists()
+    ):
+        return
+    shown = ", ".join(uncovered[:3]) + (
+        f" and {len(uncovered) - 3} more" if len(uncovered) > 3 else ""
+    )
+    raise RevertFailed(
+        f"transition {directory.name} was recorded by an earlier version in a "
+        "format this version cannot revert; nothing was changed. Revert it with "
+        f"setforge {record.meta.version}, which recorded it"
+        + (f", or restore by hand: {shown}" if shown else "")
     )
 
 

@@ -13,7 +13,7 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 import json
 import os
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -364,51 +364,30 @@ def _apply_revert(
     The caller reports that record only once its journal has completed, so a
     step that is later rolled back is never announced as a recorded revert.
 
-    Content patches reverse payload bytes; typed filesystem deltas restore
-    symlink topology while retaining links that existed before the install.
-    Legacy records lacking a touched link's preimage refuse before effects.
+    File restore: every file, symlink and directory the transition changed
+    is restored from its recorded pre image (bytes, kind, link target, mode)
+    once each path is confirmed to still hold the recorded post image;
+    modification times are not compared. Records of an earlier version that
+    kept file changes as a text patch, and legacy records lacking a touched
+    link's preimage, refuse before effects.
 
     Store-state restore (Invariant I5): when the transition carries
     ``state_snapshots/``, the byte bases / spans sidecars / scalar-base
-    manifests it captured are restored after the patch reverse —
+    manifests it captured are restored after the files —
     was-absent entries deleted, present entries rewritten byte-exact.
     The CURRENT store state for the same (store, key) set is recaptured
     first and recorded on the reverse transition, so a second revert
-    (redo) round-trips the stores too. A pre-snapshot transition (no
-    ``state_snapshots/`` dir) skips store work entirely — its store
-    deltas, if any, still ride its own ``changes.patch`` from the era
-    when store files were patch-recorded. The reverse transition is
-    written LAST (meta.json is its commit marker), so an interrupted
-    revert is re-runnable: the idempotent restore simply re-applies.
-
-    File-mode restore: when the transition carries a ``file_modes.json``
-    (a forward command changed a file's permission bits), each recorded
-    path is chmod-ed back to its pre-command mode AFTER the patch reverse —
-    the content patch carries bytes only, so this is the only inverse of
-    the install chmod (e.g. a 0600 secret retracked to 0644 is restored to
-    0600). The CURRENT mode of each such path is recaptured FIRST and
-    recorded on the reverse transition so a second revert (redo) restores
-    the install-applied mode — mode redo symmetry mirrors the store-state
-    recapture. A pre-bump transition (no ``file_modes.json``) reads back as
-    an empty map and skips mode work entirely (backward-compat).
+    (redo) round-trips the stores too. The reverse transition is written
+    LAST (meta.json is its commit marker); its file images record what the
+    reversal replaced, so a second revert is the exact redo.
     """
     transitions.ensure_state_dir_writable()
+    transitions.refuse_legacy_file_changes(record)
     transition = record.directory
     typer.echo(f"reverting: {transition}")
 
     filesystem_deltas = record.filesystem_deltas
     ownership_transfers = record.ownership_transfers
-    filesystem_paths = {item.path for item in filesystem_deltas}
-    text_paths = (
-        []
-        if record.files_complete
-        else [
-            path
-            for path in dict.fromkeys((*record.paths, *record.file_modes))
-            if path not in filesystem_paths
-        ]
-    )
-    file_pre = transitions.capture_files(text_paths)
 
     pre_store_state = record.state_snapshots
     reverse_store_state: tuple[transitions.StateSnapshotEntry, ...] = ()
@@ -419,12 +398,6 @@ def _apply_revert(
             transitions.snapshot_store_state(e.store, e.profile, e.key)
             for e in pre_store_state
         )
-
-    # Recapture the CURRENT mode of every mode-recorded path BEFORE the
-    # restore so the reverse transition can redo the install chmod. Empty
-    # for a pre-bump transition (no file_modes.json → {}), which then
-    # records no file_modes on the reverse record (omit-when-empty).
-    pre_command_modes = {} if record.files_complete else record.file_modes
 
     _refuse_legacy_symlink_record(record, config, profile)
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
@@ -437,14 +410,9 @@ def _apply_revert(
         config_identity_fd=config_identity_fd,
     )
 
-    if not record.files_complete:
-        transitions.apply_patch_reverse(transition)
     operations.apply_filesystem_deltas_reverse_anchored(filesystem_deltas, path_guards)
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
-    # Restore each path's pre-install mode AFTER the patch reverse rewrote
-    # its bytes (the content patch never carries permission bits).
-    _restore_modes(pre_command_modes)
     reverse_ownership: list[transitions.OwnershipTransferDelta] = []
     for item in reversed(ownership_transfers):
         restored = ownership_store.transfer_locked(
@@ -458,17 +426,14 @@ def _apply_revert(
             transitions.OwnershipTransferDelta(item.after, restored)
         )
 
-    target = _write_reverse_transition(
+    return _write_reverse_transition(
         transition,
         profile,
-        text_paths,
-        file_pre,
+        record.paths,
         state_snapshots=reverse_store_state,
-        filesystem_deltas=transitions.reverse_filesystem_deltas(filesystem_deltas),
+        filesystem_deltas=filesystem_deltas,
         ownership_transfers=tuple(reverse_ownership),
-        paths=record.paths if record.files_complete else None,
     )
-    return target
 
 
 def _report_recorded_revert(target: Path, profile: str) -> None:
@@ -566,27 +531,12 @@ def _ownership_transfer_identity_dir(
     return None
 
 
-def _restore_modes(recorded: Mapping[Path, int]) -> None:
-    """chmod each recorded path back to its pre-command mode.
-
-    Runs AFTER the patch reverse restored the path's bytes, so the mode
-    axis is reverted in lockstep with the content axis. A path that no
-    longer exists is skipped (idempotent — an interrupted revert can
-    re-run); no-op for the empty map (pre-bump transition).
-    """
-    for path, mode in recorded.items():
-        try:
-            path.chmod(mode)
-        except FileNotFoundError:
-            continue
-
-
 _TO_BEFORE_OPTION = typer.Option(
     None,
     "--to-before",
     help=(
         "Revert the named transition AND every newer transition for the "
-        "profile. The newest step is pre-flight dry-run-checked; if a "
+        "profile. Every step is checked against the live files first; if a "
         "later step fails, the steps already applied are rolled back and "
         "nothing is changed (exit 1)."
     ),
@@ -609,10 +559,9 @@ def revert(
 
     With ``--to-before=<id>``: revert the named transition AND every
     newer transition for the profile (in reverse-chronological order).
-    The newest step is pre-flight dry-run-checked before any live
-    mutation. Subsequent steps each run their own internal
-    dry-run-then-apply gate; when one of them fails, the steps already
-    applied are rolled back, so the chain reverts completely or not at all.
+    Every step's files are checked against the live tree before any live
+    mutation; when a later step still fails, the steps already applied are
+    rolled back, so the chain reverts completely or not at all.
 
     Opens the confirm-explain-redo wizard before applying (mockup A for
     single-step; mockup H summary panel for multi-step). Records its own
@@ -628,6 +577,7 @@ def revert(
         raise NoTransitionFound(f"no transition history for profile {profile!r}")
 
     record = transitions.load_record(transition)
+    transitions.refuse_legacy_file_changes(record)
     plan = _build_revert_plan(record, profile)
     choice = confirm_revert_operation(plan=plan, yes=yes)
     if choice is RevertChoice.ABORT:
@@ -686,6 +636,9 @@ def _apply_confirmed_reverts(
                 raise SetforgeError(
                     "transition history changed after confirmation; retry revert"
                 )
+            transitions.validate_filesystem_deltas_reverse(
+                *(record.filesystem_deltas for record in records)
+            )
             journal = _prepare_revert_journal(records, profile, config)
             journal = operations.begin_checkpoint(
                 journal,
@@ -760,42 +713,36 @@ def _resolve_to_before_chain(
 
 
 def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) -> None:
-    """Multi-step revert: pre-flight first step, then sequential apply.
+    """Multi-step revert: pre-flight the whole chain, then sequential apply.
 
     Steps:
     1. Resolve the chain (target + every newer transition, newest-first).
-    2. Pre-flight check the FIRST (newest) step via
-       ``apply_patch_reverse(dry_run=True)``: this catches the
-       most-likely failure mode — drift on the live tree since the
-       most-recent transition was recorded. Surface failure and exit 1
-       on drift; no live mutation has occurred.
-
-       Note: we cannot pre-flight steps 2..N without applying 1..N-1
-       first — each later step's reverse patch is defined against the
-       state produced by reversing its successor. Steps 2..N still run
-       their internal dry-run-then-apply (the existing
-       ``dry_run=False`` mode) so they refuse cleanly mid-stream on
-       unexpected drift.
+    2. Refuse a step recorded in an earlier version's text-patch format, and
+       check every step's file images against the live tree: the newest
+       step against what is live, each older step against the pre images
+       the newer steps restore. Drift on any file refuses with exit 1
+       before any live mutation.
     3. Show the multi-step confirm wizard (one prompt covering all N).
-    4. On user confirm: apply each step's reverse via
-       ``_apply_revert`` (which calls ``apply_patch_reverse(dry_run=False)``
-       — i.e. dry-run-then-real-apply per step — plus plugin / extension
-       reconcile and writes a reverse transition). One journal covers the
-       whole chain: a mid-stream failure rolls the applied steps back, and
-       the recorded reverts are reported only after the chain commits.
+    4. On user confirm: re-check the chain under the locks, then apply each
+       step's reverse via ``_apply_revert`` (which re-checks its own files
+       against the live tree, restores them, reverses the plugin /
+       extension deltas and writes a reverse transition). One journal covers
+       the whole chain: a mid-stream failure rolls the applied steps back,
+       and the recorded reverts are reported only after the chain commits.
     """
     chain = _resolve_to_before_chain(profile, to_before)
-    # Pre-flight the newest step. Only step 1 is checkable against live
-    # state without applying prior steps; see docstring.
+    records = tuple(transitions.load_record(entry.directory) for entry in chain)
+    for record in records:
+        transitions.refuse_legacy_file_changes(record)
     try:
-        transitions.apply_patch_reverse(chain[0].directory, dry_run=True)
+        transitions.validate_filesystem_deltas_reverse(
+            *(record.filesystem_deltas for record in records)
+        )
     except RevertFailed as exc:
         raise SetforgeError(
-            f"dry-run reversal of {chain[0].directory.name!r} failed; "
-            f"no live changes made:\n{exc}"
+            f"reversal of the chain to before {chain[-1].directory.name!r} would "
+            f"fail; no live changes made:\n{exc}"
         ) from exc
-
-    records = tuple(transitions.load_record(entry.directory) for entry in chain)
     step_plans = tuple(_build_revert_plan(record, profile) for record in records)
     plan = MultiStepRevertPlan(profile=profile, steps=step_plans)
     choice = confirm_multi_step_revert_operation(plan=plan, yes=yes)
@@ -828,18 +775,12 @@ def _prepare_revert_journal(
     has_plugins = False
     has_codex_plugins = False
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]] = {}
-    generic_paths: dict[Path, None] = {}
     for record in chain:
-        transfer_claim_paths = {
-            OwnershipStore().claim_path(item.after.resource_id): None
+        touched.update(
+            (OwnershipStore().claim_path(item.after.resource_id), None)
             for item in record.ownership_transfers
-        }
-        touched.update(transfer_claim_paths)
-        generic_paths.update(transfer_claim_paths)
-        touched.update(dict.fromkeys(record.paths))
-        delta_paths = dict.fromkeys(item.path for item in record.filesystem_deltas)
-        touched.update(delta_paths)
-        generic_paths.update(delta_paths)
+        )
+        touched.update((item.path, None) for item in record.filesystem_deltas)
         for snapshot in record.state_snapshots or ():
             identity = (snapshot.store, snapshot.profile, snapshot.key)
             state_keys[identity] = transitions.snapshot_store_state(*identity)
@@ -868,7 +809,7 @@ def _prepare_revert_journal(
             codex_plugins=has_codex_plugins,
             mcp_endpoints=mcp_endpoints,
         ),
-        path_guards=orphan_scan.capture_parent_path_guards(tuple(generic_paths)),
+        path_guards=orphan_scan.capture_parent_path_guards(tuple(touched)),
     )
 
 

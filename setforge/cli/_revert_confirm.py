@@ -176,13 +176,13 @@ def _render_extensions_section(plan: RevertPlan, console: Console) -> None:
 
 
 def _render_risks_section(plan: RevertPlan, console: Console) -> None:
-    """Render the RISKS panel with patch-reverse-collision callouts."""
+    """Render the RISKS panel with the whole-file drift callout."""
     console.print("[bold red]=== RISKS ===[/bold red]")
     console.print(
-        "  - Collision check happens at apply time "
-        "(``patch --dry-run -R`` inside apply_patch_reverse); revert "
-        "uses patch-reverse, not whole-file overwrite, and refuses "
-        "cleanly if any reverse-hunk collides with a live edit."
+        "  - Revert restores whole files: each must still hold what the "
+        "transition left (bytes, mode, link target; timestamps are ignored). "
+        "A file edited since refuses the revert, naming it, before anything "
+        "is written."
     )
     if plan.plugin_reconciles or plan.extension_reconciles:
         console.print(
@@ -204,8 +204,8 @@ def _render_panel(plan: RevertPlan, console: Console) -> None:
     _render_extensions_section(plan, console)
     console.print("[bold]=== what 'revert' will do ===[/bold]")
     console.print(
-        f"  Reverse the {len(plan.file_mutations)} file mutation(s) "
-        "using stored patch-reverse data."
+        f"  Restore the {len(plan.file_mutations)} file mutation(s) "
+        "from the recorded pre-transition images."
     )
     if plan.plugin_reconciles:
         console.print(f"  Reverse {len(plan.plugin_reconciles)} plugin reconcile(s).")
@@ -323,14 +323,13 @@ def _render_multi_step_panel(plan: MultiStepRevertPlan, console: Console) -> Non
         )
     console.print("[bold]=== what 'revert --to-before' will do ===[/bold]")
     console.print(
-        f"  Apply each step's reverse patch in newest-first order "
+        f"  Restore each step's files in newest-first order "
         f"({len(plan.steps)} steps total)."
     )
     console.print(
-        "  The newest step's reverse has been pre-flight dry-run-checked "
-        "against live; mid-stream failure on a later step (rare) leaves "
-        "partial state and exits 1. Abort is still safe here — nothing "
-        "has been written yet."
+        "  Every step's files have been checked against live; a failure on "
+        "a later step (rare) rolls the steps already applied back and exits "
+        "1. Abort is still safe here — nothing has been written yet."
     )
 
 

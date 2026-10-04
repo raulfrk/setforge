@@ -526,8 +526,9 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     Asserts:
     - exit 0, no .rej siblings, both reverse transitions recorded;
     - live file rolled back to pre-install (does not exist);
-    - via a call log: the step-1 (newest, transition_b) pre-flight check
-      fires BEFORE any step is applied, and the steps apply newest-first.
+    - via a call log: the whole chain is checked against live (before the
+      wizard and again under the locks) BEFORE any step is applied, and the
+      steps apply newest-first, each re-checking its own files.
     """
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
@@ -540,19 +541,21 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     from setforge import transitions as _transitions_module
     from setforge.cli import revert as _revert_module
 
-    call_log: list[tuple[str, Path]] = []
-    real_preflight = _transitions_module.apply_patch_reverse
+    call_log: list[tuple[str, object]] = []
+    real_check = _transitions_module.validate_filesystem_deltas_reverse
     real_apply = _revert_module._apply_revert
 
-    def _logging_preflight(transition: Any, *, dry_run: bool = False) -> None:
-        call_log.append(("preflight", transition))
-        real_preflight(transition, dry_run=dry_run)
+    def _logging_check(*steps: Any) -> None:
+        call_log.append(("check", len(steps)))
+        real_check(*steps)
 
     def _logging_apply(record: Any, *args: Any, **kwargs: Any) -> Path:
         call_log.append(("apply", record.directory))
         return real_apply(record, *args, **kwargs)
 
-    monkeypatch.setattr(_transitions_module, "apply_patch_reverse", _logging_preflight)
+    monkeypatch.setattr(
+        _transitions_module, "validate_filesystem_deltas_reverse", _logging_check
+    )
     monkeypatch.setattr(_revert_module, "_apply_revert", _logging_apply)
 
     revert_result = runner.invoke(
@@ -579,12 +582,15 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     # No .rej leakage anywhere.
     assert list(tmp_path.rglob("*.rej")) == []
 
-    # The pre-flight check on the newest step (transition_b) runs before any
-    # step is applied, and the chain unwinds newest-first.
+    # The whole chain is checked before any step is applied, and the chain
+    # unwinds newest-first.
     assert call_log == [
-        ("preflight", transition_b),
+        ("check", 2),
+        ("check", 2),
         ("apply", transition_b),
+        ("check", 1),
         ("apply", transition_a),
+        ("check", 1),
     ]
 
 

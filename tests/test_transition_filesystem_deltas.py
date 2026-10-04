@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -656,3 +657,23 @@ def test_capture_refuses_a_file_replaced_between_stat_and_open(
             transitions.capture_filesystem_image("live", dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
+
+
+def test_reverse_check_follows_a_chain_through_each_step_pre_image(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "file"
+    path.write_bytes(b"third")
+    third = transitions.snapshot_filesystem_image(path)
+    second = replace(third, payload=b"second", mtime_ns=1)
+    first = replace(third, payload=b"first", mtime_ns=2)
+    newer = (transitions.FilesystemDelta(path, second, third),)
+    older = (transitions.FilesystemDelta(path, first, second),)
+    other = (transitions.FilesystemDelta(path, first, first),)
+
+    transitions.validate_filesystem_deltas_reverse(newer, older)
+    with pytest.raises(RevertFailed, match="changed since transition"):
+        transitions.validate_filesystem_deltas_reverse(newer, other)
+    with pytest.raises(RevertFailed, match="changed since transition"):
+        transitions.validate_filesystem_deltas_reverse(older)
+    assert path.read_bytes() == b"third"
