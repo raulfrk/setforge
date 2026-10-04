@@ -45,17 +45,21 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, NewType
+from typing import Any, Final, NewType
 
 from pydantic import ValidationError
 
-from setforge import __version__, atomicio
+from setforge import __version__, atomicio, base_store, scalar_base_store
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+from setforge.ownership import (
+    ClaimEvent,
+    OwnershipClaim,
+    ownership_claim_from_json,
+    ownership_claim_to_json,
+)
 from setforge.paths import state_root
-
-if TYPE_CHECKING:
-    from setforge.ownership import OwnershipClaim
+from setforge.reconcile import store as reconcile_store
 
 TransitionDir = NewType("TransitionDir", Path)
 """A directory containing transition metadata (``meta.json``, ``changes.patch``, etc.).
@@ -118,7 +122,6 @@ class OwnershipTransferDelta:
     def __post_init__(self) -> None:
         if self.before.owner_id == self.after.owner_id:
             raise ValueError("ownership transfer must change owner")
-        from setforge.ownership import ClaimEvent
 
         expected = replace(
             self.before,
@@ -1051,9 +1054,6 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     ``spans_store`` traversal guard inline rather than reaching through the
     retired module).
     """
-    from setforge import base_store, scalar_base_store
-    from setforge.reconcile import store as reconcile_store
-
     match store:
         case SnapshotStore.BASE:
             return base_store.base_path(profile, key)
@@ -1558,8 +1558,6 @@ _OWNERSHIP_TRANSFERS_FILENAME: Final[str] = "ownership_transfers.json"
 def _serialize_ownership_transfers(
     deltas: tuple[OwnershipTransferDelta, ...],
 ) -> str | None:
-    from setforge.ownership import ownership_claim_to_json
-
     if not deltas:
         return None
     identities = [item.before.resource_id for item in deltas]
@@ -1610,8 +1608,6 @@ def load_ownership_transfers(
 
 
 def _ownership_transfer_from_json(raw: object) -> OwnershipTransferDelta:
-    from setforge.ownership import ownership_claim_from_json
-
     if not isinstance(raw, dict) or set(raw) != {"before", "after"}:
         raise TypeError("ownership transfer entry must contain before and after")
     before = raw["before"]
