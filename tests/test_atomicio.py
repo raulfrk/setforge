@@ -31,6 +31,77 @@ def test_atomic_write_bytes_at_stays_bound_after_parent_symlink_swap(
     assert not (outside / "config.toml").exists()
 
 
+def test_staged_file_at_holds_exact_bytes_mode_and_mtime_until_published(
+    tmp_path: Path,
+) -> None:
+    mtime_ns = 1_700_000_000_123_456_789
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with atomicio.staged_file_at(
+            parent_fd, ".staged", b"payload\n", 0o640, mtime_ns=mtime_ns
+        ):
+            staged = (tmp_path / ".staged").stat()
+            assert (tmp_path / ".staged").read_bytes() == b"payload\n"
+            os.replace(".staged", "leaf", src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+    published = (tmp_path / "leaf").stat()
+    assert stat.S_IMODE(staged.st_mode) == 0o640
+    assert (stat.S_IMODE(published.st_mode), published.st_mtime_ns) == (
+        0o640,
+        mtime_ns,
+    )
+    assert published.st_ino == staged.st_ino
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["leaf"]
+
+
+def test_staged_file_at_removes_the_staged_name_when_publication_fails(
+    tmp_path: Path,
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with (
+            pytest.raises(RuntimeError, match="publish failed"),
+            atomicio.staged_file_at(parent_fd, ".staged", b"payload\n", 0o600),
+        ):
+            raise RuntimeError("publish failed")
+    finally:
+        os.close(parent_fd)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("occupant", ["file", "symlink"])
+def test_staged_file_at_refuses_and_keeps_an_existing_staged_name(
+    tmp_path: Path, occupant: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside\n")
+    staged = root / ".staged"
+    if occupant == "file":
+        staged.write_bytes(b"theirs\n")
+    else:
+        staged.symlink_to(outside)
+    parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with (
+            pytest.raises(FileExistsError),
+            atomicio.staged_file_at(parent_fd, ".staged", b"ours\n", 0o600),
+        ):
+            pytest.fail("the staged name was not created by this call")
+    finally:
+        os.close(parent_fd)
+
+    assert outside.read_bytes() == b"outside\n"
+    if occupant == "file":
+        assert staged.read_bytes() == b"theirs\n"
+    else:
+        assert staged.is_symlink()
+
+
 def test_atomic_write_bytes_round_trip(tmp_path: Path) -> None:
     target = tmp_path / "sub" / "file.bin"
     payload = b"\x00\x01binary\xffbytes\n"

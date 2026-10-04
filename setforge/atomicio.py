@@ -28,6 +28,7 @@ import contextlib
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -132,36 +133,60 @@ def atomic_write_text(
     )
 
 
+@contextlib.contextmanager
+def staged_file_at(
+    parent_fd: int,
+    temporary: str,
+    data: bytes,
+    mode: int,
+    *,
+    mtime_ns: int | None = None,
+) -> Iterator[None]:
+    """Hold ``data`` at a new ``temporary`` name while the caller publishes it.
+
+    The name is created exclusively and without following a link, so a
+    pre-existing entry is refused and left alone. Mode and ``mtime_ns`` are set
+    on the descriptor and flushed with the data before the caller runs; the
+    directory is flushed after it. The staged name is removed on exit unless
+    publication moved it.
+    """
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        mode,
+        dir_fd=parent_fd,
+    )
+    try:
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                if written == 0:  # pragma: no cover - kernel contract
+                    raise OSError("short write while publishing file")
+                view = view[written:]
+            os.fchmod(descriptor, mode)
+            if mtime_ns is not None:
+                os.utime(descriptor, ns=(mtime_ns, mtime_ns))
+            os.fsync(descriptor)
+        finally:
+            # NFS keeps an unlinked name that is still open as a `.nfs*`
+            # sibling, which a later directory scan would see; close before
+            # publishing.
+            os.close(descriptor)
+        yield
+        os.fsync(parent_fd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=parent_fd)
+
+
 def atomic_write_bytes_at(
     parent_fd: int, name: str, data: bytes, *, mode: int = 0o600
 ) -> None:
     """Atomically replace a regular leaf relative to a held directory fd."""
     temporary = f".{name}.setforge-{uuid4().hex}.tmp"
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            mode,
-            dir_fd=parent_fd,
-        )
-        view = memoryview(data)
-        while view:
-            written = os.write(descriptor, view)
-            if written == 0:  # pragma: no cover - kernel contract
-                raise OSError("short write while publishing file")
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
+    with staged_file_at(parent_fd, temporary, data, mode):
         os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
 
 
 def fsync_path(path: Path, *, strict: bool) -> None:

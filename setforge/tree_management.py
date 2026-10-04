@@ -8,8 +8,7 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -618,44 +617,9 @@ def _chmod_directory_at(
         os.close(parent_fd)
 
 
-@contextmanager
-def _staged_file_at(
-    parent_fd: int, temporary: str, payload: bytes, mode: int
-) -> Iterator[None]:
-    """Hold ``payload`` at a new ``temporary`` name while the caller publishes it.
-
-    The name is created exclusively, so a pre-existing entry is refused and
-    left alone; the staged name is removed on exit unless publication moved it.
-    """
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        mode,
-        dir_fd=parent_fd,
-    )
-    try:
-        try:
-            view = memoryview(payload)
-            while view:
-                written = os.write(descriptor, view)
-                view = view[written:]
-            os.fchmod(descriptor, mode)
-            os.fsync(descriptor)
-        finally:
-            # NFS keeps an unlinked name that is still open as a `.nfs*`
-            # sibling, which the post-apply scan would see; close before
-            # publishing.
-            os.close(descriptor)
-        yield
-        os.fsync(parent_fd)
-    finally:
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
-
-
 def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> None:
     temporary = temporary_entry_name(name, "create")
-    with _staged_file_at(parent_fd, temporary, payload, mode):
+    with atomicio.staged_file_at(parent_fd, temporary, payload, mode):
         _publish_noreplace_at(parent_fd, temporary, name)
 
 
@@ -1041,7 +1005,7 @@ def _exchange_file_at(
     parent_fd: int, name: str, payload: bytes, mode: int, expected: TreeEntry
 ) -> None:
     temporary = temporary_entry_name(name, "update")
-    with _staged_file_at(parent_fd, temporary, payload, mode):
+    with atomicio.staged_file_at(parent_fd, temporary, payload, mode):
         _exchange_verified_at(parent_fd, temporary, name, expected)
 
 

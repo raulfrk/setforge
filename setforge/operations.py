@@ -1673,59 +1673,6 @@ def _verify_parent_binding(parent_fd: int, parent: Path) -> None:
         raise SetforgeError(f"journaled path parent changed before write: {parent}")
 
 
-def _atomic_write_at(
-    parent_fd: int, name: str, payload: bytes, *, mode: int, mtime_ns: int | None
-) -> None:
-    """Atomically publish bytes relative to a held directory descriptor."""
-    temporary = f".{name}.setforge-{uuid4().hex}"
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            mode,
-            dir_fd=parent_fd,
-        )
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written == 0:  # pragma: no cover - defensive kernel contract
-                raise OSError("short write while publishing recovered file")
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        os.replace(
-            temporary,
-            name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
-        if mtime_ns is not None:
-            os.utime(
-                name,
-                ns=(mtime_ns, mtime_ns),
-                dir_fd=parent_fd,
-                follow_symlinks=False,
-            )
-        published = os.open(
-            name,
-            os.O_RDONLY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-        try:
-            os.fsync(published)
-        finally:
-            os.close(published)
-        os.fsync(parent_fd)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
-
-
 def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
     """Capture one leaf relative to a held, verified parent descriptor."""
     name = path.name
@@ -1853,13 +1800,15 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
     _remove_replaceable_at(parent_fd, name, snapshot.path)
     if snapshot.kind is SnapshotKind.FILE:
         assert snapshot.payload is not None
-        _atomic_write_at(
+        temporary = f".{name}.setforge-{uuid4().hex}"
+        with atomicio.staged_file_at(
             parent_fd,
-            name,
+            temporary,
             snapshot.payload,
-            mode=snapshot.mode if snapshot.mode is not None else 0o600,
+            snapshot.mode if snapshot.mode is not None else 0o600,
             mtime_ns=snapshot.mtime_ns,
-        )
+        ):
+            os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         return None
     if snapshot.kind is SnapshotKind.SYMLINK:
         assert snapshot.link_target is not None
