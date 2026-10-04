@@ -487,47 +487,20 @@ def freeze_candidate(path: Path) -> ScanEntry:
 
 
 def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
-    parent = entry.path.parent
-    expected = dict(entry.parent_identities)
-    follow_flags = os.O_RDONLY | os.O_DIRECTORY
-    flags = follow_flags | os.O_NOFOLLOW
-    try:
-        parent_fd = os.open(Path("/"), flags)
-    except OSError as exc:
-        raise SetforgeError(f"scan candidate parent changed: {parent}") from exc
-    try:
-        current = Path("/")
-        for component in parent.parts[1:]:
-            current /= component
-            expected_parent = expected.get(current)
-            if expected_parent is None:
-                raise SetforgeError(
-                    f"scan candidate has no parent identity: {entry.path}"
-                )
-            alias = stat.S_ISLNK(expected_parent.mode)
-            try:
-                next_fd = os.open(
-                    component, follow_flags if alias else flags, dir_fd=parent_fd
-                )
-            except OSError as exc:
-                raise SetforgeError(
-                    f"scan candidate parent changed: {current}"
-                ) from exc
-            os.close(parent_fd)
-            parent_fd = next_fd
-            actual_parent = PathIdentity.from_stat(os.fstat(parent_fd))
-            if (
-                actual_parent.device,
-                actual_parent.inode,
-                operations.alias_guard_mode(actual_parent.mode)
-                if alias
-                else actual_parent.mode,
-            ) != (
-                expected_parent.device,
-                expected_parent.inode,
-                expected_parent.mode,
-            ):
-                raise SetforgeError(f"scan candidate parent changed: {current}")
+    identities: dict[Path, tuple[int, int, int] | None] = {
+        path: (identity.device, identity.inode, identity.mode)
+        for path, identity in entry.parent_identities
+    }
+    with operations.open_guarded_parent(
+        entry.path,
+        identities,
+        create_missing=False,
+        permit_existing_absent=False,
+        changed="scan candidate parent changed",
+        unguarded="scan candidate has no parent identity",
+    ) as parent_fd:
+        if parent_fd is None:  # pragma: no cover - every identity is present
+            raise SetforgeError(f"scan candidate parent changed: {entry.path.parent}")
         try:
             current_info = os.stat(
                 entry.path.name, dir_fd=parent_fd, follow_symlinks=False
@@ -542,5 +515,3 @@ def _with_verified_parent(entry: ScanEntry, *, unlink: bool) -> None:
             raise SetforgeError(f"refusing unsupported scan candidate: {entry.path}")
         if unlink:
             os.unlink(entry.path.name, dir_fd=parent_fd)
-    finally:
-        os.close(parent_fd)

@@ -966,7 +966,7 @@ def _restore_directory_metadata_anchored(
     guard_identities: dict[Path, tuple[int, int, int] | None],
 ) -> None:
     replacement = _path_snapshot_from_filesystem_image(delta.path, delta.pre)
-    with _open_guarded_parent(
+    with open_guarded_parent(
         delta.path,
         guard_identities,
         create_missing=False,
@@ -1002,7 +1002,7 @@ def _replace_filesystem_delta_anchored(
     guard_identities: dict[Path, tuple[int, int, int] | None],
 ) -> tuple[int, int, int] | None:
     replacement = _path_snapshot_from_filesystem_image(delta.path, delta.pre)
-    with _open_guarded_parent(
+    with open_guarded_parent(
         delta.path,
         guard_identities,
         create_missing=replacement.kind is not SnapshotKind.ABSENT,
@@ -1510,17 +1510,20 @@ def _guard_identities(
 
 
 @contextmanager
-def _open_guarded_parent(  # noqa: C901
+def open_guarded_parent(  # noqa: C901
     path: Path,
     guard_identities: dict[Path, tuple[int, int, int] | None],
     *,
     create_missing: bool,
     permit_existing_absent: bool,
+    changed: str = "journaled path parent changed before write",
+    unguarded: str = "journaled path parent lacks an identity guard",
 ) -> Iterator[int | None]:
     """Yield ``path.parent`` as a verified directory descriptor.
 
     Only an ancestor captured as a symlink is followed, and only to the
-    directory identity recorded for it.
+    directory identity recorded for it. ``changed`` and ``unguarded`` word the
+    refusals for callers that guard something other than a journaled path.
     """
     path = path.expanduser().absolute()
     follow_flags = os.O_RDONLY | os.O_DIRECTORY
@@ -1533,9 +1536,7 @@ def _open_guarded_parent(  # noqa: C901
         for component in path.relative_to("/").parts[:-1]:
             current_path /= component
             if current_path not in guard_identities:
-                raise SetforgeError(
-                    f"journaled path parent lacks an identity guard: {current_path}"
-                )
+                raise SetforgeError(f"{unguarded}: {current_path}")
             expected = guard_identities[current_path]
             alias = expected is not None and stat.S_ISLNK(expected[2])
             try:
@@ -1544,31 +1545,23 @@ def _open_guarded_parent(  # noqa: C901
                 )
             except FileNotFoundError:
                 if expected is not None:
-                    raise SetforgeError(
-                        f"journaled path parent changed before write: {current_path}"
-                    ) from None
+                    raise SetforgeError(f"{changed}: {current_path}") from None
                 if not create_missing:
                     yield None
                     return
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=current_fd)
                 except OSError as exc:
-                    raise SetforgeError(
-                        f"journaled path parent changed before write: {current_path}"
-                    ) from exc
+                    raise SetforgeError(f"{changed}: {current_path}") from exc
                 try:
                     child_fd = os.open(component, flags, dir_fd=current_fd)
                 except OSError as exc:
-                    raise SetforgeError(
-                        f"journaled path parent changed before write: {current_path}"
-                    ) from exc
+                    raise SetforgeError(f"{changed}: {current_path}") from exc
                 try:
                     info = os.fstat(child_fd)
                 except OSError as exc:
                     os.close(child_fd)
-                    raise SetforgeError(
-                        f"journaled path parent changed before write: {current_path}"
-                    ) from exc
+                    raise SetforgeError(f"{changed}: {current_path}") from exc
                 guard_identities[current_path] = (
                     info.st_dev,
                     info.st_ino,
@@ -1576,9 +1569,7 @@ def _open_guarded_parent(  # noqa: C901
                 )
                 expected = guard_identities[current_path]
             except OSError as exc:
-                raise SetforgeError(
-                    f"journaled path parent changed before write: {current_path}"
-                ) from exc
+                raise SetforgeError(f"{changed}: {current_path}") from exc
             descriptors.append(child_fd)
             info = os.fstat(child_fd)
             actual = (
@@ -1595,9 +1586,7 @@ def _open_guarded_parent(  # noqa: C901
                     )
                 guard_identities[current_path] = actual
             elif actual != expected:
-                raise SetforgeError(
-                    f"journaled path parent changed before write: {current_path}"
-                )
+                raise SetforgeError(f"{changed}: {current_path}")
             current_fd = child_fd
         yield current_fd
     finally:
@@ -1800,7 +1789,7 @@ def _restore_path_anchored(
 ) -> bool:
     """Restore one path relative to a verified parent descriptor."""
     create_missing = snapshot.kind is not SnapshotKind.ABSENT
-    with _open_guarded_parent(
+    with open_guarded_parent(
         snapshot.path,
         guard_identities,
         create_missing=create_missing,
