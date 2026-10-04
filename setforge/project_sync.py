@@ -15,7 +15,7 @@ from pathlib import Path
 
 from setforge import atomicio, operations
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
-from setforge.errors import MergeTypeMismatch, SetforgeError, StructuredParseError
+from setforge.errors import SetforgeError
 from setforge.file_ownership import refuse_active_file_claims
 from setforge.git_overlay import (
     OverlayClaim,
@@ -80,14 +80,10 @@ from setforge.reconcile.merge_model import (
     MergeResult,
     Segment,
 )
-from setforge.reconcile.structured_units import (
-    _dump_model,
-    _load_model,
-    structured_format,
-)
+from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.types import ABSENT
 from setforge.reconcile.types import file_id as reconcile_file_id
-from setforge.structural_merge import merge_structural
+from setforge.reconcile_apply import _key_merge
 from setforge.transitions import state_root
 from setforge.ui.primitives import CANCEL
 
@@ -740,24 +736,21 @@ class AutoResolution(StrEnum):
 def merge_project_content(
     path: Path, base: MergeInput, ours: MergeInput, theirs: MergeInput
 ) -> MergeResult:
-    """Three-way project content, preferring key-aware clean structured merges."""
+    """Three-way project content, merging structured files by key as install does.
+
+    A side that did not move leaves the other side's bytes verbatim.
+    """
     fmt = structured_format(path)
     if (
         fmt is not None
         and isinstance(base, bytes)
         and isinstance(ours, bytes)
         and isinstance(theirs, bytes)
+        and len({base, ours, theirs}) == 3
     ):
-        try:
-            structured = merge_structural(
-                _load_model(base, fmt),
-                _load_model(ours, fmt),
-                _load_model(theirs, fmt),
-            )
-            if structured.clean:
-                return MergeResult((Clean(_dump_model(structured.merged_model, fmt)),))
-        except (MergeTypeMismatch, StructuredParseError, TypeError, ValueError):
-            pass
+        merged = _key_merge(base, ours, theirs, fmt)
+        if merged is not None:
+            return MergeResult((Clean(merged),))
     return line_merge(base, ours, theirs)
 
 

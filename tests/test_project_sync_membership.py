@@ -336,7 +336,7 @@ def test_sync_reports_repair_of_private_overlay_permissions(tmp_path: Path) -> N
     assert _git(target, "diff", "--", "AGENTS.md") == ""
 
 
-def test_sync_reports_yaml_reformatting_without_a_manifest_change(
+def test_sync_keeps_a_layout_only_yaml_edit_as_install_does(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
@@ -352,15 +352,12 @@ def test_sync_reports_yaml_reformatting_without_a_manifest_change(
     )
     assert injected.exit_code == 0, injected.output
     assert apply_sync(plan_sync(target)) is False
-    record = manifest_path(target, "demo")
-    manifest_before = record.read_bytes()
     destination = target / "settings.yaml"
     destination.write_text("section:\n    flag: true\n")
 
     assert apply_sync(plan_sync(target)) is True
 
-    assert destination.read_text() == canonical
-    assert record.read_bytes() == manifest_before
+    assert destination.read_text() == "section:\n    flag: true\n"
     assert apply_sync(plan_sync(target)) is False
 
 
