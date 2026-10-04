@@ -19,7 +19,7 @@ from setforge.provision.bundle import execute_bundle, validate_bundle
 from setforge.provision.capability_graph import CapabilityTargetKind
 from setforge.provision.driver import exit_code
 from setforge.provision.protocol import Identity, Outcome
-from setforge.provision.reference import InMemoryProvisioner
+from tests.provision_reference import InMemoryProvisioner
 
 _PROFILE = "bundle-test"
 
