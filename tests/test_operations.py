@@ -878,11 +878,11 @@ def test_journal_stays_compatible_with_earlier_releases(
         _prepare(tmp_path, paths=(path,)),
         name="files",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore files",
     )
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
     for row in raw["checkpoints"]:
+        assert row["recovery"]
         assert row["recovered"] is False
         row["recovered"] = True
     journal_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -894,6 +894,19 @@ def test_journal_stays_compatible_with_earlier_releases(
 
     assert path.read_text(encoding="utf-8") == "before"
     assert operations.active("p") is None
+
+
+def test_irreversible_checkpoint_requires_manual_recovery_text(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journal = _prepare(tmp_path)
+
+    with pytest.raises(SetforgeError, match="needs manual recovery text"):
+        operations.begin_checkpoint(
+            journal, name="packages", kind=operations.CheckpointKind.IRREVERSIBLE
+        )
+
+    assert operations.load("p").checkpoints == ()
 
 
 def test_recovery_refuses_parent_swap_after_preflight(

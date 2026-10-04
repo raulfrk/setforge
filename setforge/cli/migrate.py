@@ -374,7 +374,6 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         journal,
         name="migration-chain",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore every migration-affected path",
     )
     try:
         _execute_chain(chain=chain, roots=roots, choice=choice)
@@ -528,7 +527,6 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
         journal,
         name="marker-finalize",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore every tracked source from the write-ahead snapshot",
     )
     # The batch is recorded as ONE revertible transition only after every
     # write lands. atomic_write_text is per-file atomic, but the loop is not

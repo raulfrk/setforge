@@ -351,7 +351,6 @@ def snapshot_restore(
             journal,
             name="restore-files",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore every live path captured before snapshot restore",
             restore_state=False,
             restore_transitions=False,
             adapters=(),

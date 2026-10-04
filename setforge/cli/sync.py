@@ -527,7 +527,6 @@ def sync(
             journal,
             name="capture-files-and-stores",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore captured tracked/config paths and reconcile stores",
         )
 
         try:

@@ -687,7 +687,6 @@ def _apply_confirmed_reverts(
     selection once they are held. A failure rolls every applied step back,
     and the recorded reverts are reported only after the journal completes.
     """
-    scope = "chain" if chain else "revert"
     recorded: list[Path] = []
     try:
         with operations.transaction(
@@ -707,9 +706,6 @@ def _apply_confirmed_reverts(
                 journal,
                 name="revert-chain",
                 kind=operations.CheckpointKind.COMPENSATABLE,
-                recovery=(
-                    f"restore pre-{scope} files, stores, modes, and adapter inventories"
-                ),
             )
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None

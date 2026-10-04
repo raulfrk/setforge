@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from setforge.locking import MutationLockGuards, MutationScopes
 
 JOURNAL_SCHEMA_VERSION: Final[int] = 1
+# Journal readers reject a checkpoint whose recovery text is empty.
+_AUTOMATIC_RECOVERY: Final[str] = "automatic"
 _RENAME_NOREPLACE: Final[int] = 1
 _IN_CREATE: Final[int] = 0x00000100
 _IN_DELETE: Final[int] = 0x00000200
@@ -663,13 +665,19 @@ def begin_checkpoint(
     *,
     name: str,
     kind: CheckpointKind,
-    recovery: str,
+    recovery: str | None = None,
     paths: tuple[Path, ...] | None = None,
     restore_state: bool | None = None,
     restore_transitions: bool = True,
     adapters: tuple[AdapterKind, ...] | None = None,
 ) -> OperationJournal:
-    """Write effect intent durably before the effect begins."""
+    """Write effect intent durably before the effect begins.
+
+    ``recovery`` is the manual remediation ``setforge recover`` prints for an
+    irreversible checkpoint; it is never shown for any other kind.
+    """
+    if not recovery and kind is CheckpointKind.IRREVERSIBLE:
+        raise SetforgeError("an irreversible checkpoint needs manual recovery text")
     if journal.checkpoints and not journal.checkpoints[-1].completed:
         raise SetforgeError(
             "cannot begin a checkpoint while the prior one is uncertain"
@@ -712,7 +720,7 @@ def begin_checkpoint(
             OperationCheckpoint(
                 name,
                 kind,
-                recovery,
+                recovery or _AUTOMATIC_RECOVERY,
                 paths=scoped_paths,
                 restore_state=bool(journal.state_snapshots)
                 if restore_state is None
