@@ -158,14 +158,12 @@ def migrate(
             _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return
     if finalize:
-        with mutation_locks(config_dir=cfg_path.resolve().parent):
-            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+        with operations.transaction(config_dir=cfg_path.resolve().parent):
             _dispatch_finalize(cfg_path=cfg_path, yes=yes)
         return
 
     if apply_flag:
-        with mutation_locks(config_dir=cfg_path.resolve().parent):
-            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+        with operations.transaction(config_dir=cfg_path.resolve().parent):
             guard_minimum_version(cfg_path)
             current = detect_current_schema(cfg_path)
             target = _resolve_target(to=to)

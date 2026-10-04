@@ -370,7 +370,7 @@ def test_refused_revert_of_guarded_transition_leaves_no_operation(
     assert not getattr(result.exception, "__notes__", ())
     assert dst.read_text(encoding="utf-8") == "manually edited content\n"
     assert operations.active("vmh") is None
-    operations.refuse_active("vmh")
+    operations._refuse_active()
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")

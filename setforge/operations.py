@@ -14,16 +14,19 @@ import stat
 import struct
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Unpack, cast
 from uuid import uuid4
 
 from setforge import atomicio, transitions
 from setforge.errors import SetforgeError
+
+if TYPE_CHECKING:
+    from setforge.locking import MutationLockGuards, MutationScopes
 
 JOURNAL_SCHEMA_VERSION: Final[int] = 1
 _RENAME_NOREPLACE: Final[int] = 1
@@ -592,7 +595,7 @@ def active(profile: str) -> OperationJournal | None:
     return load(profile)
 
 
-def refuse_active(profile: str) -> None:
+def _refuse_active() -> None:
     """Fail when any unfinished mutation still owns recovery baselines."""
     journals = _load_all()
     if not journals:
@@ -1283,6 +1286,25 @@ def recover_on_error(profile: str, command: str) -> Iterator[None]:
                 f"automatic recovery failed; the journal was retained: {recovery_error}"
             )
         raise
+
+
+@contextmanager
+def transaction(
+    *, recover: tuple[str, str] | None = None, **scopes: Unpack[MutationScopes]
+) -> Iterator[MutationLockGuards]:
+    """Hold the declared mutation locks, refuse any unfinished operation, then run.
+
+    ``recover`` names the ``(profile, command)`` journal the block publishes; a
+    failure rolls that journal back before the locks are released.
+    """
+    from setforge.locking import mutation_locks
+
+    with (
+        mutation_locks(**scopes) as guards,
+        recover_on_error(*recover) if recover is not None else nullcontext(),
+    ):
+        _refuse_active()
+        yield guards
 
 
 def recover_adapters(journal: OperationJournal) -> None:

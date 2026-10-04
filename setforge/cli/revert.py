@@ -65,7 +65,6 @@ from setforge.errors import (
     RevertFailed,
     SetforgeError,
 )
-from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipStore,
     read_owner_id_locked,
@@ -691,17 +690,14 @@ def _apply_confirmed_reverts(
     scope = "chain" if chain else "revert"
     recorded: list[Path] = []
     try:
-        with (
-            mutation_locks(
-                resources=True,
-                config_identity_dir=_ownership_transfer_identity_dir(records, config),
-                config_dir=config.resolve().parent,
-                target_roots=_ownership_transfer_lock_targets(records),
-                profiles=_revert_locked_profiles(records, profile),
-            ) as mutation_guards,
-            operations.recover_on_error(profile, "revert"),
-        ):
-            operations.refuse_active(profile)
+        with operations.transaction(
+            resources=True,
+            config_identity_dir=_ownership_transfer_identity_dir(records, config),
+            config_dir=config.resolve().parent,
+            target_roots=_ownership_transfer_lock_targets(records),
+            profiles=_revert_locked_profiles(records, profile),
+            recover=(profile, "revert"),
+        ) as mutation_guards:
             if not history_unchanged():
                 raise SetforgeError(
                     "transition history changed after confirmation; retry revert"

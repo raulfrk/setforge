@@ -19,7 +19,6 @@ from setforge.cli._lock_enumerate import _LockItem, enumerate_lock_items
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import LockConflict, ResolveError
 from setforge.lockfile import LockFile, lock_path, parse_lock, write_lock
-from setforge.locking import mutation_locks
 from setforge.provision.identity import normalize_python_package_name
 from setforge.provision.resolve.protocol import PackageType, ResolvedPin
 from setforge.provision.resolve.registry import get_resolver
@@ -132,8 +131,7 @@ def lock(
     # existing lock UNDER the lock so a second writer sees the first's pins and
     # merge_lock unions them. Keyed on the config dir (not the profile) because
     # the lockfile is profile-independent.
-    with mutation_locks(config_dir=path.parent, profile=profile):
-        operations.refuse_active(profile)
+    with operations.transaction(config_dir=path.parent, profile=profile):
         cfg = load_config(config)
         resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
         items = enumerate_lock_items(cfg, resolved)

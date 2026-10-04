@@ -50,7 +50,6 @@ from setforge.file_ownership import (
     observe_file,
     publish_file_claim_locked,
 )
-from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipError,
     OwnershipStore,
@@ -473,17 +472,14 @@ def _apply_structured(
         if owner_id is not None and config_dir is not None
         else None
     )
-    with (
-        mutation_locks(
-            resources=owner_id is not None,
-            config_identity_dir=identity_dir,
-            config_dir=config_dir,
-            target_roots=(stage.dst.parent,),
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "stage"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=owner_id is not None,
+        config_identity_dir=identity_dir,
+        config_dir=config_dir,
+        target_roots=(stage.dst.parent,),
+        profile=profile,
+        recover=(profile, "stage"),
+    ) as mutation_guards:
         if owner_id is not None and config_dir is not None:
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None
@@ -898,17 +894,14 @@ def _apply(
         if owner_id is not None and config_dir is not None
         else None
     )
-    with (
-        mutation_locks(
-            resources=owner_id is not None,
-            config_identity_dir=identity_dir,
-            config_dir=config_dir,
-            target_roots=(stage.dst.parent,),
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "stage"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=owner_id is not None,
+        config_identity_dir=identity_dir,
+        config_dir=config_dir,
+        target_roots=(stage.dst.parent,),
+        profile=profile,
+        recover=(profile, "stage"),
+    ) as mutation_guards:
         if owner_id is not None and config_dir is not None:
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None

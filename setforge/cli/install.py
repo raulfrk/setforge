@@ -2562,21 +2562,18 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             "ownership transfer requires transition recording; remove --no-transition"
         )
 
-    with (
-        mutation_locks(
-            resources=True,
-            config_identity_dir=(
-                resolve_owner_common_dir(repo_root)
-                if package_owner_id is not None
-                else None
-            ),
-            config_dir=config.parent,
-            target_roots=tree_target_preview,
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "install"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=True,
+        config_identity_dir=(
+            resolve_owner_common_dir(repo_root)
+            if package_owner_id is not None
+            else None
+        ),
+        config_dir=config.parent,
+        target_roots=tree_target_preview,
+        profile=profile,
+        recover=(profile, "install"),
+    ) as mutation_guards:
         if config.read_bytes() != ownership_config:
             raise SetforgeError(
                 "install configuration changed after confirmation; retry"

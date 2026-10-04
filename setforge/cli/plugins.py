@@ -169,10 +169,9 @@ def plugin_add(
         )
         return
 
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         load_config(config)
         _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
         if not no_install:
@@ -188,10 +187,9 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
     *,
     no_install: bool,
 ) -> None:
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         config_target = config.resolve()
         config_before = config_target.read_bytes()
         config_mode = config_target.stat().st_mode & 0o7777
@@ -465,10 +463,9 @@ def plugin_remove(  # noqa: C901 - product-specific transactional removal
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)
-        with mutation_locks(
+        with operations.transaction(
             resources=True, config_dir=config.resolve().parent, profile=profile
         ):
-            operations.refuse_active(profile)
             cfg = load_config(config)
             config_target = config.resolve()
             config_before = config_target.read_bytes()
@@ -501,10 +498,9 @@ def plugin_remove(  # noqa: C901 - product-specific transactional removal
                 raise typer.Exit(code=1) from exc
             typer.echo(f"removed Codex plugin: {plugin_id}")
         return
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         cfg = load_config(config)
         changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
             config, profile, bare_ref
@@ -624,10 +620,9 @@ def _codex_plugin_reconcile(  # noqa: C901 - lock/read-only rendering boundary
         if dry_run or policy is ReconcilePolicy.REPORT:
             report = execute(cfg, resolved)
         else:
-            with mutation_locks(
+            with operations.transaction(
                 resources=True, config_dir=config.resolve().parent, profile=profile
             ):
-                operations.refuse_active(profile)
                 current_cfg = load_config(config)
                 current_resolved = resolve_effective_profile(
                     current_cfg, profile, config.resolve().parent
@@ -675,10 +670,9 @@ def _run_plugin_reconcile(
             auto=auto,
         )
         return policy, report
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         # Re-resolve after serialization so a waiting PRUNE never applies
         # desired state older than the preceding writer.
         current_cfg = load_config(config)
@@ -752,10 +746,9 @@ def sync_cache(
     config = _resolve_config_arg(config)
     repo_root = config.resolve().parent
     try:
-        with mutation_locks(
+        with operations.transaction(
             resources=True, config_dir=config.resolve().parent, profile=profile
         ):
-            operations.refuse_active(profile)
             cfg = load_config(config)
             resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
             refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)

@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from setforge import codex_plugins, operations, orphan_scan, transitions
+from setforge import codex_plugins, locking, operations, orphan_scan, transitions
 from setforge.errors import SetforgeError
 from setforge.locking import install_resources_lock, profile_lock
 from setforge.ownership import (
@@ -1586,6 +1586,64 @@ def test_recover_on_error_preserves_primary_when_journal_load_fails(
     assert any("automatic recovery failed" in note for note in caught.value.__notes__)
 
 
+def test_transaction_rolls_back_a_failed_block_while_its_locks_are_held(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "live"
+    path.write_text("before", encoding="utf-8")
+    held_during_recovery: list[set[locking.LockRank]] = []
+    real_recover = operations.recover_automatically
+
+    def recording_recover(journal: operations.OperationJournal) -> bool:
+        held_during_recovery.append({rank for rank, _key in locking._HELD_RANKS.get()})
+        return real_recover(journal)
+
+    monkeypatch.setattr(operations, "recover_automatically", recording_recover)
+
+    def fail_during_apply() -> None:
+        with operations.transaction(
+            resources=True, profile="p", recover=("p", "install")
+        ):
+            journal = _prepare(tmp_path, paths=(path,))
+            operations.begin_checkpoint(
+                journal,
+                name="files",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery="restore files",
+            )
+            path.write_text("after", encoding="utf-8")
+            raise RuntimeError("apply failed")
+
+    with pytest.raises(RuntimeError, match="apply failed") as caught:
+        fail_during_apply()
+
+    assert held_during_recovery == [
+        {
+            locking.LockRank.MUTATION,
+            locking.LockRank.RESOURCES,
+            locking.LockRank.PROFILE,
+        }
+    ]
+    assert not getattr(caught.value, "__notes__", [])
+    assert path.read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is None
+    assert locking._HELD_RANKS.get() == ()
+
+
+def test_transaction_refuses_an_unfinished_operation_outside_its_scopes(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journal = _prepare(tmp_path)
+
+    with (
+        pytest.raises(SetforgeError, match="unfinished install operation"),
+        operations.transaction(profile="other", recover=("other", "install")),
+    ):
+        pytest.fail("the block ran beside an unfinished operation")
+
+    assert operations.load("p") == journal
+
+
 def test_adapter_recovery_restores_extension_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1818,7 +1876,7 @@ def test_unusable_journal_reports_the_file_and_how_to_get_past_it(
 
     for blocked in (
         lambda: operations.load("p"),
-        lambda: operations.refuse_active("other"),
+        operations._refuse_active,
     ):
         with pytest.raises(SetforgeError) as failure:
             blocked()

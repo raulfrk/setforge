@@ -53,7 +53,6 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.file_ownership import active_file_claims, refuse_active_file_claims
-from setforge.locking import mutation_locks
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.ownership import OwnershipStore
 
@@ -329,13 +328,12 @@ def _execute_scan_cleanup(
         console.print("=== no scan candidates approved ===")
         return
     approved_by_path = {entry.path: entry for entry in approved}
-    with (
-        mutation_locks(
-            resources=True, config_dir=config_path.resolve().parent, profile=profile
-        ),
-        operations.recover_on_error(profile, "cleanup-orphans"),
+    with operations.transaction(
+        resources=True,
+        config_dir=config_path.resolve().parent,
+        profile=profile,
+        recover=(profile, "cleanup-orphans"),
     ):
-        operations.refuse_active(profile)
         _, refreshed = _detect_scan_live(profile, config_path)
         selected = tuple(
             entry
@@ -592,13 +590,12 @@ def _apply_orphan_cleanup(
         return
 
     confirmed = {_orphan_path_identity(orphan.path) for orphan in orphans}
-    with (
-        mutation_locks(
-            resources=True, config_dir=config_path.resolve().parent, profile=profile
-        ),
-        operations.recover_on_error(profile, "cleanup-orphans"),
+    with operations.transaction(
+        resources=True,
+        config_dir=config_path.resolve().parent,
+        profile=profile,
+        recover=(profile, "cleanup-orphans"),
     ):
-        operations.refuse_active(profile)
         _, refreshed = _detect_orphans_live(profile, config_path)
         approved_still_orphaned = [
             orphan
