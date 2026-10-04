@@ -2653,3 +2653,68 @@ def test_reinject_after_remove_reclaims_this_checkouts_released_claim(
     )
     assert removed.exit_code == 0, removed.output
     assert not (target / "AGENTS.md").exists()
+
+
+def _injected_tracked_overlay(tmp_path: Path) -> tuple[Path, list[str]]:
+    """Inject over a committed ``AGENTS.md``; return the target and CLI arguments."""
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    (target / "AGENTS.md").write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(target),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "team file",
+        ],
+        check=True,
+    )
+    arguments = [str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(
+        app, ["project", "inject", "demo", *arguments, "--auto=use-profile"]
+    )
+    assert injected.exit_code == 0, injected.output
+    assert (target / "AGENTS.md").read_text() == (
+        "team instructions\nmanaged instructions\n"
+    )
+    return target, arguments
+
+
+def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(target), "rm", "-q", "-f", "AGENTS.md"], check=True
+    )
+    destination = target / "AGENTS.md"
+    assert not destination.exists()
+
+    removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert not destination.exists()
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert not (target / ".git" / "info" / "attributes").exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    status = subprocess.run(
+        ["git", "-C", str(target), "status", "--short"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == "D  AGENTS.md\n"

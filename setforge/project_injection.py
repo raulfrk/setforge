@@ -1784,6 +1784,21 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     )
 
 
+def _overlay_removal_content(
+    item: ProjectFilePlan, *, git_worktree: bool
+) -> bytes | None:
+    """Return what removal writes to a tracked overlay file, ``None`` for nothing.
+
+    A file missing from a Git worktree was removed through Git, which tracks
+    it; only a directory that is no longer one gets the saved content back.
+    """
+    if item.overlay is None:
+        raise SetforgeError("tracked project overlay state is missing")
+    if item.destination.exists():
+        return clean_content(item.overlay, item.destination.read_bytes())
+    return None if git_worktree else item.overlay.base
+
+
 def _restore_planned_files(
     plan: ProjectRemovePlan,
     resources: tuple[ResourceId, ...],
@@ -1801,26 +1816,20 @@ def _restore_planned_files(
             else:
                 _unlink_project_file(guards.targets[0], item.relative_destination)
         elif item.action is ProjectFileAction.OVERLAY:
-            if item.overlay is None:
-                raise SetforgeError("tracked project overlay state is missing")
-            overlay_live_payload = (
-                item.destination.read_bytes() if item.destination.exists() else None
+            restored = _overlay_removal_content(
+                item, git_worktree=plan.visibility_plan is not None
             )
-            restored = (
-                clean_content(item.overlay, overlay_live_payload)
-                if overlay_live_payload is not None
-                else item.overlay.base
-            )
-            _write_project_file(
-                guards.targets[0],
-                item.relative_destination,
-                restored,
-                (
-                    item.previous_mode
-                    if item.previous_mode is not None
-                    else item.source_mode
-                ),
-            )
+            if restored is not None:
+                _write_project_file(
+                    guards.targets[0],
+                    item.relative_destination,
+                    restored,
+                    (
+                        item.previous_mode
+                        if item.previous_mode is not None
+                        else item.source_mode
+                    ),
+                )
         else:
             if item.previous_payload is None or item.previous_mode is None:
                 raise SetforgeError("project injection restoration baseline is corrupt")
