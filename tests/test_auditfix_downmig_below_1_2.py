@@ -17,28 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ruamel.yaml import YAML
 
 from setforge.migrations import (
-    MigrationRoots,
     detect_current_schema,
     parse_schema_version,
 )
 from setforge.migrations.registry import find_migration_path
-
-
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+from tests.shared_helpers import load_yaml, migration_roots
 
 
 def _write_2_0_config(tmp_path: Path) -> None:
@@ -72,7 +57,7 @@ def test_cross_major_downgrade_below_1_2_clears_locking_floor(
     would reject the very config the downgrade produced.
     """
     _write_2_0_config(tmp_path)
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
 
     chain = find_migration_path(from_v="2.0", to_v=to_v)
     assert chain  # the chain must bridge the major boundary
@@ -82,7 +67,7 @@ def test_cross_major_downgrade_below_1_2_clears_locking_floor(
     cfg_path = tmp_path / "setforge.yaml"
     assert detect_current_schema(cfg_path) == to_v
 
-    data = _load(cfg_path)
+    data = load_yaml(cfg_path)
     floor = data.get("minimum_version")
     # The target engine's expected schema is `to_v`; it must SATISFY the floor
     # (full major.minor compare, >= boundary) or load_config refuses the config.
@@ -97,8 +82,8 @@ def test_cross_major_downgrade_below_1_2_clears_locking_floor(
 def test_cross_major_downgrade_to_1_0_floor_is_registry_min(tmp_path: Path) -> None:
     """A 2.0 -> 1.0 downgrade lands the floor at the registry minimum (1.0)."""
     _write_2_0_config(tmp_path)
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     for migration in find_migration_path(from_v="2.0", to_v="1.0"):
         migration.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     assert str(data["minimum_version"]) == "1.0"

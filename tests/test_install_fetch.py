@@ -72,17 +72,6 @@ def _write_local_package_config(repo: Path) -> Path:
     return config
 
 
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
-
-
 def _install(config: Path | None, *extra: str) -> Result:
     args = [
         "install",

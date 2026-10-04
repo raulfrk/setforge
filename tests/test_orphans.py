@@ -725,11 +725,6 @@ def test_apply_refuses_when_orphan_ignore_is_not_a_list(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
 def _write_minimal_yaml(tmp_path: Path) -> Path:
     """Build a minimal setforge.yaml with one tracked_file."""
     cfg = tmp_path / "setforge.yaml"

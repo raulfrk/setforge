@@ -62,17 +62,6 @@ def _write_tracked(repo: Path, body: str) -> None:
     src.write_text(body, encoding="utf-8")
 
 
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
-
-
 def _install(config: Path) -> Result:
     """Run a transition-RECORDING install (no --no-transition)."""
     args = [

@@ -30,17 +30,6 @@ _DOC_A = "# A\n\nbody a\n"
 _DOC_Z = "# Z\n\nbody z\n"
 
 
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
-
-
 def _live_dir() -> Path:
     return Path.home() / ".setforge_preflight"
 

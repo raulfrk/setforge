@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 from hypothesis import settings
+from typer.testing import CliRunner
 
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge import claude_plugins as _cp
@@ -284,6 +285,22 @@ def rename_flags_rejected(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
     monkeypatch.setattr(ctypes, "CDLL", _Library)
     return rejected
+
+
+@pytest.fixture
+def runner() -> CliRunner:
+    return CliRunner()
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "repo"
+    target.mkdir()
+    return target
 
 
 # ---------------------------------------------------------------------------

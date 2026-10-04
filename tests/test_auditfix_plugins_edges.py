@@ -30,6 +30,7 @@ from setforge.config import (
     MarketplaceSource,
     MarketplaceSourceKind,
 )
+from tests.shared_helpers import write_setforge_yaml
 
 _FIXTURE_YAML = """\
 version: 1
@@ -86,12 +87,6 @@ profiles:
 """
 
 
-def _write(tmp_path: Path, body: str) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
-
-
 def _regular_host_local(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force install_mode REGULAR so _resolve_add_source is a passthrough."""
     monkeypatch.setattr(
@@ -111,7 +106,7 @@ def test_plugin_add_rolls_back_marketplace_on_binary_failure(
 ) -> None:
     """`plugin add` to a fresh marketplace must roll the YAML entry back when
     the ``claude marketplace add`` binary call fails — byte-identical config."""
-    cfg = _write(tmp_path, _FIXTURE_YAML_WITH_MP)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML_WITH_MP)
     before = cfg.read_bytes()
     _regular_host_local(monkeypatch)
 
@@ -145,7 +140,7 @@ def test_plugin_remove_disable_bare_name_reconstructs_full_id(
 ) -> None:
     """`plugin remove superpowers --disable` must call plugin_disable with the
     full ``superpowers@mp`` id, not the bare name claude would reject."""
-    cfg = _write(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
 
     captured: list[str] = []
 
@@ -173,7 +168,7 @@ def test_plugin_remove_disable_at_form_passes_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An explicit ``@``-form id is passed straight through unchanged."""
-    cfg = _write(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
 
     captured: list[str] = []
     monkeypatch.setattr(
@@ -199,7 +194,7 @@ def test_plugin_remove_disable_unknown_bare_name_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bare name absent from the registry exits 1 instead of disabling it."""
-    cfg = _write(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML_WITH_PLUGIN)
 
     called: list[str] = []
     monkeypatch.setattr(plugins_mod.claude_plugins_mod, "plugin_disable", called.append)
@@ -228,7 +223,7 @@ def test_marketplace_add_local_clone_routes_source_through_cache_path(
 ) -> None:
     """Under local-clone, `marketplace add` must hand claude a PATH-kind source
     (the on-disk cache), not the raw GitHub slug."""
-    cfg = _write(tmp_path, _FIXTURE_YAML)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML)
     cache_dir = tmp_path / "cache" / "r"
 
     monkeypatch.setattr(
@@ -279,7 +274,7 @@ def test_marketplace_add_cache_miss_rolls_back_yaml(
 ) -> None:
     """A MarketplaceCacheMiss while resolving the source must roll back the YAML
     entry (atomicity holds for the local-clone failure path too)."""
-    cfg = _write(tmp_path, _FIXTURE_YAML_WITH_MP)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML_WITH_MP)
     before = cfg.read_bytes()
 
     monkeypatch.setattr(

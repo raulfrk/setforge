@@ -46,11 +46,6 @@ class _TerminalInput(io.BytesIO):
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def confine_root(tmp_path: Path) -> Path:
     root = tmp_path / "home"
     root.mkdir()

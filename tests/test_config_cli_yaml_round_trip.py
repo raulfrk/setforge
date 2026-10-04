@@ -16,11 +16,6 @@ from setforge.cli import app
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def seed_local_with_comments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a local.yaml whose comments + key order MUST survive a mutation."""
     local = tmp_path / "local.yaml"

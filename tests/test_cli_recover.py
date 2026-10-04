@@ -18,11 +18,6 @@ from setforge.errors import SetforgeError
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def recovery_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "state"
     monkeypatch.setattr(transitions, "state_root", lambda: root)

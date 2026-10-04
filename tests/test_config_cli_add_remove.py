@@ -22,11 +22,6 @@ from tests.conftest import redirect_local_config_path
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def seed_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a local.yaml with binaries + a comment for round-trip checks."""
     local = tmp_path / "local.yaml"

@@ -10,25 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ruamel.yaml import YAML
-
-from setforge.migrations import MigrationRoots
 from setforge.migrations._contract_2_0 import Contract20Migration
-
-
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
-
+from tests.shared_helpers import load_yaml, migration_roots
 
 _FLOOR = 'minimum_version: "2.0"\n'
 
@@ -45,11 +28,11 @@ def test_roundtrip_shallow_keys_behavior_equivalent(tmp_path: Path) -> None:
         "      - editor.fontSize\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     fwd = Contract20Migration()
     fwd.apply(roots=roots)
     fwd.reverse.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     assert data["schema_version"] == "1.2"
     tf = data["tracked_files"]["settings"]
     # A plain PINNED span is behavior-equivalent at 1.2, so it survives as a
@@ -69,11 +52,11 @@ def test_roundtrip_deep_key_untranslates(tmp_path: Path) -> None:
         "      - editor\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     fwd = Contract20Migration()
     fwd.apply(roots=roots)
     fwd.reverse.apply(roots=roots)
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
     assert list(tf["preserve_user_keys_deep"]) == ["editor"]
     # The 2.0-exclusive deep span is gone (untranslated, not left dangling).
     assert "spans" not in tf or all(s.get("deep") is not True for s in tf["spans"])
@@ -98,11 +81,11 @@ def test_roundtrip_section_untranslates_with_mode(tmp_path: Path) -> None:
         "    preserve_user_sections_mode: strip\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     fwd = Contract20Migration()
     fwd.apply(roots=roots)
     fwd.reverse.apply(roots=roots)
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
     assert tf["preserve_user_sections"] is True
     assert tf["preserve_user_sections_mode"] == "strip"
 
@@ -121,9 +104,9 @@ def test_reverse_leaves_native_plain_span_untouched(tmp_path: Path) -> None:
         "        semantics: shared\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     Contract20Migration().reverse.apply(roots=roots)
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
     span = tf["spans"][0]
     assert span["anchor"] == "editor.fontSize"
     assert span["kind"] == "forked"
