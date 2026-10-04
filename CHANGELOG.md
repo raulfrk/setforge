@@ -11,6 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge recover` after an interrupted install that was updating a file now
   also removes the `.bak` copy that install had written, so the tree returns to
   its exact earlier state; a `.bak` that existed before is restored as it was.
+- The first install of a managed tree that contains SetForge's own state
+  directory no longer stops with "inputs changed after confirmation; retry".
 - Home directories reached through a symlink, such as NFS or automounted homes,
   work across install, sync, revert, snapshots, orphan cleanup and project
   commands. Symlinks present when an operation is planned are followed; a

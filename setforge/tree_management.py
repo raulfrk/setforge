@@ -17,7 +17,7 @@ import pathspec
 from setforge import atomicio
 from setforge.config import TreeOrphanPolicy, TreePolicy, TreeSymlinkPolicy
 from setforge.errors import InvariantViolation, SetforgeError
-from setforge.paths import state_root
+from setforge.paths import cache_root, data_root, state_root
 from setforge.reconcile.types import file_id
 
 _SCHEMA = "1.0"
@@ -251,6 +251,7 @@ class _ScanContext:
     capture_payloads: bool
     entries: list[TreeEntry]
     payloads: list[tuple[str, bytes]]
+    skip: frozenset[Path] = frozenset()
 
 
 def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
@@ -271,6 +272,8 @@ def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
         return
     mode = stat.S_IMODE(before.st_mode)
     path = directory / name
+    if path in context.skip:
+        return
     if stat.S_ISREG(before.st_mode):
         payload, stable = _stable_file_at(directory_fd, name, before, path)
         context.entries.append(
@@ -337,7 +340,17 @@ def _walk_tree(
 def scan_live_tree(destination: Path, policy: TreePolicy) -> TreeInventory:
     """Inventory a live tree, recording symlinks instead of refusing them."""
     live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
-    return scan_tree(destination, live_policy).inventory
+    return scan_tree(destination, live_policy, skip=_state_trees()).inventory
+
+
+def _state_trees() -> frozenset[Path]:
+    """SetForge's own state roots, lexical and resolved: never tree content."""
+    roots = (state_root(), cache_root(), data_root())
+    return frozenset(
+        path
+        for root in roots
+        for path in (root.expanduser().absolute(), root.expanduser().resolve())
+    )
 
 
 def scan_tree(
@@ -345,6 +358,7 @@ def scan_tree(
     policy: TreePolicy,
     *,
     capture_payloads: bool = False,
+    skip: frozenset[Path] = frozenset(),
 ) -> FrozenTree:
     """Build a stable, no-follow tree inventory without crossing devices."""
     root = root.absolute()
@@ -367,7 +381,9 @@ def scan_tree(
         opened = os.fstat(root_fd)
         if (opened.st_dev, opened.st_ino) != (root_before.st_dev, root_before.st_ino):
             raise SetforgeError(f"managed tree root changed while scanning: {root}")
-        return _scan_tree_fd(root_fd, root, policy, capture_payloads=capture_payloads)
+        return _scan_tree_fd(
+            root_fd, root, policy, capture_payloads=capture_payloads, skip=skip
+        )
     finally:
         os.close(root_fd)
 
@@ -378,6 +394,7 @@ def _scan_tree_fd(
     policy: TreePolicy,
     *,
     capture_payloads: bool = False,
+    skip: frozenset[Path] = frozenset(),
 ) -> FrozenTree:
     root_before = os.fstat(root_fd)
     context = _ScanContext(
@@ -387,6 +404,7 @@ def _scan_tree_fd(
         capture_payloads,
         [],
         [],
+        skip,
     )
     _walk_tree(context, root_fd, display, PurePosixPath())
     root_after = os.fstat(root_fd)
