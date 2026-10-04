@@ -86,8 +86,8 @@ def test_collect_classifies_unstaged_as_pending(
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
-    assert {h.label for h in stage.hunks} == {"## Shell", "## Host paths"}
-    assert all(h.cls is HunkClass.PENDING for h in stage.hunks)
+    assert {h.label for h in stage.units} == {"## Shell", "## Host paths"}
+    assert all(h.cls is HunkClass.PENDING for h in stage.units)
 
 
 def test_collect_rejects_persisted_key_units_for_plain_file(
@@ -183,7 +183,7 @@ def test_walk_applies_choices_and_quits(
     # Share the first hunk, then quit before the second.
     decisions: list[Decision | None | _Quit] = [Decision(HunkClass.SHARED), QUIT]
     scripted = iter(decisions)
-    result = walk(stage.hunks, lambda h, i, n: next(scripted))
+    result = walk(stage.units, lambda h, i, n: next(scripted))
 
     assert result.units[0].cls is HunkClass.SHARED
     assert result.units[1].cls is HunkClass.PENDING  # untouched (quit before it)
@@ -196,7 +196,7 @@ def test_walk_skip_leaves_class_unchanged(
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
-    result = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
+    result = walk(stage.units, lambda h, i, n: None)  # skip every hunk
     assert all(h.cls is HunkClass.PENDING for h in result.units)
     assert result.decided_refs == set()
 
@@ -214,8 +214,8 @@ def test_render_list_human_reports_participation_and_actionable_counts(
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (first,) = collect_stages(cfg, resolved, repo, profile)
-    shell = next(hunk for hunk in first.hunks if hunk.label == "## Shell")
-    host = next(hunk for hunk in first.hunks if hunk.label == "## Host paths")
+    shell = next(hunk for hunk in first.units if hunk.label == "## Shell")
+    host = next(hunk for hunk in first.units if hunk.label == "## Host paths")
     changed = replace(
         first,
         participating=True,
@@ -255,7 +255,7 @@ def test_render_list_json_changed_local_needs_no_reconfirm(
 
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
-    local = replace(stage.hunks[0], cls=HunkClass.LOCAL, changed=True)
+    local = replace(stage.units[0], cls=HunkClass.LOCAL, changed=True)
 
     _render_list(
         OutputContext(OutputFormat.JSON),
@@ -279,8 +279,8 @@ def test_summarize_stages_is_the_stage_json_projection(
 
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
-    local = replace(stage.hunks[0], cls=HunkClass.LOCAL, changed=True)
-    shared = replace(stage.hunks[1], cls=HunkClass.SHARED, changed=True)
+    local = replace(stage.units[0], cls=HunkClass.LOCAL, changed=True)
+    shared = replace(stage.units[1], cls=HunkClass.SHARED, changed=True)
 
     (summary,) = summarize_stages(
         [replace(stage, participating=True, units=[local, shared])]
@@ -317,7 +317,7 @@ def test_same_class_reconfirm_refreshes_plain_confirmed_hash(
         profile,
         first,
         walk(
-            first.hunks,
+            first.units,
             lambda h, i, n: (
                 Decision(HunkClass.SHARED) if h.label == "## Shell" else None
             ),
@@ -330,10 +330,10 @@ def test_same_class_reconfirm_refreshes_plain_confirmed_hash(
     )
     first.dst.write_bytes(_LIVE.replace(b"Prefer zsh.", b"Prefer fish."))
     (changed,) = collect_stages(cfg, resolved, repo, profile)
-    shell = next(h for h in changed.hunks if h.label == "## Shell")
+    shell = next(h for h in changed.units if h.label == "## Shell")
     assert shell.changed is True
     result = walk(
-        changed.hunks,
+        changed.units,
         lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
     )
     assert shell.ref in result.decided_refs
@@ -341,7 +341,7 @@ def test_same_class_reconfirm_refreshes_plain_confirmed_hash(
     _apply(profile, changed, result)
 
     (confirmed,) = collect_stages(cfg, resolved, repo, profile)
-    shell_after = next(h for h in confirmed.hunks if h.label == "## Shell")
+    shell_after = next(h for h in confirmed.units if h.label == "## Shell")
     assert shell_after.changed is False
     assert shell_after.live_hash != old_hash
     assert shell_after.confirmed_hash == shell_after.live_hash
@@ -362,7 +362,7 @@ def test_skip_or_quit_does_not_refresh_plain_confirmed_hash(
     _apply(
         profile,
         first,
-        walk(first.hunks, lambda h, i, n: Decision(HunkClass.SHARED)),
+        walk(first.units, lambda h, i, n: Decision(HunkClass.SHARED)),
     )
     stored_before = {
         str(row["unit_id"]): row["live_hash"]
@@ -374,13 +374,13 @@ def test_skip_or_quit_does_not_refresh_plain_confirmed_hash(
         )
     )
     (changed,) = collect_stages(cfg, resolved, repo, profile)
-    result = walk(changed.hunks, lambda h, i, n: choice)
+    result = walk(changed.units, lambda h, i, n: choice)
     assert result.decided_refs == set()
 
     _apply(profile, changed, result)
 
     (again,) = collect_stages(cfg, resolved, repo, profile)
-    assert all(h.changed for h in again.hunks)
+    assert all(h.changed for h in again.units)
     assert {
         str(row["unit_id"]): row["live_hash"]
         for row in store.read_index(profile).files["CLAUDE.md"].hunks
@@ -398,7 +398,7 @@ def test_deciding_other_plain_unit_does_not_refresh_changed_shared(
     _apply(
         profile,
         first,
-        walk(first.hunks, lambda h, i, n: Decision(HunkClass.SHARED)),
+        walk(first.units, lambda h, i, n: Decision(HunkClass.SHARED)),
     )
     first.dst.write_bytes(
         _LIVE.replace(b"Prefer zsh.", b"Prefer fish.").replace(
@@ -410,7 +410,7 @@ def test_deciding_other_plain_unit_does_not_refresh_changed_shared(
         profile,
         changed,
         walk(
-            changed.hunks,
+            changed.units,
             lambda h, i, n: (
                 Decision(HunkClass.SHARED) if h.label == "## Shell" else None
             ),
@@ -418,7 +418,7 @@ def test_deciding_other_plain_unit_does_not_refresh_changed_shared(
     )
 
     (again,) = collect_stages(cfg, resolved, repo, profile)
-    by_label = {h.label: h for h in again.hunks}
+    by_label = {h.label: h for h in again.units}
     assert by_label["## Shell"].changed is False
     assert by_label["## Host paths"].changed is True
 
@@ -433,7 +433,7 @@ def test_plain_prompt_to_lock_live_race_refuses_stale_decision(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     assert stage.ownership is not None
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
     )
     stage.dst.write_bytes(_LIVE.replace(b"Prefer zsh.", b"Prefer fish."))
@@ -457,7 +457,7 @@ def test_plain_adopt_refuses_stale_recorded_base_before_live_write(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
             if h.label == "## Shell"
@@ -498,7 +498,7 @@ def test_adopt_corrupt_index_fails_before_live_write(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
             if h.label == "## Shell"
@@ -533,7 +533,7 @@ def test_adopt_corrupt_drafts_fails_before_live_write(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
             if h.label == "## Shell"
@@ -567,7 +567,7 @@ def test_apply_writes_classes_and_keeps_base(
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED)
             if h.label == "## Shell"
@@ -596,7 +596,7 @@ def test_apply_adopts_container_without_rewriting_live(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     assert stage.ownership is not None
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED)
             if h.label == "## Shell"
@@ -663,7 +663,7 @@ def test_apply_transfers_container_and_records_reversible_transition(
     )
     config_path.write_text(config_payload, encoding="utf-8")
     adopt_result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, _i, _n: (
             Decision(
                 HunkClass.SHARED_DRAFTED,
@@ -689,7 +689,7 @@ def test_apply_transfers_container_and_records_reversible_transition(
     assert store.read(observation.resource_id) == before
     assert stage.dst.read_bytes() == live_before
 
-    result = walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.SHARED))
+    result = walk(stage.units, lambda _h, _i, _n: Decision(HunkClass.SHARED))
     real_read_locked = stage_mod.read_owner_id_locked
     monkeypatch.setattr(stage_mod, "read_owner_id_locked", lambda *args: uuid4())
     with pytest.raises(InvariantViolation, match="owner identity changed"):
@@ -757,7 +757,7 @@ def test_apply_adoption_failure_recovers_claim_and_reconcile_record(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     assert stage.ownership is not None
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: Decision(HunkClass.SHARED),
     )
     index_before = store._index_path(profile).read_bytes()
@@ -789,7 +789,7 @@ def test_owned_adopt_live_failure_restores_file_claim_and_store(
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
     assert stage.ownership is not None
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(
                 HunkClass.SHARED_DRAFTED,
@@ -841,13 +841,13 @@ def test_apply_merges_concurrent_classification(
 
     # host shares "## Shell" interactively, SKIPS "## Host paths".
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
     )
     # concurrent sync classifies "## Host paths" LOCAL and commits it first.
     concurrent = [
         replace(h, cls=HunkClass.LOCAL) if h.label == "## Host paths" else h
-        for h in stage.hunks
+        for h in stage.units
     ]
     with locking.profile_lock(profile):
         store.record(
@@ -869,7 +869,7 @@ def test_apply_merges_concurrent_classification(
 
 
 def _shell_anchor(stage: FileStage) -> str:
-    return next(h.unit_id for h in stage.hunks if h.label == "## Shell")
+    return next(h.unit_id for h in stage.units if h.label == "## Shell")
 
 
 def test_apply_keep_local_draft_stores_draft_and_keeps_live(
@@ -884,7 +884,7 @@ def test_apply_keep_local_draft_stores_draft_and_keeps_live(
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft)
             if h.label == "## Shell"
@@ -916,7 +916,7 @@ def test_apply_adopt_rewrites_live_to_draft(
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
             if h.label == "## Shell"
@@ -983,7 +983,7 @@ def test_apply_writes_live_under_profile_lock(
 
     draft = b"## Shell\nPrefer a portable shell.\n\n"
     result = walk(
-        stage.hunks,
+        stage.units,
         lambda h, i, n: (
             Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
             if h.label == "## Shell"
@@ -1085,17 +1085,17 @@ def test_walk_scales_to_many_hunks_no_whole_file_degrade(
         # over the freshly-collected classes (NOT store.reconstruct, which is the
         # storage identity = recorded local).
         (st,) = collect_stages(cfg, resolved, repo, "p")
-        return hunks_mod.reconstruct(st.base, st.live, st.hunks, {})
+        return hunks_mod.reconstruct(st.base, st.live, st.units, {})
 
     (stage,) = collect_stages(cfg, resolved, repo, "p")
     # Each edited section is its own hunk — NOT one whole-file conflict.
-    assert len(stage.hunks) == sections
+    assert len(stage.units) == sections
 
     # Share every hunk → tracked promotion takes the host's edits verbatim.
-    _apply("p", stage, walk(stage.hunks, lambda h, i, n: Decision(HunkClass.SHARED)))
+    _apply("p", stage, walk(stage.units, lambda h, i, n: Decision(HunkClass.SHARED)))
     assert tracked_promotion() == live
 
     # Re-walk demoting every hunk to LOCAL → tracked promotion falls back to base.
     (stage2,) = collect_stages(cfg, resolved, repo, "p")
-    _apply("p", stage2, walk(stage2.hunks, lambda h, i, n: Decision(HunkClass.LOCAL)))
+    _apply("p", stage2, walk(stage2.units, lambda h, i, n: Decision(HunkClass.LOCAL)))
     assert tracked_promotion() == base

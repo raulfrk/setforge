@@ -15,7 +15,6 @@ from setforge.cli.stage import (
     collect_stages,
     collect_structured_stages,
     walk,
-    walk_structured,
 )
 from setforge.config import resolve_profile
 from setforge.ownership import OwnershipStore
@@ -28,7 +27,7 @@ from tests.test_stage_structured import _setup_structured
 def _line_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     (stage,) = collect_stages(cfg, resolve_profile(cfg, profile), repo, profile)
-    result = walk(stage.hunks, lambda h, i, n: Decision(HunkClass.SHARED))
+    result = walk(stage.units, lambda h, i, n: Decision(HunkClass.SHARED))
     return lambda: stage_mod._apply(profile, stage, result, owner_id=uuid4())
 
 
@@ -39,8 +38,8 @@ def _structured_stage(
     (stage,) = collect_structured_stages(
         cfg, resolve_profile(cfg, profile), repo, profile
     )
-    result = walk_structured(stage.units, lambda u, i, t: Decision(HunkClass.LOCAL))
-    return lambda: stage_mod._apply_structured(profile, stage, result, owner_id=uuid4())
+    result = walk(stage.units, lambda u, i, t: Decision(HunkClass.LOCAL))
+    return lambda: stage_mod._apply(profile, stage, result, owner_id=uuid4())
 
 
 def _fail_after_record(monkeypatch: pytest.MonkeyPatch) -> None:

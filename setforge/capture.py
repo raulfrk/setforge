@@ -21,11 +21,13 @@ from setforge import atomicio
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile
 from setforge.errors import InvariantViolation, StructuredParseError
-from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
-from setforge.reconcile.types import HunkClass, UnitKind, UnitRef, content_sha, file_id
+from setforge.reconcile.hunks import Hunk
+from setforge.reconcile.structured_units import KeyUnit
+from setforge.reconcile.types import HunkClass, UnitRef, content_sha, file_id
+from setforge.reconcile.unit_engine import engine_for
 
 
 class CaptureAction(StrEnum):
@@ -133,7 +135,7 @@ def _item(
 
 def _held_back_warnings(
     name: str,
-    units: Sequence[reconcile_hunks.Hunk] | Sequence[su_mod.KeyUnit],
+    units: Sequence[Hunk] | Sequence[KeyUnit],
     noun: str,
 ) -> tuple[str, ...]:
     warnings: list[str] = []
@@ -178,35 +180,24 @@ def _plan_staged(
             f"staged file {sub_name!r} live bytes cannot be read: {err}"
         ) from err
     stored_drafts = reconcile_store.read_drafts(profile, fid)
-    fmt = su_mod.structured_format(dst)
-    if fmt is None:
-        stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
+    engine = engine_for(dst)
+    stored = index_model.require_unit_kind(entry.hunks, engine.kind)
+    if engine.fmt is None:
         _require_utf8(sub_name, base, live)
-        hunks = reconcile_hunks.classify(
-            reconcile_hunks.extract_hunks(base, live), stored
-        )
-        # A migrated v1 draft key is bound to its v2 unit here, and the bound
-        # manifest is the one recorded, so the upgrade lands with the index row.
-        drafts = reconcile_hunks.bind_drafts(hunks, stored_drafts)
-        proposed = reconcile_hunks.reconstruct(base, live, hunks, drafts)
-        _require_utf8(sub_name, proposed)
-        rows = reconcile_hunks.serialize(
-            hunks, allow_relocation=src.suffix.lower() in {".md", ".markdown"}
-        )
-        warnings = _held_back_warnings(src.name, hunks, "hunk")
-    else:
-        stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
-        try:
-            fresh = su_mod.extract_structured_units(base, live, fmt)
-        except StructuredParseError as err:
-            raise InvariantViolation(
-                f"staged file {sub_name!r} cannot be parsed as {fmt.value}"
-            ) from err
-        units = su_mod.classify_structured(fresh, stored, fmt)
-        drafts = su_mod.bind_structured_drafts(units, stored_drafts)
-        proposed = su_mod.reconstruct_structured(base, live, units, drafts, fmt)
-        rows = su_mod.serialize_structured(units)
-        warnings = _held_back_warnings(src.name, units, "key")
+    try:
+        fresh = engine.extract(base, live)
+    except StructuredParseError as err:  # raised by a structured format only
+        raise InvariantViolation(
+            f"staged file {sub_name!r} cannot be parsed as {engine.fmt}"
+        ) from err
+    units = engine.classify(fresh, stored)
+    # A migrated legacy draft key is bound to its current unit here, and the
+    # bound manifest is the one recorded, so the upgrade lands with the index row.
+    drafts = engine.bind_drafts(units, stored_drafts)
+    proposed = engine.reconstruct(base, live, units, drafts)
+    _require_utf8(sub_name, proposed)
+    rows = engine.serialize(units, src)
+    warnings = _held_back_warnings(src.name, units, engine.noun)
     return _item(
         sub_name,
         src,

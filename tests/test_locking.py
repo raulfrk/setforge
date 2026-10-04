@@ -482,7 +482,6 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
         install.install: "install",
         sync.sync: "sync",
         stage._apply: "stage",
-        stage._apply_structured: "stage",
         cleanup._apply_cleanup: "cleanup",
         orphans._apply_orphan_cleanup: "cleanup-orphans",
         orphans._execute_scan_cleanup: "cleanup-orphans",
