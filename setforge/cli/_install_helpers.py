@@ -24,7 +24,6 @@ import stat
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC
 from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, assert_never
@@ -872,15 +871,16 @@ def _write_install_transition(
     ``command_line`` is captured from
     ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
     callers don't have to thread it through, and ``end_timestamp`` is
-    stamped at the moment of write — both align with the spec's
-    "stamp at the point the command body returns successfully" model.
+    stamped by :func:`transitions.make_meta` after the record's start time
+    — both align with the spec's "stamp at the point the command body
+    returns successfully" model.
     """
     return transitions.write_transition(
         transitions.make_meta(
             transitions.TransitionCommand.INSTALL,
             profile,
             source_dir=source_dir,
-            end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+            record_end=True,
             command_line=redact_argv(sys.argv[1:]),
         ),
         file_pre,

@@ -18,7 +18,6 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
@@ -1339,7 +1338,7 @@ def _write_reverse_transition(
     reverse_meta = transitions.make_meta(
         transitions.TransitionCommand.REVERT,
         profile,
-        end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+        record_end=True,
         command_line=redact_argv(sys.argv[1:]),
         # preserve_user_keys_applied left None — concept doesn't apply
         # to revert (no deploy/overlay path runs in reverse direction).

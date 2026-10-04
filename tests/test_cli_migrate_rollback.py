@@ -158,7 +158,7 @@ class _StoreCutoverStep:
             transitions.make_meta(
                 transitions.TransitionCommand.MIGRATE,
                 transitions.MIGRATE_TRANSITION_PROFILE,
-                end_timestamp=transitions.now_utc().isoformat(),
+                record_end=True,
                 command_line=None,
             ),
             file_pre,
@@ -275,7 +275,7 @@ class _ConcurrentInstallStep:
             transitions.make_meta(
                 transitions.TransitionCommand.INSTALL,
                 "some-other-profile",
-                end_timestamp=transitions.now_utc().isoformat(),
+                record_end=True,
                 command_line=None,
             ),
             {sentinel: None},

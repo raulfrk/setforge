@@ -301,7 +301,7 @@ def make_meta(
     profile: str,
     *,
     source_dir: Path | None = None,
-    end_timestamp: str | None = None,
+    record_end: bool = False,
     command_line: list[str] | None = None,
 ) -> TransitionMeta:
     """Build a TransitionMeta with current host + version + UTC timestamp.
@@ -313,21 +313,22 @@ def make_meta(
     handy (revert, plugin reconcile sub-record) keep the pre-bump call
     shape.
 
-    The two trailing kwargs (``end_timestamp``, ``command_line``) are a
-    later schema bump. Both default to ``None`` so pre-bump callers compile
-    unchanged. See
-    the TransitionMeta docstring for the omit-when-None round-trip
+    ``record_end`` stamps ``end_timestamp`` here, after ``timestamp``, so a
+    record's end is never earlier than its start. It and ``command_line``
+    default to off so the fields stay absent from records that never carried
+    them. See the TransitionMeta docstring for the omit-when-None round-trip
     rationale.
     """
+    timestamp = now_utc()
     source_sha = _git_head(source_dir) if source_dir is not None else None
     return TransitionMeta(
         command=command,
         profile=profile,
-        timestamp=now_utc(),
+        timestamp=timestamp,
         host=platform.node(),
         version=__version__,
         source_sha=source_sha,
-        end_timestamp=end_timestamp,
+        end_timestamp=now_utc().isoformat() if record_end else None,
         command_line=command_line,
     )
 
