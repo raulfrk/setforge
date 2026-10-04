@@ -363,46 +363,6 @@ class StageSummary:
         }
 
 
-def walk_structured(
-    units: list[KeyUnit], choose: Choice[KeyUnit]
-) -> WalkResult[KeyUnit]:
-    """Apply one :class:`Decision` per key-unit, keyed by the unit's PATH.
-
-    The structured analog of :func:`walk`: identical control flow, but a unit's
-    identity is its dotted ``path`` (not a line ``unit_id``), so drafts and the
-    adopt set use typed KEY references.
-    """
-    out = list(units)
-    drafts: dict[UnitRef, bytes] = {}
-    adopt_refs: set[UnitRef] = set()
-    decided_refs: set[UnitRef] = set()
-    for index, unit in enumerate(units):
-        decision = choose(unit, index, len(units))
-        if isinstance(decision, _Quit):
-            break
-        if decision is None:
-            continue
-        draft_hash = content_sha(decision.draft) if decision.draft is not None else None
-        out[index] = replace(
-            unit,
-            cls=decision.cls,
-            changed=False,
-            confirmed_hash=unit.value_hash,
-            draft_hash=draft_hash,
-        )
-        decided_refs.add(unit.ref)
-        if decision.draft is not None:
-            drafts[unit.ref] = decision.draft
-        if decision.adopt:
-            adopt_refs.add(unit.ref)
-    return WalkResult(
-        units=out,
-        drafts=drafts,
-        adopt_refs=adopt_refs,
-        decided_refs=decided_refs,
-    )
-
-
 def _apply_structured(
     profile: str,
     stage: FileStage[KeyUnit],
@@ -484,38 +444,38 @@ def counts[U: (Hunk, KeyUnit)](units: list[U]) -> Counter[HunkClass]:
     return Counter(unit.cls for unit in units)
 
 
-def walk(hunks: list[Hunk], choose: Choice[Hunk]) -> WalkResult[Hunk]:
-    """Apply one :class:`Decision` per hunk, collecting drafts + the adopt set.
+def walk[U: (Hunk, KeyUnit)](units: list[U], choose: Choice[U]) -> WalkResult[U]:
+    """Apply one :class:`Decision` per unit, collecting drafts + the adopt set.
 
-    ``choose(hunk, index, total)`` returns a :class:`Decision` to (re)classify,
-    ``None`` to leave the hunk unchanged (skip / next), or :data:`QUIT` to stop
+    ``choose(unit, index, total)`` returns a :class:`Decision` to (re)classify,
+    ``None`` to leave the unit unchanged (skip / next), or :data:`QUIT` to stop
     early. Choices made before a QUIT are kept. A drafted decision records the
-    hunk's ``draft_hash`` and stashes its bytes under a typed LINE reference; an
-    ``adopt`` decision additionally marks that unit for the live-rewrite.
+    unit's ``draft_hash`` and stashes its bytes under the unit's typed reference;
+    an ``adopt`` decision additionally marks that unit for the live-rewrite.
     """
-    out = list(hunks)
+    out = list(units)
     drafts: dict[UnitRef, bytes] = {}
     adopt_refs: set[UnitRef] = set()
     decided_refs: set[UnitRef] = set()
-    for index, hunk in enumerate(hunks):
-        decision = choose(hunk, index, len(hunks))
+    for index, unit in enumerate(units):
+        decision = choose(unit, index, len(units))
         if isinstance(decision, _Quit):
             break
         if decision is None:
             continue
         draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(
-            hunk,
+            unit,
             cls=decision.cls,
             changed=False,
-            confirmed_hash=hunk.live_hash,
+            confirmed_hash=unit.content_hash,
             draft_hash=draft_hash,
         )
-        decided_refs.add(hunk.ref)
+        decided_refs.add(unit.ref)
         if decision.draft is not None:
-            drafts[hunk.ref] = decision.draft
+            drafts[unit.ref] = decision.draft
         if decision.adopt:
-            adopt_refs.add(hunk.ref)
+            adopt_refs.add(unit.ref)
     return WalkResult(
         units=out,
         drafts=drafts,
@@ -524,78 +484,16 @@ def walk(hunks: list[Hunk], choose: Choice[Hunk]) -> WalkResult[Hunk]:
     )
 
 
-def _interactive_choice(stage: FileStage[Hunk]) -> Choice[Hunk]:
+#: ``walk`` under the name its key-unit callers outside this module import.
+walk_structured = walk
+
+
+def _interactive_choice[U: (Hunk, KeyUnit)](stage: FileStage[U]) -> Choice[U]:
     """A button-bar-backed choose callback for the interactive walk."""
     style = _themed_style()
+    engine = stage.engine
 
-    def choose(hunk: Hunk, index: int, total: int) -> Decision | None | _Quit:
-        flag = " (changed)" if hunk.changed else ""
-        current = f"currently {hunk.cls.value}"
-        result = button_bar(
-            [
-                Button("Share", _Menu.SHARE),
-                Button("Keep local", HunkClass.LOCAL),
-                Button("Skip", None),
-                Button("Quit", QUIT),
-            ],
-            title=f"stage {stage.sub_name} — hunk {index + 1}/{total}: "
-            f"{hunk.label}{flag}",
-            body=f"{stage.engine.preview(stage.base, stage.live, hunk)}\n[{current}]",
-            initial=0 if hunk.cls is not HunkClass.LOCAL else 1,
-            style=style,
-        )
-        if result is CANCEL or isinstance(result, _Quit):
-            return QUIT  # Esc / Ctrl-C / Quit stops the walk, keeping prior choices
-        if result is None:
-            return None  # Skip — leave the class unchanged
-        if result is HunkClass.LOCAL:
-            return Decision(HunkClass.LOCAL)
-        return _share_submenu(stage, hunk, style)  # Share → how to share
-
-    return choose
-
-
-def _share_submenu(stage: FileStage[Hunk], hunk: Hunk, style: Style) -> Decision | None:
-    """The Share sub-menu: draft (Claude rewrite) / verbatim / skip.
-
-    Returns a SHARED_DRAFTED :class:`Decision` (carrying the draft + adopt flag),
-    a plain SHARED Decision (verbatim), or ``None`` (skip / back / draft-cancelled
-    — the hunk is left unchanged). The draft session is constructed per-hunk inside
-    :func:`share_draft.draft_hunk` and discarded on accept/cancel.
-    """
-    result = button_bar(
-        [
-            Button("Draft (Claude)", _Menu.DRAFT),
-            Button("Verbatim", _Menu.VERBATIM),
-            Button("Skip", None),
-        ],
-        title=f"share {hunk.label} — rewrite host-specific text?",
-        body=(
-            "Draft: Claude rewrites this region into a shareable version "
-            "(then adopt it locally or keep your local bytes).\n"
-            "Verbatim: share your live bytes as-is."
-        ),
-        initial=0,
-        style=style,
-    )
-    if result is CANCEL or result is None:
-        return None  # back / skip → leave unchanged
-    if result is _Menu.VERBATIM:
-        return Decision(HunkClass.SHARED)
-    # Draft: hand the host-specific live region to Claude for a shareable rewrite.
-    j1, j2 = hunk.live_span
-    region = b"".join(split_lines(stage.live)[j1:j2])
-    outcome = share_draft.draft_hunk(region, display_path=stage.sub_name)
-    if outcome is CANCEL:
-        return None  # draft cancelled → leave the hunk unchanged
-    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft, adopt=outcome.adopt)
-
-
-def _structured_interactive_choice(stage: FileStage[KeyUnit]) -> Choice[KeyUnit]:
-    """A button-bar-backed choose callback for the interactive structured walk."""
-    style = _themed_style()
-
-    def choose(unit: KeyUnit, index: int, total: int) -> Decision | None | _Quit:
+    def choose(unit: U, index: int, total: int) -> Decision | None | _Quit:
         flag = " (changed)" if unit.changed else ""
         result = button_bar(
             [
@@ -604,48 +502,62 @@ def _structured_interactive_choice(stage: FileStage[KeyUnit]) -> Choice[KeyUnit]
                 Button("Skip", None),
                 Button("Quit", QUIT),
             ],
-            title=f"stage {stage.sub_name} — key {index + 1}/{total}: "
-            f"{unit.path}{flag}",
-            body=f"{stage.engine.preview(stage.base, stage.live, unit)}\n"
+            title=f"stage {stage.sub_name} — {engine.noun} {index + 1}/{total}: "
+            f"{unit.label}{flag}",
+            body=f"{engine.preview(stage.base, stage.live, unit)}\n"
             f"[currently {unit.cls.value}]",
             initial=0 if unit.cls is not HunkClass.LOCAL else 1,
             style=style,
         )
         if result is CANCEL or isinstance(result, _Quit):
-            return QUIT
+            return QUIT  # Esc / Ctrl-C / Quit stops the walk, keeping prior choices
         if result is None:
-            return None
+            return None  # Skip — leave the class unchanged
         if result is HunkClass.LOCAL:
             return Decision(HunkClass.LOCAL)
-        return _structured_share_submenu(stage, unit, style)  # _Menu.SHARE → how
+        return _share_submenu(stage, unit, style)  # Share → how to share
 
     return choose
 
 
-def _structured_share_submenu(
-    stage: FileStage[KeyUnit], unit: KeyUnit, style: Style
-) -> Decision | None:
-    """The structured Share sub-menu: draft (Claude rewrite) / verbatim / skip.
+#: Share sub-menu wording per unit kind: what a draft rewrites, and the options.
+_SHARE_WORDING: Final = {
+    UnitKind.LINE: (
+        "text",
+        "Draft: Claude rewrites this region into a shareable version "
+        "(then adopt it locally or keep your local bytes).\n"
+        "Verbatim: share your live bytes as-is.",
+    ),
+    UnitKind.KEY: (
+        "value",
+        "Draft: Claude rewrites this value into a shareable scalar (same type); "
+        "your local value stays — only the shareable scalar is promoted.\n"
+        "Verbatim: share your live value as-is.",
+    ),
+}
 
-    The key-unit sibling of :func:`_share_submenu`. Returns a SHARED_DRAFTED
-    :class:`Decision` (carrying the type-confined scalar draft + adopt flag), a
-    plain SHARED Decision (verbatim live value), or ``None`` (skip / back /
-    draft-cancelled — the unit is left unchanged). The draft is bounded to a
-    same-type scalar inside :func:`share_draft.draft_key_unit`; the live value at
-    the unit's path is read as the type anchor.
+
+def _share_submenu[U: (Hunk, KeyUnit)](
+    stage: FileStage[U], unit: U, style: Style
+) -> Decision | None:
+    """The Share sub-menu: draft (Claude rewrite) / verbatim / skip.
+
+    Returns a SHARED_DRAFTED :class:`Decision` (carrying the draft + adopt flag),
+    a plain SHARED Decision (verbatim), or ``None`` (skip / back / draft-cancelled
+    — the unit is left unchanged). A hunk's draft rewrites its live region; a key
+    unit's draft is bounded to a scalar of the live value's type inside
+    :func:`share_draft.draft_key_unit`, which never offers adopt. The draft
+    session is constructed per unit and discarded on accept/cancel.
     """
+    what, body = _SHARE_WORDING[stage.engine.kind]
     result = button_bar(
         [
             Button("Draft (Claude)", _Menu.DRAFT),
             Button("Verbatim", _Menu.VERBATIM),
             Button("Skip", None),
         ],
-        title=f"share {unit.path} — rewrite host-specific value?",
-        body=(
-            "Draft: Claude rewrites this value into a shareable scalar (same type); "
-            "your local value stays — only the shareable scalar is promoted.\n"
-            "Verbatim: share your live value as-is."
-        ),
+        title=f"share {unit.label} — rewrite host-specific {what}?",
+        body=body,
         initial=0,
         style=style,
     )
@@ -653,20 +565,24 @@ def _structured_share_submenu(
         return None  # back / skip → leave unchanged
     if result is _Menu.VERBATIM:
         return Decision(HunkClass.SHARED)
-    # Draft: hand the live scalar to Claude for a shareable, type-confined rewrite.
-    fmt = stage.engine.fmt
-    assert fmt is not None
-    original = su_mod.value_at(stage.live, unit.path, fmt)
-    if original is ABSENT:
-        # The host deleted this leaf live — there is no scalar to generalise, and
-        # an absent type-anchor would re-prompt forever. Leave the unit unchanged.
-        return None
-    # Adopt-locally is not wired for structured drafts (live-rewrite is a follow-up),
-    # so the key-unit draft is keep-local only — never advertise or return adopt.
-    outcome = share_draft.draft_key_unit(original, display_path=stage.sub_name, fmt=fmt)
+    if isinstance(unit, Hunk):
+        j1, j2 = unit.live_span
+        region = b"".join(split_lines(stage.live)[j1:j2])
+        outcome = share_draft.draft_hunk(region, display_path=stage.sub_name)
+    else:
+        fmt = stage.engine.fmt
+        assert fmt is not None
+        original = su_mod.value_at(stage.live, unit.path, fmt)
+        if original is ABSENT:
+            # The host deleted this leaf live — there is no scalar to generalise, and
+            # an absent type-anchor would re-prompt forever. Leave the unit unchanged.
+            return None
+        outcome = share_draft.draft_key_unit(
+            original, display_path=stage.sub_name, fmt=fmt
+        )
     if outcome is CANCEL:
         return None  # draft cancelled → leave the unit unchanged
-    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft)
+    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft, adopt=outcome.adopt)
 
 
 def _adopt_live(stage: FileStage[Hunk], result: WalkResult[Hunk]) -> bytes:
@@ -1132,7 +1048,7 @@ def stage(
         if not stage_item.hunks:
             continue
         owner_id = _confirm_file_ownership(stage_item, repo_root)
-        result = walk(stage_item.hunks, _interactive_choice(stage_item))
+        result = walk(stage_item.units, _interactive_choice(stage_item))
         _apply(
             profile,
             stage_item,
@@ -1154,9 +1070,7 @@ def stage(
         if not struct_item.units:
             continue
         owner_id = _confirm_file_ownership(struct_item, repo_root)
-        sresult = walk_structured(
-            struct_item.units, _structured_interactive_choice(struct_item)
-        )
+        sresult = walk(struct_item.units, _interactive_choice(struct_item))
         _apply_structured(
             profile,
             struct_item,
