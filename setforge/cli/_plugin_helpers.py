@@ -130,7 +130,7 @@ def _walk_extension_failures(
     Skips ids not in ``retry_failed_ids`` when that set is non-empty;
     full-pass behavior is restored when it is empty. The is_install
     branch picks the correct inverse for the RETRY path inside
-    :func:`_handle_extension_failure`.
+    :func:`_retry_extension_op`.
     """
     for ext_id, err in report.failed:
         if retry_failed_ids and ext_id not in retry_failed_ids:
@@ -138,17 +138,23 @@ def _walk_extension_failures(
         # The originating op was either install (in to_install) or
         # uninstall (in to_uninstall). Pick the right inverse for RETRY.
         is_install = ext_id in report.to_install
-        outcome, retry_ok = _handle_extension_failure(
-            ext_id=ext_id,
+        pin = (pins or {}).get(ext_id.casefold())
+        outcome = _handle_failure(
+            kind=ReconcileKind.EXTENSION,
+            item_id=ext_id,
             error_summary=err,
-            is_install=is_install,
             yes=yes,
-            successful_added=tuple(final_added),
-            successful_removed=tuple(final_removed),
-            pin=(pins or {}).get(ext_id.casefold()),
+            retry=functools.partial(
+                _retry_extension_op, ext_id, is_install=is_install, pin=pin
+            ),
+            on_abort=lambda: _abort_reverse_reconcile_extensions(
+                successful_added=tuple(final_added),
+                successful_removed=tuple(final_removed),
+            ),
+            announce=True,
         )
         outcomes.append(outcome)
-        if retry_ok:
+        if outcome.status is ReconcileStatus.RETRIED_OK:
             if is_install:
                 final_added.append(ext_id)
             else:
@@ -248,10 +254,7 @@ def _retry_extension_op(
 ) -> str | None:
     """Re-attempt one per-extension op; return error string on failure, None on success.
 
-    Mirrors :func:`_retry_plugin_op`'s signature shape so the RETRY
-    branch in :func:`_handle_extension_failure` has the same
-    ``retry_err is None`` predicate as :func:`_handle_plugin_failure`. A
-    ``pin`` keeps the RETRY install BYTE-STRONG (download + verify the locked
+    A ``pin`` keeps the RETRY install BYTE-STRONG (download + verify the locked
     VSIX), matching the first pass.
     """
     try:
@@ -264,78 +267,63 @@ def _retry_extension_op(
     return None
 
 
-def _handle_extension_failure(
+def _handle_failure(
     *,
-    ext_id: str,
+    kind: ReconcileKind,
+    item_id: str,
     error_summary: str,
-    is_install: bool,
     yes: bool,
-    successful_added: tuple[str, ...],
-    successful_removed: tuple[str, ...],
-    pin: ResolvedPin | None = None,
-) -> tuple[transitions.ReconcileOutcome, bool]:
-    """Surface the failure prompt for one extension; return (outcome, retry_ok).
+    retry: Callable[[], str | None],
+    on_abort: Callable[[], object],
+    announce: bool = False,
+) -> transitions.ReconcileOutcome:
+    """Prompt for one failed item and return its outcome.
 
-    ``retry_ok`` is ``True`` only when the user picked RETRY and the
-    second attempt succeeded — the caller uses that signal to fold the
-    item into the successful-added / -removed lists for the
-    :class:`ExtensionDelta`.
-
-    On ABORT, calls :func:`_abort_reverse_reconcile_extensions` to roll
-    back items landed so far this install, then raises
-    :class:`ReconcileAborted`.
+    SKIP records ``skipped``; RETRY runs ``retry`` once (``None`` on success)
+    and records ``retried_ok`` or ``skipped``; ABORT runs ``on_abort`` to roll
+    back what landed this install, then raises :class:`ReconcileAborted`.
+    ``announce`` adds the per-item progress lines extensions print (plugin
+    failures are already rendered by :func:`_emit_plugin_report`).
     """
-    typer.secho(f"FAILED  {ext_id} — {error_summary}", err=True, fg=typer.colors.YELLOW)
+    if announce:
+        typer.secho(
+            f"FAILED  {item_id} — {error_summary}", err=True, fg=typer.colors.YELLOW
+        )
     action = prompt_failure_action(
-        message=f"failed: {ext_id}\n{error_summary}",
+        message=f"failed: {item_id}\n{error_summary}",
         full_stderr=_stderr_full_from_failed(error_summary),
         yes=yes,
     )
-    if action is FailureAction.SKIP:
-        typer.echo(f"skipped   {ext_id}")
-        return (
-            transitions.ReconcileOutcome(
-                item_id=ext_id,
-                kind=ReconcileKind.EXTENSION,
-                status=ReconcileStatus.SKIPPED,
-                error_summary=error_summary,
-            ),
-            False,
+    if action is FailureAction.ABORT:
+        on_abort()
+        raise ReconcileAborted(
+            f"install aborted during {kind} reconcile (failed item: {item_id!r})"
         )
     if action is FailureAction.RETRY:
-        retry_err = _retry_extension_op(ext_id, is_install=is_install, pin=pin)
-        if retry_err is not None:
+        retry_err = retry()
+        if retry_err is None:
+            if announce:
+                typer.echo(f"retried   {item_id}")
+            return transitions.ReconcileOutcome(
+                item_id=item_id,
+                kind=kind,
+                status=ReconcileStatus.RETRIED_OK,
+                error_summary=None,
+            )
+        if announce:
             typer.secho(
-                f"FAILED  retry {ext_id} — {retry_err}",
+                f"FAILED  retry {item_id} — {retry_err}",
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-            return (
-                transitions.ReconcileOutcome(
-                    item_id=ext_id,
-                    kind=ReconcileKind.EXTENSION,
-                    status=ReconcileStatus.SKIPPED,
-                    error_summary=retry_err,
-                ),
-                False,
-            )
-        typer.echo(f"retried   {ext_id}")
-        return (
-            transitions.ReconcileOutcome(
-                item_id=ext_id,
-                kind=ReconcileKind.EXTENSION,
-                status=ReconcileStatus.RETRIED_OK,
-                error_summary=None,
-            ),
-            True,
-        )
-    # ABORT
-    _abort_reverse_reconcile_extensions(
-        successful_added=successful_added,
-        successful_removed=successful_removed,
-    )
-    raise ReconcileAborted(
-        f"install aborted during extension reconcile (failed item: {ext_id!r})"
+        error_summary = retry_err
+    elif announce:
+        typer.echo(f"skipped   {item_id}")
+    return transitions.ReconcileOutcome(
+        item_id=item_id,
+        kind=kind,
+        status=ReconcileStatus.SKIPPED,
+        error_summary=error_summary,
     )
 
 
@@ -727,17 +715,13 @@ class _RetryOpKind(StrEnum):
     """Closed set of originating ops a failed plugin item can map back to.
 
     Returned by :func:`_classify_plugin_failure` and dispatched on by
-    :func:`_retry_plugin_op`. ``UNKNOWN`` reaches the RETRY branch only
-    when ``claude_plugins.reconcile`` introduces a new failure category
-    without updating the classifier — surfaces as a SKIP-equivalent
-    (the retry is a no-op).
+    :func:`_retry_plugin_op`.
     """
 
     INSTALL = "install"
     ENABLE = "enable"
     DISABLE = "disable"
     MARKETPLACE_ADD = "marketplace_add"
-    UNKNOWN = "unknown"
 
 
 def _classify_plugin_failure(
@@ -756,9 +740,7 @@ def _classify_plugin_failure(
         return _RetryOpKind.ENABLE
     if failed_id in set(report.to_disable):
         return _RetryOpKind.DISABLE
-    if failed_id in set(report.marketplaces_added):
-        return _RetryOpKind.MARKETPLACE_ADD
-    return _RetryOpKind.UNKNOWN
+    return _RetryOpKind.MARKETPLACE_ADD
 
 
 def _retry_plugin_op(
@@ -773,8 +755,6 @@ def _retry_plugin_op(
     Dispatched by ``op_kind`` from :func:`_classify_plugin_failure`.
     ``marketplace_add`` looks up the source from ``cfg.marketplaces``;
     other kinds parse ``name@marketplace`` from ``failed_id``.
-    ``"unknown"`` returns a placeholder error string so the outcome
-    records ``"skipped"`` rather than a misleading ``"retried_ok"``.
 
     A ``pins`` entry for ``failed_id`` keeps a retried install strong: the
     marketplace cache is re-pinned to the locked commit (via the same
@@ -798,8 +778,6 @@ def _retry_plugin_op(
                 if source is None:
                     return f"marketplace {failed_id!r} not in cfg.marketplaces"
                 claude_plugins_mod.marketplace_add(failed_id, source)
-            case _RetryOpKind.UNKNOWN:
-                return f"unknown op kind {op_kind!r} for retry"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         return claude_plugins_mod.stderr_of(exc)
     except (PluginToolMissing, MarketplaceCacheMiss) as exc:
@@ -837,10 +815,7 @@ def _retry_pin_marketplace(
 
 # Maps a retried op_kind from _classify_plugin_failure to the
 # _PluginRetriedPieces field that accumulates its second-attempt
-# successes. Unknown op kinds (the classifier's "unknown" fallback)
-# are deliberately absent — _handle_plugin_failure treats a missing
-# entry as a SKIP-equivalent rather than a retried_ok with no delta
-# bookkeeping.
+# successes.
 _RETRY_PIECE_FIELD: Final[Mapping[_RetryOpKind, str]] = {
     _RetryOpKind.INSTALL: "installed",
     _RetryOpKind.ENABLE: "enabled",
@@ -866,65 +841,21 @@ def _handle_plugin_failure(
     so the caller can fold it into the final :class:`PluginDelta`. A
     ``pins`` entry for ``failed_id`` keeps the RETRY install strong (the
     marketplace cache is re-pinned to the locked commit), matching the first
-    pass. On ABORT, calls :func:`_abort_reverse_reconcile_plugins` with the
-    plugins/marketplaces landed so far this install, then raises
+    pass. On ABORT, reverses the plugins/marketplaces landed so far this install via
+    :func:`_reverse_plugins`, then raises
     :class:`ReconcileAborted`.
     """
-    action = prompt_failure_action(
-        message=f"failed: {failed_id}\n{error_summary}",
-        full_stderr=_stderr_full_from_failed(error_summary),
+    outcome = _handle_failure(
+        kind=ReconcileKind.PLUGIN,
+        item_id=failed_id,
+        error_summary=error_summary,
         yes=yes,
+        retry=lambda: _retry_plugin_op(cfg, failed_id, op_kind, pins=pins),
+        on_abort=lambda: _reverse_plugins(delta_so_far),
     )
-    if action is FailureAction.SKIP:
-        return transitions.ReconcileOutcome(
-            item_id=failed_id,
-            kind=ReconcileKind.PLUGIN,
-            status=ReconcileStatus.SKIPPED,
-            error_summary=error_summary,
-        )
-    if action is FailureAction.RETRY:
-        retry_err = _retry_plugin_op(cfg, failed_id, op_kind, pins=pins)
-        if retry_err is None:
-            # Record the retry success in the appropriate piece so the
-            # final delta reflects ground truth. ``op_kind == "unknown"``
-            # is a no-op append (matches the prior elif chain) — today
-            # that branch is dead because ``_retry_plugin_op`` already
-            # returns a non-None error string for unknown kinds, so this
-            # ``is None`` arm is only reached for the four mapped kinds.
-            piece_field = _RETRY_PIECE_FIELD.get(op_kind)
-            if piece_field is not None:
-                getattr(retried, piece_field).append(failed_id)
-            return transitions.ReconcileOutcome(
-                item_id=failed_id,
-                kind=ReconcileKind.PLUGIN,
-                status=ReconcileStatus.RETRIED_OK,
-                error_summary=None,
-            )
-        return transitions.ReconcileOutcome(
-            item_id=failed_id,
-            kind=ReconcileKind.PLUGIN,
-            status=ReconcileStatus.SKIPPED,
-            error_summary=retry_err,
-        )
-    # ABORT
-    _abort_reverse_reconcile_plugins(delta_so_far)
-    raise ReconcileAborted(
-        f"install aborted during plugin reconcile (failed item: {failed_id!r})"
-    )
-
-
-def _abort_reverse_reconcile_plugins(delta: transitions.PluginDelta) -> None:
-    """Reverse plugin/marketplace items landed so far this install (ABORT path).
-
-    Reuses :func:`_reverse_plugins` to avoid duplicating the four
-    uniform-inverse-op dispatch table — that function already runs the
-    correct inverse for each delta field with per-item warn-and-continue
-    semantics so the rollback completes even if a single inverse op
-    fails. The reverse delta and failure list are discarded; the
-    caller's :class:`ReconcileAborted` carries the abort reason and
-    SetforgeError handler surfaces it.
-    """
-    _reverse_plugins(delta)
+    if outcome.status is ReconcileStatus.RETRIED_OK:
+        getattr(retried, _RETRY_PIECE_FIELD[op_kind]).append(failed_id)
+    return outcome
 
 
 def _delta_from_report(
