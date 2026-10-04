@@ -2347,6 +2347,31 @@ def test_remove_reads_a_record_written_with_an_older_schema(
     assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
 
 
+def test_remove_restores_a_file_injected_under_an_empty_file_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    config.write_text(config.read_text().replace("instructions:", '"":'))
+    target = _git_repo(tmp_path / "target")
+    (target / "AGENTS.md").write_text("my own notes\n")
+    arguments = ["demo", str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(app, ["project", "inject", *arguments])
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+    state = manifest_path(target, "demo")
+    assert json.loads(state.read_text())["files"][0]["file_id"] == ""
+
+    for mode in ("--dry-run", "--yes"):
+        removed = CliRunner().invoke(app, ["project", "remove", *arguments[:-1], mode])
+        assert removed.exit_code == 0, (removed.output, removed.exception)
+        assert "  restore replace-untracked: AGENTS.md\n" in removed.output
+
+    assert (target / "AGENTS.md").read_text() == "my own notes\n"
+    assert not state.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+
+
 def _non_mapping_entry(entry: dict[str, object]) -> object:
     return list(entry)
 

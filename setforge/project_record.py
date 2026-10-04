@@ -134,7 +134,6 @@ def _record_files(  # noqa: C901 - one fail-closed parser for untrusted state
             ) from exc
         if (
             not isinstance(file_id, str)
-            or not file_id
             or not isinstance(declaring_profile, str)
             or not declaring_profile
             or not isinstance(source_digest, str)
