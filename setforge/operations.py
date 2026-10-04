@@ -6,7 +6,6 @@ import base64
 import binascii
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +14,7 @@ import stat
 import struct
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -178,19 +177,11 @@ def journal_path(profile: str) -> Path:
     return journals_root() / f"{digest}.json"
 
 
-@contextmanager
-def _registry_lock() -> Iterator[None]:
+def _registry_lock() -> AbstractContextManager[None]:
     """Serialize global journal discovery and creation across processes."""
-    from setforge.locking import _acquire_fd
+    from setforge.locking import _flock
 
-    root = journals_root()
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / ".registry.lock").open("a") as fd:
-        _acquire_fd(fd, timeout=None, timeout_message="")
-        try:
-            yield
-        finally:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+    return _flock(journals_root() / ".registry.lock", timeout=None, timeout_message="")
 
 
 def _load_all() -> tuple[OperationJournal, ...]:
