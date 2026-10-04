@@ -16,11 +16,6 @@ from setforge.config import load_config
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def seed_tracked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a minimal valid tracked setforge.yaml."""
     tracked = tmp_path / "tracked" / "setforge.yaml"

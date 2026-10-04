@@ -12,24 +12,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ruamel.yaml import YAML
-
-from setforge.migrations import MigrationRoots, parse_schema_version
+from setforge.migrations import parse_schema_version
 from setforge.migrations._contract_2_0 import Contract20Migration
-
-
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+from tests.shared_helpers import load_yaml, migration_roots
 
 
 def test_reverse_lowers_contract_floor_to_target(tmp_path: Path) -> None:
@@ -45,11 +30,11 @@ def test_reverse_lowers_contract_floor_to_target(tmp_path: Path) -> None:
         "      - editor\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     fwd = Contract20Migration()
     fwd.apply(roots=roots)
     fwd.reverse.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     assert data["schema_version"] == "1.2"
     # The stale 2.0 floor must be gone — a 1.2 engine (expected schema 1.2)
     # would refuse against it. The floor, if present, must be <= the target.
@@ -79,9 +64,9 @@ def test_reverse_direct_lowers_stale_floor(tmp_path: Path) -> None:
         "        deep: true\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     Contract20Migration().reverse.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     assert data["schema_version"] == "1.2"
     # Lowered to the registry minimum (1.0) — never above the 1.2 target.
     assert str(data["minimum_version"]) == "1.0"
@@ -105,9 +90,9 @@ def test_reverse_leaves_low_handauthored_floor_untouched(tmp_path: Path) -> None
         "        semantics: host-local\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     Contract20Migration().reverse.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     # Below the target — never blocks the 1.2 engine, so untouched.
     assert str(data["minimum_version"]) == "1.0"
 
@@ -126,7 +111,7 @@ def test_reverse_no_floor_stays_absent(tmp_path: Path) -> None:
         "        semantics: host-local\n",
         encoding="utf-8",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     Contract20Migration().reverse.apply(roots=roots)
-    data = _load(tmp_path / "setforge.yaml")
+    data = load_yaml(tmp_path / "setforge.yaml")
     assert "minimum_version" not in data

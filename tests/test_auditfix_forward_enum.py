@@ -19,12 +19,7 @@ import pytest
 from pydantic import ValidationError
 
 from setforge.config import load_config
-
-
-def _write(tmp_path: Path, body: str) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
+from tests.shared_helpers import write_setforge_yaml
 
 
 def test_unknown_scope_value_reverts_to_default_and_warns(
@@ -41,7 +36,7 @@ def test_unknown_scope_value_reverts_to_default_and_warns(
         "mcp_servers:\n  s1:\n    command: ['x']\n    scope: futurescope\n"
         "profiles:\n  default: {}\n"
     )
-    cfg = _write(tmp_path, body)
+    cfg = write_setforge_yaml(tmp_path, body)
 
     config = load_config(cfg)  # must NOT raise
 
@@ -56,7 +51,7 @@ def test_genuine_validation_error_still_propagates(tmp_path: Path) -> None:
         "tracked_files:\n  a:\n    dst: y\n"
         "profiles:\n  default: {}\n"
     )
-    cfg = _write(tmp_path, body)
+    cfg = write_setforge_yaml(tmp_path, body)
 
     with pytest.raises(ValidationError):
         load_config(cfg)

@@ -17,11 +17,6 @@ from setforge.errors import ConfirmRequiresInteractive
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-@pytest.fixture
 def seed_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     local = tmp_path / "local.yaml"
     local.write_text("binaries:\n  code: /usr/bin/code\n", encoding="utf-8")

@@ -380,11 +380,6 @@ def test_multi_step_dialog_returns_cancel_treated_as_abort(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
 def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 

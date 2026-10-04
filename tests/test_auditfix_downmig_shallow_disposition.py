@@ -16,34 +16,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ruamel.yaml import YAML
-
-from setforge.migrations import MigrationRoots
 from setforge.migrations._contract_2_0 import Contract20Migration
+from tests.shared_helpers import load_yaml, migration_roots
 
 _FLOOR = 'minimum_version: "2.0"\n'
 
 
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
-
-
 def _roundtrip(tmp_path: Path) -> dict:
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     fwd = Contract20Migration()
     fwd.apply(roots=roots)
     fwd.reverse.apply(roots=roots)
-    return _load(tmp_path / "setforge.yaml")
+    return load_yaml(tmp_path / "setforge.yaml")
 
 
 def test_mixed_shallow_and_deep_keeps_disposition_for_kept_shallow_span(

@@ -17,28 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ruamel.yaml import YAML
 
 from setforge.migrations import (
-    MigrationRoots,
     detect_current_schema,
     parse_schema_version,
 )
 from setforge.migrations.registry import find_migration_path
-
-
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+from tests.shared_helpers import load_yaml, migration_roots
 
 
 def _write_2_0_config_with_floor(tmp_path: Path, floor: str) -> None:
@@ -69,7 +54,7 @@ def test_same_major_floor_does_not_lock_out_sub_1_2_target(
     so the 1.1 / 1.0 target engine's ``_refuse_below_floor`` rejected the result.
     """
     _write_2_0_config_with_floor(tmp_path, "1.5")
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
 
     chain = find_migration_path(from_v="2.0", to_v=to_v)
     assert chain
@@ -79,7 +64,7 @@ def test_same_major_floor_does_not_lock_out_sub_1_2_target(
     cfg_path = tmp_path / "setforge.yaml"
     assert detect_current_schema(cfg_path) == to_v
 
-    floor = _load(cfg_path).get("minimum_version")
+    floor = load_yaml(cfg_path).get("minimum_version")
     assert floor is not None
     assert parse_schema_version(str(floor)) <= parse_schema_version(to_v), (
         f"floor {floor!r} (from a hand-authored 1.5) exceeds the {to_v} target "
@@ -90,10 +75,10 @@ def test_same_major_floor_does_not_lock_out_sub_1_2_target(
 def test_same_major_low_floor_left_untouched(tmp_path: Path) -> None:
     """A floor already at/below the step's to_version is not disturbed."""
     _write_2_0_config_with_floor(tmp_path, "1.1")
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     # Downgrade only to 1.2: a 1.1 floor already satisfies a 1.2 target, so the
     # reverse must leave it untouched (it never blocks the target).
     for migration in find_migration_path(from_v="2.0", to_v="1.2"):
         migration.apply(roots=roots)
-    floor = _load(tmp_path / "setforge.yaml").get("minimum_version")
+    floor = load_yaml(tmp_path / "setforge.yaml").get("minimum_version")
     assert str(floor) == "1.1"

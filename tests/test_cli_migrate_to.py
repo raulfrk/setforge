@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.migrations import MigrationRoots, detect_current_schema
+from tests.shared_helpers import write_setforge_yaml
 
 runner = CliRunner()
 
@@ -23,12 +24,6 @@ _AT_1_1 = (
     'version: 1\nschema_version: "1.1"\ntracked_files: {}\nprofiles:\n  default: {}\n'
 )
 _AT_1_0 = "version: 1\ntracked_files: {}\nprofiles:\n  default: {}\n"
-
-
-def _write(tmp_path: Path, body: str) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +44,7 @@ def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_to_equals_current_is_noop(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_0)  # absent schema_version -> 1.0
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)  # absent schema_version -> 1.0
     result = runner.invoke(app, ["migrate", "--config", str(cfg), "--to", "1.0"])
     assert result.exit_code == 0
     assert "already at schema_version 1.0" in result.stdout
@@ -58,7 +53,7 @@ def test_to_equals_current_is_noop(tmp_path: Path) -> None:
 
 
 def test_to_unknown_version_rejected(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     result = runner.invoke(app, ["migrate", "--config", str(cfg), "--to", "9.9"])
     assert result.exit_code != 0
     assert "unknown schema version" in result.output
@@ -66,14 +61,14 @@ def test_to_unknown_version_rejected(tmp_path: Path) -> None:
 
 def test_pin_rejects_non_mapping_root(tmp_path: Path) -> None:
     """A list/scalar-root config yields a clean CLI error, not a TypeError."""
-    cfg = _write(tmp_path, "- just\n- a\n- list\n")
+    cfg = write_setforge_yaml(tmp_path, "- just\n- a\n- list\n")
     result = runner.invoke(app, ["migrate", "--config", str(cfg), "--pin", "1.1"])
     assert result.exit_code != 0
     assert "root must be a mapping" in result.output
 
 
 def test_to_and_pin_mutually_exclusive(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--pin", "1.0", "--to", "1.0"]
     )
@@ -89,7 +84,7 @@ def test_to_and_pin_mutually_exclusive(tmp_path: Path) -> None:
 
 
 def test_to_downgrade_check_previews_reverse(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.0", "--check"]
     )
@@ -100,7 +95,7 @@ def test_to_downgrade_check_previews_reverse(tmp_path: Path) -> None:
 
 
 def test_to_downgrade_apply_yes_strips_stamp(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.0", "--apply", "--yes"]
     )
@@ -110,7 +105,7 @@ def test_to_downgrade_apply_yes_strips_stamp(tmp_path: Path) -> None:
 
 
 def test_downgrade_non_tty_without_yes_requires_interactive(tmp_path: Path) -> None:
-    cfg = _write(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     # CliRunner stdin is not a TTY; no --yes -> ConfirmRequiresInteractive
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.0", "--apply"]
@@ -182,7 +177,7 @@ def test_partial_chain_failure_rolls_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Step 2 raising must roll the file back to its pre-migration bytes."""
-    cfg = _write(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
         "setforge.migrations.registry.MIGRATIONS", (_StampStep(), _RaisingStep())

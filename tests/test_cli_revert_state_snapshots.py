@@ -18,7 +18,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
@@ -69,17 +68,6 @@ def _write_tracked(repo: Path, md_body: str, yaml_body: str = _YAML_DOC) -> None
     tracked.mkdir(parents=True, exist_ok=True)
     (tracked / "doc.md").write_text(md_body, encoding="utf-8")
     (tracked / "doc.yaml").write_text(yaml_body, encoding="utf-8")
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
 
 
 def _live_md() -> Path:

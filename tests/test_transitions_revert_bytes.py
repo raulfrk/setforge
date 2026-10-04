@@ -9,8 +9,8 @@ from setforge.transitions import (
     TransitionDir,
     apply_patch_reverse,
     compute_patch,
-    snapshot_paths,
 )
+from tests.shared_helpers import record_transition
 
 pytestmark = pytest.mark.skipif(
     shutil.which("patch") is None, reason="GNU patch not on PATH"
@@ -30,23 +30,11 @@ _CASES = {
 }
 
 
-def _record(tmp_path: Path, live: Path, before: bytes, after: bytes) -> TransitionDir:
-    live.parent.mkdir(parents=True, exist_ok=True)
-    live.write_bytes(before)
-    pre = snapshot_paths([live])
-    live.write_bytes(after)
-    post = snapshot_paths([live])
-    transition = TransitionDir(tmp_path / "transition")
-    transition.mkdir()
-    (transition / "changes.patch").write_text(compute_patch(pre, post))
-    return transition
-
-
 @pytest.mark.parametrize("name", sorted(_CASES))
 def test_reverse_and_redo_restore_exact_bytes(tmp_path: Path, name: str) -> None:
     before, after = _CASES[name]
     live = tmp_path / "live.txt"
-    transition = _record(tmp_path, live, before, after)
+    transition = record_transition(tmp_path, live, before, after)
 
     apply_patch_reverse(transition)
     assert live.read_bytes() == before

@@ -14,25 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
 from setforge.migrations._contract_2_0 import Contract20Migration
-
-
-def _roots(tmp_path: Path) -> MigrationRoots:
-    return MigrationRoots(
-        cfg_path=tmp_path / "setforge.yaml",
-        repo_root=tmp_path,
-        home=tmp_path / "home",
-    )
-
-
-def _load(path: Path) -> dict:
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+from tests.shared_helpers import load_yaml, migration_roots
 
 
 def _write(path: Path, text: str) -> None:
@@ -61,8 +46,8 @@ def test_translate_shallow_keys_to_pinned_host_local_spans(tmp_path: Path) -> No
         "      - editor.fontSize\n"
         "      - editor.theme\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    data = _load(tmp_path / "setforge.yaml")
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    data = load_yaml(tmp_path / "setforge.yaml")
     tf = data["tracked_files"]["settings"]
     assert "preserve_user_keys" not in tf
     spans = tf["spans"]
@@ -85,8 +70,8 @@ def test_translate_deep_keys_to_pinned_deep_spans(tmp_path: Path) -> None:
         "    preserve_user_keys_deep:\n"
         "      - editor\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
     assert "preserve_user_keys_deep" not in tf
     span = tf["spans"][0]
     assert span["anchor"] == "editor"
@@ -113,8 +98,8 @@ def test_translate_sections_enumerates_from_tracked_markers(tmp_path: Path) -> N
         "    preserve_user_sections: true\n"
         "    preserve_user_sections_mode: strip\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
     assert "preserve_user_sections" not in tf
     assert "preserve_user_sections_mode" not in tf
     span = tf["spans"][0]
@@ -134,8 +119,8 @@ def test_translate_shallow_keys_sets_forked_disposition(tmp_path: Path) -> None:
         "    preserve_user_keys:\n"
         "      - editor.fontSize\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
     assert tf["disposition"] == "forked"
 
 
@@ -156,8 +141,8 @@ def test_translate_shared_section_sets_shared_disposition(tmp_path: Path) -> Non
         "    dst: ~/doc.md\n"
         "    preserve_user_sections: true\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
     assert tf["disposition"] == "shared"
 
 
@@ -180,8 +165,8 @@ def test_translate_host_local_section_to_overlay_no_disposition(
         "    dst: ~/doc.md\n"
         "    preserve_user_sections: true\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
     # Host-local sections stay disposition-less (OVERLAY path is disposition=None).
     assert "disposition" not in tf
     span = tf["spans"][0]
@@ -211,7 +196,7 @@ def test_keys_plus_shared_section_conflict_refuses(tmp_path: Path) -> None:
         "    preserve_user_sections: true\n",
     )
     with pytest.raises(ConfigError, match="both dispositions"):
-        Contract20Migration().apply(roots=_roots(tmp_path))
+        Contract20Migration().apply(roots=migration_roots(tmp_path))
 
 
 def test_sections_no_markers_drops_flag_emits_no_span(tmp_path: Path) -> None:
@@ -226,8 +211,8 @@ def test_sections_no_markers_drops_flag_emits_no_span(tmp_path: Path) -> None:
         "    dst: ~/doc.md\n"
         "    preserve_user_sections: true\n",
     )
-    Contract20Migration().apply(roots=_roots(tmp_path))
-    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    Contract20Migration().apply(roots=migration_roots(tmp_path))
+    tf = load_yaml(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
     assert "preserve_user_sections" not in tf
     assert "spans" not in tf or len(tf.get("spans", [])) == 0
 
@@ -250,11 +235,11 @@ def test_local_yaml_overlay_translated(tmp_path: Path) -> None:
         tmp_path / "setforge.yaml",
         _FLOOR + "schema_version: '1.2'\n",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     migration = Contract20Migration()
     assert local_yaml in migration.affected_paths(roots=roots)
     migration.apply(roots=roots)
-    tf = _load(local_yaml)["tracked_files"]["settings"]
+    tf = load_yaml(local_yaml)["tracked_files"]["settings"]
     assert "preserve_user_keys" not in tf
     spans = tf["spans"]
     assert any(s["anchor"] == "editor.fontSize" for s in spans)
@@ -272,7 +257,7 @@ def test_idempotent_replay(tmp_path: Path) -> None:
         "    preserve_user_keys:\n"
         "      - editor.fontSize\n",
     )
-    roots = _roots(tmp_path)
+    roots = migration_roots(tmp_path)
     Contract20Migration().apply(roots=roots)
     first = (tmp_path / "setforge.yaml").read_text(encoding="utf-8")
     Contract20Migration().apply(roots=roots)
@@ -293,7 +278,7 @@ def test_below_floor_refuses_and_mutates_nothing(tmp_path: Path) -> None:
     )
     _write(tmp_path / "setforge.yaml", original)
     with pytest.raises(ConfigError, match=r"2\.0"):
-        Contract20Migration().apply(roots=_roots(tmp_path))
+        Contract20Migration().apply(roots=migration_roots(tmp_path))
     assert (tmp_path / "setforge.yaml").read_text(encoding="utf-8") == original
 
 
@@ -301,7 +286,7 @@ def test_malformed_non_mapping_root_raises_config_error(tmp_path: Path) -> None:
     """A non-mapping setforge.yaml root raises ConfigError, not a bare TypeError."""
     _write(tmp_path / "setforge.yaml", "- just\n- a\n- list\n")
     with pytest.raises(ConfigError):
-        Contract20Migration().apply(roots=_roots(tmp_path))
+        Contract20Migration().apply(roots=migration_roots(tmp_path))
 
 
 # Both contract-drop migrations route through the SINGLE shared
@@ -362,7 +347,7 @@ def test_both_contract_gates_share_one_helper(tmp_path: Path) -> None:
         _write(cfg, body)
         before = cfg.read_text(encoding="utf-8")
         with pytest.raises(ConfigError) as exc:
-            migration.apply(roots=_roots(tmp_path))
+            migration.apply(roots=migration_roots(tmp_path))
         msg = str(exc.value)
         assert label in msg
         assert floor in msg
@@ -409,6 +394,6 @@ def test_all_or_nothing_rollback_on_mid_apply_failure(
 
     monkeypatch.setattr(mod, "atomic_write_yaml", _boom)
     with pytest.raises(OSError, match="injected"):
-        Contract20Migration().apply(roots=_roots(tmp_path))
+        Contract20Migration().apply(roots=migration_roots(tmp_path))
     assert (tmp_path / "setforge.yaml").read_text(encoding="utf-8") == cfg_original
     assert local_yaml.read_text(encoding="utf-8") == local_original
