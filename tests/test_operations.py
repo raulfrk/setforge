@@ -2295,7 +2295,6 @@ def test_install_root_recovery_accepts_an_ancestor_alias_with_a_redundant_target
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install", "--profile=p"),
         paths=(root, *alias_paths),
         path_guards=guards,
     )
