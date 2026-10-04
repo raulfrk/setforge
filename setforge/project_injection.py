@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from setforge import atomicio, operations
 from setforge.config import (
@@ -66,6 +67,9 @@ from setforge.project_overlay import (
     write_overlay,
 )
 from setforge.transitions import state_root
+
+if TYPE_CHECKING:
+    from setforge.project_sync import AutoResolution
 
 _MANIFEST_SCHEMA = 3
 _PRIOR_MANIFEST_SCHEMA = 2
@@ -602,12 +606,12 @@ def _refuse_claimed_destinations(
 def resolve_injection_plan(
     plan: ProjectInjectionPlan,
     *,
-    auto: str | None,
+    auto: AutoResolution | None,
     interactive: bool,
 ) -> ProjectInjectionPlan | None:
     """Resolve initial tracked-file collisions without mutating state."""
-    from setforge.project_sync import legacy_two_way_merge
-    from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
+    from setforge.project_sync import resolve_automatically, two_way_merge
+    from setforge.reconcile.merge_model import Conflict
     from setforge.reconcile.types import FileId
     from setforge.ui.primitives import CANCEL
 
@@ -617,19 +621,11 @@ def resolve_injection_plan(
             resolved_files.append(item)
             continue
         assert item.previous_payload is not None
-        result = legacy_two_way_merge(item.previous_payload, item.source_payload)
+        result = two_way_merge(item.previous_payload, item.source_payload)
         if result.clean:
             merged = result.merged()
         elif auto is not None:
-            if auto not in {"keep-live", "use-profile"}:
-                raise SetforgeError(f"unknown project injection resolution: {auto}")
-            segments = tuple(
-                segment
-                if isinstance(segment, Clean)
-                else Clean(segment.ours if auto == "keep-live" else segment.theirs)
-                for segment in result.segments
-            )
-            merged = MergeResult(segments).merged()
+            merged = resolve_automatically(result, auto).merged()
         elif interactive:
             from setforge.reconcile.claude_merge import make_claude_merge_fn
             from setforge.reconcile.wizard import resolve_conflicts

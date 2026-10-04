@@ -32,13 +32,13 @@ from setforge.project_sync import (
     _merge_mode,
     apply_sync,
     discover_injections,
-    legacy_two_way_merge,
     merge_project_content,
     missing_locally,
     plan_sync,
     render_sync_manifests,
     resolve_automatically,
     resolve_sync_plan,
+    two_way_merge,
 )
 from setforge.reconcile import file_id as reconcile_file_id
 from setforge.reconcile import record as record_base
@@ -374,8 +374,8 @@ def test_plan_sync_reports_unrecorded_target(tmp_path: Path) -> None:
         plan_sync(target)
 
 
-def test_legacy_two_way_merge_splits_independent_differences() -> None:
-    result = legacy_two_way_merge(
+def test_two_way_merge_splits_independent_differences() -> None:
+    result = two_way_merge(
         b"one-local\nshared-a\nshared-b\nthree-local\n",
         b"one-profile\nshared-a\nshared-b\nthree-profile\n",
     )
@@ -394,10 +394,10 @@ def test_legacy_two_way_merge_splits_independent_differences() -> None:
         (AutoResolution.USE_PROFILE, b"one-profile\nshared\ntwo-profile\n"),
     ],
 )
-def test_legacy_two_way_merge_resolves_every_hunk_explicitly(
+def test_two_way_merge_resolves_every_hunk_explicitly(
     policy: AutoResolution, expected: bytes
 ) -> None:
-    result = legacy_two_way_merge(
+    result = two_way_merge(
         b"one-local\nshared\ntwo-local\n",
         b"one-profile\nshared\ntwo-profile\n",
     )
@@ -408,8 +408,8 @@ def test_legacy_two_way_merge_resolves_every_hunk_explicitly(
     assert resolved.merged() == expected
 
 
-def test_legacy_two_way_merge_is_byte_exact_without_final_newline() -> None:
-    result = legacy_two_way_merge(b"same\nlocal", b"same\nprofile")
+def test_two_way_merge_is_byte_exact_without_final_newline() -> None:
+    result = two_way_merge(b"same\nlocal", b"same\nprofile")
 
     assert result.segments == (
         Clean(b"same\n"),

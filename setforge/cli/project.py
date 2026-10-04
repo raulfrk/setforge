@@ -282,18 +282,14 @@ def project_inject(
         if not sys.stdin.isatty():
             # Without a TTY the apply cannot ask, so the preview must fail on
             # the same unresolved tracked-file conflict.
-            resolve_injection_plan(
-                plan, auto=auto.value if auto is not None else None, interactive=False
-            )
+            resolve_injection_plan(plan, auto=auto, interactive=False)
         typer.echo("dry run: no changes applied")
         return
     if not _confirm("inject", yes=yes):
         typer.echo("aborted: no changes applied")
         return
     resolved_plan = resolve_injection_plan(
-        plan,
-        auto=auto.value if auto is not None else None,
-        interactive=sys.stdin.isatty(),
+        plan, auto=auto, interactive=sys.stdin.isatty()
     )
     if resolved_plan is None:
         typer.echo("aborted: no changes applied")

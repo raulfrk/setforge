@@ -473,7 +473,7 @@ def _legacy_result(
                 ),
             )
         )
-    return legacy_two_way_merge(live, desired)
+    return two_way_merge(live, desired)
 
 
 def _merge_mode(
@@ -553,7 +553,7 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                 result = (
                     _clean_result(addition.source_payload)
                     if live is ABSENT
-                    else legacy_two_way_merge(live, addition.source_payload)
+                    else two_way_merge(live, addition.source_payload)
                 )
                 result_mode, mode_conflict = _merge_mode(
                     None,
@@ -754,7 +754,7 @@ def merge_project_content(
     return line_merge(base, ours, theirs)
 
 
-def legacy_two_way_merge(ours: bytes, theirs: bytes) -> MergeResult:
+def two_way_merge(ours: bytes, theirs: bytes) -> MergeResult:
     """Represent a no-ancestor comparison as independently resolvable hunks.
 
     With no common ancestor, SetForge cannot safely attribute a difference to
