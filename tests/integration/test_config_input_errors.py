@@ -53,7 +53,6 @@ def test_validate_all_reports_unreadable_tracked_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     env = integration_env()
-    monkeypatch.setattr("setforge.cli.validate._LOCAL_CONFIG_PATH", env.local_config)
     src = env.tracked("text/note.txt")
     src.chmod(0)
     try:
@@ -80,7 +79,6 @@ def test_config_commands_report_corrupt_local_yaml_cleanly(
     argv: list[str],
 ) -> None:
     env = integration_env()
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", env.local_config)
     env.local_config.parent.mkdir(parents=True, exist_ok=True)
     env.local_config.write_text("binaries: [\n", encoding="utf-8")
 

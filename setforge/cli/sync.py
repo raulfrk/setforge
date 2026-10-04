@@ -27,9 +27,7 @@ from setforge import (
     capture as capture_mod,
 )
 from setforge import codex_resources as codex_resources_mod
-from setforge import (
-    source as source_mod,
-)
+from setforge import paths as paths_mod
 from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -717,7 +715,7 @@ def _sync_snapshot_paths(
 ) -> list[Path]:
     """Tracked srcs under the profile + ``setforge.yaml`` + local.yaml.
 
-    Includes :data:`LOCAL_CONFIG_PATH` so any transition-spanning mutation
+    Includes ``local.yaml`` so any transition-spanning mutation
     of local.yaml is revertable. Capture itself no longer writes local.yaml
     (host-local content is a LOCAL unit in the reconcile store); the include
     is retained so that a local.yaml write landing inside the SYNC
@@ -738,10 +736,7 @@ def _sync_snapshot_paths(
             for name in selected.config
         )
     paths.append(config.resolve())
-    # Resolve LOCAL_CONFIG_PATH off the module so it tracks any runtime
-    # override (tests monkeypatch ``setforge.source.LOCAL_CONFIG_PATH``) —
-    # a module-bound import would diverge from the runtime value.
-    paths.append(source_mod.LOCAL_CONFIG_PATH.resolve())
+    paths.append(paths_mod.local_config_path().resolve())
     return paths
 
 

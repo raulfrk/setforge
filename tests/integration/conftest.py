@@ -192,7 +192,7 @@ def integration_env(
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
     monkeypatch.setattr(Path, "home", lambda: Path(os.environ["HOME"]))
     monkeypatch.setattr(
-        "setforge.claude_marketplace_cache.MARKETPLACE_CACHE_ROOT", mp_cache
+        "setforge.claude_marketplace_cache.marketplace_cache_root", lambda: mp_cache
     )
     redirect_local_config_path(monkeypatch, local_yaml)
     for name in _MOCKED_BINARIES:

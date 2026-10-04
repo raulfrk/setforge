@@ -36,6 +36,7 @@ from setforge.migrations import (
     _require_mapping_root,
 )
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.paths import state_root
 from setforge.reconcile import file_id
 
 if TYPE_CHECKING:
@@ -356,8 +357,6 @@ def _store_legs(profile: str, fid: FileId) -> tuple[Path, ...]:
     ``setforge revert --profile=migrate`` snapshots + restores them (the seed is
     NOT re-derivable once the markers are stripped — pitfall MP-1/5).
     """
-    from setforge.transitions import state_root
-
     root = state_root()
     return (
         root / "base" / profile / fid,

@@ -38,7 +38,7 @@ from setforge import (
     deploy,
     local_config,
 )
-from setforge.binaries import LOCAL_CONFIG_PATH
+from setforge import paths as paths_mod
 from setforge.config import (
     Config,
     ResolvedProfile,
@@ -56,11 +56,15 @@ from setforge.file_ownership import (
 )
 from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
-from setforge.operations import journals_root
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
-from setforge.paths import template_context
+from setforge.paths import (
+    cache_root,
+    journals_root,
+    snapshots_root,
+    state_root,
+    template_context,
+)
 from setforge.source import load_local_codex_overlay
-from setforge.transitions import state_root
 from setforge.tree_management import (
     plan_tree,
     read_inventory,
@@ -237,20 +241,21 @@ GENERIC_DST_ROOTS: frozenset[Path] = frozenset(
 # (``claude-canary.sh``) makes a managed root — yet reaping it destroys the
 # user's host-local state. The root-level GENERIC_DST_ROOTS denylist cannot
 # catch it (its directory is a legitimate managed root), so it is excluded here
-# at file granularity. See setforge/binaries.py for LOCAL_CONFIG_PATH.
-HOST_LOCAL_FILES: frozenset[Path] = frozenset(
-    _norm(p)
-    for p in (
-        LOCAL_CONFIG_PATH,
-        Path.home() / ".claude" / "additional-content.md",
+# at file granularity.
+def _host_local_floor() -> frozenset[Path]:
+    return frozenset(
+        _norm(p)
+        for p in (
+            paths_mod.local_config_path(),
+            Path.home() / ".claude" / "additional-content.md",
+        )
     )
-)
 
 
 def _host_local_files(config: Config) -> frozenset[Path]:
     """Every file setforge WRITES but never deploys from a tracked source.
 
-    The :data:`HOST_LOCAL_FILES` floor (``local.yaml`` + the
+    The :func:`_host_local_floor` (``local.yaml`` + the
     ``additional-content.md`` stub, bootstrapped independently of any profile)
     UNIONED with every profile's ``bootstrap`` dst — each ``touch``ed by
     :func:`setforge.deploy.bootstrap_local` and recorded in the transition
@@ -259,7 +264,7 @@ def _host_local_files(config: Config) -> frozenset[Path]:
     bootstrap stub left by a retired sibling profile is excluded too. Reaping
     any of these via ``cleanup-orphans`` is data loss.
     """
-    paths = set(HOST_LOCAL_FILES)
+    paths = set(_host_local_floor())
     for profile in config.profiles.values():
         paths.update(_norm(p) for p in profile.bootstrap)
     return frozenset(paths)
@@ -275,14 +280,12 @@ def _own_state_roots() -> frozenset[Path]:
     or a tracked dst below ``~/.local/state/setforge``), so these are excluded
     at tree granularity: reaping one deletes live ownership or recovery state.
     """
-    from setforge.snapshots import snapshots_root  # imports this module
-
     return frozenset(
         _norm(root)
         for root in (
             state_root(),
             journals_root(),
-            Path("~/.cache/setforge"),
+            cache_root(),
             snapshots_root(),
         )
     )
@@ -584,7 +587,7 @@ def detect_orphans(
 def load_ignored_orphans() -> frozenset[str]:
     """Return the set of tracked_file IDs flagged "keep orphan".
 
-    Reads orphan_ignore from setforge.binaries.LOCAL_CONFIG_PATH. Returns an
+    Reads orphan_ignore from ``local.yaml``. Returns an
     empty frozenset when the file is absent, the key is missing, or the payload
     is not a list.
 
@@ -596,10 +599,11 @@ def load_ignored_orphans() -> frozenset[str]:
     refuse instead.
     """
     try:
-        data = local_config.load_local_yaml(LOCAL_CONFIG_PATH)
+        data = local_config.load_local_yaml(paths_mod.local_config_path())
     except (ConfigError, OSError, ValueError, RecursionError) as exc:
         sys.stderr.write(
-            f"warning: could not read orphan_ignore from {LOCAL_CONFIG_PATH} "
+            "warning: could not read orphan_ignore from "
+            f"{paths_mod.local_config_path()} "
             f"({exc}); continuing with an empty ignore list\n"
         )
         return frozenset()
@@ -824,7 +828,9 @@ def detect_profile_orphans(
             config, resolved, repo_root, profile=profile_name
         )
     )
-    project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
+    project_paths = load_local_codex_overlay(
+        paths_mod.local_config_path()
+    ).project_paths
     for other_profile in config.profiles:
         if other_profile == profile_name:
             continue

@@ -19,7 +19,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from setforge import operations
+from setforge import operations, paths
 from setforge import snapshots as snap_mod
 from setforge._redact import redact_argv
 from setforge.cli import (
@@ -93,13 +93,11 @@ def _emit_create_summary(meta: snap_mod.SnapshotMeta, *, console: Console) -> No
 
     Distinguishes the tracked_files.dst paths from the host-local
     ``local.yaml`` so the count line reads as the user expects
-    ("capturing N tracked_files.dst paths"). ``LOCAL_CONFIG_PATH`` is
-    read off ``snap_mod`` so tests' monkeypatch of the constant flows
-    through to the banner.
+    ("capturing N tracked_files.dst paths").
     """
     size_bytes = snap_mod.directory_size_bytes(meta.snapshot_id)
     root = snap_mod.snapshots_root() / meta.snapshot_id
-    local_yaml = snap_mod.LOCAL_CONFIG_PATH
+    local_yaml = paths.local_config_path()
     local_yaml_captured = local_yaml in meta.files
     tracked_count = len(meta.files) - (1 if local_yaml_captured else 0)
     console.print(f"=== creating snapshot {meta.label!r} ===")
@@ -298,8 +296,8 @@ def snapshot_restore(
     config_dirs = {
         resolved_config.resolve().parent,
         *(
-            (snap_mod.LOCAL_CONFIG_PATH.parent,)
-            if snap_mod.LOCAL_CONFIG_PATH in target.files
+            (paths.local_config_path().parent,)
+            if paths.local_config_path() in target.files
             else ()
         ),
     }

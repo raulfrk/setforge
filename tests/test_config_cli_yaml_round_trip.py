@@ -35,9 +35,6 @@ def seed_local_with_comments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "  # patch tracker (TBD)\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
     return local
 
 

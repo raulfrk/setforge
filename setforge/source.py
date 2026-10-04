@@ -42,7 +42,7 @@ from pydantic import (
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from setforge import git_ops
+from setforge import git_ops, paths
 from setforge.anchors import (
     Anchor,
     AnchorAfterHeading,
@@ -71,10 +71,6 @@ _STRICT = ConfigDict(extra="forbid")
 
 CLI_FLAG: Final[str] = "--source"
 ENV_VAR: Final[str] = "SETFORGE_SOURCE"
-LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
-DEFAULT_CLONE_ROOT: Final[Path] = (
-    Path.home() / ".local" / "share" / "setforge" / "sources"
-)
 CONFIG_FILENAME: Final[str] = "setforge.yaml"
 # Pre-rename filename, retained as a one-shot migration target for
 # validate_source_dir's friendly ConfigError. Mirrors the
@@ -118,7 +114,7 @@ class GitSource(BaseModel):
 
     Cloning + checkout is handled by :mod:`setforge.git_ops` (not yet
     implemented). This module only resolves the *expected on-disk location*:
-    ``clone_dest`` if set, otherwise ``DEFAULT_CLONE_ROOT / <name>``.
+    ``clone_dest`` if set, otherwise ``~/.local/share/setforge/sources/<name>``.
     """
 
     model_config = _STRICT
@@ -153,7 +149,7 @@ class GitSource(BaseModel):
         """Return the on-disk location where this source's clone lives."""
         if self.clone_dest is not None:
             return self.clone_dest.expanduser()
-        return DEFAULT_CLONE_ROOT / self.display_name
+        return paths.data_root() / "sources" / self.display_name
 
 
 Source = Annotated[PathSource | GitSource, Field(discriminator="kind")]
@@ -629,7 +625,7 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
 
 
 def load_local_tracked_file_overlays(
-    path: Path = LOCAL_CONFIG_PATH,
+    path: Path | None = None,
 ) -> dict[str, _LocalTrackedFileOverlay]:
     """Return the ``tracked_files:`` overlay block from ``local.yaml``.
 
@@ -638,12 +634,12 @@ def load_local_tracked_file_overlays(
     overlay applier) invoke this at profile-resolution time, never at
     import time, per the SPEC 8 anti-smell discipline.
     """
-    return _load_local_source_config(path).tracked_files
+    return _load_local_source_config(path or paths.local_config_path()).tracked_files
 
 
-def load_local_codex_overlay(path: Path = LOCAL_CONFIG_PATH) -> CodexLocalOverlay:
+def load_local_codex_overlay(path: Path | None = None) -> CodexLocalOverlay:
     """Return the strict host-local Codex overlay, empty on absence."""
-    return _load_local_source_config(path).codex
+    return _load_local_source_config(path or paths.local_config_path()).codex
 
 
 _MARKDOWN_SUFFIXES: Final[frozenset[str]] = frozenset({".md", ".markdown"})
@@ -751,7 +747,7 @@ def _validate_host_local_section(
 
 
 def load_local_host_local_sections(
-    path: Path = LOCAL_CONFIG_PATH,
+    path: Path | None = None,
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Return ``{tracked_file_id: {section_name: HostLocalSection}}``.
 
@@ -774,6 +770,8 @@ def load_local_host_local_sections(
     NewType so a type-checker flags any attempt to pass a tracked-side
     shared-section name in.
     """
+    if path is None:
+        path = paths.local_config_path()
     if not path.exists():
         return {}
     yaml = YAML(typ="safe")
@@ -819,7 +817,6 @@ def get_resolved_source() -> Source:
     return resolve_source(
         cli_path=_cli_source,
         env=os.environ,
-        local_config_path=LOCAL_CONFIG_PATH,
         cwd=Path.cwd(),
     )
 
@@ -828,7 +825,7 @@ def resolve_source(
     *,
     cli_path: Path | None,
     env: Mapping[str, str],
-    local_config_path: Path = LOCAL_CONFIG_PATH,
+    local_config_path: Path | None = None,
     cwd: Path | None = None,
 ) -> Source:
     """Walk the 4-layer precedence chain and return the resolved source.
@@ -851,7 +848,7 @@ def resolve_source(
     env_value = env.get(ENV_VAR)
     if env_value:
         return PathSource(path=Path(env_value))
-    local = _load_local_source_config(local_config_path)
+    local = _load_local_source_config(local_config_path or paths.local_config_path())
     if local.source is not None:
         return local.source
     cwd_resolved = cwd or Path.cwd()
@@ -998,9 +995,7 @@ def fetch_source(source: Source) -> str:
 __all__ = [
     "CLI_FLAG",
     "CONFIG_FILENAME",
-    "DEFAULT_CLONE_ROOT",
     "ENV_VAR",
-    "LOCAL_CONFIG_PATH",
     "Anchor",
     "AnchorAfterHeading",
     "AnchorAfterSection",

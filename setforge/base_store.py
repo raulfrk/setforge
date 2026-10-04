@@ -41,7 +41,7 @@ from pathlib import Path
 
 from setforge import atomicio, base_store_format
 from setforge.errors import BaseStoreError, BaseStoreIOError
-from setforge.transitions import state_root
+from setforge.paths import state_root
 
 
 def base_root() -> Path:

@@ -10,7 +10,7 @@ the 2.1 -> 3.0 migration.
 from pathlib import Path
 
 from setforge.errors import BaseStoreError
-from setforge.transitions import state_root
+from setforge.paths import state_root
 
 
 def scalar_base_root() -> Path:

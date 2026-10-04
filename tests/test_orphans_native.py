@@ -12,7 +12,7 @@ from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import compare as compare_mod
-from setforge import orphan_scan, source, transitions
+from setforge import orphan_scan, paths, transitions
 from setforge.cli import app
 from setforge.compare import _touched_paths_from_meta
 from setforge.config import Config, Profile, TrackedFile, load_config, resolve_profile
@@ -286,7 +286,7 @@ def test_compare_accepts_selected_local_codex_removal_absent_from_sibling(
     document = yaml.load(native_profile.read_text())
     document["profiles"]["files"] = {"tracked_files": ["retired"]}
     yaml.dump(document, native_profile)
-    source.LOCAL_CONFIG_PATH.write_text("codex:\n  config:\n    remove: [model]\n")
+    paths.local_config_path().write_text("codex:\n  config:\n    remove: [model]\n")
 
     compared = CliRunner().invoke(
         app,
@@ -316,7 +316,7 @@ def test_compare_protects_sibling_project_mcp_without_selected_codex(
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    source.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         f"codex:\n  project_paths:\n    app: {project}\n"
     )
     config = repo / "setforge.yaml"

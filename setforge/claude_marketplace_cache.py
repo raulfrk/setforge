@@ -5,8 +5,8 @@ to a usable ``cache_dir`` — clone-on-demand, refresh-by-source-shape,
 collision-handling. All git invocations honor the locked subprocess
 hygiene (list argv, ``check=True``, ``text=True``,
 ``capture_output=True``, explicit ``timeout=``). Cache directory
-layout is rooted at :data:`MARKETPLACE_CACHE_ROOT`; each marketplace
-mirrors into ``MARKETPLACE_CACHE_ROOT / <repo-basename>``.
+layout is rooted at :func:`marketplace_cache_root`; each marketplace
+mirrors into ``marketplace_cache_root() / <repo-basename>``.
 """
 
 from __future__ import annotations
@@ -41,13 +41,15 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 _TIMEOUT_S = 30
 _CLONE_TIMEOUT_S = 120
 
-#: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
-#: clones into ``MARKETPLACE_CACHE_ROOT / <repo-basename>`` (the segment
-#: after the final ``/`` of ``MarketplaceSource.repo``). Tests monkeypatch
-#: this module attribute to redirect into ``tmp_path``.
-MARKETPLACE_CACHE_ROOT: Final[Path] = (
-    Path(platformdirs.user_cache_dir("setforge")) / "marketplaces"
-)
+
+def marketplace_cache_root() -> Path:
+    """Default root for ``LOCAL_CLONE`` marketplace mirrors.
+
+    Each marketplace clones into ``marketplace_cache_root() / <repo-basename>``
+    (the segment after the final ``/`` of ``MarketplaceSource.repo``).
+    """
+    return Path(platformdirs.user_cache_dir("setforge")) / "marketplaces"
+
 
 #: Sidecar filename (under the cache root) recording ``owner/repo -> cache
 #: subdir`` aliases. Written by the ``BOTH`` collision outcome when a repo
@@ -60,10 +62,10 @@ MARKETPLACE_ALIAS_SIDECAR: Final[str] = ".aliases.json"
 
 __all__ = [
     "MARKETPLACE_ALIAS_SIDECAR",
-    "MARKETPLACE_CACHE_ROOT",
     "MarketplaceSourcePlan",
     "apply_marketplace_source_plan",
     "checkout_marketplace_at",
+    "marketplace_cache_root",
     "plan_marketplace_source",
     "read_cache_aliases",
     "resolve_marketplace_source",
@@ -594,7 +596,7 @@ def plan_marketplace_source(
     auto: bool = False,
 ) -> MarketplaceSourcePlan:
     """Select source/cache actions without mutating the marketplace cache."""
-    root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
+    root = cache_root if cache_root is not None else marketplace_cache_root()
     frozen_source = source.model_copy(deep=True)
     if mode is ClaudeInstallMode.REGULAR or source.source is MarketplaceSourceKind.PATH:
         return MarketplaceSourcePlan(
@@ -855,7 +857,7 @@ def sync_marketplace_cache(
     marketplaces in non-active profiles are left alone. Raises
     :class:`MarketplaceCacheMiss` on git failure for any marketplace.
     """
-    root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
+    root = cache_root if cache_root is not None else marketplace_cache_root()
     refreshed: list[str] = []
     # The marketplaces referenced by a profile are those needed by its
     # claude_plugins entries. Resolve plugin names -> marketplace names

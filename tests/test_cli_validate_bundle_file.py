@@ -18,9 +18,6 @@ def _sandbox_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(
-        "setforge.cli.validate._LOCAL_CONFIG_PATH", tmp_path / "local.yaml"
-    )
 
 
 def _repo_with_launcher(tmp_path: Path) -> Path:
@@ -82,7 +79,6 @@ def test_validate_all_keeps_inherited_bundle_overlays_isolated(
     )
     local = tmp_path / "local.yaml"
     local.write_text(f"tracked_files:\n  revdiff.launcher:\n    {override}\n")
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
     original = (cfg.read_bytes(), local.read_bytes())
     runner = CliRunner()
     for profile in ("base", "child"):

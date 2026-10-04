@@ -35,8 +35,7 @@ import typer
 from rich.console import Console
 
 from setforge import compare as compare_mod
-from setforge import local_config, operations, orphan_scan, transitions
-from setforge.binaries import LOCAL_CONFIG_PATH
+from setforge import local_config, operations, orphan_scan, paths, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -88,16 +87,16 @@ class ApplyChoice(StrEnum):
 
 
 def _append_ignored_orphan(ignore_id: str) -> None:
-    """Append ``ignore_id`` to ``orphan_ignore:`` in :data:`LOCAL_CONFIG_PATH`.
+    """Append ``ignore_id`` to ``orphan_ignore:`` in ``local.yaml``.
 
     Uses ruamel.yaml's round-trip loader so existing comments and key
     ordering survive. Creates the file (with parent dirs) when absent.
     Idempotent — re-adding an existing id is a no-op.
     """
-    LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
     original = (
-        LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
-        if LOCAL_CONFIG_PATH.exists()
+        paths.local_config_path().read_text(encoding="utf-8")
+        if paths.local_config_path().exists()
         else None
     )
     data = yaml_rt().load(original) if original is not None else None
@@ -110,7 +109,7 @@ def _append_ignored_orphan(ignore_id: str) -> None:
         return
     raw.append(ignore_id)
     data["orphan_ignore"] = raw
-    atomic_write_yaml(LOCAL_CONFIG_PATH, data)
+    atomic_write_yaml(paths.local_config_path(), data)
 
 
 def _print_skip_note(
@@ -548,17 +547,18 @@ def _require_readable_ignore_list() -> None:
     deleting with an empty list would re-arm every path the user protected.
     """
     try:
-        data = local_config.load_local_yaml(LOCAL_CONFIG_PATH)
+        data = local_config.load_local_yaml(paths.local_config_path())
     except ConfigError as exc:
         raise ConfigError(
-            f"refusing to delete orphans: {LOCAL_CONFIG_PATH} could not be read ({exc})"
+            f"refusing to delete orphans: {paths.local_config_path()} "
+            f"could not be read ({exc})"
         ) from exc
     raw = data.get("orphan_ignore")
     if raw is not None and not isinstance(raw, list):
         # Parseable but the wrong shape is the same hazard as unparseable: the
         # protection list would silently come back empty.
         raise ConfigError(
-            f"refusing to delete orphans: orphan_ignore in {LOCAL_CONFIG_PATH} "
+            f"refusing to delete orphans: orphan_ignore in {paths.local_config_path()} "
             "must be a list"
         )
 
@@ -710,7 +710,8 @@ def cleanup_orphans(
         )
         _append_ignored_orphan(ignore)
         console.print(
-            f"added [cyan]{ignore}[/cyan] to orphan_ignore in {LOCAL_CONFIG_PATH}"
+            f"added [cyan]{ignore}[/cyan] to orphan_ignore in "
+            f"{paths.local_config_path()}"
         )
         return
 

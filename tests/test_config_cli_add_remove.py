@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.errors import SetforgeError
+from tests.conftest import redirect_local_config_path
 
 
 @pytest.fixture
@@ -33,9 +34,6 @@ def seed_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "# comment-A\nbinaries:\n  code: /usr/bin/code\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
     return local
 
 
@@ -268,7 +266,7 @@ def test_remove_local_missing_yaml_exits_clean_without_creating(
     # so this test pins its no-op remove boundary directly.
     missing = tmp_path / "absent" / "local.yaml"
     assert not missing.exists()
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", missing)
+    redirect_local_config_path(monkeypatch, missing)
 
     result = runner.invoke(
         app, ["config", "remove", "--local", "binaries.code", "--yes"]

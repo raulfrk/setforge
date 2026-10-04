@@ -52,6 +52,7 @@ from pydantic import ValidationError
 from setforge import __version__, atomicio
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+from setforge.paths import state_root
 
 if TYPE_CHECKING:
     from setforge.ownership import OwnershipClaim
@@ -142,21 +143,7 @@ class OwnershipTransferDelta:
 MIGRATE_TRANSITION_PROFILE: Final[str] = "migrate"
 
 
-_STATE_ENV = "SETFORGE_STATE_DIR"
-_DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "setforge")
 _STALE_PENDING_AGE = timedelta(hours=24)
-
-
-def state_root() -> Path:
-    """Resolve the setforge state dir.
-
-    Honors the ``SETFORGE_STATE_DIR`` env var (used by tests and by
-    operators relocating state). Falls back to ``~/.local/state/setforge``.
-    """
-    override = os.environ.get(_STATE_ENV)
-    if override:
-        return Path(override)
-    return Path.home().joinpath(*_DEFAULT_STATE_ROOT_SUFFIX)
 
 
 def transitions_root() -> Path:
@@ -1057,9 +1044,7 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
 
     Delegates to each surviving store module's public path accessor so its
     traversal guard (relative key, no ``..``, stays inside the profile
-    subtree) and suffix convention live in one place; the store modules
-    import :func:`state_root` from here, so those imports are deferred to
-    call time to keep the module graph acyclic. The ``SPANS`` store is the
+    subtree) and suffix convention live in one place. The ``SPANS`` store is the
     retired legacy sidecar, kept only so pre-existing ``store="spans"``
     transitions still restore byte-exact — its guarded manifest path is
     computed by :func:`_spans_manifest_path` (which keeps the retired

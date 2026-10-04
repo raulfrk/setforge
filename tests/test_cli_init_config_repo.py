@@ -27,6 +27,7 @@ from setforge.cli._config_repo import (
 )
 from setforge.cli._init_helpers import host_local_dir_path
 from setforge.migrations import current_expected_schema_version
+from tests.conftest import redirect_local_config_path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -35,17 +36,10 @@ from setforge.migrations import current_expected_schema_version
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Re-point ``$HOME`` and every module-bound LOCAL_CONFIG_PATH at tmp."""
+    """Re-point ``$HOME`` and ``local.yaml`` at tmp."""
     monkeypatch.setenv("HOME", str(tmp_path))
     local_yaml = tmp_path / ".config" / "setforge" / "local.yaml"
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli._init_helpers.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli.init.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli._config_repo.LOCAL_CONFIG_PATH", local_yaml)
-    # `compare` / `validate` resolve the source via the source module's
-    # own LOCAL_CONFIG_PATH global; patch it so the wired source: block is
-    # read from the test's local.yaml rather than the real $HOME one.
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_yaml)
+    redirect_local_config_path(monkeypatch, local_yaml)
     return tmp_path
 
 

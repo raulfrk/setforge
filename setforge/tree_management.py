@@ -19,8 +19,8 @@ import pathspec
 from setforge import atomicio
 from setforge.config import TreeOrphanPolicy, TreePolicy, TreeSymlinkPolicy
 from setforge.errors import InvariantViolation, SetforgeError
+from setforge.paths import state_root
 from setforge.reconcile.types import file_id
-from setforge.transitions import state_root
 
 _SCHEMA = "1.0"
 _DIR_MODE = 0o700

@@ -23,9 +23,8 @@ from setforge.errors import SetforgeError
 
 
 @pytest.fixture(autouse=True)
-def _reset_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Redirect binaries' LOCAL_CONFIG_PATH + clear CLI/env state per test."""
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", tmp_path / "local.yaml")
+def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear CLI/env state per test."""
     binaries._cli_overrides.clear()
     for name in binaries.SUPPORTED_BINARIES:
         monkeypatch.delenv(

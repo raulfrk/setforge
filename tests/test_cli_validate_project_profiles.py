@@ -163,7 +163,6 @@ def test_validate_does_not_expose_synthetic_codex_ids_to_overlays(
         "tracked_files:\n  codex.instruction.base:\n    mode: 0o600\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("setforge.cli.validate._LOCAL_CONFIG_PATH", local)
     config = tmp_path / "setforge.yaml"
     config.write_text(
         "schema_version: '6.5'\n"

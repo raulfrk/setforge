@@ -29,7 +29,7 @@ from setforge.ownership import (
     ownership_claim_from_json,
     ownership_claim_to_json,
 )
-from setforge.transitions import state_root
+from setforge.paths import state_root
 
 __all__ = [
     "OwnershipHistoryStore",

@@ -666,7 +666,6 @@ def test_cli_upgrade_skips_migrate_check_when_host_config_is_broken(
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     broken = tmp_path / "local.yaml"
     broken.write_text("source: {kind: bogus}\n", encoding="utf-8")
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", broken)
     monkeypatch.chdir(tmp_path)
     responses = [
         subprocess.CompletedProcess(

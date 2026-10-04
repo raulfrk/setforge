@@ -22,7 +22,8 @@ from typing import Any, assert_never
 import typer
 from rich.console import Console
 
-from setforge.binaries import _STUB_TEMPLATE, LOCAL_CONFIG_PATH
+from setforge import paths
+from setforge.binaries import _STUB_TEMPLATE
 from setforge.cli import app
 from setforge.cli._config_repo import (
     ConfigRepoScaffoldError,
@@ -368,12 +369,13 @@ def _backup_existing(*, console: Console) -> Path | None:
     note). Restore is a copy operation the user runs by hand; we do
     not currently ship ``init --restore-backup``.
     """
-    if not LOCAL_CONFIG_PATH.exists():
+    local_yaml = paths.local_config_path()
+    if not local_yaml.exists():
         return None
     suffix = backup_suffix_now()
-    backup = LOCAL_CONFIG_PATH.with_name(f"{LOCAL_CONFIG_PATH.name}.bak.{suffix}")
-    shutil.copy2(LOCAL_CONFIG_PATH, backup)
-    console.print(f"  backed up {LOCAL_CONFIG_PATH.name} → {backup.name}")
+    backup = local_yaml.with_name(f"{local_yaml.name}.bak.{suffix}")
+    shutil.copy2(local_yaml, backup)
+    console.print(f"  backed up {local_yaml.name} → {backup.name}")
     return backup
 
 
@@ -427,18 +429,19 @@ def _wire_source_block(target_dir: Path, *, console: Console) -> bool:
     ``/tmp``, to avoid a cross-device rename), then atomically renamed over
     the target.
     """
-    if local_yaml_has_source(LOCAL_CONFIG_PATH):
+    local_yaml = paths.local_config_path()
+    if local_yaml_has_source(local_yaml):
         console.print("  source: block already present — left unchanged")
         return False
     spec = SourceSpec(choice=SourceChoice.PATH, path=target_dir)
-    existing = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    existing = local_yaml.read_text(encoding="utf-8")
     new_content = existing + _build_source_block(spec)
-    mode = LOCAL_CONFIG_PATH.stat().st_mode
-    tmp = LOCAL_CONFIG_PATH.with_name(f"{LOCAL_CONFIG_PATH.name}.tmp")
+    mode = local_yaml.stat().st_mode
+    tmp = local_yaml.with_name(f"{local_yaml.name}.tmp")
     try:
         tmp.write_text(new_content, encoding="utf-8")
         tmp.chmod(mode)
-        tmp.replace(LOCAL_CONFIG_PATH)
+        tmp.replace(local_yaml)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -546,10 +549,10 @@ def _local_yaml_is_pristine_stub() -> bool:
     Returns True when the file is absent (nothing to clobber); False when it
     holds customized content that an overwrite would destroy.
     """
-    if not LOCAL_CONFIG_PATH.exists():
+    if not paths.local_config_path().exists():
         return True
     try:
-        text = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+        text = paths.local_config_path().read_text(encoding="utf-8")
     except OSError:
         # Unreadable file: treat as customized so we err on the safe side
         # (back it up rather than silently discard).
@@ -588,7 +591,7 @@ def _apply_bootstrap(
     _mkdir_with_retry(host_local_dir_path())
     if not force and not _local_yaml_is_pristine_stub():
         _backup_existing(console=console)
-    LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         _STUB_TEMPLATE + _build_source_block(source_spec), encoding="utf-8"
     )
     created = [d.path for d in probe.dirs if d.will_create]
@@ -623,7 +626,9 @@ def _print_completion_report(
         "  to undo: rm -rf ~/.config/setforge ~/.local/share/setforge/host-local"
     )
     if backup_path is not None:
-        console.print(f"  to restore from backup: cp {backup_path} {LOCAL_CONFIG_PATH}")
+        console.print(
+            f"  to restore from backup: cp {backup_path} {paths.local_config_path()}"
+        )
 
 
 def _print_idempotent_reinit_report(probe: EnvProbe, *, console: Console) -> None:
@@ -776,7 +781,7 @@ def init(
             param_hint="--path-source",
         )
 
-    with mutation_locks(config_dir=LOCAL_CONFIG_PATH.parent):
+    with mutation_locks(config_dir=paths.local_config_path().parent):
         _run_init_mutation(
             force=force,
             no_prompt=no_prompt,
@@ -810,9 +815,10 @@ def _run_init_mutation(
     if is_initialized(probe) and not force:
         if path_source is not None or git_source is not None:
             console.print(
-                f"error: {LOCAL_CONFIG_PATH} already exists, so --path-source / "
-                "--git-source were not applied. Edit its `source:` block, or "
-                "re-run with --force to replace it (a backup is kept)."
+                f"error: {paths.local_config_path()} already exists, so "
+                "--path-source / --git-source were not applied. Edit its "
+                "`source:` block, or re-run with --force to replace it "
+                "(a backup is kept)."
             )
             sys.exit(1)
         _print_idempotent_reinit_report(probe, console=console)

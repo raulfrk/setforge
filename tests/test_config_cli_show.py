@@ -13,6 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from tests.conftest import redirect_local_config_path
 
 
 @pytest.fixture
@@ -32,10 +33,7 @@ def seed_local_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "# host-local overlays\nsource:\n  kind: path\n  path: /opt/cfg\n",
         encoding="utf-8",
     )
-    # Re-redirect both LOCAL_CONFIG_PATH constants to this seeded file.
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local_path)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_path)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local_path)
+    redirect_local_config_path(monkeypatch, local_path)
     return local_path
 
 

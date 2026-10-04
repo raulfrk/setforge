@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 from setforge.binaries import _STUB_TEMPLATE
 from setforge.cli import app
 from setforge.cli._init_helpers import host_local_dir_path
+from tests.conftest import redirect_local_config_path
 
 # A customized local.yaml: carries user content (a source: block + a custom
 # top-level key) but NOT an active binaries: override — an override pointing at
@@ -38,14 +39,10 @@ _CUSTOM_LOCAL_YAML = (
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Re-point ``$HOME`` and every module-bound LOCAL_CONFIG_PATH at tmp."""
+    """Re-point ``$HOME`` and ``local.yaml`` at tmp."""
     monkeypatch.setenv("HOME", str(tmp_path))
     local_yaml = tmp_path / ".config" / "setforge" / "local.yaml"
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli._init_helpers.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli.init.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.cli._config_repo.LOCAL_CONFIG_PATH", local_yaml)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_yaml)
+    redirect_local_config_path(monkeypatch, local_yaml)
     return tmp_path
 
 

@@ -131,7 +131,6 @@ def test_command_families_share_host_local_destination(
 ) -> None:
     """Install, inspect, status, stage, and snapshot see the same live path."""
     from setforge import snapshots
-    from setforge.cli import status as status_cli
 
     env = integration_env(tracked={"note": ("text/note.txt", "hello\n")})
     alternate = env.home / "host-local" / "note.txt"
@@ -141,8 +140,6 @@ def test_command_families_share_host_local_destination(
         encoding="utf-8",
     )
     monkeypatch.setenv("SETFORGE_SOURCE", str(env.repo))
-    monkeypatch.setattr(snapshots, "LOCAL_CONFIG_PATH", env.local_config)
-    monkeypatch.setattr(status_cli, "LOCAL_CONFIG_PATH", env.local_config)
 
     install = env.run_verb(["install", "--yes", "--no-git-check", "--no-secrets-scan"])
     assert install.exit_code == 0, install.output

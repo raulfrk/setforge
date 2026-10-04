@@ -37,7 +37,8 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
-from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
+from setforge import paths
+from setforge.binaries import ensure_local_config_stub
 from setforge.cli import (
     _require_output_condition,
     _require_output_path,
@@ -210,7 +211,7 @@ def _tracked_yaml_path() -> Path:
 def _scope_yaml_path(scope: ConfigScope) -> Path:
     """Return the on-disk YAML file for ``scope`` (local | tracked)."""
     if scope is ConfigScope.LOCAL:
-        return LOCAL_CONFIG_PATH
+        return paths.local_config_path()
     if scope is ConfigScope.TRACKED:
         return _tracked_yaml_path()
     raise SetforgeError(f"_scope_yaml_path: unexpected scope {scope!r}")

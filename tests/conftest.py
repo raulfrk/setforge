@@ -1,17 +1,15 @@
 """Shared pytest fixtures for the setforge test suite.
 
-Two autouse fixtures here form a defense-in-depth around the
-``~/.config/setforge/local.yaml`` stub-creation race that surfaces
-when CliRunner tests share ``$HOME``:
+Every setforge-owned path (``local.yaml``, the state, cache, data and
+snapshot roots) is resolved at call time from ``$HOME`` by
+:mod:`setforge.paths`, so one autouse fixture keeps every test off the
+developer's real home:
 
-- :func:`_isolated_local_config` redirects the ``LOCAL_CONFIG_PATH``
-  module constants and their import-site bindings to a per-test
-  ``tmp_path`` directory.
-- :func:`_isolate_home` monkeypatches ``$HOME`` and ``pathlib.Path.home``
-  to a per-test tmp directory. Catches any production code path that
-  resolves ``Path.home()`` lazily (completion, snapshots, transitions,
-  migrations) — without this, parallel workers would still race on the
-  dev-host home for those code paths.
+- :func:`_isolate_home` points ``$HOME`` and ``pathlib.Path.home`` at a
+  per-test tmp directory and clears the environment variables that would
+  relocate a root somewhere else.
+- :func:`_isolated_local_config` then places ``local.yaml`` directly in the
+  test's ``tmp_path``, where most tests write it.
 
 The :class:`FakeClaude` / :class:`FakeGit` fakes and their
 ``fake_claude`` / ``fake_git`` fixtures live here (rather than in a
@@ -27,18 +25,16 @@ import os
 import resource
 import shutil
 import subprocess
-import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from hypothesis import settings
 
-import setforge.cli  # noqa: F401  (import every module that binds LOCAL_CONFIG_PATH)
-from setforge import binaries as _binaries_mod
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge import claude_plugins as _cp
+from setforge import paths as _paths
 from setforge.config import (
     Config,
     Package,
@@ -61,61 +57,64 @@ if hypothesis_profile := os.environ.get("HYPOTHESIS_PROFILE"):
     settings.load_profile(hypothesis_profile)
 
 
-_LOCAL_CONFIG_ATTRS = ("LOCAL_CONFIG_PATH", "_LOCAL_CONFIG_PATH")
-_REAL_LOCAL_CONFIG_PATH = _binaries_mod.LOCAL_CONFIG_PATH
+# Captured at import, before any fixture redirects ``$HOME``.
+REAL_HOME = Path.home()
+REAL_LOCAL_CONFIG_PATH = _paths.local_config_path()
+_real_local_config_path = _paths.local_config_path
+
+# Variables that relocate a setforge-touched root. A value inherited from the
+# developer's shell would point a test at real state, so each test starts
+# without them and sets its own.
+_ROOT_ENV_VARS = (
+    "SETFORGE_STATE_DIR",
+    "SETFORGE_SOURCE",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+)
 
 
 def redirect_local_config_path(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
-    """Point every module-level ``LOCAL_CONFIG_PATH`` binding at ``target``.
+    """Make :func:`setforge.paths.local_config_path` return ``target``.
 
-    Walks every imported ``setforge`` module so a new ``from ... import
-    LOCAL_CONFIG_PATH`` is covered without editing this list. Default
-    arguments captured at import time are not reachable this way.
+    Every module reads the path through ``paths.local_config_path()`` at call
+    time, so this one patch reaches all of them.
     """
-    for name, module in list(sys.modules.items()):
-        if module is None or not (name == "setforge" or name.startswith("setforge.")):
-            continue
-        for attr in _LOCAL_CONFIG_ATTRS:
-            if hasattr(module, attr):
-                monkeypatch.setattr(module, attr, target)
+    monkeypatch.setattr(_paths, "local_config_path", lambda: target)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_local_config(
+    _isolate_home: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Redirect ``LOCAL_CONFIG_PATH`` constants to a tmp path for every test.
+    """Place ``local.yaml`` in the test's ``tmp_path`` for every test.
 
-    ``binaries`` and ``source`` carry the source constants, while modules
-    that imported those constants keep their own bindings. All reachable
-    bindings must be redirected so none leaks to
-    ``~/.config/setforge/local.yaml`` on the dev host. Also resets
-    ``source._cli_source`` to None so a test that sets it directly via
-    ``set_cli_source`` (without going through a ``CliRunner`` callback)
-    doesn't leak the value to later tests.
+    Isolation does not depend on this fixture: without it the path resolves
+    under the redirected home. Also resets ``source._cli_source`` to None so a
+    test that sets it directly via ``set_cli_source`` (without going through a
+    ``CliRunner`` callback) doesn't leak the value to later tests.
     """
+    del _isolate_home
     redirect_local_config_path(monkeypatch, tmp_path / "local.yaml")
     monkeypatch.setattr("setforge.source._cli_source", None)
 
 
 @pytest.fixture(autouse=True)
 def _isolate_home(
-    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
-) -> Path | None:
+) -> Path:
     """Redirect ``$HOME`` + ``Path.home()`` to a per-test tmp directory.
 
-    Belt-and-suspenders against production code that resolves ``Path.home()``
-    lazily (completion, snapshots, transitions, migrations). The
-    :func:`_isolated_local_config` fixture redirects imported
-    ``LOCAL_CONFIG_PATH`` constants; monkeypatching at the ``Path.home`` level
-    catches every other reachable site and keeps parallel workers isolated.
-
-    Skip on tests carrying the ``no_home_isolation`` marker — used by
-    tests that legitimately need the live ``$HOME``. The marker is a
-    forward escape hatch; no test ships with it today.
+    Every setforge root is derived from the home at call time
+    (:mod:`setforge.paths`), so this is what keeps a test off the developer's
+    real ``~/.config/setforge``, ``~/.local/state/setforge`` and
+    ``~/.cache/setforge``; ``tests/test_local_config_isolation.py`` checks it.
 
     The home dir lives under a per-test ``tmp_path_factory.mktemp``
     directory, NOT under the test's ``tmp_path``. This matters because
@@ -131,10 +130,10 @@ def _isolate_home(
     via parameter and inspect the contents of the sandboxed
     ``~/.config/setforge/`` directly.
     """
-    if request.node.get_closest_marker("no_home_isolation") is not None:
-        return None
     home = tmp_path_factory.mktemp("_autoisolated_home")
     monkeypatch.setenv("HOME", str(home))
+    for name in _ROOT_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
     # ``Path.home`` is monkeypatched to read ``$HOME`` dynamically so a
     # downstream fixture that does ``monkeypatch.setenv("HOME", ...)``
     # still propagates to ``Path.home()`` calls. A captured-value lambda
@@ -207,28 +206,6 @@ def _suppress_fresh_host_welcome(
 
     monkeypatch.setattr("setforge.cli._welcome.is_fresh_host", _force_non_fresh)
     monkeypatch.setattr("setforge.cli.install.is_fresh_host", _force_non_fresh)
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: Sequence[pytest.Item],
-) -> None:
-    """Register custom markers for ``--strict-markers``.
-
-    Registration via ``config.addinivalue_line`` keeps
-    ``pytest --strict-markers`` happy without forcing every test author
-    to remember the marker name in pyproject.toml. The collection hook
-    fires once per session, so the registration cost is negligible.
-
-    The ``fresh_host`` marker is registered in ``pyproject.toml`` —
-    keeping a single registration site avoids drift between the two
-    descriptions.
-    """
-    del items  # collection hook accepts items; we don't filter here.
-    config.addinivalue_line(
-        "markers",
-        "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
-    )
 
 
 _MUTANT_MEMORY_HEADROOM = 1 << 30
@@ -693,7 +670,7 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
         fake = FakeGit(known_repos=known_repos, unknown_shas=unknown_shas)
         fake._real_run = subprocess.run
         cache_root = tmp_path / "marketplaces"
-        monkeypatch.setattr(_mp_cache, "MARKETPLACE_CACHE_ROOT", cache_root)
+        monkeypatch.setattr(_mp_cache, "marketplace_cache_root", lambda: cache_root)
         monkeypatch.setattr(
             "setforge.claude_marketplace_cache.shutil.which",
             lambda name: "/usr/bin/git" if name == "git" else None,
@@ -717,21 +694,17 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
 
 
 def _local_clone_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting LOCAL_CLONE."""
-    from setforge import binaries as bin_mod
-
+    """Point ``local.yaml`` at a file selecting LOCAL_CLONE."""
     local_path = tmp_path / "local.yaml"
     local_path.write_text("claude:\n  install_mode: local-clone\n")
-    monkeypatch.setattr(bin_mod, "LOCAL_CONFIG_PATH", local_path)
+    redirect_local_config_path(monkeypatch, local_path)
 
 
 def _regular_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting REGULAR."""
-    from setforge import binaries as bin_mod
-
+    """Point ``local.yaml`` at a file selecting REGULAR."""
     local_path = tmp_path / "local.yaml"
     local_path.write_text("claude:\n  install_mode: regular\n")
-    monkeypatch.setattr(bin_mod, "LOCAL_CONFIG_PATH", local_path)
+    redirect_local_config_path(monkeypatch, local_path)
 
 
 # ---------------------------------------------------------------------------

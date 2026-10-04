@@ -28,7 +28,7 @@ from setforge.errors import (
     OwnershipError,
 )
 from setforge.locking import config_identity_lock, require_resources_lock
-from setforge.transitions import state_root
+from setforge.paths import state_root
 
 __all__ = [
     "Authority",

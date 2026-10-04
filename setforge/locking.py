@@ -32,7 +32,7 @@ from enum import IntEnum
 from pathlib import Path
 
 from setforge.errors import SetforgeError
-from setforge.transitions import state_root
+from setforge.paths import cache_root, state_root
 
 _POLL_INTERVAL: float = 0.05  # seconds between LOCK_NB retries
 
@@ -73,7 +73,7 @@ def _ranked(rank: LockRank, key: str) -> Iterator[None]:
 
 def _user_global_locks_dir() -> Path:
     """Return the lock namespace shared by one user's external resources."""
-    return Path("~/.cache/setforge/locks").expanduser()
+    return cache_root() / "locks"
 
 
 def require_resources_lock() -> None:

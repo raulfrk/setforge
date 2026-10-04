@@ -8,10 +8,11 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from setforge import codex_lifecycle, operations, snapshots, transitions
+from setforge import codex_lifecycle, operations, paths
 from setforge import compare as compare_mod
 from setforge.config import Config, resolve_effective_profile
 from setforge.errors import SetforgeError
+from setforge.paths import journals_root, snapshots_root, state_root
 
 
 class ScanEntryKind(StrEnum):
@@ -173,10 +174,10 @@ def _managed_inventory(
         for path in (
             repo_root,
             config_path,
-            compare_mod.LOCAL_CONFIG_PATH,
-            transitions.state_root(),
-            operations.journals_root(),
-            snapshots.snapshots_root(),
+            paths.local_config_path(),
+            state_root(),
+            journals_root(),
+            snapshots_root(),
         )
     )
     bounded_roots = tuple(
@@ -418,9 +419,9 @@ def capture_parent_path_guards(
 def _state_trees() -> frozenset[Path]:
     """Return SetForge's state roots, lexical and resolved."""
     roots = (
-        transitions.state_root(),
-        operations.journals_root(),
-        snapshots.snapshots_root(),
+        state_root(),
+        journals_root(),
+        snapshots_root(),
     )
     return frozenset(
         tree for root in roots for tree in (_norm(root), root.expanduser().resolve())

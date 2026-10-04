@@ -30,6 +30,7 @@ from setforge.git_visibility import (
     read_claims,
 )
 from setforge.locking import mutation_locks
+from setforge.paths import state_root
 from setforge.project_injection import (
     _MANIFEST_SCHEMA,
     ProjectFileAction,
@@ -50,7 +51,6 @@ from setforge.project_sync import (
     StoredProjectFile,
     _stored_files,
 )
-from setforge.transitions import state_root
 
 
 class ProjectFileVisibility(StrEnum):

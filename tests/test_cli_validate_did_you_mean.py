@@ -254,11 +254,9 @@ def _write_minimal_config(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def local_yaml_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point setforge's LOCAL_CONFIG_PATH at a per-test path."""
-    local = tmp_path / "local.yaml"
-    monkeypatch.setattr("setforge.cli.validate._LOCAL_CONFIG_PATH", local)
-    return local
+def local_yaml_at(tmp_path: Path) -> Path:
+    """The per-test ``local.yaml`` the autouse conftest fixture points at."""
+    return tmp_path / "local.yaml"
 
 
 def test_validate_local_yaml_absent_exits_zero(

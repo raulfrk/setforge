@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from setforge import binaries
+from setforge import paths
 from setforge.cli import cleanup as cleanup_mod
 from setforge.cli import orphans as orphans_mod
 from setforge.migrations import _yaml_ops
@@ -37,7 +37,7 @@ def _write_orphans(path: Path) -> None:
 def test_local_yaml_writer_uses_atomic_primitive(
     module: object, writer: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = binaries.LOCAL_CONFIG_PATH
+    path = paths.local_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_ORIGINAL, encoding="utf-8")
     calls: list[Path] = []
@@ -59,7 +59,7 @@ def test_local_yaml_writer_uses_atomic_primitive(
 
 
 def test_orphans_writer_creates_missing_file(tmp_path: Path) -> None:
-    path = binaries.LOCAL_CONFIG_PATH
+    path = paths.local_config_path()
     assert not path.exists()
     orphans_mod._append_ignored_orphan("tool")
     assert "orphan_ignore" in path.read_text(encoding="utf-8")

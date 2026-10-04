@@ -48,14 +48,14 @@ from pathlib import Path
 from typing import Final
 from uuid import UUID
 
-from setforge import atomicio, operations, transitions
-from setforge.binaries import LOCAL_CONFIG_PATH
+from setforge import atomicio, operations, paths, transitions
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, resolve_symlink_target
 from setforge.errors import SetforgeError
 from setforge.file_ownership import active_file_claims, refuse_active_file_claims
 from setforge.locking import mutation_locks
 from setforge.ownership import read_owner_id_locked, resolve_owner_common_dir
+from setforge.paths import snapshots_root
 from setforge.transitions import now_utc
 from setforge.tree_management import TreeEntryKind, scan_tree
 
@@ -233,11 +233,6 @@ def restore_locks(
         yield owner_id
 
 
-def snapshots_root() -> Path:
-    """Return the XDG-data root where snapshots live."""
-    return Path.home() / ".local" / "share" / "setforge" / "snapshots"
-
-
 def _snapshot_id(label: str, *, timestamp: datetime | None = None) -> str:
     """Build the ``<YYYYMMDDTHHMMSSZ>-<label>`` snapshot id."""
     if (
@@ -304,8 +299,8 @@ def _resolve_dst_paths(
         if destination not in seen:
             seen.add(destination)
             dst_paths.append(destination)
-    if LOCAL_CONFIG_PATH not in seen:
-        dst_paths.append(LOCAL_CONFIG_PATH)
+    if paths.local_config_path() not in seen:
+        dst_paths.append(paths.local_config_path())
     return dst_paths
 
 

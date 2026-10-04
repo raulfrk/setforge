@@ -67,7 +67,7 @@ _TO_VERSION = "2.0"
 
 # local.yaml lives under ~/.config/setforge/ — derived from roots.home so the
 # migration touches the same path the source layer reads (mirrors
-# setforge.source.LOCAL_CONFIG_PATH but rooted on MigrationRoots.home).
+# setforge.paths.local_config_path but rooted on MigrationRoots.home).
 _LOCAL_YAML_RELPATH = (".config", "setforge", "local.yaml")
 
 
