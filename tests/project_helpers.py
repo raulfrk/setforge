@@ -67,6 +67,8 @@ def candidate_filter_entrypoint(
     entrypoint.write_text(
         f"#!{sys.executable}\n"
         "import os\n"
+        "if os.environ.get('MUTANT_UNDER_TEST') == 'stats':\n"
+        "    os.environ['MUTANT_UNDER_TEST'] = ''\n"
         "_original_cwd = os.getcwd()\n"
         "try:\n"
         f"    os.chdir({str(Path(__file__).parents[1])!r})\n"

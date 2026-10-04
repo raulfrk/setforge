@@ -95,6 +95,9 @@ CORE_FILES: tuple[str, ...] = (
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
     "setforge/project_sync.py",
+    "setforge/project_record.py",
+    "setforge/reconcile_apply.py",
+    "setforge/reconcile/merge.py",
 )
 
 ALLOWLIST_PATH = REPO_ROOT / "tests" / "mutmut_allowlist.txt"

@@ -191,6 +191,9 @@ only_mutate = [
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
     "setforge/project_sync.py",
+    "setforge/project_record.py",
+    "setforge/reconcile_apply.py",
+    "setforge/reconcile/merge.py",
 ]
 # Scope the tests mutmut runs to the focused per-module unit suites for the
 # core PLUS the two hermetic integration suites that drive the core through
@@ -226,6 +229,10 @@ pytest_add_cli_args_test_selection = [
     "tests/test_project_sync_recovery.py",
     "tests/test_project_sync_membership.py",
     "tests/test_project_visibility.py",
+    "tests/test_project_injection.py",
+    "tests/test_reconcile_apply.py",
+    "tests/reconcile/test_merge.py",
+    "tests/reconcile/test_merge_properties.py",
     "tests/integration/test_verbs.py",
     "tests/integration/test_smoke.py",
 ]
