@@ -1,0 +1,49 @@
+name: Nightly watch
+
+# Reads the verdict the home CI coordinator publishes for the nightly run and
+# opens (or updates) one issue when it is not green. Runs long after the
+# nightly's 12 hour wait limit, and never waits on the nightly itself.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  statuses: read
+  issues: write
+
+jobs:
+  check:
+    name: Nightly verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Report a red or missing verdict
+        run: |
+          set -euo pipefail
+          sha=$(gh run list --repo "$REPO" --workflow nightly.yml --event schedule \
+            --limit 1 --json headSha --jq '.[0].headSha // empty')
+          if [ -z "$sha" ]; then
+            echo "No scheduled nightly run found; nothing to check."
+            exit 0
+          fi
+          state=$(gh api "repos/$REPO/commits/$sha/status" \
+            --jq '[.statuses[] | select(.context == "home-ci/full")][0].state // "missing"')
+          echo "home-ci/full on $sha: $state"
+          if [ "$state" = "success" ]; then
+            exit 0
+          fi
+          title="Nightly full run is not green"
+          body="home-ci/full on ${sha} is: ${state}. Run: ${GITHUB_SERVER_URL}/${REPO}/actions/workflows/nightly.yml"
+          number=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi
+          exit 1
