@@ -10,7 +10,7 @@ one profile (``--profile=NAME``) or every profile (``--all``).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import typer
@@ -763,110 +763,88 @@ def _validation_error_to_context(
     data: Mapping[str, object],
     err: Mapping[str, object],
 ) -> ValidationErrorWithContext:
-    """Convert one ``Pydantic ValidationError`` entry to a context carrier.
+    """Convert one ``Pydantic ValidationError`` entry of ``local.yaml``.
 
-    Walks the error's ``loc`` tuple against ``data``'s ``.lc`` table to
-    map the field path to a source line/column — including nested
-    overlay-class errors (``len(loc) > 1``) via the error-line-walker. Builds
-    a 1-3-line snippet from ``raw_text`` around the offending line.
     When the error is an ``extra_forbidden`` shape, the offending key
     itself is the ``field_value`` and we consult the close-match
     suggester against the overlay-class-specific candidate list
     dispatched by :func:`_candidate_list_for`.
     """
-    loc = err.get("loc", ())
-    err_type = err.get("type", "")
-    msg = err.get("msg", "")
-    raw_lines = raw_text.splitlines()
-
-    line_1, col_1, field_value, suggestion = _resolve_error_position(
-        data, loc, err_type, msg
+    return _error_to_context(
+        local_yaml_path,
+        raw_text.splitlines(),
+        data,
+        err,
+        _candidate_list_for,
+        setforge_yaml=False,
     )
 
-    # Snippet: the offending line plus up to 1 line of surrounding
-    # context for the schema-error UX (mockup D shows 2-3 lines of
-    # context for nested keys; for top-level keys 1 line is enough).
-    snippet_lines = _build_snippet(raw_lines, line_1)
-    fix_hint = _build_fix_hint(local_yaml_path, line_1, err_type, field_value, msg)
+
+def _error_to_context(
+    path: Path,
+    raw_lines: list[str],
+    data: Mapping[str, object],
+    err: Mapping[str, object],
+    candidates_for: Callable[[tuple[object, ...]], list[str]],
+    *,
+    setforge_yaml: bool,
+) -> ValidationErrorWithContext:
+    """Convert one Pydantic error entry to a did-you-mean carrier.
+
+    Walks the error's ``loc`` against ``data``'s nested ``.lc`` tables to
+    map the field path to a source line/column, builds a 1-3-line snippet
+    from ``raw_lines``, and takes close-match candidates from
+    ``candidates_for``. ``setforge_yaml`` adds the ``setforge.yaml``-only
+    handling: a missing field points at its parent and is named in the
+    message, and an unquoted ``schema_version`` gets a quoting hint.
+    """
+    loc_raw = err.get("loc", ())
+    loc = loc_raw if isinstance(loc_raw, tuple) else ()
+    err_type = err.get("type", "")
+    msg = err.get("msg", "")
+    line_1, col_1, field_value, suggestion = _resolve_error_position(
+        data, loc, err_type, msg, candidates_for, missing_at_parent=setforge_yaml
+    )
+    if setforge_yaml:
+        if err_type == "missing" and loc:
+            msg = f"{msg}: {'.'.join(str(step) for step in loc)}"
+        elif err_type == "string_type" and loc and loc[-1] == "schema_version":
+            msg = f'{msg} (write it as a quoted string, e.g. schema_version: "1.0")'
     return ValidationErrorWithContext(
-        file_path=local_yaml_path,
+        file_path=path,
         line=line_1,
         column=col_1,
-        snippet_lines=snippet_lines,
+        snippet_lines=_build_snippet(raw_lines, line_1),
         field_value=field_value,
-        fix_hint=fix_hint,
+        fix_hint=_build_fix_hint(path, line_1, err_type, field_value, msg),
         suggestion=suggestion,
     )
 
 
 def _resolve_error_position(
     data: Mapping[str, object],
-    loc: tuple[object, ...] | object,
+    loc: tuple[object, ...],
     err_type: object,
     msg: object,
+    candidates_for: Callable[[tuple[object, ...]], list[str]],
+    *,
+    missing_at_parent: bool,
 ) -> tuple[int, int, str, str | None]:
     """Map a Pydantic error ``loc`` to (line, col, field_value, suggestion).
 
-    Three shapes:
-
-    - Empty / non-tuple loc → ``(1, 1, "", None)`` (top-level placeholder).
-    - Single-element loc (``('plgins',)``) → close-match against
-      :func:`_local_yaml_top_keys`; line/col anchored to the
-      offending top-level key.
-    - Nested loc (``('tracked_files', <id>, 'bogus')``,
-      ``('plugins', 'add')``) → walk the ``.lc`` tables to surface the
-      real nested line/column; candidate list dispatched via
-      :func:`_candidate_list_for` per overlay-class shape.
-
-    Falls back to ``(1, 1, "", None)`` when the parent chain can't be
-    walked on the ``.lc`` table (intermediate non-Mapping, missing key,
-    or :exc:`AttributeError` from a plain ``dict``).
-    """
-    if not isinstance(loc, tuple) or not loc:
-        return 1, 1, "", None
-    if len(loc) == 1:
-        return _resolve_top_level_local_error(data, loc, err_type, msg)
-    return _resolve_nested_local_error(data, loc, err_type, msg)
-
-
-def _resolve_top_level_local_error(
-    data: Mapping[str, object],
-    loc: tuple[object, ...],
-    err_type: object,
-    msg: object,
-) -> tuple[int, int, str, str | None]:
-    """Resolve a single-element ``loc`` against the top-level CommentedMap."""
-    head = str(loc[0])
-    candidates = _candidate_list_for(loc)
-    if err_type == "extra_forbidden":
-        line_1, col_1 = _lookup_key_position(data, head)
-        suggestion = suggest_close_match(head, candidates)
-        return line_1, col_1, head, suggestion
-    line_1, col_1 = _lookup_value_position(data, head)
-    field_value = _stringify_field_value(data, head, msg)
-    return line_1, col_1, field_value, None
-
-
-def _resolve_nested_local_error(
-    data: Mapping[str, object],
-    loc: tuple[object, ...],
-    err_type: object,
-    msg: object,
-) -> tuple[int, int, str, str | None]:
-    """Resolve a nested ``loc`` against nested ``.lc`` tables.
-
     Walks down ``data`` following each step of ``loc[:-1]`` until the
     parent of the leaf is reached, then anchors line/col on the leaf
-    via the parent's ``.lc.key(...)`` / ``.lc.value(...)``. Falls back
-    to ``(1, 1, "", None)`` when an intermediate step is non-Mapping or
-    missing — keeps the formatter from mis-pointing into an unrelated
-    region of the file.
+    via the parent's ``.lc.key(...)`` / ``.lc.value(...)``. An empty
+    ``loc``, an intermediate non-Mapping step, or a missing key falls back
+    to ``(1, 1, "", None)`` — keeps the formatter from mis-pointing into an
+    unrelated region of the file. Integer-keyed list traversal is not wired
+    up and takes the same fallback.
 
-    Sibling of :func:`_resolve_nested_setforge_error`
-    on the ``setforge.yaml`` side; the two stay separate because the
-    candidate-list dispatch differs (per-overlay-class for local.yaml,
-    per-Profile/TrackedFile shape for setforge.yaml).
+    With ``missing_at_parent``, a ``missing`` field that is absent from its
+    parent is anchored on the key that owns the parent.
     """
+    if not loc:
+        return 1, 1, "", None
     parent: object = data
     for step in loc[:-1]:
         if isinstance(parent, Mapping) and step in parent:
@@ -876,11 +854,25 @@ def _resolve_nested_local_error(
     leaf = str(loc[-1])
     if not isinstance(parent, Mapping):
         return 1, 1, "", None
-    candidates = _candidate_list_for(loc)
     if err_type == "extra_forbidden":
         line_1, col_1 = _lookup_key_position(parent, leaf)
+        candidates = candidates_for(loc)
         suggestion = suggest_close_match(leaf, candidates) if candidates else None
         return line_1, col_1, leaf, suggestion
+    if (
+        missing_at_parent
+        and err_type == "missing"
+        and len(loc) > 1
+        and leaf not in parent
+    ):
+        owner: object = data
+        for step in loc[:-2]:
+            owner = owner[step] if isinstance(owner, Mapping) else {}
+        owner_key = str(loc[-2])
+        if isinstance(owner, Mapping) and owner_key in owner:
+            line_1, col_1 = _lookup_key_position(owner, owner_key)
+            return line_1, col_1, owner_key, None
+        return 1, 1, "", None
     line_1, col_1 = _lookup_value_position(parent, leaf)
     field_value = _stringify_field_value(parent, leaf, msg)
     return line_1, col_1, field_value, None
@@ -1073,157 +1065,30 @@ def _route_setforge_yaml_validation_error(
         return
     for err in exc.errors():
         failures.append(
-            _setforge_yaml_error_to_context(config_path, raw_lines, raw, err)
+            _error_to_context(
+                config_path,
+                raw_lines,
+                raw,
+                err,
+                _setforge_candidates_for,
+                setforge_yaml=True,
+            )
         )
 
 
-def _setforge_yaml_error_to_context(
-    config_path: Path,
-    raw_lines: list[str],
-    raw: Mapping[str, object],
-    err: Mapping[str, object],
-) -> ValidationErrorWithContext:
-    """Convert one Pydantic error from ``load_config`` to a did-you-mean carrier.
-
-    Sibling of :func:`_validation_error_to_context` for the engine
-    config side. Walks the error's ``loc`` against ``raw``'s nested
-    ``.lc`` tables; picks the candidate list for close-match from the
-    appropriate Pydantic model at that nesting depth.
-    """
-    loc_raw = err.get("loc", ())
-    loc = loc_raw if isinstance(loc_raw, tuple) else ()
-    err_type = err.get("type", "")
-    msg = err.get("msg", "")
-    line_1, col_1, field_value, suggestion = _resolve_setforge_yaml_error_position(
-        raw, loc, err_type, msg
-    )
-    if err_type == "missing" and loc:
-        msg = f"{msg}: {'.'.join(str(step) for step in loc)}"
-    elif err_type == "string_type" and loc and loc[-1] == "schema_version":
-        msg = f'{msg} (write it as a quoted string, e.g. schema_version: "1.0")'
-    snippet_lines = _build_snippet(raw_lines, line_1)
-    fix_hint = _build_setforge_fix_hint(config_path, line_1, err_type, field_value, msg)
-    return ValidationErrorWithContext(
-        file_path=config_path,
-        line=line_1,
-        column=col_1,
-        snippet_lines=snippet_lines,
-        field_value=field_value,
-        fix_hint=fix_hint,
-        suggestion=suggestion,
-    )
-
-
-def _resolve_setforge_yaml_error_position(
-    raw: Mapping[str, object],
-    loc: tuple[object, ...],
-    err_type: object,
-    msg: object,
-) -> tuple[int, int, str, str | None]:
-    """Map a setforge.yaml Pydantic ``loc`` to (line, col, field_value, suggestion).
-
-    Handles three shapes:
-
-    - Empty loc → (1, 1, "", None) (top-level shape error).
-    - Single-element loc (``('proffiles',)``) → close-match against
-      :attr:`Config.model_fields.keys()`.
-    - Nested loc (``('profiles', 'p', 'tipo')`` /
-      ``('tracked_files', 'd', 'srcc')``) → walk the ``.lc`` tables to
-      locate the offending nested key, candidate list from the matching
-      nested Pydantic model's ``model_fields``.
-
-    .. note::
-
-        Sibling of :func:`_resolve_error_position` (local.yaml side) by
-        design. The two stay separate because the candidate-list
-        dispatch differs (setforge.yaml top-level uses ``Config`` /
-        ``Profile`` / ``TrackedFile`` shapes; local.yaml uses
-        ``LocalConfig`` + 4 overlay-class candidate lists). Unifying
-        would entangle the dispatch tables; keep them split.
-    """
-    if not loc:
-        return 1, 1, "", None
-    if len(loc) == 1:
-        return _resolve_top_level_setforge_error(raw, loc, err_type, msg)
-    return _resolve_nested_setforge_error(raw, loc, err_type, msg)
-
-
-def _resolve_top_level_setforge_error(
-    raw: Mapping[str, object],
-    loc: tuple[object, ...],
-    err_type: object,
-    msg: object,
-) -> tuple[int, int, str, str | None]:
-    """Resolve a single-element ``loc`` against the top-level CommentedMap."""
-    head = str(loc[0])
-    candidates = list(Config.model_fields.keys())
-    if err_type == "extra_forbidden":
-        line_1, col_1 = _lookup_key_position(raw, head)
-        suggestion = suggest_close_match(head, candidates)
-        return line_1, col_1, head, suggestion
-    line_1, col_1 = _lookup_value_position(raw, head)
-    field_value = _stringify_field_value(raw, head, msg)
-    return line_1, col_1, field_value, None
-
-
-def _resolve_nested_setforge_error(
-    raw: Mapping[str, object],
-    loc: tuple[object, ...],
-    err_type: object,
-    msg: object,
-) -> tuple[int, int, str, str | None]:
-    """Resolve a nested ``loc`` against the nested ``.lc`` tables.
-
-    Sibling of :func:`_resolve_nested_local_error` (local.yaml side).
-    Handles ``profiles.<name>.<key>`` and ``tracked_files.<id>.<key>``
-    shapes — the common cases for setforge.yaml typo close-match
-    suggestions.
-    """
-    # Walk down to the parent of the leaf so we can call
-    # ``.lc.key(leaf)`` on it. Only mapping shapes are exercised today;
-    # integer-keyed list traversal (e.g. ``loc=('profiles', 'p',
-    # 'extensions', 'include', 0)``) is not yet wired up and returns
-    # the ``(1, 1, '', None)`` fallback. Extension to CommentedSeq
-    # subscripts is intentionally deferred — current acceptance does
-    # not exercise list-indexed loc shapes.
-    parent: object = raw
-    for step in loc[:-1]:
-        if isinstance(parent, Mapping) and step in parent:
-            parent = parent[step]
-        else:
-            return 1, 1, "", None
-    leaf = str(loc[-1])
-    if not isinstance(parent, Mapping):
-        return 1, 1, "", None
-    candidates = _candidates_for_nested_loc(loc)
-    if err_type == "extra_forbidden":
-        line_1, col_1 = _lookup_key_position(parent, leaf)
-        suggestion = suggest_close_match(leaf, candidates) if candidates else None
-        return line_1, col_1, leaf, suggestion
-    if err_type == "missing" and leaf not in parent:
-        owner: object = raw
-        for step in loc[:-2]:
-            owner = owner[step] if isinstance(owner, Mapping) else {}
-        owner_key = str(loc[-2])
-        if isinstance(owner, Mapping) and owner_key in owner:
-            line_1, col_1 = _lookup_key_position(owner, owner_key)
-            return line_1, col_1, owner_key, None
-        return 1, 1, "", None
-    line_1, col_1 = _lookup_value_position(parent, leaf)
-    field_value = _stringify_field_value(parent, leaf, msg)
-    return line_1, col_1, field_value, None
-
-
-def _candidates_for_nested_loc(loc: tuple[object, ...]) -> list[str]:
-    """Return the close-match candidate list for the nested error site.
+def _setforge_candidates_for(loc: tuple[object, ...]) -> list[str]:
+    """Return the close-match candidate list for a ``setforge.yaml`` error site.
 
     Maps the loc shape to the Pydantic model whose ``model_fields`` are
     the valid keys at that depth:
 
+    - ``(<key>,)`` → :attr:`Config.model_fields`.
     - ``('profiles', <name>, <key>)`` → :attr:`Profile.model_fields`.
     - ``('tracked_files', <id>, <key>)`` → :attr:`TrackedFile.model_fields`.
     - Anything else → empty list (no suggestion fires).
     """
+    if len(loc) == 1:
+        return list(Config.model_fields.keys())
     if len(loc) < 3:
         return []
     head = str(loc[0])
@@ -1232,28 +1097,6 @@ def _candidates_for_nested_loc(loc: tuple[object, ...]) -> list[str]:
     if head == "tracked_files":
         return list(TrackedFile.model_fields.keys())
     return []
-
-
-def _build_setforge_fix_hint(
-    config_path: Path,
-    line_1: int,
-    err_type: object,
-    field_value: str,
-    msg: object,
-) -> str:
-    """Render the ``Fix:`` action line for a setforge.yaml error.
-
-    Sibling of :func:`_build_fix_hint`; uses repo-relative path
-    (display root is the directory of ``setforge.yaml`` itself) and
-    "unknown key" wording for ``extra_forbidden``.
-    """
-    home_path = _home_relative(config_path)
-    if err_type == "extra_forbidden":
-        return (
-            f"edit {home_path}:{line_1} — unknown key {field_value!r} "
-            "(remove or rename to a known key)"
-        )
-    return f"edit {home_path}:{line_1} — {msg}"
 
 
 def _build_top_level_fallback(
