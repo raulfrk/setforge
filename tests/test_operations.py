@@ -2224,6 +2224,73 @@ def test_state_root_mismatch_refuses_before_adapter_recovery(
     assert calls == 0
 
 
+def test_journal_recovers_after_config_ancestor_became_a_symlink(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    config_dir = tmp_path / "real" / "cfg"
+    config_dir.mkdir(parents=True)
+    path = tmp_path / "live.txt"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        operations.prepare(
+            command="sync",
+            profile="p",
+            config_dir=config_dir,
+            resources_lock=False,
+            command_line=("sync", "--profile=p"),
+            paths=(path,),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    (tmp_path / "real").rename(tmp_path / "moved")
+    (tmp_path / "real").symlink_to("moved")
+
+    operations.refuse_conflicting_mutation(
+        resources=False, config_dir=None, profile="other"
+    )
+    with pytest.raises(SetforgeError, match="unfinished sync operation"):
+        operations.refuse_conflicting_mutation(
+            resources=False, config_dir=config_dir, profile=None
+        )
+    assert operations.load("p") == journal
+    assert operations.recover_automatically(journal)
+
+    assert path.read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is None
+
+
+def test_journal_reports_retryable_error_after_state_ancestor_became_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "real" / "state"
+    state_root.mkdir(parents=True)
+    monkeypatch.setattr(transitions, "state_root", lambda: state_root)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    path = tmp_path / "live.txt"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        _prepare(tmp_path, paths=(path,)),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    (tmp_path / "real").rename(tmp_path / "moved")
+    (tmp_path / "real").symlink_to("moved")
+
+    assert operations.load("p") == journal
+    with pytest.raises(SetforgeError, match="SETFORGE_STATE_DIR"):
+        operations.recover_automatically(journal)
+
+    (tmp_path / "real").unlink()
+    (tmp_path / "moved").rename(tmp_path / "real")
+    assert operations.recover_automatically(journal)
+    assert path.read_text(encoding="utf-8") == "before"
+
+
 def test_active_journal_is_visible_across_transition_state_roots(
     tmp_path: Path,
     operation_state: Path,

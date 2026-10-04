@@ -674,7 +674,8 @@ def conflicting_journals(
         if (resources and journal.resources_lock)
         or (
             expected_config is not None
-            and expected_config in locked_config_dirs(journal)
+            and expected_config
+            in {path.resolve() for path in locked_config_dirs(journal)}
         )
         or bool(expected_profiles.intersection(locked_profiles(journal)))
     )
@@ -2308,20 +2309,17 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         raise ValueError("config_dir must be absolute")
     if not state_dir.is_absolute():
         raise ValueError("state_dir must be absolute")
-    if config_dir is not None and config_dir != config_dir.resolve():
-        raise ValueError("config_dir must be canonical")
     if (
         tuple(sorted(set(reserved_config_dirs), key=str)) != reserved_config_dirs
-        or any(
-            not path.is_absolute() or path != path.resolve()
-            for path in reserved_config_dirs
-        )
+        or any(not path.is_absolute() for path in reserved_config_dirs)
         or (config_dir is not None and config_dir not in reserved_config_dirs)
     ):
         raise ValueError(
-            "reserved_config_dirs must be sorted, unique, canonical, and include "
+            "reserved_config_dirs must be sorted, unique, absolute, and include "
             "config_dir"
         )
+    if any(".." in path.parts for path in (state_dir, *reserved_config_dirs)):
+        raise ValueError("state_dir and reserved_config_dirs must not contain '..'")
     if config_dirs_digest is not None and (
         not isinstance(config_dirs_digest, str)
         or config_dirs_digest != _config_dirs_digest(reserved_config_dirs)
@@ -2331,8 +2329,6 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         raise ValueError(
             "snapshot restore journal requires a config reservation witness"
         )
-    if state_dir != state_dir.resolve():
-        raise ValueError("state_dir must be canonical")
     return OperationJournal(
         operation_id=_require_str(raw, "operation_id"),
         command=command,
