@@ -27,18 +27,13 @@ from setforge.errors import (
     OwnershipCollisionError,
     OwnershipError,
 )
-from setforge.locking import (
-    TargetLockGuard,
-    config_identity_lock,
-    require_resources_lock,
-)
+from setforge.locking import config_identity_lock, require_resources_lock
 from setforge.transitions import state_root
 
 __all__ = [
     "Authority",
     "ClaimEvent",
     "ClaimLifecycle",
-    "LegacyOwnershipEvidence",
     "OwnershipClaim",
     "OwnershipStore",
     "ProvenanceFact",
@@ -53,8 +48,6 @@ __all__ = [
     "read_owner_id",
     "read_owner_id_locked",
     "resolve_owner_common_dir",
-    "scan_legacy_receipts",
-    "scan_legacy_reconcile",
 ]
 
 _SCHEMA = "1.0"
@@ -165,19 +158,6 @@ class ResourceScope:
                 f"coordinate:{info.st_dev}:{info.st_ino}:{leaf_digest}",
             )
         info = resolved.stat()
-        if not stat.S_ISDIR(info.st_mode):
-            raise OwnershipError("target-root scope requires a directory")
-        return cls._from_wire(
-            ScopeKind.TARGET_ROOT, f"object:{info.st_dev}:{info.st_ino}"
-        )
-
-    @classmethod
-    def target_root_guarded(cls, guard: TargetLockGuard) -> ResourceScope:
-        """Create an object scope from the descriptor held by a target lock."""
-        guard.verify_expected()
-        if guard.target_fd is None:
-            raise OwnershipError("target-root object does not exist")
-        info = os.fstat(guard.target_fd)
         if not stat.S_ISDIR(info.st_mode):
             raise OwnershipError("target-root scope requires a directory")
         return cls._from_wire(
@@ -312,17 +292,6 @@ class OwnershipClaim:
         ):
             raise OwnershipError("an active claim must retain management authority")
         _validate_claim_history(self)
-
-
-@dataclass(frozen=True, slots=True)
-class LegacyOwnershipEvidence:
-    """Read-only legacy evidence that never grants management authority."""
-
-    source: str
-    identity_hint: str
-    locator: Path
-    ambiguous: bool = False
-    corrupt: bool = False
 
 
 def _validate_claim_history(claim: OwnershipClaim) -> None:
@@ -789,23 +758,12 @@ class OwnershipStore:
                 "run recovery before retrying"
             )
 
-    def _write_claim(
-        self, claim: OwnershipClaim, *, directory_fd: int | None = None
-    ) -> None:
-        if directory_fd is not None:
-            _atomic_write_at(
-                directory_fd,
-                self._claim_path(claim.resource_id).name,
-                (json.dumps(_claim_to_json(claim), sort_keys=True) + "\n").encode(),
-            )
-            return
-        with _open_dir_chain(self.root, "claims", create=True) as directory_fd:
-            assert directory_fd is not None
-            _atomic_write_at(
-                directory_fd,
-                self._claim_path(claim.resource_id).name,
-                (json.dumps(_claim_to_json(claim), sort_keys=True) + "\n").encode(),
-            )
+    def _write_claim(self, claim: OwnershipClaim, *, directory_fd: int) -> None:
+        _atomic_write_at(
+            directory_fd,
+            self._claim_path(claim.resource_id).name,
+            (json.dumps(_claim_to_json(claim), sort_keys=True) + "\n").encode(),
+        )
 
     def _read_path(
         self,
@@ -846,9 +804,7 @@ class OwnershipStore:
             )
         return claim
 
-    def _write_intent(
-        self, intent: _MoveIntent, *, directory_fd: int | None = None
-    ) -> None:
+    def _write_intent(self, intent: _MoveIntent, *, directory_fd: int) -> None:
         payload = (
             json.dumps(
                 {
@@ -861,32 +817,15 @@ class OwnershipStore:
             )
             + "\n"
         ).encode()
-        if directory_fd is not None:
-            _atomic_write_at(
-                directory_fd, self._intent_path(intent.intent_id).name, payload
-            )
-            return
-        with _open_dir_chain(self.root, "intents", create=True) as directory_fd:
-            assert directory_fd is not None
-            _atomic_write_at(
-                directory_fd,
-                self._intent_path(intent.intent_id).name,
-                payload,
-            )
+        _atomic_write_at(
+            directory_fd, self._intent_path(intent.intent_id).name, payload
+        )
 
-    def _read_intent(
-        self, path: Path, *, directory_fd: int | None = None
-    ) -> _MoveIntent:
+    def _read_intent(self, path: Path, *, directory_fd: int) -> _MoveIntent:
         try:
             if path.parent != self.intents_root or path.name != Path(path.name).name:
                 raise ValueError("invalid ownership intent path")
-            if directory_fd is None:
-                with _open_dir_chain(self.root, "intents", create=False) as opened_fd:
-                    if opened_fd is None:
-                        raise FileNotFoundError(path)
-                    payload = _read_regular_at(opened_fd, path.name)
-            else:
-                payload = _read_regular_at(directory_fd, path.name)
+            payload = _read_regular_at(directory_fd, path.name)
             if payload is None:
                 raise FileNotFoundError(path)
             raw = _require_mapping(
@@ -922,120 +861,13 @@ class OwnershipStore:
                 f"invalid ownership move intent {path}"
             ) from exc
 
-    def _unlink_claim(
-        self, resource_id: ResourceId, *, directory_fd: int | None = None
-    ) -> None:
-        if directory_fd is not None:
-            os.unlink(self._claim_path(resource_id).name, dir_fd=directory_fd)
-            os.fsync(directory_fd)
-            return
-        with _open_dir_chain(self.root, "claims", create=False) as directory_fd:
-            if directory_fd is None:
-                raise CorruptOwnershipState("ownership claims directory disappeared")
-            os.unlink(self._claim_path(resource_id).name, dir_fd=directory_fd)
-            os.fsync(directory_fd)
+    def _unlink_claim(self, resource_id: ResourceId, *, directory_fd: int) -> None:
+        os.unlink(self._claim_path(resource_id).name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
 
-    def _unlink_intent(
-        self, intent_id: uuid.UUID, *, directory_fd: int | None = None
-    ) -> None:
-        if directory_fd is not None:
-            os.unlink(self._intent_path(intent_id).name, dir_fd=directory_fd)
-            os.fsync(directory_fd)
-            return
-        with _open_dir_chain(self.root, "intents", create=False) as directory_fd:
-            if directory_fd is None:
-                raise CorruptOwnershipState("ownership intents directory disappeared")
-            os.unlink(self._intent_path(intent_id).name, dir_fd=directory_fd)
-            os.fsync(directory_fd)
-
-
-def scan_legacy_receipts(root: Path) -> tuple[LegacyOwnershipEvidence, ...]:
-    """Read old receipt identities as unverified evidence, never as claims."""
-    try:
-        root_info = root.lstat()
-    except FileNotFoundError:
-        return ()
-    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
-        return (LegacyOwnershipEvidence("receipt", root.name, root, corrupt=True),)
-    evidence: list[LegacyOwnershipEvidence] = []
-    seen: set[str] = set()
-    for path in sorted(root.glob("*.json")):
-        try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                raise OSError("legacy receipt is not a regular file")
-            raw = _require_mapping(
-                json.loads(path.read_text(encoding="utf-8")), "receipt"
-            )
-            key = _require_string(raw, "key")
-        except (
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            KeyError,
-            TypeError,
-            ValueError,
-        ):
-            evidence.append(
-                LegacyOwnershipEvidence("receipt", path.name, path, corrupt=True)
-            )
-            continue
-        duplicate = key in seen
-        seen.add(key)
-        evidence.append(
-            LegacyOwnershipEvidence("receipt", key, path, ambiguous=duplicate)
-        )
-    duplicate_keys = {
-        item.identity_hint
-        for item in evidence
-        if sum(other.identity_hint == item.identity_hint for other in evidence) > 1
-    }
-    return tuple(
-        replace(item, ambiguous=True) if item.identity_hint in duplicate_keys else item
-        for item in evidence
-    )
-
-
-def scan_legacy_reconcile(root: Path) -> tuple[LegacyOwnershipEvidence, ...]:
-    """Inventory legacy reconcile artifacts without inferring ownership."""
-    try:
-        root_info = root.lstat()
-    except FileNotFoundError:
-        return ()
-    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
-        return (LegacyOwnershipEvidence("reconcile", root.name, root, corrupt=True),)
-    evidence: list[LegacyOwnershipEvidence] = []
-    for leg in ("base", "local", "index", "drafts"):
-        leg_root = root / leg
-        try:
-            leg_info = leg_root.lstat()
-        except FileNotFoundError:
-            continue
-        if not stat.S_ISDIR(leg_info.st_mode) or stat.S_ISLNK(leg_info.st_mode):
-            evidence.append(
-                LegacyOwnershipEvidence(f"reconcile-{leg}", leg, leg_root, corrupt=True)
-            )
-            continue
-        for path in sorted(leg_root.rglob("*")):
-            try:
-                info = path.lstat()
-            except OSError:
-                continue
-            if stat.S_ISLNK(info.st_mode):
-                evidence.append(
-                    LegacyOwnershipEvidence(
-                        f"reconcile-{leg}",
-                        path.relative_to(leg_root).as_posix(),
-                        path,
-                        corrupt=True,
-                    )
-                )
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                continue
-            relative = path.relative_to(leg_root).as_posix()
-            evidence.append(LegacyOwnershipEvidence(f"reconcile-{leg}", relative, path))
-    return tuple(evidence)
+    def _unlink_intent(self, intent_id: uuid.UUID, *, directory_fd: int) -> None:
+        os.unlink(self._intent_path(intent_id).name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
 
 
 def load_or_create_owner_id(config_dir: Path) -> uuid.UUID:
