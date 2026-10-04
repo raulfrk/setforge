@@ -1796,14 +1796,20 @@ def write_transition(
             key=str,
         )
     )
-    covered = {_canonical_filesystem_path(item.path) for item in filesystem_deltas}
+    # ``_file_deltas`` records a directory at its resolved location; tree code
+    # records it as written. Compare in one form: resolved parent, unresolved leaf.
+    covered = {
+        Path(os.path.realpath(item.path.parent)) / item.path.name
+        for item in filesystem_deltas
+    }
     filesystem_deltas = _canonicalize_filesystem_deltas(
         (
             *filesystem_deltas,
             *(
                 item
                 for item in _file_deltas(file_pre, file_post)
-                if item.path not in covered
+                if Path(os.path.realpath(item.path.parent)) / item.path.name
+                not in covered
                 or FilesystemKind.DIRECTORY not in (item.pre.kind, item.post.kind)
             ),
         )

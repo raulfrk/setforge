@@ -50,6 +50,24 @@ profiles:
 """
 
 
+_FILE_AND_TREE = """\
+schema_version: '6.2'
+minimum_version: '6.2'
+version: 1
+tracked_files:
+  note:
+    src: note.txt
+    dst: {dst}
+  bundle:
+    src: bundle
+    dst: {tree}
+    tree: {{}}
+profiles:
+  p:
+    tracked_files: [note, bundle]
+"""
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _state_root(tmp_path, monkeypatch)
@@ -201,3 +219,27 @@ def test_revert_of_a_sync_removes_the_directories_it_created(
 
     assert reverted.exit_code == 0, reverted.output
     assert not (repo / "tracked" / "deep").exists()
+
+
+@pytest.mark.parametrize("via_symlink", [False, True])
+def test_revert_removes_a_directory_shared_by_a_file_and_a_tree(
+    repo: Path, tmp_path: Path, via_symlink: bool
+) -> None:
+    (repo / "tracked" / "bundle").mkdir()
+    (repo / "tracked" / "bundle" / "item.txt").write_text("item\n", encoding="utf-8")
+    real = tmp_path / "real"
+    real.mkdir()
+    base = real
+    if via_symlink:
+        base = tmp_path / "link"
+        base.symlink_to(real)
+    shared = base / "newtool"
+    config = _config(
+        repo, _FILE_AND_TREE, dst=shared / "note.txt", tree=shared / "bundle"
+    )
+    _install(config)
+
+    reverted = _revert(config)
+
+    assert reverted.exit_code == 0, reverted.output
+    assert not (real / "newtool").exists()
