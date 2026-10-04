@@ -11,7 +11,7 @@ import pytest
 from setforge.cli import stage as stage_mod
 from setforge.cli.stage import (
     Decision,
-    StructuredFileStage,
+    FileStage,
     _apply_structured,
     collect_stages,
     collect_structured_stages,
@@ -22,6 +22,7 @@ from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.reconcile import share_draft
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from setforge.reconcile.unit_engine import structured_engine
 from setforge.ui.widgets import CANCEL
 
 
@@ -64,7 +65,7 @@ def test_collect_structured_yields_key_units(
 
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
-    assert stage.fmt is StructuredFormat.YAML
+    assert stage.engine.fmt is StructuredFormat.YAML
     assert [u.path for u in stage.units] == ["fontSize"]
     assert all(u.cls is HunkClass.PENDING for u in stage.units)
 
@@ -192,9 +193,9 @@ def test_structured_stage_validates_parent_child_intent_before_persist(
         (saved,) = collect_structured_stages(
             cfg, resolve_profile(cfg, profile), repo, profile
         )
-        assert reconstruct_structured(base, live, saved.units, {}, saved.fmt) == (
-            live if parent is HunkClass.SHARED else base
-        )
+        assert reconstruct_structured(
+            base, live, saved.units, {}, StructuredFormat.YAML
+        ) == (live if parent is HunkClass.SHARED else base)
     assert dst.read_bytes() == live
 
 
@@ -399,19 +400,19 @@ def test_walk_structured_draft_uses_typed_key_reference(
 # --- structured Share sub-menu (Draft button → type-confined key draft) -------
 
 
-def _value_stage() -> tuple[StructuredFileStage, KeyUnit]:
+def _value_stage() -> tuple[FileStage[KeyUnit], KeyUnit]:
     """A one-key structured stage whose live ``workdir`` is a host-specific path."""
     live = b"workdir: /home/raul/projects\n"
     unit = KeyUnit(HunkClass.PENDING, "workdir", "workdir", "sha256:v")
-    stage = StructuredFileStage(
+    stage = FileStage(
         sub_name="settings.yaml",
         fid=file_id("settings.yaml"),
         src=Path("src"),
         dst=Path("dst"),
         base=live,
         live=live,
-        fmt=StructuredFormat.YAML,
         units=[unit],
+        engine=structured_engine(StructuredFormat.YAML),
     )
     return stage, unit
 
@@ -544,7 +545,7 @@ def test_public_structured_promotion_preserves_shape_comments_and_inverse(
     before_control = (live_root / "two").read_bytes()
     seen: list[str] = []
 
-    def choices(_stage: StructuredFileStage):
+    def choices(_stage: FileStage[KeyUnit]):
         def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
             seen.append(unit.path)
             return Decision(
@@ -632,7 +633,7 @@ def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
     assert destination.read_bytes() == base
     destination.write_bytes(live)
 
-    def choices(_stage: StructuredFileStage):
+    def choices(_stage: FileStage[KeyUnit]):
         def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
             return Decision(
                 HunkClass.LOCAL if unit.path == "host" else HunkClass.SHARED
