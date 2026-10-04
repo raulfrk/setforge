@@ -66,8 +66,8 @@ def test_changed_lines_parses_multi_file_hunks() -> None:
 def test_changed_lines_ignores_pure_deletions() -> None:
     diff = textwrap.dedent(
         """\
-        --- a/setforge/yaml_merge.py
-        +++ b/setforge/yaml_merge.py
+        --- a/setforge/base_store_format.py
+        +++ b/setforge/base_store_format.py
         @@ -12,3 +11,0 @@ def f():
         -gone_one
         -gone_two
@@ -75,7 +75,7 @@ def test_changed_lines_ignores_pure_deletions() -> None:
         """
     )
     changed = changed_lines_from_diff(diff)
-    assert changed.get("setforge/yaml_merge.py", set()) == set()
+    assert changed.get("setforge/base_store_format.py", set()) == set()
 
 
 def test_changed_lines_empty_diff_is_empty_mapping() -> None:
@@ -87,8 +87,8 @@ _RESULTS = """\
     setforge.scalar_merge.x_resolve_scalar__mutmut_4: survived
     setforge.scalar_merge.x_resolve_scalar__mutmut_9: survived
     setforge.base_store.xǁStoreǁload__mutmut_2: timeout
-    setforge.yaml_merge.x_merge__mutmut_7: suspicious
-    setforge.yaml_merge.x_merge__mutmut_8: no tests
+    setforge.base_store_format.x_merge__mutmut_7: suspicious
+    setforge.base_store_format.x_merge__mutmut_8: no tests
     setforge.scalar_merge.xǁ_Absentǁ__repr____mutmut_1: not checked
 """
 
@@ -100,7 +100,7 @@ def test_parse_results_keeps_only_survived_timeout_suspicious() -> None:
         "setforge.scalar_merge.x_resolve_scalar__mutmut_4",
         "setforge.scalar_merge.x_resolve_scalar__mutmut_9",
         "setforge.base_store.xǁStoreǁload__mutmut_2",
-        "setforge.yaml_merge.x_merge__mutmut_7",
+        "setforge.base_store_format.x_merge__mutmut_7",
     }
 
 
@@ -108,7 +108,7 @@ def test_parse_results_carries_status() -> None:
     survivors = parse_results(_RESULTS)
     by_name = {s.name: s.status for s in survivors}
     assert by_name["setforge.base_store.xǁStoreǁload__mutmut_2"] == "timeout"
-    assert by_name["setforge.yaml_merge.x_merge__mutmut_7"] == "suspicious"
+    assert by_name["setforge.base_store_format.x_merge__mutmut_7"] == "suspicious"
 
 
 def test_survivor_module_path_and_function_plain_function() -> None:
@@ -206,7 +206,7 @@ def test_read_allowlist_strips_comments_and_blanks(tmp_path) -> None:
             # header comment
             setforge.scalar_merge.x_resolve_scalar__mutmut_4  # equivalent mutant
 
-            setforge.yaml_merge.x_merge__mutmut_7
+            setforge.base_store_format.x_merge__mutmut_7
             # trailing comment
             """
         ),
@@ -215,7 +215,7 @@ def test_read_allowlist_strips_comments_and_blanks(tmp_path) -> None:
     allow = read_allowlist(p)
     assert allow == {
         "setforge.scalar_merge.x_resolve_scalar__mutmut_4",
-        "setforge.yaml_merge.x_merge__mutmut_7",
+        "setforge.base_store_format.x_merge__mutmut_7",
     }
 
 
@@ -236,11 +236,13 @@ def test_decide_all_allowlisted_exits_zero() -> None:
 def test_decide_remaining_survivor_exits_one() -> None:
     survivors = [
         Survivor("setforge.scalar_merge.x_resolve_scalar__mutmut_4", "survived"),
-        Survivor("setforge.yaml_merge.x_merge__mutmut_7", "suspicious"),
+        Survivor("setforge.base_store_format.x_merge__mutmut_7", "suspicious"),
     ]
     allow = {"setforge.scalar_merge.x_resolve_scalar__mutmut_4"}
     remaining, code = decide(survivors, allow)
-    assert [s.name for s in remaining] == ["setforge.yaml_merge.x_merge__mutmut_7"]
+    assert [s.name for s in remaining] == [
+        "setforge.base_store_format.x_merge__mutmut_7"
+    ]
     assert code == 1
 
 

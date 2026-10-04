@@ -84,10 +84,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Mirrors [tool.mutmut].only_mutate.
 CORE_FILES: tuple[str, ...] = (
-    "setforge/markdown_merge.py",
     "setforge/scalar_merge.py",
     "setforge/structural_merge.py",
-    "setforge/yaml_merge.py",
     "setforge/base_store.py",
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
