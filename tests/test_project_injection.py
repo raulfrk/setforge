@@ -2651,8 +2651,14 @@ def test_reinject_after_remove_reclaims_this_checkouts_released_claim(
     assert not (target / "AGENTS.md").exists()
 
 
-def _injected_tracked_overlay(tmp_path: Path) -> tuple[Path, list[str]]:
-    """Inject over a committed ``AGENTS.md``; return the target and CLI arguments."""
+def _injected_tracked_overlay(
+    tmp_path: Path, *, draft: str = ""
+) -> tuple[Path, list[str]]:
+    """Inject over a committed ``AGENTS.md``; return the target and CLI arguments.
+
+    ``draft`` is appended to the file after the commit, so the content saved at
+    injection holds a line Git does not have.
+    """
     config = _config(tmp_path)
     (config.parent / "project" / "demo" / "AGENTS.md").write_text(
         "team instructions\nmanaged instructions\n"
@@ -2676,6 +2682,7 @@ def _injected_tracked_overlay(tmp_path: Path) -> tuple[Path, list[str]]:
         ],
         check=True,
     )
+    (target / "AGENTS.md").write_text("team instructions\n" + draft)
     arguments = [str(target), "--config", str(config), "--yes"]
     injected = CliRunner().invoke(
         app, ["project", "inject", "demo", *arguments, "--auto=use-profile"]
@@ -2714,6 +2721,35 @@ def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
         capture_output=True,
     ).stdout
     assert status == "D  AGENTS.md\n"
+
+
+@pytest.mark.parametrize(
+    "draft", ["", "local draft\n"], ids=["committed-content", "uncommitted-line"]
+)
+def test_remove_restores_a_tracked_overlay_file_that_the_user_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, draft: str
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    target, arguments = _injected_tracked_overlay(tmp_path, draft=draft)
+    destination = target / "AGENTS.md"
+    destination.unlink()
+
+    removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert destination.read_text() == "team instructions\n" + draft
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert not (target / ".git" / "info" / "attributes").exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    status = subprocess.run(
+        ["git", "-C", str(target), "status", "--short"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == (" M AGENTS.md\n" if draft else "")
 
 
 def test_missing_tracked_overlay_file_names_project_remove_not_sync(

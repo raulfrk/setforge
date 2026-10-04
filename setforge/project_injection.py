@@ -141,6 +141,8 @@ class ProjectRemovePlan:
     created_parents: tuple[Path, ...]
     visibility_plan: VisibilityPlan | None
     overlay_git_plan: OverlayGitPlan | None
+    #: Missing tracked-overlay destinations that Git's index no longer has.
+    git_removed: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1412,9 +1414,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
 
     A sync may record merged bytes that still hold local edits. Removal would
     discard them, so by default an ordinary file must equal the profile bytes.
-    A missing file holds nothing to discard: removal leaves it absent or writes
-    the saved pre-injection content back. Only that default mode allows it;
+    A missing file holds nothing to discard, so that default mode accepts it;
     a caller validating the record for another purpose still gets an error.
+    Removal writes a missing file's saved pre-injection content back. Two
+    missing files stay absent: one that did not exist before injection, and a
+    tracked-overlay file that Git's index no longer has (after ``git rm``, or
+    on a branch without it), which the plan lists in ``git_removed``.
     """
     root, git_dir, target_stat = _verified_project_target(target)
     canonical_config_path = config_path.resolve(strict=True)
@@ -1446,6 +1451,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     files: list[ProjectFilePlan] = []
     file_visibilities: dict[Path, ProjectVisibility] = {}
     all_parents: set[Path] = set()
+    git_removed: list[Path] = []
     destinations: set[str] = set()
     file_ids: set[str] = set()
     raw_files = raw["files"]
@@ -1657,6 +1663,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
             if live_payload is not None and live_payload != overlay.base:
                 clean_content(overlay, live_payload)
             live_matches_present = True
+            if info is None and git_dir is not None and not _is_tracked(root, relative):
+                git_removed.append(relative)
         if info is None and not live_matches_absent and not removable_missing:
             raise SetforgeError(
                 f"injected project file is missing: {destination}; "
@@ -1791,16 +1799,17 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         ),
         visibility_plan=visibility_plan,
         overlay_git_plan=overlay_git_plan,
+        git_removed=tuple(git_removed),
     )
 
 
 def _overlay_removal_content(
-    item: ProjectFilePlan, *, git_worktree: bool
+    item: ProjectFilePlan, *, git_removed: bool
 ) -> bytes | None:
     """Return what removal writes to a tracked overlay file, ``None`` for nothing.
 
-    A file missing from a Git worktree was removed through Git, which tracks
-    it; only a directory that is no longer one gets the saved content back.
+    A missing file gets its saved pre-injection content back, which may hold
+    lines Git never had, unless Git itself removed the path from its index.
     """
     if item.overlay is None:
         raise SetforgeError("tracked project overlay state is missing")
@@ -1809,7 +1818,7 @@ def _overlay_removal_content(
         if live == item.overlay.base:
             return live
         return clean_content(item.overlay, live)
-    return None if git_worktree else item.overlay.base
+    return None if git_removed else item.overlay.base
 
 
 def _restore_planned_files(
@@ -1830,7 +1839,7 @@ def _restore_planned_files(
                 _unlink_project_file(guards.targets[0], item.relative_destination)
         elif item.action is ProjectFileAction.OVERLAY:
             restored = _overlay_removal_content(
-                item, git_worktree=plan.visibility_plan is not None
+                item, git_removed=item.relative_destination in plan.git_removed
             )
             if restored is not None:
                 _write_project_file(
