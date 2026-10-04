@@ -50,7 +50,6 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
 )
-from setforge.provision.local import set_manifest_tracked_root
 
 # Property-based test profiles. The default per-PR run keeps the standard
 # example budget; the "deep" profile (selected nightly via
@@ -165,12 +164,6 @@ def _reset_claude_bin_cache() -> None:
     fixtures the preceding test happened to use.
     """
     _cp._get_claude_bin.cache_clear()
-
-
-@pytest.fixture(autouse=True)
-def _reset_manifest_tracked_root() -> None:
-    """Drop the tracked root an earlier in-process install pinned."""
-    set_manifest_tracked_root(None)
 
 
 @pytest.fixture(autouse=True)

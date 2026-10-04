@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from setforge.config import (
     BundleComponent,
@@ -186,6 +187,7 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
     lock: LockFile | None = None,
     platform_os: str | None = None,
     platform_arch: str | None = None,
+    tracked_root: Path | None = None,
 ) -> ReconcileResult:
     validated = validate_bundle(bundle, cfg)
     if graph is not None and graph != validated:
@@ -251,7 +253,11 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
             continue
         outcome = planned_apply(item) if planned_apply is not None else None
         if outcome is None:
-            target = provisioner if provisioner is not None else build(item)
+            target = (
+                provisioner
+                if provisioner is not None
+                else build(item, tracked_root=tracked_root)
+            )
             outcome = _apply(target, item)
         outcomes.append(outcome)
         if outcome.outcome in (Outcome.OK, Outcome.SKIP):

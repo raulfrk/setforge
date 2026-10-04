@@ -7,6 +7,7 @@ instance by its ``type``.
 """
 
 from collections.abc import Callable
+from pathlib import Path
 
 from setforge.errors import DuplicateProvisionerType, UnknownProvisionerType
 from setforge.provision.protocol import Provisioner, ProvisionItem
@@ -34,8 +35,11 @@ def register(type_: str) -> Callable[[type[Provisioner]], type[Provisioner]]:
     return _decorator
 
 
-def build(item: ProvisionItem) -> Provisioner:
+def build(item: ProvisionItem, *, tracked_root: Path | None = None) -> Provisioner:
     """Instantiate the provisioner registered for ``item.type``.
+
+    ``tracked_root`` is the manifest's ``tracked/`` directory; only ``local``
+    items read their source from it.
 
     Raises :class:`UnknownProvisionerType` (naming the known types) when no
     provisioner claims ``item.type``.
@@ -47,4 +51,5 @@ def build(item: ProvisionItem) -> Provisioner:
         raise UnknownProvisionerType(
             f"no provisioner registered for type {item.type!r}; known types: {known}"
         ) from None
-    return cls()
+    kwargs = {"tracked_root": tracked_root} if item.type == "local" else {}
+    return cls(**kwargs)

@@ -37,15 +37,6 @@ class LocalSourceError(Exception):
     pass
 
 
-_manifest_tracked_root: Path | None = None
-
-
-def set_manifest_tracked_root(root: Path | None) -> None:
-    """Pin the ``tracked/`` directory of the manifest being installed."""
-    global _manifest_tracked_root
-    _manifest_tracked_root = root
-
-
 def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
     # realpath both sides: catches a symlink under tracked/ aimed outside it too.
     real_root = Path(tracked_root).resolve()
@@ -237,7 +228,5 @@ class LocalProvisioner(Provisioner):
         # Lazy: mirrors install.py's tracked_root derivation via the source layer.
         if self._tracked_root is not None:
             return self._tracked_root
-        if _manifest_tracked_root is not None:
-            return _manifest_tracked_root
         source_dir = resolve_source_dir(get_resolved_source())
         return source_dir / "tracked"

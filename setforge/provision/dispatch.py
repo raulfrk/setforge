@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from itertools import groupby
+from pathlib import Path
 
 import setforge.provision.cargo as _cargo  # noqa: F401
 import setforge.provision.github_release as _github_release  # noqa: F401
@@ -79,6 +80,7 @@ class ProvisioningPlan:
     lock: LockFile | None = None
     platform_os: str | None = None
     platform_arch: str | None = None
+    tracked_root: Path | None = None
 
     @property
     def capability_graph(self) -> CapabilityGraph:
@@ -95,6 +97,7 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
     lock: LockFile | None = None,
     ownership_store: OwnershipStore | None = None,
     owner_id: uuid.UUID | None = None,
+    tracked_root: Path | None = None,
 ) -> ProvisioningPlan:
     """Probe every top-level provisioner once and retain its exact delta."""
     items = resolve_provision_items(cfg, resolved)
@@ -119,7 +122,7 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
     ownership: list[PackageDecision] = []
     for _type, group_iter in groupby(items, key=lambda it: it.type):
         group = list(group_iter)
-        batch = plan_reconcile(build(group[0]), group)
+        batch = plan_reconcile(build(group[0], tracked_root=tracked_root), group)
         if ownership_store is not None:
             observations = {item.identity: item for item in batch.observations}
             decisions = tuple(
@@ -245,7 +248,7 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
         )
         for _type, group_iter in grouped:
             group = list(group_iter)
-            batch = plan_reconcile(build(group[0]), group)
+            batch = plan_reconcile(build(group[0], tracked_root=tracked_root), group)
             planned_bundle_batches.append(batch)
             observations = {item.identity: item for item in batch.observations}
             for item in group:
@@ -300,6 +303,7 @@ def plan_provisioning(  # noqa: C901 - direct and bundle ownership share one pla
         lock=lock,
         platform_os=None if host is None else host.os,
         platform_arch=None if host is None else host.arch,
+        tracked_root=tracked_root,
     )
 
 
@@ -365,6 +369,7 @@ def apply_provisioning(plan: ProvisioningPlan) -> list[ReconcileResult]:
             lock=plan.lock,
             platform_os=plan.platform_os,
             platform_arch=plan.platform_arch,
+            tracked_root=plan.tracked_root,
         )
         for name, graph in zip(plan.bundles, plan.bundle_graphs, strict=True)
     ]
