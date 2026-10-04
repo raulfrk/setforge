@@ -1,10 +1,10 @@
-"""Stage-B: the structured (key-aware) deploy entry ``reconcile_structured_file``.
+"""Stage-B: the structured (key-aware) deploy through ``reconcile_file(fmt=...)``.
 
 The plain 3-way engine deploys line files; structured (yaml/json/jsonc) files need
 a key-aware merge so an independent-key upstream change does not false-conflict with
-a host edit (the case a line merge fails on). ``reconcile_structured_file`` uses
+a host edit (the case a line merge fails on). Given ``fmt``, ``reconcile_file`` uses
 ``merge_structural`` as a clean-fast-path and falls back to the proven line path
-(``reconcile_plain_file``: wizard / --auto / DEFERRED) for a genuine same-key
+(wizard / --auto / DEFERRED) for a genuine same-key
 collision — so no new conflict wizard is introduced.
 
 Pins: independent-key host+upstream edits merge CLEAN (the subsumption win); a
@@ -19,7 +19,7 @@ import pytest
 from setforge.locking import profile_lock
 from setforge.reconcile import file_id, read_base, record
 from setforge.reconcile.structured_units import StructuredFormat
-from setforge.reconcile_apply import AutoSide, ReconcileKind, reconcile_structured_file
+from setforge.reconcile_apply import AutoSide, ReconcileKind, reconcile_file
 
 _P = "default"
 _FMT = StructuredFormat.YAML
@@ -39,7 +39,7 @@ def test_independent_key_edits_merge_clean() -> None:
     _seed(fid, base=base, local=host)
 
     upstream = b"editor:\n  fontSize: 12\n  theme: dark\n"  # upstream added a key
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert isinstance(out.content, bytes)
@@ -57,7 +57,7 @@ def test_same_key_collision_defers_non_interactively() -> None:
     _seed(fid, base=base, local=host)
 
     upstream = b"key: 2\n"
-    out = reconcile_structured_file(
+    out = reconcile_file(
         _P, fid, live=host, tracked=upstream, fmt=_FMT, interactive=False
     )
 
@@ -71,7 +71,7 @@ def test_no_upstream_change_is_noop() -> None:
     doc = b"a: 1\nb: 2\n"
     _seed(fid, base=doc, local=doc)
 
-    out = reconcile_structured_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
 
     assert out.kind is ReconcileKind.NOOP
 
@@ -82,7 +82,7 @@ def test_base_absent_divergent_live_seeds_keep_live() -> None:
     host = b"x: 1\n"
     tracked = b"x: 2\n"
     # no _seed(): base is absent
-    out = reconcile_structured_file(_P, fid, live=host, tracked=tracked, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=tracked, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == host  # kept live
@@ -97,7 +97,7 @@ def test_divergent_root_shapes_defer_through_plain_fallback() -> None:
     upstream = b"key: upstream\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == base
@@ -116,9 +116,7 @@ def test_divergent_root_shapes_auto_select_exact_raw_bytes(
     upstream = b"key: upstream\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(
-        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
-    )
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -130,7 +128,7 @@ def test_unchanged_yaml_binary_is_byte_identical_noop() -> None:
     doc = b"payload: !!binary |\n  AP8=\n"
     _seed(fid, base=doc, local=doc)
 
-    out = reconcile_structured_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
 
     assert out.kind is ReconcileKind.NOOP
     assert out.content is None
@@ -148,7 +146,7 @@ def test_mapping_live_with_non_mapping_other_roots_defers(
     host = b"local: keep\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == base
@@ -166,9 +164,7 @@ def test_mapping_live_with_non_mapping_other_roots_auto_selects_raw_bytes(
     host = b"local: keep\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(
-        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
-    )
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == (host if side is AutoSide.OURS else upstream)
@@ -218,7 +214,7 @@ def test_untouched_live_takes_tracked_bytes_verbatim(
     fid = file_id("untouched-live")
     _seed(fid, base=base, local=base)
 
-    out = reconcile_structured_file(_P, fid, live=base, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=base, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == upstream
@@ -248,7 +244,7 @@ def test_unchanged_tracked_leaves_edited_live_alone(
     fid = file_id("unchanged-tracked")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=base, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=base, fmt=fmt)
 
     assert out.kind is ReconcileKind.NOOP
     assert out.content is None
@@ -259,7 +255,7 @@ def test_unchanged_yaml_with_indented_sequence_is_noop() -> None:
     doc = b"# top comment\na: 1\nnested:\n  x:\n    - 1\n    - 2\n  y: null\n"
     _seed(fid, base=doc, local=doc)
 
-    out = reconcile_structured_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=doc, tracked=doc, fmt=_FMT)
 
     assert out.kind is ReconcileKind.NOOP
 
@@ -270,7 +266,7 @@ def test_live_already_equal_to_new_tracked_only_advances_base() -> None:
     both = b"l:\n  - a\nz: 9\n"
     _seed(fid, base=base, local=both)
 
-    out = reconcile_structured_file(_P, fid, live=both, tracked=both, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=both, tracked=both, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == both
@@ -318,7 +314,7 @@ def test_yaml_the_key_engine_cannot_model_is_line_merged(
     fid = file_id("unmodelled")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -338,9 +334,7 @@ def test_unparseable_live_json_defers_instead_of_raising(broken: bytes) -> None:
     fid = file_id("broken-live")
     _seed(fid, base=_JSON_BASE, local=broken)
 
-    out = reconcile_structured_file(
-        _P, fid, live=broken, tracked=_JSON_UPSTREAM, fmt=_JSON
-    )
+    out = reconcile_file(_P, fid, live=broken, tracked=_JSON_UPSTREAM, fmt=_JSON)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == _JSON_BASE
@@ -354,7 +348,7 @@ def test_use_tracked_replaces_unparseable_live_json(
     fid = file_id("broken-live-auto")
     _seed(fid, base=_JSON_BASE, local=broken)
 
-    out = reconcile_structured_file(
+    out = reconcile_file(
         _P, fid, live=broken, tracked=upstream, fmt=_JSON, auto=AutoSide.THEIRS
     )
 
@@ -371,9 +365,7 @@ def test_unparseable_live_json_is_kept_without_use_tracked(
     broken = b'{\n  "a": 1,\n  "L'
     _seed(fid, base=_JSON_BASE, local=broken)
 
-    out = reconcile_structured_file(
-        _P, fid, live=broken, tracked=_JSON_BASE, fmt=_JSON, auto=auto
-    )
+    out = reconcile_file(_P, fid, live=broken, tracked=_JSON_BASE, fmt=_JSON, auto=auto)
 
     assert out.kind is ReconcileKind.NOOP
 
@@ -384,7 +376,7 @@ def test_use_tracked_keeps_host_edit_when_neither_side_parses() -> None:
     host = b"---\nkind: A\n---\nkind: MINE\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(
+    out = reconcile_file(
         _P, fid, live=host, tracked=base, fmt=_FMT, auto=AutoSide.THEIRS
     )
 
@@ -398,7 +390,7 @@ def test_duplicate_key_live_json_is_line_merged() -> None:
     upstream = b'{\n  "a": 1,\n  "m": 0,\n  "z": 2\n}\n'
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "a": 1,\n  "a": 5,\n  "m": 0,\n  "z": 2\n}\n'
@@ -457,7 +449,7 @@ def test_independent_edits_keep_untouched_lines_byte_identical(
     fid = file_id("line-preserving")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -491,7 +483,7 @@ def test_line_merge_that_would_duplicate_a_key_yields_to_the_key_merge(
     fid = file_id("same-key-both")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -505,7 +497,7 @@ def test_adjacent_line_edits_merge_by_key_with_exact_bytes() -> None:
     upstream = b"editor:\n  fontSize: 12\n  theme: dark\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"editor:\n  fontSize: 18\n  theme: dark\n"
@@ -546,7 +538,7 @@ def test_adjacent_edits_keep_the_live_layout(
     fid = file_id("adjacent-layout")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -560,7 +552,7 @@ def test_two_keys_merged_on_one_line_are_re_serialised() -> None:
     upstream = b"m: {x: 1, y: 7}\nz: 0\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"m: {x: 5, y: 7}\nz: 0\n"
@@ -604,7 +596,7 @@ def test_anchors_and_merge_keys_survive_a_merge(
     fid = file_id("anchors")
     _seed(fid, base=_ANCHORED, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -630,7 +622,7 @@ def test_alias_bearing_yaml_is_never_re_serialised(base: bytes) -> None:
     upstream = base.replace(b"port: 1", b"port: 2")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == base
@@ -646,9 +638,7 @@ def test_alias_bearing_yaml_conflict_auto_takes_exact_side(
     upstream = base.replace(b"port: 1", b"port: 2")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(
-        _P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side
-    )
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT, auto=side)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == (host if side is AutoSide.OURS else upstream)
@@ -663,7 +653,7 @@ def test_merged_strict_json_stays_strict_json() -> None:
     upstream = b'{\n  "a": 1\n}\n'
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert isinstance(out.content, bytes)
@@ -677,7 +667,7 @@ def test_json5_syntax_already_in_use_may_stay_in_the_merge() -> None:
     upstream = b'{\n  "a": 1,\n}\n'
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "a": 5,\n}\n'
@@ -718,7 +708,7 @@ def test_json_key_merge_follows_the_live_layout(
     fid = file_id("json-layout")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -763,7 +753,7 @@ def test_re_serialised_yaml_keeps_the_source_byte_layout(base: bytes) -> None:
     upstream = base.replace(b"x: 1, y: 2", b"x: 1, y: 7")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == base.replace(b"x: 1, y: 2", b"x: 5, y: 7")
@@ -815,7 +805,7 @@ def test_json_array_root_merges_element_wise(
     fid = file_id("array-root")
     _seed(fid, base=_KEYS, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -861,7 +851,7 @@ def test_json_array_root_same_position_edits_still_conflict(
     fid = file_id("array-root-conflict")
     _seed(fid, base=_KEYS, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == _KEYS
@@ -874,7 +864,7 @@ def test_json_array_root_insertion_inside_a_replaced_run_conflicts() -> None:
     upstream = b"[\n  1,\n  7,\n  8,\n  6,\n  4\n]\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.DEFERRED
 
@@ -886,7 +876,7 @@ def test_json_array_root_insertion_between_two_edited_elements_merges() -> None:
     upstream = b"[\n  1,\n  7,\n  8,\n  4\n]\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"[\n  1,\n  7,\n  9,\n  8,\n  4\n]\n"
@@ -899,7 +889,7 @@ def test_json_array_root_identical_edits_on_both_sides_merge() -> None:
     upstream = b"[\n  0,\n  2,\n  3,\n  4,\n  5\n]\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"[\n  0,\n  2,\n  3,\n  4,\n  5\n]\n"
@@ -911,7 +901,7 @@ def test_alias_bearing_yaml_still_merges_adjacent_edits_by_key() -> None:
     upstream = _ANCHORED.replace(b"z: 1", b"z: 2")
     _seed(fid, base=_ANCHORED, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == host.replace(b"z: 1", b"z: 2")
@@ -921,9 +911,7 @@ def test_alias_bearing_yaml_still_merges_adjacent_edits_by_key() -> None:
 def _assert_converged(fid, out, upstream: bytes, fmt: StructuredFormat) -> None:
     assert isinstance(out.content, bytes)
     _seed(fid, base=upstream, local=out.content)
-    again = reconcile_structured_file(
-        _P, fid, live=out.content, tracked=upstream, fmt=fmt
-    )
+    again = reconcile_file(_P, fid, live=out.content, tracked=upstream, fmt=fmt)
     assert again.kind is ReconcileKind.NOOP
 
 
@@ -988,7 +976,7 @@ def test_both_sides_inserting_at_one_spot_keeps_both_lines(
     fid = file_id("same-spot")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1055,7 +1043,7 @@ def test_interleaved_edits_keep_every_live_only_line(
     fid = file_id("interleaved")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1106,7 +1094,7 @@ def test_de_aliased_key_keeps_the_value_its_side_wrote(
     fid = file_id("de-aliased")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1121,7 +1109,7 @@ def test_commented_json_does_not_gain_a_trailing_comma_either() -> None:
     upstream = b'{\n  "k0": 4,\n  "k4": 3\n}\n'
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b'{\n  "k0": 4,\n  "k4": 3\n  // h note\n}\n'
@@ -1182,7 +1170,7 @@ def test_non_colliding_edits_in_one_hunk_merge_from_the_lines(
     fid = file_id("one-hunk")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1196,7 +1184,7 @@ def test_both_sides_changing_one_line_differently_is_re_serialised() -> None:
     upstream = b"b: 2\nl:\n    - x\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"b: 2\nl:\n    - x\n"
@@ -1241,9 +1229,7 @@ def test_whole_file_reformat_costs_a_fixed_number_of_parses(
     monkeypatch.setattr(structured_units, "_load_model", counting_load)
     started = time.monotonic()
 
-    out = reconcile_apply.reconcile_structured_file(
-        _P, fid, live=host, tracked=upstream, fmt=fmt
-    )
+    out = reconcile_apply.reconcile_file(_P, fid, live=host, tracked=upstream, fmt=fmt)
 
     elapsed = time.monotonic() - started
     assert out.kind is ReconcileKind.WRITE
@@ -1403,7 +1389,7 @@ def test_a_line_both_sides_added_next_to_an_edit_appears_once(
     fid = file_id("added-twice")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1417,7 +1403,7 @@ def test_crlf_document_shrunk_to_one_unterminated_line_keeps_crlf() -> None:
     upstream = b"b: 2"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"b: 2\r\n# host note\r\n"
@@ -1430,7 +1416,7 @@ def test_re_serialised_merge_of_a_one_line_live_file_keeps_crlf() -> None:
     upstream = b"a: 1\r\nb: 3\r\nc: 4\r\n"
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_FMT)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == b"b: 3\r\nc: 4"
@@ -1505,7 +1491,7 @@ def test_json_array_root_keeps_a_repeated_element_as_data(
     fid = file_id("array-root-repeat")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
+    out = reconcile_file(_P, fid, live=host, tracked=upstream, fmt=_JSON)
 
     assert out.kind is ReconcileKind.WRITE
     assert out.content == expected
@@ -1517,9 +1503,7 @@ def test_json_array_root_upstream_append_equal_to_a_host_edit_conflicts() -> Non
     host = _array(1, "A", "B")
     _seed(fid, base=base, local=host)
 
-    out = reconcile_structured_file(
-        _P, fid, live=host, tracked=_array(1, "A", 2, "B"), fmt=_JSON
-    )
+    out = reconcile_file(_P, fid, live=host, tracked=_array(1, "A", 2, "B"), fmt=_JSON)
 
     assert out.kind is ReconcileKind.DEFERRED
     assert read_base(_P, fid) == base

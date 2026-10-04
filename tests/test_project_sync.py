@@ -45,7 +45,7 @@ from setforge.reconcile import record as record_base
 from setforge.reconcile.merge_model import ABSENT, Clean, Conflict, MergeResult
 from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import WizardResult
-from setforge.reconcile_apply import reconcile_structured_file
+from setforge.reconcile_apply import reconcile_file
 from tests.project_helpers import _config, _git_repo
 
 
@@ -2316,7 +2316,5 @@ def test_public_sync_merges_a_structured_member_to_the_bytes_install_gives(
         record_base("install", fid, base=base, local=local)
     fmt = structured_format(live)
     assert fmt is not None
-    installed = reconcile_structured_file(
-        "install", fid, live=local, tracked=profile, fmt=fmt
-    )
+    installed = reconcile_file("install", fid, live=local, tracked=profile, fmt=fmt)
     assert installed.content == expected

@@ -296,7 +296,7 @@ def _auto_side(
     return None
 
 
-def _resolve_plain_reconcile(
+def _resolve_reconcile(
     profile: str,
     sub_name: str,
     sub_src: Path,
@@ -306,16 +306,18 @@ def _resolve_plain_reconcile(
     interactive: bool,
     section_auto: reconcile_apply.ReconcileAuto | None,
 ) -> _PendingDeploy | None:
-    """Resolve a PLAIN tracked file through the 3-way reconcile engine.
+    """Resolve a tracked file through the 3-way reconcile engine.
 
-    Returns the pass-1 record, or ``None`` to fall back to the legacy
-    verbatim path. The caller has already established eligibility (no
-    disposition, no spans, no host-local overlay, regular file); this
-    function adds the final gate — both live and tracked must be UTF-8, since
-    the deploy write path and the conflict wizard are text-based (a binary
-    plain file stays verbatim). The merged content overrides the verbatim
-    scaffold's ``content``; the store ``record`` rides pass 2. ``section_auto``
-    (``--auto``) resolves a conflict non-interactively by taking a side.
+    Returns the pass-1 record, or ``None`` to fall back to the verbatim path:
+    both live and tracked must be UTF-8, since the deploy write path and the
+    conflict wizard are text-based (a binary file stays verbatim). A file whose
+    ``dst`` is a structured format (yaml/json/jsonc) merges at key granularity,
+    so an independent-key upstream change does not false-conflict with a host
+    edit the way the line 3-way would; a genuine same-key collision is handled
+    inside the engine (line wizard / ``--auto`` / DEFERRED). The merged content
+    overrides the verbatim scaffold's ``content``; the store ``record`` rides
+    pass 2. ``section_auto`` (``--auto``) resolves a conflict non-interactively
+    by taking a side.
     """
     scaffold = deploy.resolve_deploy(sub_src, sub_dst, mode=tracked_file.mode)
     tracked_bytes = sub_src.read_bytes()
@@ -330,68 +332,18 @@ def _resolve_plain_reconcile(
     # it is never auto-invoked. The factory returns a closure — claude is
     # spawned only if the user presses the button.
     claude_merge = _claude_merge_for(sub_dst, interactive=interactive)
-    outcome = reconcile_apply.reconcile_plain_file(
+    outcome = reconcile_apply.reconcile_file(
         profile,
         fid,
         live=reconcile.ABSENT if live_bytes is None else live_bytes,
         tracked=tracked_bytes,
+        fmt=structured_format(sub_dst),
         interactive=interactive,
         auto=_auto_side(section_auto),
         display_path=str(sub_dst),
         claude_merge=claude_merge,
         # Only consulted on the interactive seed path; the non-interactive
         # seed keeps live without prompting.
-        seed_prompt=_seed_prompt_interactive,
-    )
-    return _pending_from_reconcile(
-        sub_name, sub_src, sub_dst, tracked_file, scaffold, fid, outcome, live_bytes
-    )
-
-
-def _resolve_structured_reconcile(
-    profile: str,
-    sub_name: str,
-    sub_src: Path,
-    sub_dst: Path,
-    tracked_file: TrackedFile,
-    *,
-    interactive: bool,
-    section_auto: reconcile_apply.ReconcileAuto | None,
-) -> _PendingDeploy | None:
-    """Resolve a STRUCTURED (yaml/json/jsonc) tracked file via the key-aware engine.
-
-    Sibling of :func:`_resolve_plain_reconcile` for a file whose ``dst`` is a
-    structured format: it merges at key granularity
-    (:func:`~setforge.reconcile_apply.reconcile_structured_file`), so an
-    independent-key upstream change does not false-conflict with a host edit the
-    way the line 3-way would. Returns ``None`` (the caller falls back to the line
-    path, then to verbatim) when ``dst`` is not a structured format or either side
-    is not UTF-8. Eligibility (no disposition/spans/host-local overlay) is the
-    caller's; a genuine same-key collision is handled inside the engine (it
-    delegates to the line wizard / ``--auto`` / DEFERRED).
-    """
-    fmt = structured_format(sub_dst)
-    if fmt is None:
-        return None
-    scaffold = deploy.resolve_deploy(sub_src, sub_dst, mode=tracked_file.mode)
-    tracked_bytes = sub_src.read_bytes()
-    live_bytes = scaffold.real_dst.read_bytes() if scaffold.dst_existed else None
-    if not _is_utf8(tracked_bytes) or (
-        live_bytes is not None and not _is_utf8(live_bytes)
-    ):
-        return None
-    fid = reconcile.file_id(sub_name)
-    claude_merge = _claude_merge_for(sub_dst, interactive=interactive)
-    outcome = reconcile_apply.reconcile_structured_file(
-        profile,
-        fid,
-        live=reconcile.ABSENT if live_bytes is None else live_bytes,
-        tracked=tracked_bytes,
-        fmt=fmt,
-        interactive=interactive,
-        auto=_auto_side(section_auto),
-        display_path=str(sub_dst),
-        claude_merge=claude_merge,
         seed_prompt=_seed_prompt_interactive,
     )
     return _pending_from_reconcile(
@@ -495,21 +447,13 @@ def _resolve_one_pending(
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
     # (a local edit merges against the recorded base rather than being silently
-    # overwritten). Structured (YAML/JSON/JSONC) first, then plain (line/
-    # markdown); a binary / non-utf8 / deletion-edge file returns None from both
-    # and falls back to the verbatim tracked deploy below. Host-local *section*
+    # overwritten): structured (YAML/JSON/JSONC) by key, the rest by line.
+    # A binary / non-utf8 / deletion-edge file returns None and falls back to
+    # the verbatim tracked deploy below. Host-local *section*
     # seeding/injection was retired with the disposition/spans overlay model, so
     # a file carrying host_local sections is reconciled like any other (its
     # existing live content is preserved by the 3-way; no section is injected).
-    reconciled = _resolve_structured_reconcile(
-        profile,
-        sub_name,
-        sub_src,
-        sub_dst,
-        tracked_file,
-        interactive=interactive,
-        section_auto=section_auto,
-    ) or _resolve_plain_reconcile(
+    reconciled = _resolve_reconcile(
         profile,
         sub_name,
         sub_src,

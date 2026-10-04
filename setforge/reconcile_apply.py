@@ -1,14 +1,12 @@
 """Apply the 3-way reconcile engine to a single tracked file.
 
 The install-side glue that activates the reconcile engine per file:
-:func:`reconcile_plain_file` for **line** (text) files, and
-:func:`reconcile_structured_file` for **structured** (yaml/json/jsonc) files —
-the latter a key-aware sibling that merges independent-key upstream changes
-clean where a line merge would false-conflict, falling back to the line path
-for a genuine same-key collision. The disposition/spans cutover migrates every
-deployed file onto this engine and removes the legacy ``deploy`` path.
+:func:`reconcile_file` line-merges **text** files and, given a structured
+format (yaml/json/jsonc), first merges at key granularity so independent-key
+upstream changes merge clean where a line merge would false-conflict, falling
+back to the line path for a genuine same-key collision.
 
-:func:`reconcile_plain_file` does not MUTATE the filesystem: it reads the
+:func:`reconcile_file` does not MUTATE the filesystem: it reads the
 recorded base from the store, runs :func:`setforge.reconcile.merge` against
 the live + tracked content, drives the conflict wizard when needed, and
 returns a :class:`ReconcileOutcome` describing what the caller should do —
@@ -81,8 +79,7 @@ __all__ = [
     "ReconcileOutcome",
     "SeedChoice",
     "SeedPrompt",
-    "reconcile_plain_file",
-    "reconcile_structured_file",
+    "reconcile_file",
 ]
 
 
@@ -147,7 +144,7 @@ def resolve_conflicts(
 
 
 class ReconcileKind(StrEnum):
-    """What the caller should do with a :func:`reconcile_plain_file` result."""
+    """What the caller should do with a :func:`reconcile_file` result."""
 
     NOOP = "noop"
     WRITE = "write"
@@ -158,7 +155,7 @@ class ReconcileKind(StrEnum):
 
 @dataclass(slots=True, frozen=True)
 class ReconcileOutcome:
-    """The decision for one plain tracked file."""
+    """The decision for one tracked file."""
 
     kind: ReconcileKind
     content: bytes | Absent | None = None
@@ -267,81 +264,6 @@ def _absence_outcome(
     if read_local(profile, fid) is ABSENT and base_raw == tracked:
         return ReconcileOutcome(ReconcileKind.NOOP)
     return ReconcileOutcome(ReconcileKind.REMOVE, content=ABSENT, new_base=tracked)
-
-
-def reconcile_plain_file(
-    profile: str,
-    fid: FileId,
-    *,
-    live: bytes | Absent,
-    tracked: bytes,
-    interactive: bool = False,
-    auto: AutoSide | None = None,
-    display_path: str | None = None,
-    claude_merge: ClaudeMergeFn = claude_merge_unavailable,
-    seed_prompt: SeedPrompt = _default_seed_prompt,
-) -> ReconcileOutcome:
-    """Decide how to reconcile one plain tracked file via the 3-way engine.
-
-    ``base = read_base`` (``ABSENT`` when no base is recorded — a first
-    install or a not-yet-seeded divergence), ``ours = live``, ``theirs =
-    tracked``. A clean merge that already equals live with the base already
-    at tracked is a :attr:`~ReconcileKind.NOOP`; a clean merge resolving to
-    absence is a :attr:`~ReconcileKind.REMOVE` (unlink live, record
-    ``local=ABSENT``); any other clean merge is a :attr:`~ReconcileKind.WRITE`
-    advancing the base to ``tracked``.
-
-    A conflict resolves by, in order: the per-region wizard when
-    ``interactive`` (a cancel / skipped region writes nothing and does NOT
-    re-baseline); else ``--auto`` (``auto`` set) collapsing every region to
-    that side; else :attr:`~ReconcileKind.DEFERRED` — keeping the local file,
-    leaving the upstream change to re-surface, and letting the caller gate the
-    exit code. The full-screen wizard is never reached without a TTY. ``auto``
-    also drives the no-base seed (OURS keeps live, THEIRS takes upstream).
-    """
-    base_raw = read_base(profile, fid)
-
-    # Seed: a divergent pre-existing live file with no recorded base. Without
-    # a base the 3-way would treat both sides as conflicting "adds"; instead
-    # establish the upstream as the merge base and decide what live holds now:
-    # --auto picks the side, else interactively prompt, else (non-interactive)
-    # keep live and flag the seed so the caller warns.
-    if base_raw is None and isinstance(live, bytes) and live != tracked:
-        return _seed_outcome(
-            fid,
-            live=live,
-            tracked=tracked,
-            interactive=interactive,
-            auto=auto,
-            display_path=display_path,
-            seed_prompt=seed_prompt,
-        )
-
-    base: MergeInput = ABSENT if base_raw is None else base_raw
-    result: MergeResult = merge(base, live, tracked)
-
-    if result.clean:
-        merged = result.merged()
-        if result.absent:
-            return _absence_outcome(profile, fid, base_raw, tracked, auto)
-        if merged == live and base_raw == tracked:
-            return ReconcileOutcome(ReconcileKind.NOOP)
-        return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
-
-    if interactive:
-        wizard = resolve_conflicts(
-            fid, result, display_path=display_path, claude_merge=claude_merge
-        )
-        if wizard is CANCEL:
-            return ReconcileOutcome(ReconcileKind.CANCELLED)
-        if wizard.deferred:
-            return ReconcileOutcome(ReconcileKind.DEFERRED)
-        return _resolved_outcome(_wizard_content(result, wizard), new_base=tracked)
-
-    if auto is not None:
-        return _resolved_outcome(_take_side(result, auto), new_base=tracked)
-
-    return ReconcileOutcome(ReconcileKind.DEFERRED)
 
 
 def _parses(data: bytes, fmt: StructuredFormat) -> bool:
@@ -649,40 +571,90 @@ def _key_merge(
         return None
 
 
-def reconcile_structured_file(
+def _structured_outcome(
+    base: bytes | None,
+    live: bytes | Absent,
+    tracked: bytes,
+    fmt: StructuredFormat | None,
+    auto: AutoSide | None,
+) -> ReconcileOutcome | None:
+    """Settle a structured file at key granularity, or ``None`` to line-merge it."""
+    if fmt is None or base is None or not isinstance(live, bytes):
+        return None
+    # A live file the format cannot parse (truncated write, editor crash)
+    # has no keys to merge; --auto=use-tracked restores the tracked file.
+    if (
+        auto is AutoSide.THEIRS
+        and live != tracked
+        and not _parses(live, fmt)
+        and _parses(tracked, fmt)
+    ):
+        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+
+    # Nothing to merge: one side did not move, or both already agree. The
+    # source bytes stand verbatim — a model round-trip would reformat them.
+    if live == tracked or tracked == base:
+        if base == tracked:
+            return ReconcileOutcome(ReconcileKind.NOOP)
+        return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
+    if live == base:
+        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+
+    merged = _key_merge(base, live, tracked, fmt)
+    if merged is None:
+        return None
+    return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
+
+
+def reconcile_file(
     profile: str,
     fid: FileId,
     *,
     live: bytes | Absent,
     tracked: bytes,
-    fmt: StructuredFormat,
+    fmt: StructuredFormat | None = None,
     interactive: bool = False,
     auto: AutoSide | None = None,
     display_path: str | None = None,
     claude_merge: ClaudeMergeFn = claude_merge_unavailable,
     seed_prompt: SeedPrompt = _default_seed_prompt,
 ) -> ReconcileOutcome:
-    """Decide how to reconcile one STRUCTURED (yaml/json/jsonc) tracked file.
+    """Decide how to reconcile one tracked file via the 3-way engine.
 
-    The key-aware sibling of :func:`reconcile_plain_file`. An independent-key
-    upstream change merges CLEAN against a host edit where the line 3-way would
-    false-conflict, via :func:`~setforge.structural_merge.merge_structural` over
-    comment-preserving models. The key merge decides the VALUES; the bytes are the
-    line 3-way's whenever that holds the same values (see :func:`_key_merge` for
-    how its conflict hunks are settled), else the re-serialised model. When one
-    side did not move, the other side's bytes are used verbatim. The base-absent
-    seed is
-    byte-identical to the plain path. A GENUINE same-key collision
-    (``merge_structural`` reports conflicts) is delegated to
-    :func:`reconcile_plain_file`, so the one proven wizard / ``--auto`` / DEFERRED
-    tail resolves it — no separate structured conflict UI is introduced.
+    ``base = read_base`` (``ABSENT`` when no base is recorded — a first
+    install or a not-yet-seeded divergence), ``ours = live``, ``theirs =
+    tracked``. A clean merge that already equals live with the base already
+    at tracked is a :attr:`~ReconcileKind.NOOP`; a clean merge resolving to
+    absence is a :attr:`~ReconcileKind.REMOVE` (unlink live, record
+    ``local=ABSENT``); any other clean merge is a :attr:`~ReconcileKind.WRITE`
+    advancing the base to ``tracked``.
 
-    ``fmt`` is the caller-detected :class:`StructuredFormat`.
+    ``fmt`` (the caller-detected :class:`StructuredFormat` of a yaml/json/jsonc
+    file) merges at key granularity first: an independent-key upstream change
+    merges CLEAN against a host edit where the line 3-way would false-conflict,
+    via :func:`~setforge.structural_merge.merge_structural` over
+    comment-preserving models. The key merge decides the VALUES; the bytes are
+    the line 3-way's whenever that holds the same values (see :func:`_key_merge`
+    for how its conflict hunks are settled), else the re-serialised model. When
+    one side did not move, the other side's bytes are used verbatim. A GENUINE
+    same-key collision continues into the line path below, so the one wizard /
+    ``--auto`` / DEFERRED tail resolves it.
+
+    A conflict resolves by, in order: the per-region wizard when
+    ``interactive`` (a cancel / skipped region writes nothing and does NOT
+    re-baseline); else ``--auto`` (``auto`` set) collapsing every region to
+    that side; else :attr:`~ReconcileKind.DEFERRED` — keeping the local file,
+    leaving the upstream change to re-surface, and letting the caller gate the
+    exit code. The full-screen wizard is never reached without a TTY. ``auto``
+    also drives the no-base seed (OURS keeps live, THEIRS takes upstream).
     """
     base_raw = read_base(profile, fid)
 
-    # Seed a divergent pre-existing live file with no recorded base — identical to
-    # the plain path (base := upstream; live decides what it holds now).
+    # Seed: a divergent pre-existing live file with no recorded base. Without
+    # a base the 3-way would treat both sides as conflicting "adds"; instead
+    # establish the upstream as the merge base and decide what live holds now:
+    # --auto picks the side, else interactively prompt, else (non-interactive)
+    # keep live and flag the seed so the caller warns.
     if base_raw is None and isinstance(live, bytes) and live != tracked:
         return _seed_outcome(
             fid,
@@ -694,46 +666,32 @@ def reconcile_structured_file(
             seed_prompt=seed_prompt,
         )
 
-    if base_raw is not None and isinstance(live, bytes):
-        # A live file the format cannot parse (truncated write, editor crash)
-        # has no keys to merge; --auto=use-tracked restores the tracked file.
-        if (
-            auto is AutoSide.THEIRS
-            and live != tracked
-            and not _parses(live, fmt)
-            and _parses(tracked, fmt)
-        ):
-            return ReconcileOutcome(
-                ReconcileKind.WRITE, content=tracked, new_base=tracked
-            )
+    structured = _structured_outcome(base_raw, live, tracked, fmt, auto)
+    if structured is not None:
+        return structured
 
-        # Nothing to merge: one side did not move, or both already agree. The
-        # source bytes stand verbatim — a model round-trip would reformat them.
-        if live == tracked or tracked == base_raw:
-            if base_raw == tracked:
-                return ReconcileOutcome(ReconcileKind.NOOP)
-            return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
-        if live == base_raw:
-            return ReconcileOutcome(
-                ReconcileKind.WRITE, content=tracked, new_base=tracked
-            )
+    base: MergeInput = ABSENT if base_raw is None else base_raw
+    result: MergeResult = merge(base, live, tracked)
 
-        merged = _key_merge(base_raw, live, tracked, fmt)
-        if merged is not None:
-            return ReconcileOutcome(
-                ReconcileKind.WRITE, content=merged, new_base=tracked
-            )
+    if result.clean:
+        merged = result.merged()
+        if result.absent:
+            return _absence_outcome(profile, fid, base_raw, tracked, auto)
+        if merged == live and base_raw == tracked:
+            return ReconcileOutcome(ReconcileKind.NOOP)
+        return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
 
-    # A genuine same-key collision (or an absent / edge live) falls back to the
-    # proven line path — its wizard / --auto / DEFERRED resolves the conflict.
-    return reconcile_plain_file(
-        profile,
-        fid,
-        live=live,
-        tracked=tracked,
-        interactive=interactive,
-        auto=auto,
-        display_path=display_path,
-        claude_merge=claude_merge,
-        seed_prompt=seed_prompt,
-    )
+    if interactive:
+        wizard = resolve_conflicts(
+            fid, result, display_path=display_path, claude_merge=claude_merge
+        )
+        if wizard is CANCEL:
+            return ReconcileOutcome(ReconcileKind.CANCELLED)
+        if wizard.deferred:
+            return ReconcileOutcome(ReconcileKind.DEFERRED)
+        return _resolved_outcome(_wizard_content(result, wizard), new_base=tracked)
+
+    if auto is not None:
+        return _resolved_outcome(_take_side(result, auto), new_base=tracked)
+
+    return ReconcileOutcome(ReconcileKind.DEFERRED)
