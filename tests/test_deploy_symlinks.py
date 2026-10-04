@@ -12,15 +12,6 @@ Contract for :func:`setforge.deploy.deploy_symlinked_file`:
   ``dst`` (anti-pattern check 4: guard before ``os.symlink``).
 - Updates a pre-existing symlink at ``dst`` atomically via
   ``tmp + os.replace`` (no unlink/symlink gap).
-
-The corresponding revert helper
-(:func:`setforge.cli._install_helpers.revert_symlink_deployment`) contract:
-
-- Refuses to unlink when the user retargeted the symlink (target
-  drift since deploy).
-- Refuses to unlink when a regular file is present at dst (user
-  replaced the link with their own content).
-- Otherwise unlinks via ``Path.unlink(missing_ok=False)``.
 """
 
 from __future__ import annotations
@@ -30,7 +21,6 @@ from pathlib import Path
 import pytest
 
 from setforge import deploy
-from setforge.cli._install_helpers import revert_symlink_deployment
 from setforge.config import TrackedFile
 from setforge.errors import SetforgeError
 from tests.verb_calls import deploy_symlinked_file
@@ -229,60 +219,3 @@ def test_deploy_symlink_survives_stale_tmp_collision(tmp_path: Path) -> None:
     assert target.read_text() == "payload\n"
     # The stale collision is left untouched (not our entry to clean up).
     assert stale.is_dir()
-
-
-def test_revert_refuses_changed_symlink(tmp_path: Path) -> None:
-    """``revert_symlink_deployment`` refuses to unlink when target drifts.
-
-    User retargeted the symlink since deploy; revert MUST refuse
-    rather than blindly unlinking — the link may now carry meaning
-    setforge isn't responsible for.
-    """
-    dst = tmp_path / "link"
-    user_retarget = "/tmp/user-retarget"
-    dst.symlink_to(user_retarget)
-
-    expected = "/tmp/setforge-original-target"
-    with pytest.raises(SetforgeError) as exc_info:
-        revert_symlink_deployment(dst, expected)
-    msg = str(exc_info.value)
-    assert "target changed" in msg
-    assert expected in msg
-    assert user_retarget in msg
-    # Link NOT removed.
-    assert dst.is_symlink()
-
-
-def test_revert_unlinks_matching_symlink(tmp_path: Path) -> None:
-    """``revert_symlink_deployment`` unlinks the link when target matches."""
-    dst = tmp_path / "link"
-    expected = "/tmp/setforge-target"
-    dst.symlink_to(expected)
-    assert dst.is_symlink()
-
-    removed = revert_symlink_deployment(dst, expected)
-
-    assert removed is True
-    assert not dst.is_symlink()
-    assert not dst.exists()
-
-
-def test_revert_returns_false_when_link_absent(tmp_path: Path) -> None:
-    """``revert_symlink_deployment`` is idempotent: no link, no error."""
-    dst = tmp_path / "link"
-    assert not dst.exists()
-
-    removed = revert_symlink_deployment(dst, "/tmp/anything")
-    assert removed is False
-
-
-def test_revert_refuses_regular_file_at_dst(tmp_path: Path) -> None:
-    """``revert_symlink_deployment`` refuses on a regular file at dst."""
-    dst = tmp_path / "link"
-    dst.write_text("user-data\n")  # regular file, not a symlink
-
-    with pytest.raises(SetforgeError) as exc_info:
-        revert_symlink_deployment(dst, "/tmp/expected")
-    assert "regular file" in str(exc_info.value)
-    # User data not touched.
-    assert dst.read_text() == "user-data\n"

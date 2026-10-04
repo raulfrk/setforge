@@ -22,7 +22,6 @@ from setforge.transitions import state_root
 _SCHEMA = 1
 _MAX_STATE = 16 * 1024 * 1024
 _MAX_PACKET = 65516
-_DRIVER = "setforge-project"
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,11 +227,6 @@ def process_filter(
         _write_packets(stdout, result)
         _write_list(stdout, [])
         stdout.flush()
-
-
-def driver_name() -> str:
-    """Return the stable Git filter driver name."""
-    return _DRIVER
 
 
 def _filter_target() -> Path:

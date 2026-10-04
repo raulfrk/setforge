@@ -434,19 +434,6 @@ def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
     return choice
 
 
-def _lstat_safe(path: Path) -> os.stat_result | None:
-    """Return ``path.lstat()`` or ``None`` if missing.
-
-    Uses ``lstat`` (not ``stat``) so symlink orphans are detected as
-    symlinks without dereferencing — never call ``resolve()`` before
-    unlinking (would torch the user's pointed-to file or directory).
-    """
-    try:
-        return path.lstat()
-    except FileNotFoundError:
-        return None
-
-
 def _write_orphan_transition(
     profile: str, deltas: tuple[transitions.FilesystemDelta, ...]
 ) -> Path:

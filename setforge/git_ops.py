@@ -206,37 +206,9 @@ def status_porcelain(repo: Path, path: str | None = None) -> str:
     return result.stdout
 
 
-def rev_parse_upstream(repo: Path) -> str | None:
-    """Return the upstream-tracking ref (e.g. ``origin/main``) or None.
-
-    Wraps ``git rev-parse --abbrev-ref @{upstream}``. Returns ``None``
-    when there's no upstream configured (the rev-parse exits non-zero
-    with "no upstream configured" — that's expected, not an error).
-    """
-    result = _run_git(
-        ["rev-parse", "--abbrev-ref", "@{upstream}"],
-        cwd=repo,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
-
-
-def is_git_repo(path: Path) -> bool:
-    """Return True if ``path/.git`` exists (file or directory).
-
-    Cheap structural check — doesn't shell out. Used by the dirty-gate
-    to skip the porcelain check when a PathSource is not under git.
-    """
-    return (path / ".git").exists()
-
-
 __all__ = [
     "git_checkout",
     "git_clone",
     "git_fetch",
-    "is_git_repo",
-    "rev_parse_upstream",
     "status_porcelain",
 ]

@@ -1185,7 +1185,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
 ) -> _CapabilityApplyResult:
     """Apply frozen target plans in the selected bundles' graph order."""
     cfg = plan.ctx.cfg
-    resolved = plan.ctx.resolved
     provision_results: tuple[ReconcileResult, ...] = ()
     deploy_outcome: install_helpers_mod.DeployOutcome | None = None
     seeded: tuple[str, ...] = ()
@@ -1221,9 +1220,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 restore_transitions=False,
                 adapters=(),
             )
-        provision_results = tuple(
-            reconcile_packages(cfg, resolved, lock=active_lock, plan=plan.provisioning)
-        )
+        provision_results = tuple(reconcile_packages(plan.provisioning))
         if any(
             outcome.outcome is Outcome.OK
             for result in provision_results

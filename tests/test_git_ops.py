@@ -19,8 +19,6 @@ from setforge.git_ops import (
     git_checkout,
     git_clone,
     git_fetch,
-    is_git_repo,
-    rev_parse_upstream,
     status_porcelain,
 )
 
@@ -50,25 +48,6 @@ def _git_init(repo: Path, *, initial_branch: str = "main") -> Path:
         capture_output=True,
     )
     return repo
-
-
-# ---------------------------------------------------------------------------
-# is_git_repo
-# ---------------------------------------------------------------------------
-
-
-class TestIsGitRepo:
-    def test_returns_true_for_git_repo(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        assert is_git_repo(repo) is True
-
-    def test_returns_false_for_plain_directory(self, tmp_path: Path) -> None:
-        plain = tmp_path / "plain"
-        plain.mkdir()
-        assert is_git_repo(plain) is False
-
-    def test_returns_false_for_nonexistent_path(self, tmp_path: Path) -> None:
-        assert is_git_repo(tmp_path / "nope") is False
 
 
 # ---------------------------------------------------------------------------
@@ -110,40 +89,6 @@ class TestStatusPorcelain:
         scoped = status_porcelain(repo, path="tracked")
         assert "tracked/" in scoped
         assert "outside.txt" not in scoped
-
-
-# ---------------------------------------------------------------------------
-# rev_parse_upstream
-# ---------------------------------------------------------------------------
-
-
-class TestRevParseUpstream:
-    def test_returns_none_when_no_upstream(self, tmp_path: Path) -> None:
-        # Local-only repo (no remote configured) -> no upstream.
-        repo = _git_init(tmp_path / "repo")
-        assert rev_parse_upstream(repo) is None
-
-    def test_returns_upstream_name_when_configured(self, tmp_path: Path) -> None:
-        # Create a bare "remote" + a "local" clone of it; main tracks origin/main.
-        remote = tmp_path / "remote.git"
-        subprocess.run(
-            ["git", "init", "-q", "--bare", str(remote)],
-            check=True,
-            capture_output=True,
-        )
-        source_repo = _git_init(tmp_path / "source")
-        subprocess.run(
-            ["git", "remote", "add", "origin", str(remote)],
-            cwd=source_repo,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "push", "-q", "-u", "origin", "main"],
-            cwd=source_repo,
-            check=True,
-            capture_output=True,
-        )
-        assert rev_parse_upstream(source_repo) == "origin/main"
 
 
 # ---------------------------------------------------------------------------
