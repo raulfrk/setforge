@@ -589,7 +589,7 @@ def test_apply_delete_holds_profile_lock(
         events.append("write_transition")
         return real_write(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(cleanup_mod, "mutation_locks", _recording_locks)
+    monkeypatch.setattr(locking, "mutation_locks", _recording_locks)
     monkeypatch.setattr(cleanup_mod.transitions, "write_transition", _spy_write)
 
     cleanup_mod._apply_cleanup("p", [item], store, Console())

@@ -21,7 +21,6 @@ from rich.table import Table
 
 from setforge import operations
 from setforge import snapshots as snap_mod
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -37,7 +36,6 @@ from setforge.cli._helpers import ProfileContext
 from setforge.cli._output import make_console
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import SetforgeError
-from setforge.locking import mutation_locks
 from setforge.transitions import now_utc as _now_utc
 
 
@@ -133,8 +131,9 @@ def snapshot_create(
 ) -> None:
     """Capture the profile's live state into a new snapshot."""
     resolved_config = _resolve_config_arg(config)
-    with mutation_locks(config_dir=resolved_config.resolve().parent, profile=profile):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        config_dir=resolved_config.resolve().parent, profile=profile
+    ):
         ctx = _build_profile_ctx(profile, resolved_config)
         meta = snap_mod.create_snapshot(
             ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile, label, keep=keep
@@ -343,7 +342,6 @@ def snapshot_restore(
             config_dir=resolved_config.resolve().parent,
             config_dirs=tuple(config_dirs),
             resources_lock=True,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=tuple(file.path for file in plan.files),
             path_guards=plan.destination_ancestors,
         )
@@ -351,7 +349,6 @@ def snapshot_restore(
             journal,
             name="restore-files",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore every live path captured before snapshot restore",
             restore_state=False,
             restore_transitions=False,
             adapters=(),

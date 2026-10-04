@@ -53,7 +53,6 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.file_ownership import active_file_claims, refuse_active_file_claims
-from setforge.locking import mutation_locks
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.ownership import OwnershipStore
 
@@ -329,13 +328,12 @@ def _execute_scan_cleanup(
         console.print("=== no scan candidates approved ===")
         return
     approved_by_path = {entry.path: entry for entry in approved}
-    with (
-        mutation_locks(
-            resources=True, config_dir=config_path.resolve().parent, profile=profile
-        ),
-        operations.recover_on_error(profile, "cleanup-orphans"),
+    with operations.transaction(
+        resources=True,
+        config_dir=config_path.resolve().parent,
+        profile=profile,
+        recover=(profile, "cleanup-orphans"),
     ):
-        operations.refuse_active(profile)
         _, refreshed = _detect_scan_live(profile, config_path)
         selected = tuple(
             entry
@@ -351,7 +349,6 @@ def _execute_scan_cleanup(
             profile=profile,
             config_dir=config_path.resolve().parent,
             resources_lock=True,
-            command_line=("cleanup-orphans", "--scan", "--apply"),
             paths=tuple(entry.path for entry in selected),
             path_guards=_scan_path_guards(selected),
         )
@@ -378,7 +375,6 @@ def _execute_scan_cleanup(
                 journal,
                 name=f"delete-unrecorded-path-{index}",
                 kind=operations.CheckpointKind.REVERSIBLE,
-                recovery=f"restore approved managed-tree candidate {entry.path}",
                 paths=(entry.path,),
                 restore_state=False,
                 adapters=(),
@@ -506,7 +502,6 @@ def _execute_cleanup_locked(
                 journal,
                 name=f"delete-transition-orphan-{index}",
                 kind=operations.CheckpointKind.REVERSIBLE,
-                recovery=f"restore transition-attributed orphan {entry.path}",
                 paths=(entry.path,),
                 restore_state=False,
                 adapters=(),
@@ -579,13 +574,12 @@ def _apply_orphan_cleanup(
         return
 
     confirmed = {_orphan_path_identity(orphan.path) for orphan in orphans}
-    with (
-        mutation_locks(
-            resources=True, config_dir=config_path.resolve().parent, profile=profile
-        ),
-        operations.recover_on_error(profile, "cleanup-orphans"),
+    with operations.transaction(
+        resources=True,
+        config_dir=config_path.resolve().parent,
+        profile=profile,
+        recover=(profile, "cleanup-orphans"),
     ):
-        operations.refuse_active(profile)
         _, refreshed = _detect_orphans_live(profile, config_path)
         approved_still_orphaned = [
             orphan
@@ -605,7 +599,6 @@ def _apply_orphan_cleanup(
             profile=profile,
             config_dir=config_path.resolve().parent,
             resources_lock=True,
-            command_line=("cleanup-orphans", "--apply"),
             paths=paths,
             path_guards=orphan_scan.capture_parent_path_guards(paths),
         )

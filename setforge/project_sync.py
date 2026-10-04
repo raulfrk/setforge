@@ -1309,7 +1309,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             profile=operation_profile,
             config_dir=None,
             config_dirs=config_roots,
-            command_line=("project", "sync", str(plan.target)),
             paths=paths,
             checkpoint="synchronize-project-files-and-state",
             recovery="restore all project files, manifests, ownership, and visibility",

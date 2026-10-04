@@ -699,12 +699,6 @@ def apply_project_visibility(plan: ProjectVisibilityPlan) -> bool:
             command="project-visibility",
             profile=operation_profile,
             config_dir=plan.config_root,
-            command_line=(
-                "project",
-                "visibility",
-                str(plan.target),
-                str(plan.destination),
-            ),
             paths=paths,
             checkpoint="update-project-file-visibility",
             recovery="restore the exact project manifest and Git private/index state",

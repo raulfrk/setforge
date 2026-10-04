@@ -951,6 +951,7 @@ def test_apply_writes_live_under_profile_lock(
     import contextlib
     from collections.abc import Iterator
 
+    from setforge import locking
     from setforge.cli import stage as stage_mod
     from setforge.cli.stage import Decision, _apply
 
@@ -959,7 +960,7 @@ def test_apply_writes_live_under_profile_lock(
     (stage,) = collect_stages(cfg, resolved, repo, profile)
 
     events: list[str] = []
-    real_locks = stage_mod.mutation_locks
+    real_locks = locking.mutation_locks
     real_write = stage_mod.atomicio.atomic_write_bytes
 
     @contextlib.contextmanager
@@ -977,7 +978,7 @@ def test_apply_writes_live_under_profile_lock(
             events.append("write")
         real_write(path, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(stage_mod, "mutation_locks", recording_locks)
+    monkeypatch.setattr(locking, "mutation_locks", recording_locks)
     monkeypatch.setattr(stage_mod.atomicio, "atomic_write_bytes", recording_write)
 
     draft = b"## Shell\nPrefer a portable shell.\n\n"

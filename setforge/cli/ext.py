@@ -24,7 +24,6 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import ExtensionInstallFailed, ExtensionToolMissing
-from setforge.locking import mutation_locks
 
 ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
@@ -92,10 +91,9 @@ def ext_add(
     """Declare an extension ID on the profile via the packages surface."""
     config = _resolve_config_arg(config)
     key = name or extension_id
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         added = vscode_extensions.add_to_include(config, profile, extension_id, key=key)
         if added:
             typer.echo(f"added to {profile}.packages: {key} (extension {extension_id})")
@@ -131,10 +129,9 @@ def ext_remove(
 ) -> None:
     """Remove an extension ID from the profile's declared packages."""
     config = _resolve_config_arg(config)
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         changed = vscode_extensions.remove_from_include(
             config, profile, extension_id, add_to_exclude_list=exclude
         )
@@ -205,10 +202,9 @@ def _run_ext_reconcile(
     """Run read-only directly; reload live desired state inside serialization."""
     if ext.reconcile is ReconcilePolicy.REPORT or dry_run:
         return ext, vscode_extensions.reconcile(ext, dry_run=dry_run)
-    with mutation_locks(
+    with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        operations.refuse_active(profile)
         # Desired state is reloaded after serialization; otherwise a waiting
         # PRUNE could apply a profile older than the writer that just released
         # the global adapter lock.

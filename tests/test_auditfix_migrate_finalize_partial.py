@@ -86,7 +86,6 @@ def test_finalize_recovery_failures_preserve_primary_write_error(
         resources_lock=False,
         phase=operations.OperationPhase.APPLYING,
         created_at="2026-01-01T00:00:00+00:00",
-        command_line=(),
         paths=(),
         state_snapshots=(),
     )

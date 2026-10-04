@@ -30,6 +30,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
+from typing import TypedDict
 
 from setforge.errors import SetforgeError
 from setforge.transitions import state_root
@@ -374,6 +375,17 @@ class MutationLockGuards:
         """Revalidate every target immediately before coupled publication."""
         for target in self.targets:
             target.verify_expected()
+
+
+class MutationScopes(TypedDict, total=False):
+    """Lock scopes of ``operations.transaction``; see ``mutation_locks``."""
+
+    resources: bool
+    config_identity_dir: Path | None
+    config_dir: Path | None
+    target_roots: tuple[Path, ...]
+    profile: str | None
+    profiles: tuple[str, ...]
 
 
 def _profile_lock_path(profile: str) -> Path:

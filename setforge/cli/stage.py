@@ -50,7 +50,6 @@ from setforge.file_ownership import (
     observe_file,
     publish_file_claim_locked,
 )
-from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipError,
     OwnershipStore,
@@ -473,17 +472,14 @@ def _apply_structured(
         if owner_id is not None and config_dir is not None
         else None
     )
-    with (
-        mutation_locks(
-            resources=owner_id is not None,
-            config_identity_dir=identity_dir,
-            config_dir=config_dir,
-            target_roots=(stage.dst.parent,),
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "stage"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=owner_id is not None,
+        config_identity_dir=identity_dir,
+        config_dir=config_dir,
+        target_roots=(stage.dst.parent,),
+        profile=profile,
+        recover=(profile, "stage"),
+    ) as mutation_guards:
         if owner_id is not None and config_dir is not None:
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None
@@ -898,17 +894,14 @@ def _apply(
         if owner_id is not None and config_dir is not None
         else None
     )
-    with (
-        mutation_locks(
-            resources=owner_id is not None,
-            config_identity_dir=identity_dir,
-            config_dir=config_dir,
-            target_roots=(stage.dst.parent,),
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "stage"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=owner_id is not None,
+        config_identity_dir=identity_dir,
+        config_dir=config_dir,
+        target_roots=(stage.dst.parent,),
+        profile=profile,
+        recover=(profile, "stage"),
+    ) as mutation_guards:
         if owner_id is not None and config_dir is not None:
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None
@@ -1041,7 +1034,6 @@ def _commit_owned_persist(
         profile=profile,
         config_dir=config_dir,
         resources_lock=True,
-        command_line=tuple(sys.argv[1:]),
         paths=paths,
         state_snapshots=_store_snapshots(profile, stage.fid),
     )
@@ -1049,7 +1041,6 @@ def _commit_owned_persist(
         journal,
         name="file-adoption",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore the file ownership claim and reconcile record",
         paths=paths,
         restore_state=True,
         restore_transitions=False,
@@ -1092,7 +1083,6 @@ def _commit_owned_persist(
             journal,
             name="transition-record",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="remove the ownership-transfer transition",
             paths=(),
             restore_state=False,
             restore_transitions=True,

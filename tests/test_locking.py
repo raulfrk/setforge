@@ -5,7 +5,7 @@ import errno
 import fcntl
 import inspect
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -129,7 +129,6 @@ def test_journal_registry_lock_refusal_is_a_clean_error(
             profile="p",
             config_dir=None,
             resources_lock=False,
-            command_line=("sync",),
             paths=(),
         )
 
@@ -389,7 +388,6 @@ def test_mutation_locks_refuse_cross_profile_active_journal(
         profile="first",
         config_dir=config_dir,
         resources_lock=journal_resources,
-        command_line=("install",),
         paths=(),
     )
 
@@ -400,6 +398,29 @@ def test_mutation_locks_refuse_cross_profile_active_journal(
         pass
 
     operations.complete(journal)
+
+
+_LOCK_ENTRIES = {"install_resources_lock", "mutation_locks", "operations.transaction"}
+
+
+def _with_entries(source: str) -> list[tuple[ast.With, list[ast.Call]]]:
+    """Each ``with`` statement and its context-manager calls in entry order."""
+    return [
+        (
+            node,
+            [
+                item.context_expr
+                for item in node.items
+                if isinstance(item.context_expr, ast.Call)
+            ],
+        )
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.With)
+    ]
+
+
+def _names(calls: list[ast.Call]) -> list[str]:
+    return [ast.unparse(call.func) for call in calls]
 
 
 def test_global_resource_writers_share_one_lock() -> None:
@@ -422,20 +443,25 @@ def test_global_resource_writers_share_one_lock() -> None:
     )
     missing: list[str] = []
     for writer in writers:
-        tree = ast.parse(inspect.getsource(writer))
-        calls = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        entered = {
+            name
+            for _node, calls in _with_entries(inspect.getsource(writer))
+            for name in _names(calls)
         }
-        if not {"install_resources_lock", "mutation_locks"}.intersection(calls):
+        if not _LOCK_ENTRIES.intersection(entered):
             missing.append(writer.__name__)
 
     assert missing == []
 
 
 def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
-    """Closed inventory: mutation entrypoints declare scopes through one API."""
+    """Closed inventory: every mutation entrypoint takes its locks through one API.
+
+    A journaled writer names its journal in ``operations.transaction``, which
+    refuses and rolls back inside the locks. The explicit forms are the
+    lock-only writers and ``snapshot restore``, whose rollback is entered
+    directly after its lock helper.
+    """
     from setforge.cli import (
         cleanup,
         config,
@@ -444,6 +470,7 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
         lock,
         migrate,
         orphans,
+        revert,
         snapshot,
         stage,
         sync,
@@ -451,42 +478,69 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
         validate,
     )
 
-    writers = (
-        install.install,
-        lock.lock,
-        sync.capture,
-        sync.sync,
-        migrate.migrate,
-        snapshot.snapshot_create,
-        snapshot.snapshot_restore,
-        stage._apply,
-        stage._apply_structured,
-        cleanup._apply_cleanup,
-        orphans._apply_orphan_cleanup,
+    journaled: dict[Callable[..., object], str] = {
+        install.install: "install",
+        sync.sync: "sync",
+        stage._apply: "stage",
+        stage._apply_structured: "stage",
+        cleanup._apply_cleanup: "cleanup",
+        orphans._apply_orphan_cleanup: "cleanup-orphans",
+        orphans._execute_scan_cleanup: "cleanup-orphans",
+        revert._apply_confirmed_reverts: "revert",
+    }
+    refusing = (lock.lock, sync.capture, migrate.migrate, snapshot.snapshot_create)
+    lock_only = (
         config._run_add,
         config.config_remove,
         init.init,
         upgrade.upgrade,
         validate.fetch,
     )
-    missing = []
-    for writer in writers:
-        writer_source = inspect.getsource(writer)
-        if writer is snapshot.snapshot_restore:
-            assert any(
-                isinstance(node, ast.Call)
-                and ast.unparse(node.func) == "snap_mod.restore_locks"
-                for node in ast.walk(ast.parse(writer_source))
+
+    def transactions(source: str) -> list[str | None]:
+        return [
+            next(
+                (
+                    ast.unparse(keyword.value)
+                    for keyword in calls[0].keywords
+                    if keyword.arg == "recover"
+                ),
+                None,
             )
-            writer_source = inspect.getsource(snapshot.snap_mod.restore_locks)
-        calls = {
-            node.func.id
-            for node in ast.walk(ast.parse(writer_source))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        if "mutation_locks" not in calls:
-            missing.append(writer.__name__)
-    assert missing == []
+            for _node, calls in _with_entries(source)
+            if _names(calls) == ["operations.transaction"]
+        ]
+
+    for writer, command in journaled.items():
+        recovered = transactions(inspect.getsource(writer))
+        assert f"(profile, '{command}')" in recovered, writer.__name__
+    for writer in refusing:
+        assert None in transactions(inspect.getsource(writer)), writer.__name__
+    for writer in lock_only:
+        assert ["mutation_locks"] in [
+            _names(calls) for _node, calls in _with_entries(inspect.getsource(writer))
+        ], writer.__name__
+
+    rollbacks: list[tuple[str, list[str]]] = []
+    for path in sorted(Path(install.__file__).parent.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        assert "_refuse_active" not in source, path.name
+        for _node, calls in _with_entries(source):
+            names = _names(calls)
+            if "operations.recover_on_error" in names:
+                rollbacks.append((path.name, names))
+            elif _LOCK_ENTRIES.intersection(names):
+                assert len(names) == 1, f"{path.name}: {names}"
+        assert source.count("recover_on_error(") == int(path.name == "snapshot.py")
+    assert rollbacks == [
+        ("snapshot.py", ["snap_mod.restore_locks", "operations.recover_on_error"])
+    ]
+    assert ["mutation_locks"] in [
+        _names(calls)
+        for _node, calls in _with_entries(
+            inspect.getsource(snapshot.snap_mod.restore_locks)
+        )
+    ]
 
 
 def test_live_reconcile_reloads_desired_state_inside_global_lock() -> None:
@@ -499,28 +553,15 @@ def test_live_reconcile_reloads_desired_state_inside_global_lock() -> None:
         plugins.plugin_remove,
         plugins.sync_cache,
     ):
-        tree = ast.parse(inspect.getsource(writer))
-        locked_loads: list[ast.Call] = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.With):
-                continue
-            lock_calls = {
-                call.func.id
-                for item in node.items
-                for call in ast.walk(item.context_expr)
-                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-            }
-            if not {"install_resources_lock", "mutation_locks"}.intersection(
-                lock_calls
-            ):
-                continue
-            locked_loads.extend(
-                call
-                for call in ast.walk(node)
-                if isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Name)
-                and call.func.id == "load_config"
-            )
+        locked_loads = [
+            call
+            for node, calls in _with_entries(inspect.getsource(writer))
+            if _LOCK_ENTRIES.intersection(_names(calls))
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "load_config"
+        ]
         assert locked_loads, f"{writer.__name__} does not reload under lock"
 
 
@@ -552,7 +593,7 @@ def test_live_reconcile_waits_for_lock_before_reloading(
         return cfg
 
     if adapter_name == "ext":
-        monkeypatch.setattr(ext, "mutation_locks", recording_lock)
+        monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
         monkeypatch.setattr(ext, "load_config", locked_load)
         monkeypatch.setattr(
             ext,
@@ -572,7 +613,7 @@ def test_live_reconcile_waits_for_lock_before_reloading(
             dry_run=False,
         )
     else:
-        monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
+        monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
         monkeypatch.setattr(plugins, "load_config", locked_load)
         monkeypatch.setattr(
             plugins,
@@ -623,7 +664,7 @@ def test_extension_remove_edits_desired_state_inside_global_lock(
         return True
 
     monkeypatch.setattr(ext, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(ext, "mutation_locks", recording_lock)
+    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
     monkeypatch.setattr(ext.vscode_extensions, "remove_from_include", guarded_remove)
 
     ext.ext_remove(
@@ -660,7 +701,7 @@ def test_plugin_remove_resolves_disable_id_from_post_wait_config(
         )
 
     monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
+    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
     monkeypatch.setattr(plugins, "load_config", locked_load)
     monkeypatch.setattr(
         plugins.claude_yaml_editor_mod,
@@ -713,7 +754,7 @@ def test_sync_cache_resolves_marketplaces_after_wait(
         return []
 
     monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr(plugins, "mutation_locks", recording_lock)
+    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
     monkeypatch.setattr(plugins, "load_config", locked_load)
     monkeypatch.setattr(
         plugins.binaries,

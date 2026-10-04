@@ -13,7 +13,6 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 import json
 import os
 import stat
-import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -26,7 +25,6 @@ from rich.table import Table
 
 from setforge import operations, orphan_scan, transitions
 from setforge._editor import run_editor
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -65,7 +63,6 @@ from setforge.errors import (
     RevertFailed,
     SetforgeError,
 )
-from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipStore,
     read_owner_id_locked,
@@ -688,20 +685,16 @@ def _apply_confirmed_reverts(
     selection once they are held. A failure rolls every applied step back,
     and the recorded reverts are reported only after the journal completes.
     """
-    scope = "chain" if chain else "revert"
     recorded: list[Path] = []
     try:
-        with (
-            mutation_locks(
-                resources=True,
-                config_identity_dir=_ownership_transfer_identity_dir(records, config),
-                config_dir=config.resolve().parent,
-                target_roots=_ownership_transfer_lock_targets(records),
-                profiles=_revert_locked_profiles(records, profile),
-            ) as mutation_guards,
-            operations.recover_on_error(profile, "revert"),
-        ):
-            operations.refuse_active(profile)
+        with operations.transaction(
+            resources=True,
+            config_identity_dir=_ownership_transfer_identity_dir(records, config),
+            config_dir=config.resolve().parent,
+            target_roots=_ownership_transfer_lock_targets(records),
+            profiles=_revert_locked_profiles(records, profile),
+            recover=(profile, "revert"),
+        ) as mutation_guards:
             if not history_unchanged():
                 raise SetforgeError(
                     "transition history changed after confirmation; retry revert"
@@ -711,9 +704,6 @@ def _apply_confirmed_reverts(
                 journal,
                 name="revert-chain",
                 kind=operations.CheckpointKind.COMPENSATABLE,
-                recovery=(
-                    f"restore pre-{scope} files, stores, modes, and adapter inventories"
-                ),
             )
             identity_guard = (
                 mutation_guards.config_identity if mutation_guards is not None else None
@@ -883,7 +873,6 @@ def _prepare_revert_journal(
         profile=profile,
         config_dir=config.resolve().parent,
         resources_lock=True,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=tuple(touched),
         state_snapshots=tuple(state_keys.values()),
         adapters=_revert_adapter_snapshots(

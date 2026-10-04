@@ -698,7 +698,7 @@ def test_capture_prompt_runs_between_lock_acquisitions(
         events.append("confirm")
         return True
 
-    monkeypatch.setattr("setforge.cli.sync.mutation_locks", locks)
+    monkeypatch.setattr("setforge.locking.mutation_locks", locks)
     monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
     monkeypatch.setattr(
         "setforge.cli.sync.sys",

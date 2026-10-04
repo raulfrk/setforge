@@ -97,7 +97,7 @@ def _install_recording_lock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             events.append("apply")
         real_apply(transition_dir, dry_run=dry_run)
 
-    monkeypatch.setattr("setforge.cli.revert.mutation_locks", recording_lock)
+    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
     monkeypatch.setattr(transitions_module, "apply_patch_reverse", recording_apply)
     return events
 
@@ -228,10 +228,10 @@ def test_revert_locks_cross_profile_transition_state_before_apply(
         captured.append(profiles)
         yield
 
-    monkeypatch.setattr("setforge.cli.revert.mutation_locks", recording_lock)
+    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
     monkeypatch.setattr(
-        "setforge.cli.revert.operations.refuse_active",
-        lambda _profile: (_ for _ in ()).throw(RuntimeError("stop before apply")),
+        "setforge.cli.revert.operations._refuse_active",
+        lambda: (_ for _ in ()).throw(RuntimeError("stop before apply")),
     )
     args = ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
     if multi_step:

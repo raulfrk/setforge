@@ -482,11 +482,12 @@ def _apply_cleanup(
         # install/sync writing the same profile's state cannot interleave.
         # Per-item (not whole-loop): _pick_action above is interactive and
         # must not run while holding the lock.
-        with (
-            mutation_locks(resources=True, config_dir=config_dir, profile=profile),
-            operations.recover_on_error(profile, "cleanup"),
+        with operations.transaction(
+            resources=True,
+            config_dir=config_dir,
+            profile=profile,
+            recover=(profile, "cleanup"),
         ):
-            operations.refuse_active(profile)
             ownership_store = OwnershipStore()
             if (
                 item.provider is None
@@ -529,7 +530,6 @@ def _apply_cleanup(
                 profile=profile,
                 config_dir=config_dir,
                 resources_lock=True,
-                command_line=("cleanup", "--apply"),
                 paths=(),
             )
             journal = operations.begin_checkpoint(

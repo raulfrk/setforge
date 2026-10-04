@@ -1473,7 +1473,6 @@ def test_apply_sync_locks_and_updates_multiple_config_repositories(
     journal = journals[0]
     assert journal.profile == expected_profile
     assert journal.command == "project-sync"
-    assert journal.command_line == ("project", "sync", str(target))
     assert journal.resources_lock is True
     assert journal.reserved_config_dirs == expected_configs
     assert journal.reserved_profiles == (expected_profile,)

@@ -158,14 +158,12 @@ def migrate(
             _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return
     if finalize:
-        with mutation_locks(config_dir=cfg_path.resolve().parent):
-            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+        with operations.transaction(config_dir=cfg_path.resolve().parent):
             _dispatch_finalize(cfg_path=cfg_path, yes=yes)
         return
 
     if apply_flag:
-        with mutation_locks(config_dir=cfg_path.resolve().parent):
-            operations.refuse_active(transitions.MIGRATE_TRANSITION_PROFILE)
+        with operations.transaction(config_dir=cfg_path.resolve().parent):
             guard_minimum_version(cfg_path)
             current = detect_current_schema(cfg_path)
             target = _resolve_target(to=to)
@@ -368,7 +366,6 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
         config_dir=cfg_path.resolve().parent,
         resources_lock=False,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=affected,
         profiles=_migration_reserved_profiles(cfg_path),
     )
@@ -376,7 +373,6 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         journal,
         name="migration-chain",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore every migration-affected path",
     )
     try:
         _execute_chain(chain=chain, roots=roots, choice=choice)
@@ -523,14 +519,12 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
         config_dir=cfg_path.resolve().parent,
         resources_lock=False,
-        command_line=tuple(redact_argv(sys.argv[1:])),
         paths=tuple(paths),
     )
     journal = operations.begin_checkpoint(
         journal,
         name="marker-finalize",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore every tracked source from the write-ahead snapshot",
     )
     # The batch is recorded as ONE revertible transition only after every
     # write lands. atomic_write_text is per-file atomic, but the loop is not

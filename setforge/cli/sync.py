@@ -62,7 +62,6 @@ from setforge.config import (
 )
 from setforge.errors import ExtensionToolMissing
 from setforge.file_ownership import FileDecision, decide_file, observe_file
-from setforge.locking import mutation_locks
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import content_sha, file_id
@@ -379,8 +378,7 @@ def capture(
 
     repo_root = config.resolve().parent
     owner_id = _read_capture_owner_id(repo_root)
-    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
-        operations.refuse_active(profile)
+    with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
         initial_ctx, initial_snapshot = _load_capture_preview(
             config,
             profile,
@@ -399,8 +397,7 @@ def capture(
         auto_enum=auto_enum,
         yes=yes,
     )
-    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
-        operations.refuse_active(profile)
+    with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
         locked_ctx, locked_snapshot = _load_capture_preview(
             config,
             profile,
@@ -472,8 +469,7 @@ def sync(
 
     repo_root = config.resolve().parent
     owner_id = _read_capture_owner_id(repo_root)
-    with mutation_locks(resources=True, config_dir=repo_root, profile=profile):
-        operations.refuse_active(profile)
+    with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
         initial_ctx, initial_snapshot = _load_capture_preview(
             config,
             profile,
@@ -492,11 +488,9 @@ def sync(
         auto_enum=auto_enum,
         yes=yes,
     )
-    with (
-        mutation_locks(resources=True, config_dir=repo_root, profile=profile),
-        operations.recover_on_error(profile, "sync"),
+    with operations.transaction(
+        resources=True, config_dir=repo_root, profile=profile, recover=(profile, "sync")
     ):
-        operations.refuse_active(profile)
         ctx, locked_snapshot = _load_capture_preview(
             config,
             profile,
@@ -525,7 +519,6 @@ def sync(
             profile=profile,
             config_dir=repo_root,
             resources_lock=False,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=tuple(src_paths),
             state_snapshots=state_pre,
         )
@@ -533,7 +526,6 @@ def sync(
             journal,
             name="capture-files-and-stores",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore captured tracked/config paths and reconcile stores",
         )
 
         try:

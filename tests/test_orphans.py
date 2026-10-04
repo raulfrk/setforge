@@ -1070,7 +1070,7 @@ def test_apply_yes_holds_profile_lock(
             events.append("unlink")
         real_unlink(entry)
 
-    monkeypatch.setattr("setforge.cli.orphans.mutation_locks", _recording_locks)
+    monkeypatch.setattr(locking, "mutation_locks", _recording_locks)
     monkeypatch.setattr(orphans_mod.orphan_scan, "unlink_approved_entry", _spy_unlink)
     detection = OrphanDetection(orphans=[orphan_entry])
     monkeypatch.setattr(

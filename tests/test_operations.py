@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from setforge import codex_plugins, operations, orphan_scan, transitions
+from setforge import codex_plugins, locking, operations, orphan_scan, transitions
 from setforge.errors import SetforgeError
 from setforge.locking import install_resources_lock, profile_lock
 from setforge.ownership import (
@@ -45,7 +45,6 @@ def _prepare(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install", "--profile=p"),
         paths=paths,
     )
 
@@ -112,7 +111,6 @@ def test_prepare_round_trips_exact_path_and_store_state(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install", "--profile=p"),
         paths=(file_path, link_path, directory, absent),
         state_snapshots=(state,),
     )
@@ -394,7 +392,6 @@ def test_snapshot_restore_recovery_refuses_retargeted_parent_symlink(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -433,7 +430,6 @@ def test_snapshot_restore_recovery_refuses_replaced_parent_directory(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -477,7 +473,6 @@ def _journal_below_symlink(tmp_path: Path) -> tuple[Path, Path]:
             profile="p",
             config_dir=tmp_path,
             resources_lock=False,
-            command_line=("sync",),
             paths=(path,),
             path_guards=orphan_scan.capture_parent_path_guards((path,)),
         ),
@@ -578,7 +573,6 @@ def _journal_plain_file(tmp_path: Path, command: str) -> Path:
             profile="p",
             config_dir=tmp_path,
             resources_lock=False,
-            command_line=(command,),
             paths=(path,),
             path_guards=_path_guards(path),
         ),
@@ -653,7 +647,6 @@ def _partially_guarded_journal(tmp_path: Path, command: str) -> tuple[Path, Path
             profile="p",
             config_dir=tmp_path,
             resources_lock=False,
-            command_line=(command,),
             paths=(guarded, plain),
             path_guards=orphan_scan.capture_parent_path_guards((guarded,)),
         ),
@@ -722,7 +715,6 @@ def test_recovery_refuses_unscoped_parent_removed_after_preflight(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("sync", "--profile=p"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -765,7 +757,6 @@ def test_prepare_round_trips_config_reservations_and_path_guards(
         config_dir=tmp_path,
         config_dirs=(extra_config,),
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=guards,
     )
@@ -802,7 +793,6 @@ def test_snapshot_restore_allows_tracked_path_with_local_config_suffix(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -832,7 +822,6 @@ def test_journal_missing_a_required_key_is_invalid(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -856,7 +845,6 @@ def test_snapshot_restore_journal_cannot_narrow_path_guards(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("snapshot", "restore"),
         paths=(path,),
         path_guards=_path_guards(path),
     )
@@ -878,11 +866,13 @@ def test_journal_stays_compatible_with_earlier_releases(
         _prepare(tmp_path, paths=(path,)),
         name="files",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore files",
     )
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert raw["command_line"] == []
+    raw["command_line"] = ["install", "--profile=p"]
     for row in raw["checkpoints"]:
+        assert row["recovery"]
         assert row["recovered"] is False
         row["recovered"] = True
     journal_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -894,6 +884,19 @@ def test_journal_stays_compatible_with_earlier_releases(
 
     assert path.read_text(encoding="utf-8") == "before"
     assert operations.active("p") is None
+
+
+def test_irreversible_checkpoint_requires_manual_recovery_text(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journal = _prepare(tmp_path)
+
+    with pytest.raises(SetforgeError, match="needs manual recovery text"):
+        operations.begin_checkpoint(
+            journal, name="packages", kind=operations.CheckpointKind.IRREVERSIBLE
+        )
+
+    assert operations.load("p").checkpoints == ()
 
 
 def test_recovery_refuses_parent_swap_after_preflight(
@@ -911,7 +914,6 @@ def test_recovery_refuses_parent_swap_after_preflight(
             profile="p",
             config_dir=tmp_path,
             resources_lock=False,
-            command_line=("snapshot", "restore"),
             paths=(path,),
             path_guards=_path_guards(path),
         ),
@@ -1233,7 +1235,6 @@ def _journal_creating_state_root(
             profile="p",
             config_dir=operation_state.parent,
             resources_lock=False,
-            command_line=("migrate", "--apply"),
             paths=(store_file,),
         ),
         name="files",
@@ -1336,7 +1337,6 @@ def test_noninstall_recovery_accepts_journaled_created_parent(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("sync", "--profile=p"),
         paths=(child,),
         path_guards=tuple(guards),
     )
@@ -1380,7 +1380,6 @@ def test_unbound_install_root_normalizes_inspection_failure(
         profile="p",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("install", "--profile=p"),
         paths=(root,),
         path_guards=tuple(guards),
     )
@@ -1586,6 +1585,64 @@ def test_recover_on_error_preserves_primary_when_journal_load_fails(
     assert any("automatic recovery failed" in note for note in caught.value.__notes__)
 
 
+def test_transaction_rolls_back_a_failed_block_while_its_locks_are_held(
+    tmp_path: Path, operation_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "live"
+    path.write_text("before", encoding="utf-8")
+    held_during_recovery: list[set[locking.LockRank]] = []
+    real_recover = operations.recover_automatically
+
+    def recording_recover(journal: operations.OperationJournal) -> bool:
+        held_during_recovery.append({rank for rank, _key in locking._HELD_RANKS.get()})
+        return real_recover(journal)
+
+    monkeypatch.setattr(operations, "recover_automatically", recording_recover)
+
+    def fail_during_apply() -> None:
+        with operations.transaction(
+            resources=True, profile="p", recover=("p", "install")
+        ):
+            journal = _prepare(tmp_path, paths=(path,))
+            operations.begin_checkpoint(
+                journal,
+                name="files",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                recovery="restore files",
+            )
+            path.write_text("after", encoding="utf-8")
+            raise RuntimeError("apply failed")
+
+    with pytest.raises(RuntimeError, match="apply failed") as caught:
+        fail_during_apply()
+
+    assert held_during_recovery == [
+        {
+            locking.LockRank.MUTATION,
+            locking.LockRank.RESOURCES,
+            locking.LockRank.PROFILE,
+        }
+    ]
+    assert not getattr(caught.value, "__notes__", [])
+    assert path.read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is None
+    assert locking._HELD_RANKS.get() == ()
+
+
+def test_transaction_refuses_an_unfinished_operation_outside_its_scopes(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journal = _prepare(tmp_path)
+
+    with (
+        pytest.raises(SetforgeError, match="unfinished install operation"),
+        operations.transaction(profile="other", recover=("other", "install")),
+    ):
+        pytest.fail("the block ran beside an unfinished operation")
+
+    assert operations.load("p") == journal
+
+
 def test_adapter_recovery_restores_extension_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1604,7 +1661,6 @@ def test_adapter_recovery_restores_extension_inventory(
         resources_lock=True,
         phase=operations.OperationPhase.APPLYING,
         created_at="2026-01-01T00:00:00+00:00",
-        command_line=(),
         paths=(),
         state_snapshots=(),
         adapters=(
@@ -1654,7 +1710,6 @@ def test_adapter_recovery_restores_mcp_registration(
         resources_lock=True,
         phase=operations.OperationPhase.APPLYING,
         created_at="2026-01-01T00:00:00+00:00",
-        command_line=(),
         paths=(),
         state_snapshots=(),
         adapters=(
@@ -1742,7 +1797,6 @@ def test_plugin_recovery_respects_dependencies_and_replaces_drifted_source(
         resources_lock=True,
         phase=operations.OperationPhase.APPLYING,
         created_at="2026-01-01T00:00:00+00:00",
-        command_line=(),
         paths=(),
         state_snapshots=(),
         adapters=(
@@ -1818,7 +1872,7 @@ def test_unusable_journal_reports_the_file_and_how_to_get_past_it(
 
     for blocked in (
         lambda: operations.load("p"),
-        lambda: operations.refuse_active("other"),
+        operations._refuse_active,
     ):
         with pytest.raises(SetforgeError) as failure:
             blocked()
@@ -1927,7 +1981,6 @@ def _add_invalid_path_guard(raw: dict[str, object]) -> None:
         lambda raw: raw.update(reserved_profiles=[]),
         lambda raw: raw.update(reserved_profiles=["p", "p"]),
         lambda raw: raw.update(reserved_profiles=["z", "p"]),
-        lambda raw: raw.update(command_line="install"),
         lambda raw: raw.update(schema_version=True),
     ],
 )
@@ -1949,7 +2002,6 @@ def test_load_rejects_semantically_invalid_recovery_rows(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install",),
         paths=(path,),
         state_snapshots=(state,),
         adapters=(
@@ -2032,7 +2084,6 @@ def test_invalid_later_adapter_is_rejected_before_earlier_adapter_calls(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install",),
         paths=(),
         adapters=(
             operations.AdapterSnapshot(
@@ -2079,7 +2130,6 @@ def test_cross_profile_state_snapshot_reserves_its_profile_namespace(
         profile="migrate",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("revert",),
         paths=(),
         state_snapshots=(state,),
     )
@@ -2100,7 +2150,6 @@ def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
         profile="migrate",
         config_dir=tmp_path,
         resources_lock=False,
-        command_line=("migrate",),
         paths=(),
         profiles=("team/dev",),
     )
@@ -2172,7 +2221,6 @@ def test_load_rejects_invalid_adapter_identity_before_recovery(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install",),
         paths=(),
         adapters=(operations.AdapterSnapshot(kind, json.dumps(valid_payload)),),
     )
@@ -2204,7 +2252,6 @@ def test_state_root_mismatch_refuses_before_adapter_recovery(
         profile="p",
         config_dir=tmp_path,
         resources_lock=True,
-        command_line=("install",),
         paths=(),
         adapters=(
             operations.AdapterSnapshot(
@@ -2247,7 +2294,6 @@ def test_journal_recovers_after_config_ancestor_became_a_symlink(
             profile="p",
             config_dir=config_dir,
             resources_lock=False,
-            command_line=("sync", "--profile=p"),
             paths=(path,),
         ),
         name="files",

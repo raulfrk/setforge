@@ -42,7 +42,6 @@ from setforge import (
 from setforge import secrets as secrets_mod
 from setforge import source as source_mod
 from setforge import vscode_extensions as vscode_extensions_mod
-from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -1258,7 +1257,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             journal,
             name="tracked-files-and-stores",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore captured paths and reconcile-store snapshots",
             paths=tracked_checkpoint_paths,
             restore_state=True,
             restore_transitions=False,
@@ -1334,7 +1332,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             journal,
             name="extensions",
             kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore the frozen pre-install extension inventory",
             paths=(),
             restore_state=False,
             restore_transitions=False,
@@ -1371,7 +1368,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             journal,
             name="plugins-and-marketplaces",
             kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore frozen plugin and marketplace inventories",
             paths=(),
             restore_state=False,
             restore_transitions=False,
@@ -1451,7 +1447,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 journal,
                 name="unused-target-roots",
                 kind=operations.CheckpointKind.REVERSIBLE,
-                recovery="restore initially absent target roots",
                 paths=tuple(guard.target for guard in prepared),
                 restore_state=False,
                 restore_transitions=False,
@@ -2002,7 +1997,6 @@ def _publish_adoptions_checkpoint(
         journal,
         name="package-adoption",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore package ownership claims and migrated receipts",
         paths=(*claim_paths, *receipt_paths),
         restore_state=False,
         restore_transitions=False,
@@ -2145,7 +2139,6 @@ def _publish_file_adoptions_checkpoint(
         journal,
         name="file-adoption",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore tracked-file ownership claims",
         paths=claim_paths,
         restore_state=False,
         restore_transitions=False,
@@ -2243,7 +2236,6 @@ def _refresh_file_claims_checkpoint(
         journal,
         name="file-ownership-refresh",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore tracked-file ownership claims",
         paths=paths,
         restore_state=False,
         restore_transitions=False,
@@ -2559,21 +2551,18 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             "ownership transfer requires transition recording; remove --no-transition"
         )
 
-    with (
-        mutation_locks(
-            resources=True,
-            config_identity_dir=(
-                resolve_owner_common_dir(repo_root)
-                if package_owner_id is not None
-                else None
-            ),
-            config_dir=config.parent,
-            target_roots=tree_target_preview,
-            profile=profile,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "install"),
-    ):
-        operations.refuse_active(profile)
+    with operations.transaction(
+        resources=True,
+        config_identity_dir=(
+            resolve_owner_common_dir(repo_root)
+            if package_owner_id is not None
+            else None
+        ),
+        config_dir=config.parent,
+        target_roots=tree_target_preview,
+        profile=profile,
+        recover=(profile, "install"),
+    ) as mutation_guards:
         if config.read_bytes() != ownership_config:
             raise SetforgeError(
                 "install configuration changed after confirmation; retry"
@@ -2823,7 +2812,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             profile=profile,
             config_dir=config.parent,
             resources_lock=True,
-            command_line=tuple(redact_argv(sys.argv[1:])),
             paths=journal_paths,
             path_guards=install_parent_guards,
             state_snapshots=state_pre,
@@ -2897,7 +2885,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             journal,
             name="mcp-servers",
             kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore frozen MCP registrations",
             paths=(),
             restore_state=False,
             restore_transitions=False,
@@ -2951,7 +2938,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 journal,
                 name="transition-record",
                 kind=operations.CheckpointKind.REVERSIBLE,
-                recovery="remove the transition record committed by this install",
                 paths=(),
                 restore_state=False,
                 restore_transitions=True,
@@ -3219,7 +3205,6 @@ def _apply_secrets_and_bootstrap(
             journal,
             name="prepare-target-roots",
             kind=operations.CheckpointKind.REVERSIBLE,
-            recovery="restore initially absent target roots",
             paths=tuple(guard.target for guard in missing_guards),
             restore_state=False,
             restore_transitions=False,
@@ -3243,7 +3228,6 @@ def _apply_secrets_and_bootstrap(
         journal,
         name="secrets-and-bootstrap",
         kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore captured allowlist and bootstrap paths",
         paths=checkpoint_paths,
         restore_state=False,
         restore_transitions=False,
