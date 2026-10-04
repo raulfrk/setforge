@@ -926,3 +926,67 @@ def test_capture_undecodable_file_skips_host_local_strip(tmp_path: Path) -> None
     )
     assert result.action is CaptureAction.UPDATED
     assert src.read_bytes() == payload
+
+
+def test_sync_refuses_staged_file_claimed_by_another_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Staged units are not published from a container this checkout must take over."""
+    import subprocess
+
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.file_ownership import observe_file
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+    from setforge.reconcile.types import HunkClass, file_id
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    other = tmp_path / "other-checkout"
+    for checkout in (repo, other):
+        checkout.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=checkout, check=True)
+    load_or_create_owner_id(repo)
+    foreign = load_or_create_owner_id(other)
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, _A5_BASE.decode())
+    _write(dst, _A5_LIVE.decode())
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\ntracked_files:\n"
+        f"  CLAUDE.md: {{src: CLAUDE.md, dst: {dst}}}\n"
+        "profiles:\n  p: {tracked_files: [CLAUDE.md]}\n",
+        encoding="utf-8",
+    )
+    _stage_index(
+        "p",
+        file_id("CLAUDE.md"),
+        _A5_BASE,
+        _A5_LIVE,
+        {"## Shell": HunkClass.SHARED},
+    )
+    observation = observe_file(dst)
+    with mutation_locks(resources=True):
+        OwnershipStore().claim_locked(
+            resource_id=observation.resource_id,
+            owner_id=foreign,
+            declaration_refs=("tracked_files.CLAUDE.md",),
+            provenance=(),
+            locator=str(dst),
+            fingerprint=observation.fingerprint,
+            expected_generation=None,
+        )
+
+    result = CliRunner().invoke(
+        app, ["sync", "--profile=p", f"--config={config}", "--auto=use-live", "--yes"]
+    )
+
+    assert result.exit_code != 0
+    assert "container ownership claim" in str(result.exception)
+    assert src.read_bytes() == _A5_BASE
+    claim = OwnershipStore().read(observation.resource_id)
+    assert claim is not None
+    assert claim.owner_id == foreign

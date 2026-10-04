@@ -667,8 +667,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         ownership_authorized={
             **_file_ownership_authorization(tracked_entries, file_ownership),
             **{
-                tree.name: tree.decision.action
-                not in {FileAction.ADOPT, FileAction.TRANSFER, FileAction.HOLD}
+                tree.name: compare_mod.container_authorized(tree.decision)
                 for tree in trees
             },
         },
@@ -1022,8 +1021,7 @@ def _file_ownership_authorization(
     by_locator = {decision.observation.locator: decision for decision in decisions}
     return {
         name: all(
-            by_locator[str(path.absolute())].action
-            not in {FileAction.ADOPT, FileAction.TRANSFER, FileAction.HOLD}
+            compare_mod.container_authorized(by_locator[str(path.absolute())])
             for path in _ownership_destinations(tracked, destination)
         )
         for tracked, name, _source, destination in tracked_entries

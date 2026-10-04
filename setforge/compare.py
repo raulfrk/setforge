@@ -48,7 +48,13 @@ from setforge.config import (
     resolve_symlink_target,
 )
 from setforge.errors import BaseStoreError, ConfigError
-from setforge.file_ownership import FileAction, decide_file, observe_file, observe_tree
+from setforge.file_ownership import (
+    FileAction,
+    FileDecision,
+    decide_file,
+    observe_file,
+    observe_tree,
+)
 from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.operations import journals_root
@@ -903,6 +909,20 @@ def compare_profile(
     )
 
 
+def container_authorized(decision: FileDecision) -> bool:
+    """Whether this checkout already holds the container the decision is about.
+
+    Adoption of an unowned file, transfer of another configuration's claim and
+    a hold all leave the container outside this checkout's authority until the
+    user acts, so staged units neither explain its drift nor get published.
+    """
+    return decision.action not in {
+        FileAction.ADOPT,
+        FileAction.TRANSFER,
+        FileAction.HOLD,
+    }
+
+
 def file_authorization_map(
     config: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> dict[str, bool]:
@@ -938,15 +958,13 @@ def file_authorization_map(
                 tracked.tree.model_copy(update={"symlinks": "preserve"}),
             ).inventory
             observation = observe_tree(destination, live.fingerprint)
-            decision = decide_file(
-                observation,
-                store.read(observation.resource_id),
-                owner_id=owner_id,
+            result[name] = container_authorized(
+                decide_file(
+                    observation,
+                    store.read(observation.resource_id),
+                    owner_id=owner_id,
+                )
             )
-            result[name] = decision.action not in {
-                FileAction.ADOPT,
-                FileAction.HOLD,
-            }
             continue
         for sub_name, _src, destination in expand_tracked_file(
             name, resolve_src(tracked, repo_root), resolve_dst(tracked)
@@ -955,15 +973,13 @@ def file_authorization_map(
                 result[sub_name] = True
                 continue
             observation = observe_file(destination)
-            decision = decide_file(
-                observation,
-                store.read(observation.resource_id),
-                owner_id=owner_id,
+            result[sub_name] = container_authorized(
+                decide_file(
+                    observation,
+                    store.read(observation.resource_id),
+                    owner_id=owner_id,
+                )
             )
-            result[sub_name] = decision.action not in {
-                FileAction.ADOPT,
-                FileAction.HOLD,
-            }
     return result
 
 
@@ -1154,12 +1170,13 @@ def _has_file_authority(repo_root: Path, destination: Path) -> bool:
     except OwnershipError:
         return not (repo_root / ".git").exists()
     observation = observe_file(destination)
-    decision = decide_file(
-        observation,
-        OwnershipStore().read(observation.resource_id),
-        owner_id=owner_id,
+    return container_authorized(
+        decide_file(
+            observation,
+            OwnershipStore().read(observation.resource_id),
+            owner_id=owner_id,
+        )
     )
-    return decision.action not in {FileAction.ADOPT, FileAction.HOLD}
 
 
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:

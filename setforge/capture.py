@@ -27,10 +27,15 @@ from setforge import (
 from setforge import (
     user_section_markers as sections,
 )
-from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
+from setforge.compare import (
+    container_authorized,
+    expand_tracked_file,
+    resolve_dst,
+    resolve_src,
+)
 from setforge.config import Config, ResolvedProfile, resolve_profile
 from setforge.errors import InvariantViolation, StructuredParseError
-from setforge.file_ownership import FileAction, decide_file, observe_file
+from setforge.file_ownership import decide_file, observe_file
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
@@ -127,14 +132,9 @@ def _require_capture_authority(
         owner_id = None
     observation = observe_file(destination)
     claim = OwnershipStore().read(observation.resource_id)
-    action = (
-        FileAction.ADOPT
-        if owner_id is None and claim is None
-        else FileAction.HOLD
-        if owner_id is None
-        else decide_file(observation, claim, owner_id=owner_id).action
-    )
-    if action in {FileAction.ADOPT, FileAction.HOLD}:
+    if owner_id is None or not container_authorized(
+        decide_file(observation, claim, owner_id=owner_id)
+    ):
         raise InvariantViolation(
             f"staged file {sub_name!r} has no current container ownership claim; "
             f"run `setforge stage {sub_name}` to adopt it"
