@@ -363,71 +363,6 @@ class StageSummary:
         }
 
 
-def _apply_structured(
-    profile: str,
-    stage: FileStage[KeyUnit],
-    result: WalkResult[KeyUnit],
-    *,
-    config_dir: Path | None = None,
-    config_path: Path | None = None,
-    owner_id: UUID | None = None,
-) -> None:
-    """Persist a structured walk's classifications + drafts under ONE profile lock.
-
-    Adopt-locally (rewriting host live to a structured draft) is a follow-up; this
-    persists classifications against the unchanged live bytes. The lock spans the
-    whole record here (and, once adopt-locally lands, its live write too) —
-    mirroring :func:`_apply` so a concurrent install/sync cannot interleave.
-    """
-    identity_dir = (
-        resolve_owner_common_dir(config_dir)
-        if owner_id is not None and config_dir is not None
-        else None
-    )
-    with operations.transaction(
-        resources=owner_id is not None,
-        config_identity_dir=identity_dir,
-        config_dir=config_dir,
-        target_roots=(stage.dst.parent,),
-        profile=profile,
-        recover=(profile, "stage"),
-    ) as mutation_guards:
-        if owner_id is not None and config_dir is not None:
-            identity_guard = (
-                mutation_guards.config_identity if mutation_guards is not None else None
-            )
-            if identity_guard is None:
-                raise InvariantViolation("config owner identity lock was not acquired")
-            if (
-                read_owner_id_locked(config_dir, identity_guard.directory_fd)
-                != owner_id
-            ):
-                raise InvariantViolation(
-                    "config owner identity changed after confirmation; retry stage"
-                )
-        locked_live = stage.dst.read_bytes()
-        plan = _prepare_persist(
-            profile, stage, result, locked_live, observed_live=locked_live
-        )
-        if owner_id is None:
-            _commit_persist(profile, stage.fid, stage.base, plan)
-        else:
-            _commit_owned_persist(
-                profile,
-                stage,
-                plan,
-                owner_id=owner_id,
-                config_dir=config_dir,
-                config_path=config_path,
-                refresh_claim=(
-                    stage.ownership is not None
-                    and stage.ownership.action is FileAction.ADOPT
-                )
-                or bool(result.decided_refs),
-                live_payload=None,
-            )
-
-
 def _require_current_base(
     profile: str, fid: FileId, expected: bytes, *, display_name: str
 ) -> None:
@@ -614,8 +549,8 @@ def _adopt_live(stage: FileStage[Hunk], result: WalkResult[Hunk]) -> bytes:
 
 def _apply(
     profile: str,
-    stage: FileStage[Hunk],
-    result: WalkResult[Hunk],
+    stage: FileStage[Any],
+    result: WalkResult[Any],
     *,
     config_dir: Path | None = None,
     config_path: Path | None = None,
@@ -628,11 +563,15 @@ def _apply(
     install/sync/revert hold the lock across their whole mutating region — so a
     concurrent install/sync cannot land between the write and the record and leave
     a live tree whose bytes no longer match the classifications persisted here.
+
+    Only an engine that supports adopt rewrites live; key units persist their
+    classifications against the unchanged live bytes.
     """
+    adopting = stage.engine.supports_adopt and bool(result.adopt_refs)
     if (
         stage.ownership is not None
         and stage.ownership.action is FileAction.TRANSFER
-        and result.adopt_refs
+        and adopting
     ):
         raise InvariantViolation(
             "transfer ownership before adopting live content; no changes applied"
@@ -664,12 +603,12 @@ def _apply(
                     "config owner identity changed after confirmation; retry stage"
                 )
         locked_live = stage.dst.read_bytes()
-        if result.adopt_refs and locked_live != stage.live:
+        if adopting and locked_live != stage.live:
             raise InvariantViolation(
                 f"staged file {stage.sub_name!r} changed after it was shown; "
                 "run stage again"
             )
-        final_live = _adopt_live(stage, result) if result.adopt_refs else locked_live
+        final_live = _adopt_live(stage, result) if adopting else locked_live
         plan = _prepare_persist(
             profile, stage, result, final_live, observed_live=locked_live
         )
@@ -693,6 +632,10 @@ def _apply(
                 or bool(result.decided_refs),
                 live_payload=final_live if final_live != locked_live else None,
             )
+
+
+#: ``_apply`` under the name its key-unit callers outside this module use.
+_apply_structured = _apply
 
 
 def _store_snapshots(
@@ -1032,9 +975,11 @@ def stage(
 
     _refuse_generated_stage_target(cfg, resolved, file)
 
-    stages = collect_stages(cfg, resolved, repo_root, profile, only=file)
-    struct = collect_structured_stages(cfg, resolved, repo_root, profile, only=file)
-    if not stages and not struct:
+    staged: list[FileStage[Any]] = [
+        *collect_stages(cfg, resolved, repo_root, profile, only=file),
+        *collect_structured_stages(cfg, resolved, repo_root, profile, only=file),
+    ]
+    if not staged:
         typer.secho(
             f"{file}: nothing to stage — no local changes over a recorded base "
             f"(run `setforge install --profile={profile}` first if it is new)",
@@ -1044,14 +989,14 @@ def stage(
         raise typer.Exit(code=0)
 
     console = make_console()
-    for stage_item in stages:
-        if not stage_item.hunks:
+    for item in staged:
+        if not item.units:
             continue
-        owner_id = _confirm_file_ownership(stage_item, repo_root)
-        result = walk(stage_item.units, _interactive_choice(stage_item))
+        owner_id = _confirm_file_ownership(item, repo_root)
+        result = walk(item.units, _interactive_choice(item))
         _apply(
             profile,
-            stage_item,
+            item,
             result,
             config_dir=repo_root,
             config_path=config,
@@ -1061,32 +1006,10 @@ def stage(
         drafted = tally[HunkClass.SHARED_DRAFTED]
         drafted_note = f"  {drafted} drafted" if drafted else ""
         console.print(
-            f"{stage_item.sub_name}: "
+            f"{item.sub_name}: "
             f"{tally[HunkClass.SHARED]} shared{drafted_note}  "
             f"{tally[HunkClass.LOCAL]} local  "
             f"{tally[HunkClass.PENDING]} pending"
-        )
-    for struct_item in struct:
-        if not struct_item.units:
-            continue
-        owner_id = _confirm_file_ownership(struct_item, repo_root)
-        sresult = walk(struct_item.units, _interactive_choice(struct_item))
-        _apply_structured(
-            profile,
-            struct_item,
-            sresult,
-            config_dir=repo_root,
-            config_path=config,
-            owner_id=owner_id,
-        )
-        stally = counts(sresult.units)
-        sdrafted = stally[HunkClass.SHARED_DRAFTED]
-        sdrafted_note = f"  {sdrafted} drafted" if sdrafted else ""
-        console.print(
-            f"{struct_item.sub_name}: "
-            f"{stally[HunkClass.SHARED]} shared{sdrafted_note}  "
-            f"{stally[HunkClass.LOCAL]} local  "
-            f"{stally[HunkClass.PENDING]} pending"
         )
 
 

@@ -12,7 +12,7 @@ from setforge.cli import stage as stage_mod
 from setforge.cli.stage import (
     Decision,
     FileStage,
-    _apply_structured,
+    _apply,
     collect_stages,
     collect_structured_stages,
     walk,
@@ -123,7 +123,7 @@ def test_persist_structured_records_key_classification(
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
     result = walk(stage.units, lambda u, i, t: Decision(cls=HunkClass.LOCAL))
-    _apply_structured(profile, stage, result)
+    _apply(profile, stage, result)
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert entry.staged is True
@@ -142,7 +142,7 @@ def test_walk_structured_shared_records_shared(
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
     result = walk(stage.units, lambda u, i, t: Decision(cls=HunkClass.SHARED))
-    _apply_structured(profile, stage, result)
+    _apply(profile, stage, result)
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
@@ -181,13 +181,13 @@ def test_structured_stage_validates_parent_child_intent_before_persist(
         with pytest.raises(
             StructuredParseError, match="incompatible parent/descendant"
         ):
-            _apply_structured(profile, stage, result)
+            _apply(profile, stage, result)
         assert store.read_index(profile) == before
         assert store.read_base(profile, stage.fid) == base
         assert store.read_local(profile, stage.fid) == live
         assert store.read_drafts(profile, stage.fid) == {}
     else:
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
         (saved,) = collect_structured_stages(
             cfg, resolve_profile(cfg, profile), repo, profile
         )
@@ -208,7 +208,7 @@ def test_render_list_json_reports_structured_drafted_and_pending(
     cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (first,) = collect_structured_stages(cfg, resolved, repo, profile)
-    _apply_structured(
+    _apply(
         profile,
         first,
         walk(
@@ -290,7 +290,7 @@ def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
     cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (first,) = collect_structured_stages(cfg, resolved, repo, profile)
-    _apply_structured(
+    _apply(
         profile,
         first,
         walk(first.units, lambda u, i, t: Decision(HunkClass.SHARED)),
@@ -302,7 +302,7 @@ def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
 
     skipped = walk(changed.units, lambda u, i, t: None)
     assert skipped.decided_refs == set()
-    _apply_structured(profile, changed, skipped)
+    _apply(profile, changed, skipped)
     (still_changed,) = collect_structured_stages(cfg, resolved, repo, profile)
     assert still_changed.units[0].changed is True
     assert (
@@ -312,7 +312,7 @@ def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
 
     reconfirmed = walk(still_changed.units, lambda u, i, t: Decision(HunkClass.SHARED))
     assert reconfirmed.decided_refs == {UnitRef.key("fontSize")}
-    _apply_structured(profile, still_changed, reconfirmed)
+    _apply(profile, still_changed, reconfirmed)
     (after,) = collect_structured_stages(cfg, resolved, repo, profile)
     assert after.units[0].changed is False
     assert after.units[0].confirmed_hash == after.units[0].value_hash
@@ -331,7 +331,7 @@ def test_structured_prompt_to_lock_live_race_refuses_stale_decision(
     stage.dst.write_bytes(b"theme: dark\nfontSize: 18\n")
 
     with pytest.raises(InvariantViolation, match="changed after it was shown"):
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
 
     entry = store.read_index(profile).files["settings.yaml"]
     assert entry.staged is False
@@ -363,7 +363,7 @@ def test_structured_apply_refuses_stale_recorded_base_without_writes(
     assert not drafts_path.exists()
 
     with pytest.raises(InvariantViolation, match=r"recorded base.*changed"):
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
 
     assert stage.dst.read_bytes() == before_live
     assert store.read_base(profile, file_id("settings.yaml")) == newer_base
@@ -387,7 +387,7 @@ def test_walk_structured_draft_uses_typed_key_reference(
     )
 
     assert result.drafts == {UnitRef.key("fontSize"): draft}
-    _apply_structured(profile, stage, result)
+    _apply(profile, stage, result)
     assert store.read_drafts(profile, file_id("settings.yaml")) == {
         UnitRef.key("fontSize"): draft
     }
