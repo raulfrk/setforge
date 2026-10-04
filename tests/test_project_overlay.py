@@ -164,6 +164,8 @@ def test_real_git_process_filter_hides_overlay_but_not_project_edit(
     subprocess.run(["git", "add", "CLAUDE.md"], cwd=target, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=target, check=True)
     write_overlay(build_overlay(target, Path("CLAUDE.md"), base, local))
+    # The filter child must run this source tree, not the installed package.
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1]))
     command = f"{Path(sys.executable).with_name('setforge')} project filter-process"
     subprocess.run(
         ["git", "config", "filter.setforge-project.process", command],
@@ -205,6 +207,8 @@ def test_read_overlay_binds_the_directory_inode_but_not_its_device_number(
     write_overlay(overlay)
     state = overlay_path(target, Path("CLAUDE.md"))
     record = json.loads(state.read_bytes())
+    # Earlier releases also stored the device number and the hunk list.
+    record |= {"hunks": [], "target_device": target.stat().st_dev}
     record[field] += 1
     state.write_text(json.dumps(record))
 
@@ -214,3 +218,27 @@ def test_read_overlay_binds_the_directory_inode_but_not_its_device_number(
         with pytest.raises(SetforgeError) as failure:
             read_overlay(target, Path("CLAUDE.md"))
         assert str(failure.value) == f"project overlay identity changed: {state}"
+
+
+def test_read_overlay_refuses_a_state_file_with_an_unknown_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "target"
+    target.mkdir()
+    write_overlay(build_overlay(target, Path("CLAUDE.md"), b"team\n", b"local\n"))
+    state = overlay_path(target, Path("CLAUDE.md"))
+    record = json.loads(state.read_bytes())
+    assert sorted(record) == [
+        "base",
+        "local",
+        "path",
+        "schema",
+        "target",
+        "target_inode",
+    ]
+    state.write_text(json.dumps(record | {"extra": 1}))
+
+    with pytest.raises(SetforgeError) as failure:
+        read_overlay(target, Path("CLAUDE.md"))
+    assert str(failure.value) == f"project overlay has invalid fields: {state}"

@@ -9,15 +9,14 @@ import os
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
 from setforge import atomicio
 from setforge.errors import SetforgeError
-from setforge.reconcile.hunks import classify, extract_hunks, serialize
+from setforge.reconcile.hunks import extract_hunks
 from setforge.reconcile.merge import split_lines
-from setforge.reconcile.types import HunkClass
 from setforge.transitions import state_root
 
 _SCHEMA = 1
@@ -28,15 +27,13 @@ _DRIVER = "setforge-project"
 
 @dataclass(frozen=True, slots=True)
 class ProjectOverlay:
-    """One exact tracked-file overlay and its LOCAL hunk classifications."""
+    """One exact tracked-file overlay: every base-to-local difference is private."""
 
     target: Path
-    target_device: int
     target_inode: int
     relative_path: Path
     base: bytes
     local: bytes
-    hunks: tuple[dict[str, object], ...]
 
 
 def overlay_path(target: Path, relative_path: Path) -> Path:
@@ -52,23 +49,14 @@ def overlay_path(target: Path, relative_path: Path) -> Path:
 def build_overlay(
     target: Path, relative_path: Path, base: bytes, local: bytes
 ) -> ProjectOverlay:
-    """Classify every initial base-to-local difference as private LOCAL content."""
+    """Bind one overlay to the canonical target directory and path."""
     root = target.resolve(strict=True)
-    relative = _validated_relative(relative_path)
-    info = root.stat()
-    hunks = tuple(
-        serialize(
-            [replace(hunk, cls=HunkClass.LOCAL) for hunk in extract_hunks(base, local)]
-        )
-    )
     return ProjectOverlay(
         target=root,
-        target_device=info.st_dev,
-        target_inode=info.st_ino,
-        relative_path=relative,
+        target_inode=root.stat().st_ino,
+        relative_path=_validated_relative(relative_path),
         base=base,
         local=local,
-        hunks=hunks,
     )
 
 
@@ -76,12 +64,10 @@ def write_overlay(overlay: ProjectOverlay) -> None:
     """Atomically persist one prevalidated overlay."""
     payload = {
         "base": base64.b64encode(overlay.base).decode("ascii"),
-        "hunks": list(overlay.hunks),
         "local": base64.b64encode(overlay.local).decode("ascii"),
         "path": overlay.relative_path.as_posix(),
         "schema": _SCHEMA,
         "target": str(overlay.target),
-        "target_device": overlay.target_device,
         "target_inode": overlay.target_inode,
     }
     atomicio.atomic_write_text(
@@ -114,24 +100,19 @@ def read_overlay(target: Path, relative_path: Path) -> ProjectOverlay | None:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-    required = {
-        "base",
-        "hunks",
-        "local",
-        "path",
-        "schema",
-        "target",
-        "target_device",
-        "target_inode",
-    }
-    if not isinstance(raw, dict) or set(raw) != required or raw["schema"] != _SCHEMA:
+    required = {"base", "local", "path", "schema", "target", "target_inode"}
+    if (
+        not isinstance(raw, dict)
+        # Earlier releases also stored these two; neither was ever compared.
+        or set(raw) - {"hunks", "target_device"} != required
+        or raw["schema"] != _SCHEMA
+    ):
         raise SetforgeError(f"project overlay has invalid fields: {path}")
-    current = root.stat()
+    inode = root.stat().st_ino
     if (
         raw["target"] != str(root)
         or raw["path"] != relative.as_posix()
-        or raw["target_inode"] != current.st_ino
-        or not isinstance(raw["hunks"], list)
+        or raw["target_inode"] != inode
     ):
         raise SetforgeError(f"project overlay identity changed: {path}")
     try:
@@ -139,17 +120,12 @@ def read_overlay(target: Path, relative_path: Path) -> ProjectOverlay | None:
         local = base64.b64decode(raw["local"], validate=True)
     except (TypeError, ValueError) as exc:
         raise SetforgeError(f"project overlay payload is invalid: {path}") from exc
-    classified = classify(extract_hunks(base, local), raw["hunks"])
-    if any(hunk.cls is not HunkClass.LOCAL or hunk.changed for hunk in classified):
-        raise SetforgeError(f"project overlay hunk state is inconsistent: {path}")
     return ProjectOverlay(
         target=root,
-        target_device=current.st_dev,
-        target_inode=current.st_ino,
+        target_inode=inode,
         relative_path=relative,
         base=base,
         local=local,
-        hunks=tuple(raw["hunks"]),
     )
 
 
