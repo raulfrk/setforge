@@ -55,7 +55,6 @@ from setforge.scalar_merge import (
     _scalar_eq,
     resolve_scalar,
 )
-from setforge.scalar_path import _delete_jsonc_leaf, _set_jsonc_leaf
 
 __all__ = [
     "PathConflict",
@@ -1087,23 +1086,17 @@ def set_at_path(model: object, path: str, value: object) -> None:
     scalar, ``list`` or ``dict`` (matching :attr:`PathConflict.theirs`, which is
     already unwrapped).
 
-    Across all backends the write is comment-preserving:
-
-    * ruamel ``CommentedMap`` round-trips, so sibling comments / anchors / quotes
-      survive a plain assignment;
-    * the json-five model splices the parent's stored ``.keys`` / ``.values`` in
-      lockstep (never the derived ``key_value_pairs``) and, on REPLACING an
-      existing leaf, carries that leaf's ``wsc_before`` forward — both via
-      :func:`setforge.scalar_path._set_jsonc_leaf`;
-    * a plain ``dict`` carries no comments, so assignment suffices.
+    The write is comment-preserving: a ruamel ``CommentedMap`` round-trips, so
+    sibling comments / anchors / quotes survive a plain assignment; a plain
+    ``dict`` carries no comments, so assignment suffices.
 
     A missing intermediate PARENT raises :class:`KeyError` (no
-    auto-vivification), matching the :mod:`setforge.scalar_path` semantics.
-    A list-suffix segment raises :class:`ValueError`. When the resolved
-    parent is not a mapping (so the leaf cannot be addressed by key),
-    :class:`~setforge.errors.MergeTypeMismatch` propagates from the
-    leaf-set step — callers wrapping this seam must account for it
-    alongside ``KeyError`` / ``ValueError``.
+    auto-vivification). A list-suffix segment raises :class:`ValueError`. When
+    the resolved parent is not a mapping — a json-five object included, since
+    JSON files are staged as one whole-document unit and never written by path
+    — :class:`~setforge.errors.MergeTypeMismatch` propagates from the leaf-set
+    step; callers wrapping this seam must account for it alongside
+    ``KeyError`` / ``ValueError``.
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for set-at-path: {path!r}")
@@ -1119,9 +1112,8 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     The comment-preserving sibling of :func:`set_at_path` for a whole-subtree
     re-assert: where :func:`set_at_path` writes an UNWRAPPED plain snapshot
     (which carries no comments, so the pinned subtree's OWN interior comments
-    are lost), this seam splices the still-WRAPPED backend node — a ruamel
-    ``CommentedMap`` / ``CommentedSeq`` or a json-five ``JSONObject`` /
-    ``JSONArray`` — so the node's interior comment tokens survive the swap.
+    are lost), this seam splices the still-WRAPPED ruamel ``CommentedMap`` /
+    ``CommentedSeq`` so the node's interior comment tokens survive the swap.
 
     ``node`` MUST already be a deep copy (the caller snapshots it BEFORE the
     in-place merge mutates the source model); this seam does not copy it.
@@ -1137,11 +1129,6 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
       cleared. The slot the node is about to replace is excluded from the
       collision set, so an ``&anchor``/``*alias`` pair living inside the pinned
       subtree survives a no-op re-assert byte-identical.
-    * json-five: the parent's stored ``.keys`` / ``.values`` are spliced in
-      LOCKSTEP at the leaf's index (the derived ``key_value_pairs`` re-zips
-      keys/values on access, so editing only one list desyncs it); the
-      replaced value's ``wsc_before`` is carried onto the new node so the
-      leaf's leading whitespace / same-line position is unchanged.
     * a plain ``dict`` carries no comments, so assignment suffices.
 
     ``path`` is the same DOTTED grammar as :func:`set_at_path`; a list-suffix
@@ -1169,9 +1156,8 @@ def delete_node_at_path(model: object, path: str) -> None:
     removed live), so the reconstructed base must DROP the leaf rather than
     splice the ``ABSENT`` sentinel (which the dumper cannot serialise). Per
     backend: ruamel ``CommentedMap`` / plain ``dict`` take a plain ``del`` (the
-    key's own comment tokens go with it); json-five parents go through
-    :func:`_delete_jsonc_leaf` (``keys`` / ``values`` removed in lockstep). A
-    no-op when the leaf is already absent. Same dotted grammar as
+    key's own comment tokens go with it). A no-op when the leaf is already
+    absent. Same dotted grammar as
     :func:`set_node_at_path`: a list-suffix segment raises :class:`ValueError`,
     a missing intermediate parent raises :class:`KeyError`, and a non-mapping
     parent raises :class:`~setforge.errors.MergeTypeMismatch`.
@@ -1182,10 +1168,6 @@ def delete_node_at_path(model: object, path: str) -> None:
     inner = _json5_inner(model)
     parent = _descend_set_parent(inner, segments, path)
     leaf = segments[-1]
-    if isinstance(parent, JSONObject):
-        if _find_key_index(parent, leaf) is not None:
-            _delete_jsonc_leaf(parent, leaf)
-        return
     if isinstance(parent, MutableMapping):
         if leaf in parent:
             del parent[leaf]
@@ -1260,7 +1242,7 @@ def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
     """Walk ``segments[:-1]`` and return the leaf's parent node.
 
     Raises :class:`KeyError` when any intermediate parent is missing (no
-    auto-vivification), mirroring :func:`setforge.scalar_path` navigation.
+    auto-vivification).
     """
     for depth, seg in enumerate(segments[:-1]):
         child = _child_node(node, seg)
@@ -1284,15 +1266,10 @@ def _child_node(node: object, key: str) -> object:
 def _set_leaf(parent: object, leaf: str, value: object, path: str) -> None:
     """Set ``parent[leaf]`` to ``value`` per the parent's backend.
 
-    json-five parents go through :func:`setforge.scalar_path._set_jsonc_leaf`
-    (keys/values spliced in lockstep, replaced-leaf ``wsc_before`` preserved);
     ruamel ``CommentedMap`` and plain ``dict`` take a plain assignment (ruamel's
     round-trip mode keeps sibling comments). A parent that is not a mapping is a
     shape error and raises :class:`~setforge.errors.MergeTypeMismatch`.
     """
-    if isinstance(parent, JSONObject):
-        _set_jsonc_leaf(parent, leaf, value)
-        return
     if isinstance(parent, MutableMapping):
         parent[leaf] = value
         return
@@ -1304,47 +1281,16 @@ def _set_leaf(parent: object, leaf: str, value: object, path: str) -> None:
 def _set_node_leaf(parent: object, leaf: str, node: object, path: str) -> None:
     """Splice the WRAPPED ``node`` at ``parent[leaf]`` per the parent's backend.
 
-    json-five parents go through :func:`_set_jsonc_node` (keys/values spliced
-    in lockstep, replaced value's ``wsc_before`` carried forward); ruamel
-    ``CommentedMap`` and plain ``dict`` take a plain assignment that preserves
-    the node's own attached comments. A non-mapping parent raises
+    ruamel ``CommentedMap`` and plain ``dict`` take a plain assignment that
+    preserves the node's own attached comments. A non-mapping parent raises
     :class:`~setforge.errors.MergeTypeMismatch`.
     """
-    if isinstance(parent, JSONObject):
-        _set_jsonc_node(parent, leaf, node)
-        return
     if isinstance(parent, MutableMapping):
         parent[leaf] = node
         return
     raise MergeTypeMismatch(
         f"cannot set node at {path!r}: parent is {type(parent).__name__}, not a mapping"
     )
-
-
-def _set_jsonc_node(parent: JSONObject, leaf: str, node: object) -> None:
-    """Splice a wrapped json-five ``node`` at ``parent[leaf]`` in lockstep.
-
-    Replacing an existing leaf swaps the value node in place at its index
-    (carrying the replaced value's ``wsc_before`` so its leading whitespace /
-    same-line position is unchanged) and leaves ``.keys`` untouched — the
-    stored ``.keys`` / ``.values`` stay equal-length so the derived
-    ``key_value_pairs`` zip never desyncs. A missing leaf is added through the
-    scalar setter's append path, which already maintains both lists.
-    """
-    if not isinstance(node, Value):
-        # A plain-python node (no backend wrapper) carries no json-five comment
-        # tokens; route it through the scalar setter so it still lands.
-        _set_jsonc_leaf(parent, leaf, node)
-        return
-    idx = _find_key_index(parent, leaf)
-    if idx is None:
-        # No existing leaf: there is no wrapped value to carry whitespace from,
-        # so fall back to the append path (keys/values kept in lockstep there).
-        _set_jsonc_leaf(parent, leaf, _to_plain(node))
-        return
-    existing = parent.values[idx]
-    node.wsc_before = getattr(existing, "wsc_before", None) or [" "]
-    parent.values[idx] = node
 
 
 def _dedup_ruamel_anchors(
