@@ -21,7 +21,6 @@ from pathlib import Path
 from setforge import atomicio
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_symlink_target
 from setforge.errors import MissingTrackedFile, SetforgeError
-from setforge.markdown_merge import LineConflict
 from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ class DeployResult:
     action: DeployAction
     backup_path: Path | None
     new_base: str | None = None
-    merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
+    merge_conflicts: list[PathConflict] = field(default_factory=list)
     prior_mode: int | None = None
 
 
@@ -80,7 +79,7 @@ class ResolvedDeploy:
     effective_mode: int
     content: str
     new_base: str | None
-    merge_conflicts: list[LineConflict | PathConflict]
+    merge_conflicts: list[PathConflict]
 
 
 def copy_atomic(
@@ -224,7 +223,7 @@ def _write_resolved_content(
     mode: int | None,
     *,
     new_base: str | None,
-    merge_conflicts: list[LineConflict | PathConflict],
+    merge_conflicts: list[PathConflict],
 ) -> DeployResult:
     """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
 
