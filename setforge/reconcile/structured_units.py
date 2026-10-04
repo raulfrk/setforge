@@ -41,6 +41,7 @@ from setforge.errors import (
     MergeTypeMismatch,
     StructuredParseError,
 )
+from setforge.migrations._yaml_ops import yaml_rt
 from setforge.reconcile.index_model import KIND_KEY
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.types import HunkClass, UnitRef, content_sha
@@ -57,10 +58,6 @@ from setforge.structural_merge import (
     set_node_at_path,
     split_key_path,
 )
-
-#: YAML dump width set high so a long scalar is never reflowed onto a new line —
-#: a reflow would mint a phantom diff on an untouched unit (smell SP5).
-_YAML_WIDTH: Final = 4096
 
 #: Most promoted keys a reconstruction places line by line; past this the model
 #: dump is used (placing a new key scans its siblings). Bounded cost, not a knob.
@@ -131,18 +128,6 @@ class KeyUnit:
         return UnitRef.key(self.path)
 
 
-def _yaml() -> YAML:
-    """A ruamel round-trip YAML configured for byte-faithful preserve.
-
-    ``preserve_quotes`` keeps a scalar's quote style; ``width`` is
-    :data:`_YAML_WIDTH` (see its rationale — no long-scalar reflow, smell SP5).
-    """
-    yaml = YAML(typ="rt")
-    yaml.preserve_quotes = True
-    yaml.width = _YAML_WIDTH
-    return yaml
-
-
 def _load_model(data: bytes, fmt: StructuredFormat) -> object:
     """Parse ``data`` into a fresh comment-preserving model for ``fmt``.
 
@@ -165,7 +150,7 @@ def _load_model(data: bytes, fmt: StructuredFormat) -> object:
 
     try:
         if fmt is StructuredFormat.YAML:
-            return _yaml().load(io.StringIO(text))
+            return yaml_rt().load(io.StringIO(text))
         return _json5_loads(text, loader=ModelLoader())
     except Exception as err:
         raise StructuredParseError(f"structured input is not parseable: {err}") from err
@@ -253,7 +238,7 @@ def _dump_yaml(model: object, like: bytes | None) -> bytes:
     (nor anything above ``---``) or the block indentation; those are read off
     ``like`` and put back.
     """
-    yaml = _yaml()
+    yaml = yaml_rt()
     source = "" if like is None else like.decode("utf-8")
     lines = source.removeprefix(_BOM).splitlines()
     start = next(
