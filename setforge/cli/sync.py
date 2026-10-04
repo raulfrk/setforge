@@ -72,7 +72,7 @@ class _CaptureSnapshot:
     effective_hash: str
     ownership: tuple[FileDecision, ...]
     ownership_authorized: tuple[tuple[str, bool], ...]
-    preview: tuple[capture_mod.CapturePreview, ...]
+    preview: tuple[capture_mod.CaptureItem, ...]
     codex_plans: tuple[codex_resources_mod.CodexConfigPlan, ...]
     extension_content: str | None
     extension_warning: str | None
@@ -118,7 +118,7 @@ def _capture_ownership(
 
 def _build_capture_plan(
     *,
-    preview: tuple[capture_mod.CapturePreview, ...],
+    preview: tuple[capture_mod.CaptureItem, ...],
     ctx: ProfileContext,
 ) -> AutoPlan:
     """Build a truthful live → tracked plan from exact capture projections."""
@@ -183,7 +183,7 @@ def _load_capture_preview(
     )
     ownership, authorized = _capture_ownership(ctx, owner_id)
     preview = list(
-        capture_mod.preview_capture_profile(
+        capture_mod.plan_capture(
             cfg,
             profile,
             repo_root,
@@ -221,24 +221,22 @@ def _load_capture_preview(
         )
         for source, content in writes.items():
             preview.append(
-                capture_mod.CapturePreview(
+                capture_mod.CaptureItem(
                     name=f"{plan.resource_id}/{source.name}",
                     src=source,
                     dst=plan.destination,
                     action=capture_mod.CaptureAction.UPDATED,
-                    proposed_hash=content_sha(content),
-                    route="codex",
+                    proposed=content,
                 )
             )
         if desired != plan.base:
             preview.append(
-                capture_mod.CapturePreview(
+                capture_mod.CaptureItem(
                     name=plan.resource_id,
                     src=plan.destination,
                     dst=plan.destination,
                     action=capture_mod.CaptureAction.NOOP,
                     store_update=True,
-                    route="codex",
                 )
             )
     extension_content = None
@@ -254,13 +252,12 @@ def _load_capture_preview(
             extension_warning = str(exc)
         if extension_content is not None:
             preview.append(
-                capture_mod.CapturePreview(
+                capture_mod.CaptureItem(
                     name="extensions",
                     src=config,
                     dst=config,
                     action=capture_mod.CaptureAction.UPDATED,
-                    proposed_hash=content_sha(extension_content.encode("utf-8")),
-                    route="extensions",
+                    proposed=extension_content.encode("utf-8"),
                 )
             )
     return (
@@ -310,7 +307,7 @@ def _confirm_capture_plan(
 
 
 def _render_keep_tracked(
-    preview: tuple[capture_mod.CapturePreview, ...],
+    preview: tuple[capture_mod.CaptureItem, ...],
 ) -> None:
     """Render the non-mutating keep-tracked refusal without taking locks."""
     results = [

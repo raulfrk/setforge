@@ -10,7 +10,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from setforge.capture import CaptureAction, CapturePreview
+from setforge.capture import CaptureAction, CaptureItem
 from setforge.cli import app
 from setforge.cli._confirm import (
     AutoDirection,
@@ -103,13 +103,13 @@ def test_capture_plan_claims_only_actual_updates_and_lists_blockers() -> None:
     ctx = SimpleNamespace(profile="p")
     plan = _build_capture_plan(
         preview=(
-            CapturePreview(
+            CaptureItem(
                 name="promoted",
                 src=Path("/repo/tracked/promoted"),
                 dst=Path("/live/promoted"),
                 action=CaptureAction.UPDATED,
             ),
-            CapturePreview(
+            CaptureItem(
                 name="held",
                 src=Path("/repo/tracked/held"),
                 dst=Path("/live/held"),

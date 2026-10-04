@@ -11,7 +11,6 @@ resolves drift via ``--auto={use-live, keep-tracked}`` before calling
 writers.
 """
 
-import json
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -110,8 +109,24 @@ class CaptureResult:
 
 
 @dataclass(frozen=True, slots=True)
-class CapturePreview:
-    """Read-only projection of one file's exact capture outcome."""
+class StoreRecord:
+    """The reconcile-store row a staged capture writes; ``base`` never advances."""
+
+    base: bytes
+    local: bytes
+    hunks: list[dict[str, object]]
+    drafts: dict[UnitRef, bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureItem:
+    """One file of a capture plan: what was read and exactly what is written.
+
+    ``proposed`` is the tracked content to write (``None`` skips the file) and
+    ``record`` the store row a staged file gets. ``tracked`` and ``entry`` are
+    the tracked bytes and index row the decision was made from, so two plans
+    compare equal only when nothing they depend on changed.
+    """
 
     name: str
     src: Path
@@ -119,17 +134,14 @@ class CapturePreview:
     action: CaptureAction
     reason: str = ""
     warnings: tuple[str, ...] = ()
-    proposed_hash: str | None = None
-    tracked_hash: str | None = None
-    live_hash: str | None = None
-    base_hash: str | None = None
-    index_hash: str | None = None
-    drafts: tuple[tuple[str, str, str], ...] = ()
-    route: str = "whole-file"
+    proposed: bytes | None = None
+    tracked: bytes | None = None
+    entry: index_model.FileEntry | None = None
+    record: StoreRecord | None = None
     store_update: bool = False
 
 
-def _preview_result(
+def _item(
     name: str,
     src: Path,
     dst: Path,
@@ -137,61 +149,31 @@ def _preview_result(
     *,
     reason: str = "",
     warnings: tuple[str, ...] = (),
-    live: bytes | None = None,
-    base: bytes | None = None,
-    entry: object | None = None,
-    drafts: Mapping[UnitRef, bytes] | None = None,
-    route: str = "whole-file",
+    entry: index_model.FileEntry | None = None,
+    record: StoreRecord | None = None,
     store_update: bool = False,
-) -> CapturePreview:
-    current = src.read_bytes() if src.exists() else None
+) -> CaptureItem:
+    tracked = src.read_bytes() if src.exists() else None
     if proposed is None:
         action = CaptureAction.SKIPPED
     else:
-        action = CaptureAction.NOOP if current == proposed else CaptureAction.UPDATED
-    return CapturePreview(
+        action = CaptureAction.NOOP if tracked == proposed else CaptureAction.UPDATED
+    return CaptureItem(
         name=name,
         src=src,
         dst=dst,
         action=action,
         reason=reason,
         warnings=warnings,
-        proposed_hash=content_sha(proposed) if proposed is not None else None,
-        tracked_hash=content_sha(current) if current is not None else None,
-        live_hash=content_sha(live) if live is not None else None,
-        base_hash=content_sha(base) if base is not None else None,
-        index_hash=(
-            content_sha(
-                json.dumps(
-                    {
-                        "present": getattr(entry, "present", None),
-                        "local_hash": getattr(entry, "local_hash", None),
-                        "staged": getattr(entry, "staged", None),
-                        "hunks": getattr(entry, "hunks", None),
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            )
-            if entry is not None
-            else None
-        ),
-        drafts=tuple(
-            sorted(
-                (
-                    ref.kind.value,
-                    ref.identity,
-                    content_sha(data),
-                )
-                for ref, data in (drafts or {}).items()
-            )
-        ),
-        route=route,
+        proposed=proposed,
+        tracked=tracked,
+        entry=entry,
+        record=record,
         store_update=store_update,
     )
 
 
-def preview_capture_profile(  # noqa: C901 - exact per-route immutable projection
+def plan_capture(  # noqa: C901 - one decision per route
     config: Config,
     profile_name: str,
     repo_root: Path,
@@ -199,9 +181,9 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     resolved: ResolvedProfile,
     ownership_authorized: Mapping[str, bool],
     auto: "CaptureAuto | None" = None,
-) -> tuple[CapturePreview, ...]:
-    """Return the exact per-file capture projection without writing anything."""
-    previews: list[CapturePreview] = []
+) -> tuple[CaptureItem, ...]:
+    """Decide every tracked write and store record of a capture; write nothing."""
+    items: list[CaptureItem] = []
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         if tracked_file.tree is not None:
@@ -220,15 +202,8 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
             fmt = su_mod.structured_format(sub_dst)
             if not sub_dst.exists():
                 _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
-                previews.append(
-                    _preview_result(
-                        sub_name,
-                        sub_src,
-                        sub_dst,
-                        None,
-                        reason="live missing",
-                        route=fmt.value if fmt is not None else "whole-file",
-                    )
+                items.append(
+                    _item(sub_name, sub_src, sub_dst, None, reason="live missing")
                 )
                 continue
             fid = file_id(sub_name)
@@ -244,16 +219,19 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                 assert base is not None
                 live = sub_dst.read_bytes()
                 stored_drafts = reconcile_store.read_drafts(profile_name, fid)
-                drafts = stored_drafts
                 warnings: list[str] = []
                 if fmt is None:
                     stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
                     line_units = reconcile_hunks.classify(
                         reconcile_hunks.extract_hunks(base, live), stored
                     )
-                    drafts = reconcile_hunks.bind_drafts(line_units, drafts)
+                    drafts = reconcile_hunks.bind_drafts(line_units, stored_drafts)
                     proposed = reconcile_hunks.reconstruct(
                         base, live, line_units, drafts
+                    )
+                    rows = reconcile_hunks.serialize(
+                        line_units,
+                        allow_relocation=sub_src.suffix.lower() in {".md", ".markdown"},
                     )
                     if any(unit.cls is HunkClass.PENDING for unit in line_units):
                         warnings.append(
@@ -274,9 +252,11 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                     key_units = su_mod.classify_structured(
                         su_mod.extract_structured_units(base, live, fmt), stored, fmt
                     )
+                    drafts = su_mod.bind_structured_drafts(key_units, stored_drafts)
                     proposed = su_mod.reconstruct_structured(
                         base, live, key_units, drafts, fmt
                     )
+                    rows = su_mod.serialize_structured(key_units)
                     if any(unit.cls is HunkClass.PENDING for unit in key_units):
                         warnings.append(
                             f"{sub_src.name}: unstaged local changes kept host-only — "
@@ -291,31 +271,21 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                             "kept host-only — re-run "
                             f"`setforge stage {sub_src.name}` to re-confirm it"
                         )
-                previews.append(
-                    _preview_result(
+                items.append(
+                    _item(
                         sub_name,
                         sub_src,
                         sub_dst,
                         proposed,
                         warnings=tuple(warnings),
-                        live=live,
-                        base=base,
                         entry=entry,
-                        drafts=drafts,
-                        route=fmt.value if fmt is not None else "line",
+                        record=StoreRecord(
+                            base=base, local=live, hunks=rows, drafts=drafts
+                        ),
                         store_update=(
                             not entry.present
                             or entry.local_hash != content_sha(live)
-                            or entry.hunks
-                            != (
-                                reconcile_hunks.serialize(
-                                    line_units,
-                                    allow_relocation=sub_src.suffix.lower()
-                                    in {".md", ".markdown"},
-                                )
-                                if fmt is None
-                                else su_mod.serialize_structured(key_units)
-                            )
+                            or entry.hunks != rows
                             or stored_drafts != drafts
                         ),
                     )
@@ -323,19 +293,10 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
                 continue
             if auto is not CaptureAuto.KEEP_TRACKED:
                 _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
-            proposed = sub_dst.read_bytes()
-            previews.append(
-                _preview_result(
-                    sub_name,
-                    sub_src,
-                    sub_dst,
-                    proposed,
-                    live=proposed,
-                    entry=entry,
-                    route=fmt.value if fmt is not None else "whole-file",
-                )
+            items.append(
+                _item(sub_name, sub_src, sub_dst, sub_dst.read_bytes(), entry=entry)
             )
-    return tuple(previews)
+    return tuple(items)
 
 
 def _refuse_unparseable_structured(sub_name: str, src: Path, dst: Path) -> None:
