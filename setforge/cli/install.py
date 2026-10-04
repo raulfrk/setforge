@@ -2712,6 +2712,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         tree_paths = plan.tree_paths()
         tracked_paths = (
             *plan.dst_paths,
+            *(path.with_name(path.name + ".bak") for path in plan.dst_paths),
             *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
             *tree_paths,
         )
