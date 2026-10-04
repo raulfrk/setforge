@@ -35,7 +35,7 @@ repos:
         stages: [commit-msg]
         pass_filenames: true
       - id: check-policy-lints
-        name: check-policy-lints (SAFE-1/2, UX-1/3 — see docs/RULES.md)
+        name: check-policy-lints (SAFE-1, UX-1/3 — see docs/RULES.md)
         entry: uv run python scripts/check_policy_lints.py
         language: system
         types: [python]
