@@ -15,7 +15,7 @@ from setforge.config import (
     TrackedFile,
 )
 from setforge.errors import ConfigError
-from setforge.provision.bundle import execute_bundle, topo_order, validate_bundle
+from setforge.provision.bundle import execute_bundle, validate_bundle
 from setforge.provision.capability_graph import CapabilityTargetKind
 from setforge.provision.driver import exit_code
 from setforge.provision.protocol import Identity, Outcome
@@ -171,28 +171,6 @@ def test_duplicate_id_rejected() -> None:
     )
     with pytest.raises(ConfigError, match="duplicate"):
         validate_bundle(bundle, _cfg())
-
-
-def test_topo_order_honors_depends_on() -> None:
-    bundle = BundleSpec(
-        components=[
-            _comp("b", depends_on=["a"], crate="rb"),
-            _comp("a", crate="ra"),
-        ]
-    )
-    order = [c.id for c in topo_order(bundle)]
-    assert order.index("a") < order.index("b")
-
-
-def test_topo_order_declaration_tiebreak_deterministic() -> None:
-    bundle = BundleSpec(
-        components=[
-            _comp("x", crate="rx"),
-            _comp("y", crate="ry"),
-            _comp("z", crate="rz"),
-        ]
-    )
-    assert [c.id for c in topo_order(bundle)] == ["x", "y", "z"]
 
 
 def _run(bundle: BundleSpec, cfg: Config, prov: InMemoryProvisioner):

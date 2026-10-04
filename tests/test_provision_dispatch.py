@@ -54,7 +54,6 @@ from setforge.provision.dispatch import (
     publish_installed_package_claims_locked,
     report_provisioning,
     resolve_provision_items,
-    run_provisioning,
     validate_provisioning,
 )
 from setforge.provision.ownership import (
@@ -1032,14 +1031,14 @@ def test_bundle_and_dispatch_share_one_identity_helper() -> None:
 
 
 # --------------------------------------------------------------------------
-# run_provisioning: grouping, ADDITIVE apply, report-only, bundles, unknown.
+# plan_provisioning + apply: grouping, ADDITIVE apply, report-only, bundles, unknown.
 # --------------------------------------------------------------------------
 
 
-def test_run_provisioning_applies_cargo_packages(
+def test_apply_provisioning_applies_cargo_packages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # run_provisioning groups cargo packages under type=cargo, builds the real
+    # plan_provisioning groups cargo packages under type=cargo, builds the real
     # CargoProvisioner, and reconciles them ADDITIVE. Stub apply_one so no real
     # cargo runs; assert both crates were applied through the driver.
     import setforge.provision.cargo as cargo_prov
@@ -1059,7 +1058,7 @@ def test_run_provisioning_applies_cargo_packages(
         }
     )
     resolved = ResolvedProfile(packages=["ag", "jt"])
-    results = run_provisioning(cfg, resolved)
+    results = apply_provisioning(plan_provisioning(cfg, resolved))
     assert len(results) == 1  # one type group (cargo)
     assert set(applied) == {"ast-grep", "just"}
 
@@ -1075,7 +1074,7 @@ def test_report_only_applies_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "apply_one", _boom)
     cfg = _cfg(packages={"ag": CargoPackage(crate="ast-grep")})
     resolved = ResolvedProfile(packages=["ag"])
-    results = run_provisioning(cfg, resolved, report_only=True)
+    results = report_provisioning(plan_provisioning(cfg, resolved))
     assert len(results) == 1
     assert results[0].reported is True
     assert results[0].outcomes == ()
@@ -1163,7 +1162,7 @@ def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     )
     resolved = ResolvedProfile(bundles=["dev"])
-    results = run_provisioning(cfg, resolved)
+    results = apply_provisioning(plan_provisioning(cfg, resolved))
     assert len(results) == 1
     assert applied == ["ripgrep"]
     assert has_hard_failure(results) is False
@@ -1171,7 +1170,7 @@ def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_unknown_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     # A declared package whose type has no registered provisioner surfaces as
-    # UnknownProvisionerType from run_provisioning's build() call — a real
+    # UnknownProvisionerType from plan_provisioning's build() call — a real
     # config error, never a silent skip. Simulate the not-yet-wired case by
     # making resolve_provision_items yield an item of an unregistered type.
     import setforge.provision.dispatch as dispatch
@@ -1184,7 +1183,7 @@ def test_unknown_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         ],
     )
     with pytest.raises(UnknownProvisionerType):
-        run_provisioning(_cfg(), ResolvedProfile())
+        plan_provisioning(_cfg(), ResolvedProfile())
 
 
 def test_has_hard_failure_detects_hard() -> None:

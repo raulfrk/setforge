@@ -45,10 +45,6 @@ def _inline_model(component: BundleComponent) -> Package | None:
     )
 
 
-def _is_file_component(component: BundleComponent) -> bool:
-    return component.file is not None
-
-
 def _resolve_item(
     component: BundleComponent,
     cfg: Config,
@@ -123,33 +119,6 @@ def _apply_item_lock(
         platform_os=platform_os,
         platform_arch=platform_arch,
     )[0]
-
-
-def topo_order(bundle: BundleSpec) -> list[BundleComponent]:
-    order_index = {c.id: i for i, c in enumerate(bundle.components)}
-    by_id = {c.id: c for c in bundle.components}
-    indegree = {c.id: 0 for c in bundle.components}
-    dependents: dict[str, list[str]] = {c.id: [] for c in bundle.components}
-    for component in bundle.components:
-        for dep in component.depends_on:
-            indegree[component.id] += 1
-            dependents[dep].append(component.id)
-
-    ready = sorted(
-        (cid for cid, deg in indegree.items() if deg == 0), key=order_index.__getitem__
-    )
-    result: list[BundleComponent] = []
-    while ready:
-        cid = ready.pop(0)
-        result.append(by_id[cid])
-        newly_ready: list[str] = []
-        for dependent in dependents[cid]:
-            indegree[dependent] -= 1
-            if indegree[dependent] == 0:
-                newly_ready.append(dependent)
-        # Re-sort the frontier by declaration order so the tiebreak stays stable.
-        ready = sorted(ready + newly_ready, key=order_index.__getitem__)
-    return result
 
 
 def _ownership_skip(

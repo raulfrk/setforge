@@ -590,16 +590,5 @@ def resolve_provision_items(
     return items
 
 
-def run_provisioning(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    *,
-    report_only: bool = False,
-    lock: LockFile | None = None,
-) -> list[ReconcileResult]:
-    plan = plan_provisioning(cfg, resolved, lock=lock)
-    return report_provisioning(plan) if report_only else apply_provisioning(plan)
-
-
 def has_hard_failure(results: Sequence[ReconcileResult]) -> bool:
     return any(o.outcome is Outcome.HARD for result in results for o in result.outcomes)

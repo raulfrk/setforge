@@ -22,7 +22,11 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError
 from setforge.lockfile import LockFile
-from setforge.provision.dispatch import resolve_provision_items, run_provisioning
+from setforge.provision.dispatch import (
+    apply_provisioning,
+    plan_provisioning,
+    resolve_provision_items,
+)
 from setforge.provision.lock_apply import apply_lock_to_items
 from setforge.provision.protocol import Outcome, ProvisionItem, ProvisionOutcome
 from setforge.provision.resolve.protocol import (
@@ -296,7 +300,7 @@ def test_lock_apply_imports_no_resolver() -> None:
     }
 
 
-def test_run_provisioning_applies_lock_reaches_apply(
+def test_apply_provisioning_applies_lock_reaches_apply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import setforge.provision.python as python_prov
@@ -323,11 +327,11 @@ def test_run_provisioning_applies_lock_reaches_apply(
             ),
         )
     )
-    run_provisioning(cfg, resolved, lock=lock)
+    apply_provisioning(plan_provisioning(cfg, resolved, lock=lock))
     assert applied == ["9.9.9"]
 
 
-def test_run_provisioning_cargo_lock_reaches_exact_locked_install(
+def test_apply_provisioning_cargo_lock_reaches_exact_locked_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import setforge.provision.cargo as cargo_prov
@@ -359,7 +363,7 @@ def test_run_provisioning_cargo_lock_reaches_exact_locked_install(
         )
     )
 
-    result = run_provisioning(cfg, resolved, lock=lock)
+    result = apply_provisioning(plan_provisioning(cfg, resolved, lock=lock))
 
     assert [outcome.outcome for outcome in result[0].outcomes] == [Outcome.OK]
     assert [

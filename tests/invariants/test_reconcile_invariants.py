@@ -192,8 +192,8 @@ def scoped_out_invariants() -> dict[str, str]:
             "pure bundle-model DAG property, not a reconcile-verb step; "
             "asserted in tests/test_provision_bundle.py "
             "(test_self_edge_rejected, test_back_edge_cycle_rejected, "
-            "test_diamond_is_not_a_cycle, test_dangling_depends_on_rejected, "
-            "test_topo_order_honors_depends_on over the depends_on DAG)"
+            "test_diamond_is_not_a_cycle, test_dangling_depends_on_rejected "
+            "over the depends_on DAG)"
         ),
     }
 
