@@ -31,7 +31,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -140,6 +140,42 @@ def atomic_write_text(
     return atomic_write_bytes(
         path, text.encode(encoding), fsync=fsync, mode=mode, backup=backup
     )
+
+
+def open_dir_at(
+    dir_fd: int,
+    parts: Iterable[str],
+    *,
+    create_mode: int | None = None,
+    follow: int = 0,
+) -> int:
+    """Open the directory ``parts`` below ``dir_fd``, one component at a time.
+
+    Every component is opened without following a symlink, except the first
+    ``follow`` ones. With ``create_mode`` a missing component is created
+    exclusively and its parent flushed. Returns a new descriptor, a duplicate
+    of ``dir_fd`` when ``parts`` is empty; failures raise ``OSError``.
+    """
+    current = os.dup(dir_fd)
+    try:
+        for index, part in enumerate(parts):
+            flags = os.O_RDONLY | os.O_DIRECTORY
+            if index >= follow:
+                flags |= os.O_NOFOLLOW
+            try:
+                child = os.open(part, flags, dir_fd=current)
+            except FileNotFoundError:
+                if create_mode is None:
+                    raise
+                os.mkdir(part, create_mode, dir_fd=current)
+                os.fsync(current)
+                child = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
 
 
 @contextlib.contextmanager

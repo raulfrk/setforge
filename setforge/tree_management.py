@@ -569,17 +569,7 @@ def _parts(relative: str) -> tuple[str, ...]:
 
 def _open_parent(root_fd: int, relative: str) -> tuple[int, str]:
     parts = _parts(relative)
-    current = os.dup(root_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    try:
-        for part in parts[:-1]:
-            next_fd = os.open(part, flags, dir_fd=current)
-            os.close(current)
-            current = next_fd
-        return current, parts[-1]
-    except BaseException:
-        os.close(current)
-        raise
+    return atomicio.open_dir_at(root_fd, parts[:-1]), parts[-1]
 
 
 def _create_directory_at(root_fd: int, relative: str, mode: int) -> None:
@@ -771,13 +761,8 @@ def _same_object(left_fd: int, right_fd: int) -> bool:
 def _verify_relative_binding(
     anchor_fd: int, relative_parts: tuple[str, ...], expected_fd: int
 ) -> None:
-    current_fd = os.dup(anchor_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    current_fd = atomicio.open_dir_at(anchor_fd, relative_parts)
     try:
-        for part in relative_parts:
-            next_fd = os.open(part, flags, dir_fd=current_fd)
-            os.close(current_fd)
-            current_fd = next_fd
         if not _same_object(current_fd, expected_fd):
             raise SetforgeError("managed tree root binding changed during apply")
     finally:

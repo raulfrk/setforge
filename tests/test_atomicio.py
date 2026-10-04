@@ -103,6 +103,103 @@ def test_staged_file_at_refuses_and_keeps_an_existing_staged_name(
         assert staged.is_symlink()
 
 
+def _open_descriptors() -> int:
+    return len(os.listdir("/proc/self/fd"))  # noqa: PTH208 - descriptor table
+
+
+def test_open_dir_at_returns_a_new_descriptor_for_the_named_directory(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        nested_fd = atomicio.open_dir_at(root_fd, ("a", "b"))
+        same_fd = atomicio.open_dir_at(root_fd, ())
+        try:
+            assert os.path.samestat(os.fstat(nested_fd), (tmp_path / "a" / "b").stat())
+            assert os.path.samestat(os.fstat(same_fd), tmp_path.stat())
+            assert len({root_fd, nested_fd, same_fd}) == 3
+        finally:
+            os.close(nested_fd)
+            os.close(same_fd)
+    finally:
+        os.close(root_fd)
+
+
+@pytest.mark.parametrize(
+    ("link", "parts", "follow"),
+    [
+        ("a", ("a", "b"), 0),
+        ("a/b", ("a", "b"), 0),
+        ("a/b", ("a", "b"), 1),
+    ],
+)
+def test_open_dir_at_refuses_a_symlink_component_it_may_not_follow(
+    tmp_path: Path, link: str, parts: tuple[str, ...], follow: int
+) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    (outside / "b").mkdir(parents=True)
+    root.mkdir()
+    if link == "a/b":
+        (root / "a").mkdir()
+    (root / link).symlink_to(outside, target_is_directory=True)
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    before = _open_descriptors()
+    try:
+        with pytest.raises(OSError) as raised:  # noqa: PT011 - errno checked below
+            atomicio.open_dir_at(root_fd, parts, create_mode=0o700, follow=follow)
+        assert _open_descriptors() == before
+    finally:
+        os.close(root_fd)
+
+    assert raised.value.errno in {errno.ELOOP, errno.ENOTDIR}
+    assert sorted(path.name for path in outside.iterdir()) == ["b"]
+
+
+def test_open_dir_at_follows_only_the_leading_components_it_is_told_to(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "real"
+    (real / "store").mkdir(parents=True)
+    (tmp_path / "home").symlink_to(real, target_is_directory=True)
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        store_fd = atomicio.open_dir_at(root_fd, ("home", "store"), follow=1)
+        try:
+            assert os.path.samestat(os.fstat(store_fd), (real / "store").stat())
+        finally:
+            os.close(store_fd)
+    finally:
+        os.close(root_fd)
+
+
+def test_open_dir_at_creates_only_missing_components_and_only_when_asked(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "kept").mkdir(mode=0o755)
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    before = _open_descriptors()
+    try:
+        with pytest.raises(FileNotFoundError):
+            atomicio.open_dir_at(root_fd, ("kept", "new", "leaf"))
+        assert _open_descriptors() == before
+        assert list((tmp_path / "kept").iterdir()) == []
+
+        leaf_fd = atomicio.open_dir_at(
+            root_fd, ("kept", "new", "leaf"), create_mode=0o700
+        )
+        os.close(leaf_fd)
+    finally:
+        os.close(root_fd)
+
+    modes = [
+        stat.S_IMODE((tmp_path / relative).stat().st_mode)
+        for relative in ("kept", "kept/new", "kept/new/leaf")
+    ]
+    assert modes == [0o755, 0o700, 0o700]
+
+
 def _reject_rename_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     def reject(
         source_fd: int, source: str, destination_fd: int, destination: str, flags: int
