@@ -26,7 +26,7 @@ at load time.
 import os
 import re
 import shlex
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal, NewType
@@ -584,19 +584,7 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     3.0→4.0 span-surface-retire migration, which snapshots the pre-migration
     bytes first so ``revert`` restores them byte-for-byte.
     """
-    if not path.exists():
-        return _LocalSourceConfig()
-    yaml = YAML(typ="safe")
-    try:
-        data = yaml.load(path.read_text(encoding="utf-8"))
-    except (YAMLError, UnicodeDecodeError) as exc:
-        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
-    except OSError as exc:
-        raise ConfigError(f"cannot read {path}: {exc.strerror or exc}") from exc
-    if data is None:
-        return _LocalSourceConfig()
-    if not isinstance(data, MutableMapping):
-        raise ConfigError(f"top-level of {path} must be a mapping")
+    data = _local_yaml.read_local_yaml(path)
     _local_yaml.guard_local_yaml_schema(data, path)
     _local_yaml.strip_retired_keys(data)
     # Extract only the keys this loader owns; ignore other blocks

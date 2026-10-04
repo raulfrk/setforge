@@ -35,12 +35,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
-
 from setforge import paths
 from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
+from setforge.migrations._local_yaml import read_local_yaml
 
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "claude",
@@ -152,23 +150,7 @@ def load_host_local_config() -> HostLocalConfig:
     ``binaries:`` as a string, or ``claude.install_mode`` not one of
     the :class:`ClaudeInstallMode` members).
     """
-    if not paths.local_config_path().exists():
-        return HostLocalConfig()
-    yaml = YAML(typ="safe")
-    try:
-        data = yaml.load(paths.local_config_path().read_text(encoding="utf-8"))
-    except (YAMLError, UnicodeDecodeError) as exc:
-        raise ConfigError(
-            f"malformed YAML in {paths.local_config_path()}: {exc}"
-        ) from exc
-    except OSError as exc:
-        raise ConfigError(
-            f"cannot read {paths.local_config_path()}: {exc.strerror or exc}"
-        ) from exc
-    if data is None:
-        return HostLocalConfig()
-    if not isinstance(data, dict):
-        raise ConfigError(f"top-level of {paths.local_config_path()} must be a mapping")
+    data = read_local_yaml(paths.local_config_path())
     return HostLocalConfig(
         binaries=_parse_binaries_block(data.get("binaries")),
         claude=_parse_claude_block(data.get("claude")),
