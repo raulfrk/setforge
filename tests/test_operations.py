@@ -869,6 +869,33 @@ def test_snapshot_restore_journal_cannot_narrow_path_guards(
         operations.load("p")
 
 
+def test_journal_stays_compatible_with_earlier_releases(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "file"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        _prepare(tmp_path, paths=(path,)),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    for row in raw["checkpoints"]:
+        assert row["recovered"] is False
+        row["recovered"] = True
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+    path.write_text("after", encoding="utf-8")
+
+    loaded = operations.load("p")
+    assert loaded == journal
+    assert operations.recover_automatically(loaded)
+
+    assert path.read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is None
+
+
 def test_recovery_refuses_parent_swap_after_preflight(
     tmp_path: Path,
     operation_state: Path,

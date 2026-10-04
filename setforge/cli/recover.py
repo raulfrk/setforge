@@ -90,7 +90,7 @@ def _apply_recovery(journal: operations.OperationJournal) -> None:
             raise SetforgeError("operation journal changed before recovery; retry")
         operations.validate_recovery(current)
         operations.recover_adapters(current)
-        recovered = operations.finish_recovery(operations.recover_files(current))
+        recovered = operations.recover_files(current)
         manual = tuple(
             checkpoint
             for checkpoint in recovered.checkpoints

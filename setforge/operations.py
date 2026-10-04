@@ -124,7 +124,6 @@ class OperationCheckpoint:
     restore_transitions: bool = False
     adapters: tuple[AdapterKind, ...] = ()
     completed: bool = False
-    recovered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1246,23 +1245,6 @@ def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
         raise
 
 
-def finish_recovery(journal: OperationJournal) -> OperationJournal:
-    """Durably mark every executable checkpoint compensated/restored."""
-    updated = replace(
-        journal,
-        phase=OperationPhase.RECOVERING,
-        checkpoints=tuple(
-            replace(
-                item,
-                recovered=item.kind is not CheckpointKind.IRREVERSIBLE,
-            )
-            for item in journal.checkpoints
-        ),
-    )
-    _write(updated)
-    return updated
-
-
 def has_irreversible_effect(journal: OperationJournal) -> bool:
     """Return whether recovery requires explicit operator remediation."""
     return any(item.kind is CheckpointKind.IRREVERSIBLE for item in journal.checkpoints)
@@ -1280,7 +1262,7 @@ def recover_automatically(journal: OperationJournal) -> bool:
         raise SetforgeError("operation journal changed before automatic recovery")
     validate_recovery(current)
     recover_adapters(current)
-    recovered = finish_recovery(recover_files(current))
+    recovered = recover_files(current)
     if has_irreversible_effect(recovered):
         mark_manual(recovered)
         return False
@@ -2109,7 +2091,8 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
                 "restore_transitions": item.restore_transitions,
                 "adapters": [kind.value for kind in item.adapters],
                 "completed": item.completed,
-                "recovered": item.recovered,
+                # Unused, but readers up to 1.3.9 reject a checkpoint without it.
+                "recovered": False,
             }
             for item in journal.checkpoints
         ],
@@ -2405,7 +2388,6 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
     restore_transitions = row.get("restore_transitions")
     adapter_rows = row.get("adapters")
     completed = row.get("completed")
-    recovered = row.get("recovered")
     if not isinstance(name, str) or not name:
         raise TypeError("checkpoint name must be non-empty text")
     if not isinstance(kind_raw, str) or not kind_raw:
@@ -2422,8 +2404,8 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
         raise TypeError("checkpoint restore_state must be boolean")
     if not isinstance(restore_transitions, bool):
         raise TypeError("checkpoint restore_transitions must be boolean")
-    if not isinstance(completed, bool) or not isinstance(recovered, bool):
-        raise TypeError("checkpoint state flags must be booleans")
+    if not isinstance(completed, bool):
+        raise TypeError("checkpoint completed must be boolean")
     _require_unique(iter(paths), "checkpoint path")
     _require_unique(iter(adapter_rows), "checkpoint adapter")
     return OperationCheckpoint(
@@ -2435,7 +2417,6 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
         restore_transitions=restore_transitions,
         adapters=tuple(AdapterKind(item) for item in adapter_rows),
         completed=completed,
-        recovered=recovered,
     )
 
 
