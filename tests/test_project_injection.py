@@ -2768,3 +2768,53 @@ def test_remove_accepts_tracked_overlay_file_that_holds_only_the_committed_conte
     assert not manifest_path(target, "demo").exists()
     assert not list((state_root / "project-overlays").glob("*.json"))
     assert not (target / ".git" / "info" / "attributes").exists()
+
+
+def test_tracked_overlay_injects_into_repository_without_info_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    (config.parent / "project" / "demo" / "AGENTS.md").write_text(
+        "team instructions\nmanaged instructions\n"
+    )
+    (config.parent / "project" / "demo" / "NOTES.md").write_text("private notes\n")
+    config.write_text(
+        config.read_text()
+        + "      notes:\n        src: NOTES.md\n        dst: NOTES.md\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+    subprocess.run(["git", "-C", str(target), "add", "AGENTS.md"], check=True)
+    info = target / ".git" / "info"
+    shutil.rmtree(info)
+    runner = CliRunner()
+    arguments = [str(target), "--config", str(config), "--auto=use-profile"]
+
+    preview = runner.invoke(app, ["project", "inject", "demo", *arguments, "--dry-run"])
+    assert preview.exit_code == 0, (preview.output, preview.exception)
+    assert not info.exists()
+    injected = runner.invoke(app, ["project", "inject", "demo", *arguments, "--yes"])
+
+    assert injected.exit_code == 0, (injected.output, injected.exception)
+    assert destination.read_text() == "team instructions\nmanaged instructions\n"
+    assert b"/AGENTS.md filter=setforge-project\n" in (info / "attributes").read_bytes()
+    assert b"/NOTES.md\n" in (info / "exclude").read_bytes()
+    diff = subprocess.run(
+        ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert diff == ""
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.output == (
+        f"{target}  [demo]\n  tracked-overlay: AGENTS.md\n  hidden: NOTES.md\n"
+    )
+    removed = runner.invoke(app, ["project", "remove", "demo", *arguments[:3], "--yes"])
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert destination.read_text() == "team instructions\n"
+    assert not (target / "NOTES.md").exists()
+    assert not (info / "attributes").exists()
+    assert (info / "exclude").read_bytes() == b""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -55,6 +56,7 @@ class OverlayGitPlan:
     remove_driver: bool
     create_attributes: bool = False
     created_attributes: bool = False
+    create_info: bool = False
 
     @property
     def changed(self) -> bool:
@@ -99,15 +101,15 @@ def plan_overlay_git(
     config_path = common_dir / "config"
     attributes_path = common_dir / "info" / "attributes"
     common_fd, common_info = _open_directory(common_dir)
-    info_fd, info_info = _open_directory(attributes_path.parent)
+    info_fd, info_info = _open_info(attributes_path.parent, common_info)
     try:
         _require_directory_identity(common_dir, common_info)
-        _require_directory_identity(attributes_path.parent, info_info)
+        _require_info_identity(attributes_path.parent, info_fd, info_info)
         config_before, config_mode = _read_bounded_at(
             common_fd, "config", config_path, missing_mode=0o600
         )
-        attributes_before, attributes_mode = _read_bounded_at(
-            info_fd, "attributes", attributes_path, missing_mode=0o644
+        attributes_before, attributes_mode = _read_attributes_at(
+            info_fd, attributes_path, missing_mode=0o644
         )
         process = _config_values_at(target, common_fd, f"filter.{_DRIVER}.process")
         required = _config_values_at(target, common_fd, f"filter.{_DRIVER}.required")
@@ -115,19 +117,19 @@ def plan_overlay_git(
         created_attributes = _config_values_at(
             target, common_fd, _CREATED_ATTRIBUTES_KEY
         ) == ("true",)
-        attributes_missing = not _exists_at(info_fd, "attributes")
+        attributes_missing = info_fd is None or not _exists_at(info_fd, "attributes")
         _require_directory_identity(common_dir, common_info)
-        _require_directory_identity(attributes_path.parent, info_info)
+        _require_info_identity(attributes_path.parent, info_fd, info_info)
         if _read_bounded_at(common_fd, "config", config_path, missing_mode=0o600) != (
             config_before,
             config_mode,
-        ) or _read_bounded_at(
-            info_fd, "attributes", attributes_path, missing_mode=0o644
-        ) != (attributes_before, attributes_mode):
+        ) or _read_attributes_at(info_fd, attributes_path, missing_mode=0o644) != (
+            attributes_before,
+            attributes_mode,
+        ):
             raise SetforgeError("Git overlay state changed while planning; retry")
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
+        _close(info_fd, common_fd)
     prefix, current, suffix = _parse_attributes(attributes_before)
     by_id = {claim.claim_id: claim for claim in current}
     removed: list[OverlayClaim] = []
@@ -169,7 +171,9 @@ def plan_overlay_git(
         config_before=config_before,
         config_mode=config_mode,
         attributes_path=attributes_path,
-        info_identity=(info_info.st_dev, info_info.st_ino),
+        info_identity=(
+            (info_info.st_dev, info_info.st_ino) if info_fd is not None else None
+        ),
         attributes_before=attributes_before,
         attributes_mode=attributes_mode,
     )
@@ -197,23 +201,29 @@ def plan_overlay_git(
         remove_driver=remove_driver,
         create_attributes=configure and attributes_missing,
         created_attributes=created_attributes,
+        create_info=info_fd is None,
     )
 
 
 def apply_overlay_git(plan: OverlayGitPlan) -> None:
     """Apply a byte-bound shared Git plan after revalidating both files."""
+    if plan.create_info and not plan.changed:
+        return
     common_fd, common_info = _open_directory(plan.common_dir)
-    info_fd, info_info = _open_directory(plan.attributes_path.parent)
+    info_fd: int | None = None
     try:
         _require_directory_identity(
             plan.common_dir,
             common_info,
             expected=(plan.common_device, plan.common_inode),
         )
+        info_fd, info_info = _open_planned_info(plan, common_fd)
         _require_directory_identity(
             plan.attributes_path.parent,
             info_info,
-            expected=(plan.info_device, plan.info_inode),
+            expected=(
+                None if plan.create_info else (plan.info_device, plan.info_inode)
+            ),
         )
         current_config, current_config_mode = _read_bounded_at(
             common_fd, "config", plan.config_path, missing_mode=plan.config_mode
@@ -261,8 +271,7 @@ def apply_overlay_git(plan: OverlayGitPlan) -> None:
             )
         _require_directory_identity(plan.attributes_path.parent, info_info)
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
+        _close(info_fd, common_fd)
 
 
 def _run_git(
@@ -315,6 +324,58 @@ def _open_directory(path: Path) -> tuple[int, os.stat_result]:
         raise SetforgeError(
             f"Git overlay directory cannot be opened: {path}: {exc}"
         ) from exc
+
+
+def _open_info(
+    path: Path, common_info: os.stat_result
+) -> tuple[int | None, os.stat_result]:
+    """Open ``info``, or bind the plan to the common directory when it is missing.
+
+    Git ignores a missing ``info`` directory, so its attributes read as empty
+    and apply creates the directory.
+    """
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None, common_info
+    return _open_directory(path)
+
+
+def _open_planned_info(
+    plan: OverlayGitPlan, common_fd: int
+) -> tuple[int, os.stat_result]:
+    """Open ``info``, first creating one the plan found missing."""
+    if plan.create_info:
+        # The private exclude update of the same change may have made it.
+        with contextlib.suppress(FileExistsError):
+            os.mkdir("info", mode=0o755, dir_fd=common_fd)
+        os.fsync(common_fd)
+    return _open_directory(plan.attributes_path.parent)
+
+
+def _require_info_identity(
+    path: Path,
+    info_fd: int | None,
+    info: os.stat_result,
+    *,
+    expected: tuple[int, int] | None = None,
+) -> None:
+    if info_fd is not None:
+        _require_directory_identity(path, info, expected=expected)
+
+
+def _close(*descriptors: int | None) -> None:
+    for descriptor in descriptors:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_attributes_at(
+    info_fd: int | None, path: Path, *, missing_mode: int
+) -> tuple[bytes, int]:
+    if info_fd is None:
+        return b"", missing_mode
+    return _read_bounded_at(info_fd, "attributes", path, missing_mode=missing_mode)
 
 
 def _require_directory_identity(
@@ -380,29 +441,27 @@ def _revalidate_plan_state(
     config_before: bytes,
     config_mode: int,
     attributes_path: Path,
-    info_identity: tuple[int, int],
+    info_identity: tuple[int, int] | None,
     attributes_before: bytes,
     attributes_mode: int,
 ) -> None:
     common_fd, common_info = _open_directory(common_dir)
-    info_fd, info_info = _open_directory(attributes_path.parent)
+    info_fd, info_info = _open_info(attributes_path.parent, common_info)
     try:
         _require_directory_identity(common_dir, common_info, expected=common_identity)
-        _require_directory_identity(
-            attributes_path.parent, info_info, expected=info_identity
+        if (info_fd is None) != (info_identity is None):
+            raise SetforgeError("Git overlay state changed while planning; retry")
+        _require_info_identity(
+            attributes_path.parent, info_fd, info_info, expected=info_identity
         )
         if _read_bounded_at(
             common_fd, "config", config_path, missing_mode=config_mode
-        ) != (config_before, config_mode) or _read_bounded_at(
-            info_fd,
-            "attributes",
-            attributes_path,
-            missing_mode=attributes_mode,
+        ) != (config_before, config_mode) or _read_attributes_at(
+            info_fd, attributes_path, missing_mode=attributes_mode
         ) != (attributes_before, attributes_mode):
             raise SetforgeError("Git overlay state changed while planning; retry")
     finally:
-        os.close(info_fd)
-        os.close(common_fd)
+        _close(info_fd, common_fd)
 
 
 def _config_args(parent_fd: int) -> list[str]:
