@@ -208,6 +208,32 @@ class InstallPlan:
     preserved_store_ids: frozenset[FileId] = frozenset()
     tree_held: TreeHoldResolution | None = None
 
+    def tree_paths(self) -> tuple[Path, ...]:
+        """Return every path the frozen tree plans may mutate."""
+        return tuple(
+            path
+            for tree in self.trees
+            for path in _tree_checkpoint_paths(tree, self.ctx.profile)
+        )
+
+    def package_claim_paths(self, *actions: PackageAction) -> tuple[Path, ...]:
+        """Return the claim files of package decisions taking one of ``actions``."""
+        store = OwnershipStore()
+        return tuple(
+            store.claim_path(decision.resource_id)
+            for decision in self.provisioning.ownership
+            if decision.action in actions
+        )
+
+    def file_claim_paths(self, *actions: FileAction) -> tuple[Path, ...]:
+        """Return the claim files of file decisions taking one of ``actions``."""
+        store = OwnershipStore()
+        return tuple(
+            store.claim_path(decision.observation.resource_id)
+            for decision in self.file_ownership
+            if decision.action in actions
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PlannedTree:
@@ -1216,11 +1242,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     )
 
     def apply_packages() -> CapabilityActivation:
-        claim_paths = tuple(
-            OwnershipStore().claim_path(decision.resource_id)
-            for decision in plan.provisioning.ownership
-            if decision.action in {PackageAction.INSTALL, PackageAction.UPGRADE}
-        )
         with (
             run.checkpoint(
                 "packages",
@@ -1229,7 +1250,9 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                     "inspect package-manager output and receipts; SetForge will not "
                     "guess an uninstall for potentially user-owned software"
                 ),
-                paths=claim_paths,
+                paths=plan.package_claim_paths(
+                    PackageAction.INSTALL, PackageAction.UPGRADE
+                ),
             )
             if _provisioning_plan_has_work(plan.provisioning)
             else nullcontext()
@@ -1969,11 +1992,7 @@ def _publish_adoptions_checkpoint(
     plan: InstallPlan, run: _InstallRun
 ) -> tuple[transitions.OwnershipTransferDelta, ...]:
     """Journal and publish metadata-only adoption claims."""
-    claim_paths = tuple(
-        OwnershipStore().claim_path(decision.resource_id)
-        for decision in plan.provisioning.ownership
-        if decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
-    )
+    claim_paths = plan.package_claim_paths(PackageAction.ADOPT, PackageAction.TRANSFER)
     if not claim_paths:
         return ()
     with run.checkpoint(
@@ -2106,11 +2125,7 @@ def _generated_file_provenance(
 def _publish_file_adoptions_checkpoint(
     plan: InstallPlan, run: _InstallRun
 ) -> tuple[transitions.OwnershipTransferDelta, ...]:
-    claim_paths = tuple(
-        OwnershipStore().claim_path(decision.observation.resource_id)
-        for decision in plan.file_ownership
-        if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
-    )
+    claim_paths = plan.file_claim_paths(FileAction.ADOPT, FileAction.TRANSFER)
     if not claim_paths:
         return ()
     transfers: list[transitions.OwnershipTransferDelta] = []
@@ -2674,44 +2689,31 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             *plan.bootstrap,
             *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
         )
-        ownership_paths = tuple(
-            OwnershipStore().claim_path(decision.resource_id)
-            for decision in plan.provisioning.ownership
-            if decision.action
-            in {
-                PackageAction.ADOPT,
-                PackageAction.TRANSFER,
-                PackageAction.INSTALL,
-                PackageAction.UPGRADE,
-            }
+        tree_paths = plan.tree_paths()
+        tracked_paths = (
+            *plan.dst_paths,
+            *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
+            *tree_paths,
         )
-        file_ownership_paths = tuple(
-            OwnershipStore().claim_path(decision.observation.resource_id)
-            for decision in plan.file_ownership
-            if decision.action
-            in {
-                FileAction.ADOPT,
-                FileAction.TRANSFER,
-                FileAction.INSTALL,
-                FileAction.MANAGE,
-                FileAction.REVIEW,
-            }
-        )
-        adoption_receipt_paths = _legacy_adoption_receipt_paths(plan)
         journal_paths = tuple(
             dict.fromkeys(
                 (
-                    *plan.dst_paths,
-                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
-                    *(
-                        path
-                        for tree in plan.trees
-                        for path in _tree_checkpoint_paths(tree, profile)
-                    ),
+                    *tracked_paths,
                     *secrets_checkpoint_paths,
-                    *ownership_paths,
-                    *file_ownership_paths,
-                    *adoption_receipt_paths,
+                    *plan.package_claim_paths(
+                        PackageAction.ADOPT,
+                        PackageAction.TRANSFER,
+                        PackageAction.INSTALL,
+                        PackageAction.UPGRADE,
+                    ),
+                    *plan.file_claim_paths(
+                        FileAction.ADOPT,
+                        FileAction.TRANSFER,
+                        FileAction.INSTALL,
+                        FileAction.MANAGE,
+                        FileAction.REVIEW,
+                    ),
+                    *_legacy_adoption_receipt_paths(plan),
                 )
             )
         )
@@ -2725,18 +2727,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         tracked_checkpoint_paths = tuple(
             dict.fromkeys(
                 (
-                    *plan.dst_paths,
-                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
-                    *(
-                        path
-                        for tree in plan.trees
-                        for path in _tree_checkpoint_paths(tree, profile)
-                    ),
-                    *(
-                        OwnershipStore().claim_path(decision.observation.resource_id)
-                        for decision in plan.file_ownership
-                        if decision.action
-                        in {FileAction.INSTALL, FileAction.MANAGE, FileAction.REVIEW}
+                    *tracked_paths,
+                    *plan.file_claim_paths(
+                        FileAction.INSTALL, FileAction.MANAGE, FileAction.REVIEW
                     ),
                 )
             )
@@ -2747,14 +2740,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             if tracked.symlink is not None
         )
         tree_filesystem_paths = tuple(
-            dict.fromkeys(
-                [
-                    path
-                    for tree in plan.trees
-                    for path in _tree_checkpoint_paths(tree, profile)
-                ]
-                + sorted(symlink_paths, key=str)
-            )
+            dict.fromkeys((*tree_paths, *sorted(symlink_paths, key=str)))
         )
         tree_pre_images = {
             path: transitions.snapshot_filesystem_image(path)
