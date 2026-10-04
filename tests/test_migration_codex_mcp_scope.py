@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from setforge.errors import ConfigError
-from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+from setforge.migrations import Migration, MigrationRoots
+from setforge.migrations.registry import MIGRATIONS
 
 
 def _step(from_version: str) -> Migration:

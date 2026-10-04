@@ -6,12 +6,9 @@ from pathlib import Path
 from setforge import reconcile_apply, transitions
 from setforge.config import Config, resolve_profile
 from setforge.locking import profile_lock
-from setforge.migrations import (
-    MigrationRoots,
-    detect_current_schema,
-    find_migration_path,
-)
+from setforge.migrations import MigrationRoots, detect_current_schema
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations.registry import find_migration_path
 from setforge.reconcile import (
     ABSENT,
     read_base,

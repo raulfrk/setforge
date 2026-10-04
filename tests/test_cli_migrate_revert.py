@@ -203,7 +203,7 @@ def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
     cfg = _write_cfg(tmp_path, _AT_1_0)
     pre_bytes = cfg.read_bytes()
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_StampStep(from_version="1.0", to_version="2.1"), _OwnTransitionStep()),
     )
 
@@ -231,7 +231,7 @@ def test_migrate_apply_records_revertible_transition(
     """A migrate --apply records a MIGRATE transition; revert restores bytes."""
     cfg = _write_cfg(tmp_path, _AT_1_0)
     pre_bytes = cfg.read_bytes()
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_StampStep(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.1", "--apply", "--yes"]
@@ -257,7 +257,7 @@ def test_migrate_downgrade_records_revertible_transition(
     """A migrate --to=<older> downgrade is revertible to pre-downgrade bytes."""
     cfg = _write_cfg(tmp_path, _AT_1_1)
     pre_bytes = cfg.read_bytes()
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_StampStep(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.0", "--apply", "--yes"]
@@ -289,7 +289,7 @@ def test_migrate_revert_round_trip_is_byte_exact(
     pre_cfg = cfg.read_bytes()
     sidecar = tmp_path / "tracked" / "note.md"
     assert not sidecar.exists()
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_SidecarStep(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_SidecarStep(),))
 
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.1", "--apply", "--yes"]
@@ -312,7 +312,7 @@ def test_migrate_transition_round_trips_through_metadata_load(
 ) -> None:
     """The MIGRATE enum member deserializes via load_meta / load_latest."""
     cfg = _write_cfg(tmp_path, _AT_1_0)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_StampStep(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.1", "--apply", "--yes"]

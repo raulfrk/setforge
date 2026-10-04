@@ -35,7 +35,7 @@ def test_migrate_journal_reserves_every_declared_profile(
         tmp_path,
         "version: 1\ntracked_files: {}\nprofiles:\n  default: {}\n  team/dev: {}\n",
     )
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_StampStep(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
     captured: list[tuple[str, ...]] = []
     real_prepare = operations.prepare
 
@@ -199,7 +199,7 @@ def test_keyboard_interrupt_mid_chain_rolls_back_and_reraises(
     cfg = _write_cfg(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS", (_StampStep(), _InterruptStep())
+        "setforge.migrations.registry.MIGRATIONS", (_StampStep(), _InterruptStep())
     )
     result = runner.invoke(
         app,
@@ -221,7 +221,7 @@ def test_store_cutover_then_failure_leaves_store_and_log_consistent(
     cfg = _write_cfg(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_StampStep(), _StoreCutoverStep(), _RaisingStep()),
     )
     result = runner.invoke(
@@ -292,7 +292,7 @@ def test_rollback_sweep_spares_other_profiles_transition_record(
     cfg = _write_cfg(tmp_path, _AT_1_0)
     holder: list[Path] = []
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (
             _StampStep(),
             _StoreCutoverStep(),
@@ -334,7 +334,7 @@ def test_store_snapshot_captured_at_chain_start_preserves_prior_leg(
     leg.write_bytes(b"PRIOR-INSTALL-CONTENT\n")
 
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_StampStep(), _StoreCutoverStep(), _RaisingStep()),
     )
     result = runner.invoke(

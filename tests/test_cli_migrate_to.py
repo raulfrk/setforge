@@ -185,7 +185,7 @@ def test_partial_chain_failure_rolls_back(
     cfg = _write(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS", (_StampStep(), _RaisingStep())
+        "setforge.migrations.registry.MIGRATIONS", (_StampStep(), _RaisingStep())
     )
     result = runner.invoke(
         app, ["migrate", "--config", str(cfg), "--to", "1.2", "--apply", "--yes"]

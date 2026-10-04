@@ -50,7 +50,7 @@ class _Step:
 
     Mirrors ``tests/test_migrations.py``'s ``_NoopMigration``: a complete
     Protocol surface so a tuple of these satisfies ``tuple[Migration, ...]``
-    when monkeypatched onto ``setforge.migrations.MIGRATIONS``.
+    when monkeypatched onto ``setforge.migrations.registry.MIGRATIONS``.
     """
 
     from_version: str
@@ -86,7 +86,7 @@ def test_migration_coverage_real_bridged_bump_passes(
 ) -> None:
     """A genuine baseline→expected bump with a bridging chain passes."""
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_Step(from_version="1.0", to_version="1.1"),),
     )
     assert gate_migration_coverage(baseline="1.0", expected="1.1") == []
@@ -97,7 +97,7 @@ def test_migration_coverage_unbridged_bump_fails(
 ) -> None:
     """``expected`` bumped beyond what ``MIGRATIONS`` bridges ⇒ failure."""
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_Step(from_version="1.0", to_version="1.1"),),
     )
     violations = gate_migration_coverage(baseline="1.0", expected="1.2")
@@ -115,7 +115,7 @@ def test_migration_coverage_partial_chain_not_reaching_target_fails(
     from ``unbridged_bump`` which has a single-step registry.
     """
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (
             _Step(from_version="1.0", to_version="1.1"),
             _Step(from_version="1.1", to_version="1.2"),
@@ -150,7 +150,7 @@ def test_migration_coverage_semantic_not_lexical(
 ) -> None:
     """1.9 → 1.10 bridged chain passes (semantic compare, not string sort)."""
     monkeypatch.setattr(
-        "setforge.migrations.MIGRATIONS",
+        "setforge.migrations.registry.MIGRATIONS",
         (_Step(from_version="1.9", to_version="1.10"),),
     )
     assert gate_migration_coverage(baseline="1.9", expected="1.10") == []
@@ -214,7 +214,7 @@ def test_reverse_required_misswapped_reverse_fails(
         def reverse(self) -> _BadReverse:
             return _BadReverse()
 
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_BadMigration(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_BadMigration(),))
     violations = gate_reverse_required()
     assert any("mis-swapped reverse" in v for v in violations)
 
@@ -256,7 +256,7 @@ def test_coverage_reaches_two_zero_real_tree() -> None:
 
 def test_find_migration_path_resolves_one_two_to_two_zero() -> None:
     """find_migration_path(1.2, 2.0) is a single contract step."""
-    from setforge.migrations import find_migration_path
+    from setforge.migrations.registry import find_migration_path
 
     path = find_migration_path(from_v="1.2", to_v="2.0")
     assert len(path) == 1
@@ -266,7 +266,7 @@ def test_find_migration_path_resolves_one_two_to_two_zero() -> None:
 
 def test_find_migration_path_resolves_one_one_to_two_zero() -> None:
     """find_migration_path(1.1, 2.0) walks 1.1 -> 1.2 -> 2.0 (two steps)."""
-    from setforge.migrations import find_migration_path
+    from setforge.migrations.registry import find_migration_path
 
     path = find_migration_path(from_v="1.1", to_v="2.0")
     assert [(m.from_version, m.to_version) for m in path] == [

@@ -24,8 +24,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from setforge import locking, reconcile
+from setforge.compare import resolve_dst, resolve_src
+from setforge.config import load_config, resolve_profile
 from setforge.errors import ConfigError, MarkerError
-from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+from setforge.host_local_marker_migration import append_overlay_spans
+from setforge.migrations import (
+    ManifestEntry,
+    ManifestType,
+    MigrationRoots,
+    _require_mapping_root,
+)
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.reconcile import file_id
 
 if TYPE_CHECKING:
     from setforge.reconcile import FileId
@@ -365,10 +376,6 @@ def _file_plans(roots: MigrationRoots) -> list[_FilePlan]:
     marker-bearing file so a malformed / legacy marker REFUSES before pass 2
     mutates anything (fail-closed, all-or-nothing on validation).
     """
-    from setforge.compare import resolve_dst, resolve_src
-    from setforge.config import load_config, resolve_profile
-    from setforge.reconcile import file_id
-
     config = load_config(roots.cfg_path)
     file_profiles: dict[str, list[str]] = {}
     for profile_name in config.profiles:
@@ -475,9 +482,7 @@ class MarkerRetireMigration:
         """Retire every marker, then stamp 2.1 (see the class docstring)."""
         import contextlib
 
-        from setforge import locking, reconcile
         from setforge.atomicio import atomic_write_text
-        from setforge.host_local_marker_migration import append_overlay_spans
 
         plans = _file_plans(roots)  # pass 1: resolve + validate (fail-closed)
         local_yaml = _local_yaml_path(roots)
@@ -542,9 +547,6 @@ def _base_and_local(plan: _FilePlan) -> tuple[str, str]:
 
 def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
     """Rewrite ``schema_version: <to_version>`` in setforge.yaml (comment-safe)."""
-    from setforge.migrations import _require_mapping_root
-    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-
     yaml = yaml_rt()
     with cfg_path.open("r", encoding="utf-8") as fh:
         data = yaml.load(fh)

@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from setforge import transitions
+from setforge._redact import redact_argv
 from setforge.errors import ConfigError
 from setforge.migrations import (
     ManifestEntry,
@@ -354,8 +356,6 @@ def _build_stamp_transition_images(
     is a plain ``cfg_pre`` -> current-image restamp of ``setforge.yaml`` alone.
     Pure — reads the on-disk transformed doc but writes nothing.
     """
-    from setforge import transitions
-
     pre = roots.pre_chain_snapshot
     if pre is not None:
         file_pre = dict(pre)
@@ -375,9 +375,6 @@ def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> TransitionDi
     committed transition directory.
     """
     import sys
-
-    from setforge import transitions
-    from setforge._redact import redact_argv
 
     file_pre, file_post = _build_stamp_transition_images(roots, cfg_pre)
     return transitions.write_transition(

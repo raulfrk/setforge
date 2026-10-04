@@ -42,6 +42,7 @@ from pathlib import Path
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from setforge.errors import ConfigError, MarkerError
+from setforge.host_local_marker_migration import build_overlay_span_node
 from setforge.migrations import (
     ManifestEntry,
     ManifestType,
@@ -228,11 +229,6 @@ def _translate_section_markers(
         ) from exc
     if not bodies:
         return False
-    # Local import: build_overlay_span_node pulls the host-local inject stack
-    # (overlay_inject -> host_local_inject -> source -> config), which would
-    # form an import cycle if loaded at module scope (this module is imported
-    # at the tail of setforge.migrations, itself imported by setforge.config).
-    from setforge.host_local_marker_migration import build_overlay_span_node
 
     spans = _spans_seq(tracked_file)
     has_shared = False
