@@ -47,13 +47,7 @@ class OperationPhase(StrEnum):
     MANUAL = "manual"
 
 
-class SnapshotKind(StrEnum):
-    """Filesystem object kinds supported by automatic recovery."""
-
-    ABSENT = "absent"
-    FILE = "file"
-    SYMLINK = "symlink"
-    DIRECTORY = "directory"
+SnapshotKind = transitions.FilesystemKind
 
 
 class CheckpointKind(StrEnum):
@@ -216,56 +210,14 @@ def snapshot_path(path: Path) -> PathSnapshot:
     """Capture one stable path state without following its final symlink."""
     path = path.expanduser().absolute()
     try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return PathSnapshot(path=path, kind=SnapshotKind.ABSENT)
-    try:
-        if stat.S_ISLNK(info.st_mode):
-            link_target = str(path.readlink())
-            if not _same_snapshot_stat(info, path.lstat()):
-                raise OSError("symlink identity changed")
-            return PathSnapshot(
-                path=path,
-                kind=SnapshotKind.SYMLINK,
-                mode=stat.S_IMODE(info.st_mode),
-                link_target=link_target,
-                mtime_ns=info.st_mtime_ns,
-            )
-        if stat.S_ISREG(info.st_mode):
-            flags = os.O_RDONLY | os.O_NOFOLLOW
-            fd = os.open(path, flags)
-            try:
-                opened = os.fstat(fd)
-                if not _same_snapshot_stat(info, opened):
-                    raise OSError("file identity changed")
-                with os.fdopen(fd, "rb", closefd=False) as stream:
-                    payload = stream.read()
-                final = os.fstat(fd)
-                if not _same_snapshot_stat(opened, final):
-                    raise OSError("file changed while reading")
-            finally:
-                os.close(fd)
-            return PathSnapshot(
-                path=path,
-                kind=SnapshotKind.FILE,
-                mode=stat.S_IMODE(opened.st_mode),
-                payload=payload,
-                mtime_ns=opened.st_mtime_ns,
-            )
-        if stat.S_ISDIR(info.st_mode):
-            if not _same_snapshot_stat(info, path.lstat()):
-                raise OSError("directory identity changed")
-            return PathSnapshot(
-                path=path,
-                kind=SnapshotKind.DIRECTORY,
-                mode=stat.S_IMODE(info.st_mode),
-                mtime_ns=info.st_mtime_ns,
-            )
+        image = transitions.capture_filesystem_image(path)
     except OSError as exc:
         raise SetforgeError(
             f"filesystem path changed while snapshotting {path}; retry"
         ) from exc
-    raise SetforgeError(f"cannot journal unsupported filesystem object: {path}")
+    if image is None:
+        raise SetforgeError(f"cannot journal unsupported filesystem object: {path}")
+    return _path_snapshot_from_filesystem_image(path, image)
 
 
 def _captured_physical_path(
@@ -434,25 +386,6 @@ def bind_install_roots(
     )
     _write(updated)
     return updated
-
-
-def _same_snapshot_stat(left: os.stat_result, right: os.stat_result) -> bool:
-    """Compare identity and mutable metadata used by a path snapshot."""
-    return (
-        left.st_dev,
-        left.st_ino,
-        left.st_mode,
-        left.st_size,
-        left.st_mtime_ns,
-        left.st_ctime_ns,
-    ) == (
-        right.st_dev,
-        right.st_ino,
-        right.st_mode,
-        right.st_size,
-        right.st_mtime_ns,
-        right.st_ctime_ns,
-    )
 
 
 def prepare(
@@ -1077,7 +1010,7 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
             staged = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
             directory_fd = os.open(temporary, flags, dir_fd=parent_fd)
             opened = os.fstat(directory_fd)
-            if not _same_snapshot_stat(staged, opened):
+            if transitions.stat_identity(staged) != transitions.stat_identity(opened):
                 raise SetforgeError(
                     f"filesystem path changed since transition: {replacement.path}"
                 )
@@ -1606,81 +1539,21 @@ def _verify_parent_binding(parent_fd: int, parent: Path) -> None:
 
 def _snapshot_path_at(parent_fd: int, path: Path) -> PathSnapshot:
     """Capture one leaf relative to a held, verified parent descriptor."""
-    name = path.name
     try:
-        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return PathSnapshot(path, SnapshotKind.ABSENT)
-    if stat.S_ISLNK(before.st_mode):
-        target = os.readlink(name, dir_fd=parent_fd)
-        after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if not _same_snapshot_stat(before, after):
-            raise SetforgeError(f"filesystem path changed while reading: {path}")
-        return PathSnapshot(
-            path,
-            SnapshotKind.SYMLINK,
-            mode=stat.S_IMODE(before.st_mode),
-            link_target=target,
-            mtime_ns=before.st_mtime_ns,
-        )
-    if stat.S_ISDIR(before.st_mode):
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-        try:
-            opened = os.fstat(descriptor)
-            if not _same_snapshot_stat(before, opened):
-                raise SetforgeError(f"filesystem path changed while reading: {path}")
-        finally:
-            os.close(descriptor)
-        return PathSnapshot(
-            path,
-            SnapshotKind.DIRECTORY,
-            mode=stat.S_IMODE(before.st_mode),
-            mtime_ns=before.st_mtime_ns,
-        )
-    if not stat.S_ISREG(before.st_mode):
+        image = transitions.capture_filesystem_image(path.name, dir_fd=parent_fd)
+    except transitions.FilesystemChanged as exc:
+        raise SetforgeError(f"filesystem path changed while reading: {path}") from exc
+    if image is None:
         raise SetforgeError(f"unsupported transition filesystem object: {path}")
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_NOFOLLOW,
-        dir_fd=parent_fd,
-    )
-    try:
-        opened = os.fstat(descriptor)
-        if not _same_snapshot_stat(before, opened):
-            raise SetforgeError(f"filesystem path changed while reading: {path}")
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-        if not _same_snapshot_stat(opened, after):
-            raise SetforgeError(f"filesystem path changed while reading: {path}")
-    finally:
-        os.close(descriptor)
-    return PathSnapshot(
-        path,
-        SnapshotKind.FILE,
-        mode=stat.S_IMODE(opened.st_mode),
-        payload=b"".join(chunks),
-        mtime_ns=opened.st_mtime_ns,
-    )
+    return _path_snapshot_from_filesystem_image(path, image)
 
 
 def _path_snapshot_from_filesystem_image(
     path: Path, image: transitions.FilesystemImage
 ) -> PathSnapshot:
-    kinds = {
-        transitions.FilesystemKind.ABSENT: SnapshotKind.ABSENT,
-        transitions.FilesystemKind.FILE: SnapshotKind.FILE,
-        transitions.FilesystemKind.SYMLINK: SnapshotKind.SYMLINK,
-        transitions.FilesystemKind.DIRECTORY: SnapshotKind.DIRECTORY,
-    }
     return PathSnapshot(
         path,
-        kinds[image.kind],
+        image.kind,
         mode=image.mode,
         payload=image.payload,
         link_target=image.link_target,

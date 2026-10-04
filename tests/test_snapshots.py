@@ -354,7 +354,7 @@ def test_create_snapshot_writes_only_the_frozen_capture_plan(
     writes = 0
 
     def mutate_second_after_first_write(
-        source: snap_mod._FrozenSnapshotFile, destination: Path
+        source: snap_mod.operations.PathSnapshot, destination: Path
     ) -> None:
         nonlocal writes
         real_write(source, destination)
@@ -993,7 +993,7 @@ def test_restore_write_refuses_parent_swap_after_preflight(
     swapped = False
 
     def swap_then_write(
-        frozen: snap_mod._FrozenSnapshotFile,
+        frozen: snap_mod.operations.PathSnapshot,
         guard_identities: dict[Path, tuple[int, int, int] | None],
     ) -> None:
         nonlocal swapped
@@ -1379,7 +1379,7 @@ def test_capture_rejects_commit_marker_mirror_identity(
     partial = fake_home / "partial"
     partial.mkdir()
     live_path = Path("/_meta.json")
-    frozen = snap_mod._FrozenSnapshotFile(
+    frozen = snap_mod.operations.PathSnapshot(
         path=live_path,
         kind=kind,
         mode=0o600,

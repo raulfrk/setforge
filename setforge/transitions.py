@@ -1644,59 +1644,64 @@ def _canonical_filesystem_path(path: Path) -> Path:
     return Path(os.path.normpath(f"/{absolute.lstrip('/')}"))
 
 
+class FilesystemChanged(OSError):
+    """A filesystem entry changed while its image was being captured."""
+
+
+def capture_filesystem_image(
+    path: str | Path, *, dir_fd: int | None = None
+) -> FilesystemImage | None:
+    """Capture one entry without following it; ``None`` for an unsupported kind.
+
+    ``path`` is taken relative to ``dir_fd`` when one is given. A change seen
+    during the capture raises ``FilesystemChanged``.
+    """
+    at = {} if dir_fd is None else {"dir_fd": dir_fd}
+    try:
+        before = os.stat(path, follow_symlinks=False, **at)  # noqa: PTH116 - optional dirfd
+    except FileNotFoundError:
+        return FilesystemImage(FilesystemKind.ABSENT)
+    mode = stat.S_IMODE(before.st_mode)
+    if stat.S_ISLNK(before.st_mode) or stat.S_ISDIR(before.st_mode):
+        target = os.readlink(path, **at) if stat.S_ISLNK(before.st_mode) else None
+        after = os.stat(path, follow_symlinks=False, **at)  # noqa: PTH116 - optional dirfd
+        if stat_identity(before) != stat_identity(after):
+            raise FilesystemChanged("entry changed while snapshotting")
+        return FilesystemImage(
+            FilesystemKind.DIRECTORY if target is None else FilesystemKind.SYMLINK,
+            link_target=target,
+            mode=mode,
+            mtime_ns=before.st_mtime_ns,
+        )
+    if not stat.S_ISREG(before.st_mode):
+        return None
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW, **at)
+    try:
+        if stat_identity(before) != stat_identity(os.fstat(fd)):
+            raise FilesystemChanged("file changed before snapshot read")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            payload = stream.read()
+        if stat_identity(before) != stat_identity(os.fstat(fd)):
+            raise FilesystemChanged("file changed while snapshotting")
+    finally:
+        os.close(fd)
+    return FilesystemImage(
+        FilesystemKind.FILE, payload=payload, mode=mode, mtime_ns=before.st_mtime_ns
+    )
+
+
 def snapshot_filesystem_image(path: Path) -> FilesystemImage:
     """Capture an arbitrary-byte regular file or symlink without dereferencing."""
     path = _canonical_filesystem_path(path)
     try:
-        before = path.lstat()
-    except FileNotFoundError:
-        return FilesystemImage(FilesystemKind.ABSENT)
-    try:
-        if stat.S_ISLNK(before.st_mode):
-            target = str(path.readlink())
-            after = path.lstat()
-            if _filesystem_stat_identity(before) != _filesystem_stat_identity(after):
-                raise OSError("symlink changed while snapshotting")
-            return FilesystemImage(
-                FilesystemKind.SYMLINK,
-                link_target=target,
-                mode=stat.S_IMODE(before.st_mode),
-                mtime_ns=before.st_mtime_ns,
-            )
-        if stat.S_ISDIR(before.st_mode):
-            after = path.lstat()
-            if _filesystem_stat_identity(before) != _filesystem_stat_identity(after):
-                raise OSError("directory changed while snapshotting")
-            return FilesystemImage(
-                FilesystemKind.DIRECTORY,
-                mode=stat.S_IMODE(before.st_mode),
-                mtime_ns=before.st_mtime_ns,
-            )
-        if not stat.S_ISREG(before.st_mode):
-            raise SetforgeError(f"unsupported transition filesystem object: {path}")
-        flags = os.O_RDONLY | os.O_NOFOLLOW
-        fd = os.open(path, flags)
-        try:
-            opened = os.fstat(fd)
-            if _filesystem_stat_identity(before) != _filesystem_stat_identity(opened):
-                raise OSError("file changed before snapshot read")
-            with os.fdopen(fd, "rb", closefd=False) as stream:
-                payload = stream.read()
-            after = os.fstat(fd)
-            if _filesystem_stat_identity(opened) != _filesystem_stat_identity(after):
-                raise OSError("file changed while snapshotting")
-        finally:
-            os.close(fd)
+        image = capture_filesystem_image(path)
     except OSError as exc:
         raise SetforgeError(
             f"filesystem path changed while snapshotting {path}"
         ) from exc
-    return FilesystemImage(
-        FilesystemKind.FILE,
-        payload=payload,
-        mode=stat.S_IMODE(opened.st_mode),
-        mtime_ns=opened.st_mtime_ns,
-    )
+    if image is None:
+        raise SetforgeError(f"unsupported transition filesystem object: {path}")
+    return image
 
 
 def filesystem_deletion_deltas(paths: Iterable[Path]) -> tuple[FilesystemDelta, ...]:
@@ -1721,7 +1726,8 @@ def reverse_filesystem_deltas(
     return tuple(FilesystemDelta(item.path, item.post, item.pre) for item in deltas)
 
 
-def _filesystem_stat_identity(info: os.stat_result) -> tuple[int, ...]:
+def stat_identity(info: os.stat_result) -> tuple[int, ...]:
+    """Return the identity and mutable metadata one capture must see unchanged."""
     return (
         info.st_dev,
         info.st_ino,
