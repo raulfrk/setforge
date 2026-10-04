@@ -10,7 +10,7 @@ from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
-from setforge import atomicio, operations
+from setforge import atomicio
 from setforge.config import ProjectVisibility
 from setforge.errors import SetforgeError
 from setforge.git_info import run_git
@@ -30,11 +30,13 @@ from setforge.git_visibility import (
     read_claims,
 )
 from setforge.locking import mutation_locks
-from setforge.orphan_scan import capture_parent_path_guards
 from setforge.project_injection import (
     _MANIFEST_SCHEMA,
     ProjectFileAction,
+    _exclude_paths,
     _load_manifest_payload,
+    _overlay_git_paths,
+    _project_transaction,
     _require_compatible_visibility,
     _sha256,
     _verified_project_target,
@@ -688,27 +690,15 @@ def apply_project_visibility(plan: ProjectVisibilityPlan) -> bool:
                 (
                     plan.manifest_path,
                     *((plan.index_path,) if plan.index_path is not None else ()),
-                    *(
-                        (plan.visibility_plan.exclude_path,)
-                        if plan.visibility_plan is not None
-                        else ()
-                    ),
-                    *(
-                        (
-                            plan.overlay_git_plan.config_path,
-                            plan.overlay_git_plan.attributes_path,
-                        )
-                        if plan.overlay_git_plan is not None
-                        else ()
-                    ),
+                    *_exclude_paths(plan.visibility_plan),
+                    *_overlay_git_paths(plan.overlay_git_plan),
                 )
             )
         )
-        journal = operations.prepare(
+        with _project_transaction(
             command="project-visibility",
             profile=operation_profile,
             config_dir=plan.config_root,
-            resources_lock=True,
             command_line=(
                 "project",
                 "visibility",
@@ -716,20 +706,9 @@ def apply_project_visibility(plan: ProjectVisibilityPlan) -> bool:
                 str(plan.destination),
             ),
             paths=paths,
-            path_guards=capture_parent_path_guards(paths),
-        )
-        with operations.recover_on_error(operation_profile, "project-visibility"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="update-project-file-visibility",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery=(
-                    "restore the exact project manifest and Git private/index state"
-                ),
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="update-project-file-visibility",
+            recovery="restore the exact project manifest and Git private/index state",
+        ):
             guards.verify_targets()
             if plan.remove_from_index:
                 _run_git(
@@ -743,6 +722,4 @@ def apply_project_visibility(plan: ProjectVisibilityPlan) -> bool:
             atomicio.atomic_write_bytes(
                 plan.manifest_path, plan.manifest_after, mode=0o600
             )
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
     return True

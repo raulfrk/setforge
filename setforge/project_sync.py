@@ -13,7 +13,7 @@ from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
-from setforge import atomicio, operations
+from setforge import atomicio
 from setforge.config import ProjectVisibility, load_config, resolve_project_profile
 from setforge.errors import SetforgeError
 from setforge.file_ownership import refuse_active_file_claims
@@ -31,7 +31,6 @@ from setforge.git_visibility import (
     read_claims,
 )
 from setforge.locking import mutation_locks
-from setforge.orphan_scan import capture_parent_path_guards
 from setforge.ownership import (
     ClaimLifecycle,
     OwnershipStore,
@@ -47,10 +46,13 @@ from setforge.project_injection import (
     ProjectFilePlan,
     _claim_fingerprint,
     _claim_matches_plan,
+    _exclude_paths,
     _is_tracked,
     _load_manifest,
     _load_manifest_payload,
+    _overlay_git_paths,
     _plan_file,
+    _project_transaction,
     _remove_created_parent,
     _require_compatible_visibility,
     _require_guards,
@@ -1260,19 +1262,8 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     *(plan.target / item.relative_destination for item in plan.files),
                     *manifests,
                     *(store.claim_path(resource) for resource in resources.values()),
-                    *(
-                        (visibility_plan.exclude_path,)
-                        if visibility_plan is not None
-                        else ()
-                    ),
-                    *(
-                        (
-                            overlay_git_plan.config_path,
-                            overlay_git_plan.attributes_path,
-                        )
-                        if overlay_git_plan is not None
-                        else ()
-                    ),
+                    *_exclude_paths(visibility_plan),
+                    *_overlay_git_paths(overlay_git_plan),
                     *(
                         overlay_path(plan.target, item.relative_destination)
                         for item in plan.files
@@ -1312,29 +1303,17 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                 ),
             )
         )
-        journal = operations.prepare(
+        changed = False
+        with _project_transaction(
             command="project-sync",
             profile=operation_profile,
             config_dir=None,
             config_dirs=config_roots,
-            resources_lock=True,
             command_line=("project", "sync", str(plan.target)),
             paths=paths,
-            path_guards=capture_parent_path_guards(paths),
-        )
-        changed = False
-        with operations.recover_on_error(operation_profile, "project-sync"):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="synchronize-project-files-and-state",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                recovery=(
-                    "restore all project files, manifests, ownership, and visibility"
-                ),
-                paths=paths,
-                restore_state=False,
-                restore_transitions=False,
-            )
+            checkpoint="synchronize-project-files-and-state",
+            recovery="restore all project files, manifests, ownership, and visibility",
+        ):
             for item in plan.files:
                 guards.verify_targets()
                 merged = item.result.merged()
@@ -1438,8 +1417,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     _remove_created_parent(
                         guards.targets[0], parent.relative_to(plan.target)
                     )
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
         return (
             changed
             or (visibility_plan is not None and visibility_plan.changed)
