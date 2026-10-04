@@ -320,9 +320,7 @@ def plan_claims(
     """Plan an exact claim update against the current exclude bytes."""
     path = info_exclude_path(target)
     before, before_mode, parent_info, create_parent = _read_state(path)
-    _, current, _ = _parse(before)
-    prefix, parsed, suffix = _parse(before)
-    assert parsed == current
+    prefix, current, suffix = _parse(before)
     by_id = {claim.claim_id: claim for claim in current}
     removed: list[VisibilityClaim] = []
     for claim in remove:
@@ -352,58 +350,6 @@ def plan_claims(
         removed=tuple(removed),
         create_parent=create_parent,
     )
-
-
-def plan_file_visibility(
-    target: Path,
-    *,
-    claim: VisibilityClaim,
-    hidden: bool,
-    tracked_sibling_paths: frozenset[str],
-) -> VisibilityPlan:
-    """Plan one new/untracked injected file's hidden/tracked transition."""
-    relative = Path(claim.relative_path)
-    if relative.is_absolute() or relative == Path() or ".." in relative.parts:
-        raise SetforgeError("Git visibility path is not normalized")
-    destination = target / relative
-    try:
-        info = destination.lstat()
-    except OSError as exc:
-        raise SetforgeError(
-            f"Git visibility destination cannot be read: {destination}: {exc}"
-        ) from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise SetforgeError("Git visibility destination is not an ordinary file")
-    tracked = _run_git(
-        target,
-        ["ls-files", "--error-unmatch", "--", claim.relative_path],
-        check=False,
-    )
-    if tracked.returncode == 0:
-        raise SetforgeError("Git visibility cannot hide an already-committed file")
-    if tracked.returncode != 1:
-        detail = tracked.stderr.strip() or "unknown Git error"
-        raise SetforgeError(f"cannot classify Git visibility destination: {detail}")
-    _, _, _, current = read_claims(target)
-    own = next((item for item in current if item.claim_id == claim.claim_id), None)
-    if own is not None and own != claim:
-        raise SetforgeError("Git visibility claim identity collides")
-    if hidden:
-        if claim.relative_path in tracked_sibling_paths:
-            raise SetforgeError(
-                "Git visibility conflicts with a tracked linked-worktree claim"
-            )
-        return plan_claims(target, add=(claim,))
-    siblings = tuple(
-        item
-        for item in current
-        if item.relative_path == claim.relative_path and item.claim_id != claim.claim_id
-    )
-    if siblings:
-        raise SetforgeError(
-            "Git visibility remains hidden by another linked-worktree claim"
-        )
-    return plan_claims(target, remove=(claim,) if own is not None else ())
 
 
 def _create_exclude_parent(plan: VisibilityPlan) -> None:
