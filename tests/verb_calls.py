@@ -4,9 +4,15 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from setforge import capture as capture_mod
+from setforge import compare as compare_mod
 from setforge.cli import sync as sync_cli
 from setforge.cli._helpers import ProfileContext
-from setforge.config import Config, ResolvedProfile, resolve_profile
+from setforge.config import (
+    Config,
+    ResolvedProfile,
+    resolve_and_expand,
+    resolve_profile,
+)
 
 
 def _capture_inputs(
@@ -46,4 +52,18 @@ def capture_profile(
     resolved, authorized = _capture_inputs(config, profile, repo, resolved)
     return capture_mod.capture_profile(
         config, profile, repo, resolved=resolved, ownership_authorized=authorized
+    )
+
+
+def compare_profile(
+    config: Config, profile: str, repo: Path
+) -> compare_mod.CompareReport:
+    """Compare tracked against live as the ``compare`` command does."""
+    resolved = resolve_and_expand(config, profile, repo)
+    return compare_mod.compare_profile(
+        config,
+        profile,
+        repo,
+        resolved=resolved,
+        ownership_authorized=compare_mod.file_authorization_map(config, resolved, repo),
     )

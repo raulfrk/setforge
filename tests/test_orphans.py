@@ -1628,8 +1628,8 @@ def test_no_resolve_in_orphan_unlink_helpers() -> None:
 
 def test_apply_path_calls_detect_orphans() -> None:
     """The `--apply` code path MUST re-compute orphans live (via
-    `_detect_orphans_live`, which dispatches to `compare_profile`
-    AND `detect_orphans`), NOT cache from a prior `compare` call.
+    `_detect_orphans_live`, which dispatches to `detect_profile_orphans`
+    and so `detect_orphans`), NOT cache from a prior `compare` call.
 
     Mirrors the SPEC 2 robust acceptance command — the FIRST function
     whose name contains "apply" (case-insensitive) must transitively
@@ -1663,7 +1663,7 @@ def test_apply_path_calls_detect_orphans() -> None:
                 attr = getattr(c.func, "attr", None) or getattr(c.func, "id", None)
                 if attr is not None:
                     transitive_calls.add(attr)
-    assert "detect_orphans" in transitive_calls or "compare_profile" in transitive_calls
+    assert "detect_profile_orphans" in transitive_calls
 
 
 # ---------------------------------------------------------------------------

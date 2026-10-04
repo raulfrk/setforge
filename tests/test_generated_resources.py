@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.cli.stage import _refuse_generated_stage_target
-from setforge.compare import CompareStatus, compare_profile
+from setforge.compare import CompareStatus
 from setforge.config import (
     Config,
     GeneratedContent,
@@ -24,7 +24,7 @@ from setforge.errors import ConfigError, InvariantViolation
 from setforge.file_ownership import file_resource_id, observe_file
 from setforge.generated import resolve_generated
 from setforge.ownership import OwnershipStore, ProvenanceFactKind, read_owner_id
-from tests.verb_calls import capture_profile, preview_capture_profile
+from tests.verb_calls import capture_profile, compare_profile, preview_capture_profile
 
 
 def _generated() -> GeneratedContent:

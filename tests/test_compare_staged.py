@@ -14,11 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from setforge.compare import CompareStatus, DriftClass, compare_profile
+from setforge.compare import CompareStatus, DriftClass
 from setforge.config import Config, Profile, TrackedFile
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from tests.verb_calls import compare_profile
 
 BASE = b"## Worktrees\nUse wt.\n\n## Paths\nworkdir: /home/generic\n"
 LIVE = b"## Worktrees\nUse wt.\n\n## Shell\nzsh\n\n## Paths\nworkdir: /home/raul\n"
@@ -290,6 +291,7 @@ def test_compare_and_install_agree_on_container_authority(
     compare classifies it exactly as the install plan does.
     """
     import setforge.cli.install as install_mod
+    from setforge import compare as compare_mod
     from setforge.compare import file_authorization_map
     from setforge.config import resolve_profile
     from setforge.ownership import read_owner_id
@@ -310,7 +312,7 @@ def test_compare_and_install_agree_on_container_authority(
     assert compare_map == {"x": authorized}
     assert install_mod._file_ownership_authorization(entries, decisions) == compare_map
 
-    report = compare_profile(
+    report = compare_mod.compare_profile(
         config, "p", repo, resolved=resolved, ownership_authorized=compare_map
     )
     assert report.entries[0].drift_class is (

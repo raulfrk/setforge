@@ -43,7 +43,6 @@ from setforge.config import (
     Config,
     ResolvedProfile,
     TrackedFile,
-    resolve_and_expand,
     resolve_profile,
     resolve_symlink_target,
 )
@@ -162,10 +161,6 @@ class CompareReport:
     entries: list[FileCompare]
     has_unexpected_drift: bool
     orphans: list[OrphanEntry] = field(default_factory=list)
-    orphan_skipped_absent: int = 0
-    orphan_skipped_source: int = 0
-    orphan_skipped_unmanaged: int = 0
-    orphan_skipped_host_local: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -709,27 +704,25 @@ def compare_profile(
     profile_name: str,
     repo_root: Path,
     *,
+    resolved: ResolvedProfile,
+    ownership_authorized: Mapping[str, bool],
     transitions_dir: Path | None = None,
     ignored: frozenset[str] = frozenset(),
-    ownership_authorized: Mapping[str, bool] | None = None,
-    resolved: ResolvedProfile | None = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
+    ``resolved`` is the effective profile the CLI resolved (``config`` already
+    carries its host-local tracked-file paths) and ``ownership_authorized``
+    maps each tracked sub-file or tree to whether this checkout holds its
+    container (see :func:`file_authorization_map`).
+
     When ``transitions_dir`` is provided, also detects orphans (live
     files setforge previously deployed but no longer tracked) via
-    :func:`detect_orphans`. ``ignored`` is the set of tracked_file IDs
+    :func:`detect_profile_orphans`. ``ignored`` is the set of tracked_file IDs
     flagged "keep orphan" via ``cleanup-orphans --ignore`` (stored in
     ``~/.config/setforge/local.yaml``). When ``transitions_dir`` is
-    ``None`` the orphans list is empty — preserves the pre-orphan call
-    shape for callers that don't have a transitions dir handy.
-
-    The CLI resolves the effective profile first, mutating ``config`` with
-    host-local tracked-file paths. This helper re-expands the tracked-file list
-    idempotently and reads those already-effective definitions; plugin and
-    extension lists are irrelevant to its file-only comparison.
+    ``None`` the orphans list is empty.
     """
-    resolved = resolved or resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
 
@@ -764,25 +757,19 @@ def compare_profile(
                     f"{action.kind.value}: {action.path} ({action.detail})"
                     for action in changed
                 )
+                unexpected = ownership_authorized.get(name, False)
                 entry = FileCompare(
                     name,
                     CompareStatus.DRIFTED,
                     summary,
                     drift_class=(
-                        DriftClass.UNEXPECTED
-                        if ownership_authorized is None
-                        or ownership_authorized.get(name, False)
-                        else DriftClass.EXPECTED
+                        DriftClass.UNEXPECTED if unexpected else DriftClass.EXPECTED
                     ),
                     reason=(
                         "managed tree inventory differs"
-                        if ownership_authorized is None
-                        or ownership_authorized.get(name, False)
+                        if unexpected
                         else "tree awaits container adoption"
                     ),
-                )
-                unexpected = ownership_authorized is None or ownership_authorized.get(
-                    name, False
                 )
             entries.append(entry)
             has_unexpected = has_unexpected or unexpected
@@ -795,75 +782,71 @@ def compare_profile(
                 sub_dst,
                 tracked_file,
                 profile=profile_name,
-                ownership_authorized=(
-                    ownership_authorized.get(sub_name, False)
-                    if ownership_authorized is not None
-                    else _has_file_authority(repo_root, sub_dst)
-                ),
+                ownership_authorized=ownership_authorized.get(sub_name, False),
             )
             entries.append(entry)
             if sub_unexpected:
                 has_unexpected = True
 
-    orphans: list[OrphanEntry] = []
-    skipped_absent = 0
-    skipped_source = 0
-    skipped_unmanaged = 0
-    skipped_host_local = 0
-    if transitions_dir is not None:
-        # Resolve native containers at the lifecycle boundary, where the profile
-        # and its stored resource identities are available. The local import
-        # avoids a cycle with the native report projection's compare types.
-        from setforge import codex_lifecycle
-
-        protected_paths = set(
-            codex_lifecycle.config_destinations(
-                config, resolved, repo_root, profile=profile_name
-            )
-        )
-        project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
-        for other_profile in config.profiles:
-            if other_profile == profile_name:
-                continue
-            other_config = config.model_copy(deep=True)
-            other_config._codex_project_paths.update(
-                {
-                    name: path.expanduser().resolve(strict=False)
-                    for name, path in project_paths.items()
-                }
-            )
-            other_resolved = resolve_profile(other_config, other_profile)
-            protected_paths.update(
-                codex_lifecycle.config_destinations(
-                    other_config,
-                    other_resolved,
-                    repo_root,
-                    profile=other_profile,
-                    destination_only=True,
-                )
-            )
-        detection = detect_orphans(
-            resolved,
-            config,
-            transitions_dir,
-            repo_root,
-            ignored=ignored,
-            protected_paths=protected_paths,
-        )
-        orphans = detection.orphans
-        skipped_absent = detection.skipped_absent
-        skipped_source = detection.skipped_source
-        skipped_unmanaged = detection.skipped_unmanaged
-        skipped_host_local = detection.skipped_host_local
-
+    orphans = (
+        detect_profile_orphans(
+            config, resolved, profile_name, repo_root, transitions_dir, ignored
+        ).orphans
+        if transitions_dir is not None
+        else []
+    )
     return CompareReport(
-        entries=entries,
-        has_unexpected_drift=has_unexpected,
-        orphans=orphans,
-        orphan_skipped_absent=skipped_absent,
-        orphan_skipped_source=skipped_source,
-        orphan_skipped_unmanaged=skipped_unmanaged,
-        orphan_skipped_host_local=skipped_host_local,
+        entries=entries, has_unexpected_drift=has_unexpected, orphans=orphans
+    )
+
+
+def detect_profile_orphans(
+    config: Config,
+    resolved: ResolvedProfile,
+    profile_name: str,
+    repo_root: Path,
+    transitions_dir: Path,
+    ignored: frozenset[str],
+) -> OrphanDetection:
+    """Detect a profile's orphans, protecting every profile's native containers."""
+    # Resolve native containers at the lifecycle boundary, where the profile
+    # and its stored resource identities are available. The local import
+    # avoids a cycle with the native report projection's compare types.
+    from setforge import codex_lifecycle
+
+    protected_paths = set(
+        codex_lifecycle.config_destinations(
+            config, resolved, repo_root, profile=profile_name
+        )
+    )
+    project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
+    for other_profile in config.profiles:
+        if other_profile == profile_name:
+            continue
+        other_config = config.model_copy(deep=True)
+        other_config._codex_project_paths.update(
+            {
+                name: path.expanduser().resolve(strict=False)
+                for name, path in project_paths.items()
+            }
+        )
+        other_resolved = resolve_profile(other_config, other_profile)
+        protected_paths.update(
+            codex_lifecycle.config_destinations(
+                other_config,
+                other_resolved,
+                repo_root,
+                profile=other_profile,
+                destination_only=True,
+            )
+        )
+    return detect_orphans(
+        resolved,
+        config,
+        transitions_dir,
+        repo_root,
+        ignored=ignored,
+        protected_paths=protected_paths,
     )
 
 
@@ -1117,22 +1100,6 @@ def _classify_drifted(
         return DriftClass.EXPECTED, _STAGED_REASON
     # Slot 5 — UNEXPECTED: drift nothing above explains.
     return DriftClass.UNEXPECTED, None
-
-
-def _has_file_authority(repo_root: Path, destination: Path) -> bool:
-    """Return whether staged units can explain shared tracked/live drift."""
-    try:
-        owner_id = read_owner_id(repo_root)
-    except OwnershipError:
-        return not (repo_root / ".git").exists()
-    observation = observe_file(destination)
-    return container_authorized(
-        decide_file(
-            observation,
-            OwnershipStore().read(observation.resource_id),
-            owner_id=owner_id,
-        )
-    )
 
 
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:

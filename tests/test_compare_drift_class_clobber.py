@@ -20,8 +20,9 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.compare import CompareStatus, DriftClass, compare_profile
+from setforge.compare import CompareStatus, DriftClass
 from setforge.config import Config, Profile, TrackedFile
+from tests.verb_calls import compare_profile
 
 _DOC = """\
 # Title
