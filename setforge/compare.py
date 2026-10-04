@@ -364,10 +364,12 @@ def _resolved_tracked_dsts(
 
 
 def _recorded_meta_payloads(transitions_dir: Path) -> Iterator[dict[str, Any]]:
-    """Yield every readable ``meta.json`` object; a bad record is skipped."""
-    if not transitions_dir.is_dir():
+    """Yield every readable ``meta.json`` object; anything unreadable is skipped."""
+    try:
+        records = list(committed_transition_dirs(transitions_dir, tolerant=True))
+    except OSError:
         return
-    for record in committed_transition_dirs(transitions_dir):
+    for record in records:
         with contextlib.suppress(InvalidTransitionRecord):
             yield load_meta_payload(record)
 

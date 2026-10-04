@@ -2392,14 +2392,24 @@ def _sweep_stale_pending(root: Path) -> None:
                 continue
 
 
-def committed_transition_dirs(root: Path) -> Iterator[Path]:
-    """Yield committed records: real directories holding the ``meta.json`` marker."""
+def committed_transition_dirs(root: Path, *, tolerant: bool = False) -> Iterator[Path]:
+    """Yield committed records: real directories holding the ``meta.json`` marker.
+
+    ``tolerant`` skips an entry that cannot be examined (a record directory the
+    user may not enter) instead of raising.
+    """
     for child in root.iterdir():
-        if (
-            child.is_dir()
-            and not child.name.startswith(".pending-")
-            and (child / "meta.json").exists()
-        ):
+        try:
+            committed = (
+                child.is_dir()
+                and not child.name.startswith(".pending-")
+                and (child / "meta.json").exists()
+            )
+        except OSError:
+            if not tolerant:
+                raise
+            continue
+        if committed:
             yield child
 
 

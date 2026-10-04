@@ -276,7 +276,7 @@ def _migration_transition_dirs() -> frozenset[Path]:
     if not root.exists():
         return frozenset()
     found: set[Path] = set()
-    for candidate in transitions.committed_transition_dirs(root):
+    for candidate in transitions.committed_transition_dirs(root, tolerant=True):
         try:
             meta = transitions.load_meta(transitions.TransitionDir(candidate))
         except transitions.InvalidTransitionRecord:
