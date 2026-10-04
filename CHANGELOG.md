@@ -67,6 +67,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `install --dry-run` reports the same drift-gate count the real run enforces.
 - A corrupt adapter record in a transition gives a clean error from `revert`,
   `transitions show` and `transitions list`.
+- A transition's recorded end time is no longer earlier than its start.
 
 ### Changed
 
@@ -88,6 +89,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The unused `diff-match-patch` dependency is removed.
 - Project overlay state written by this release is not readable by 1.3.9;
   state written by earlier releases still reads.
+- Operation journals no longer record the command line. `project remove`
+  previews `leave absent` for a file Git removed.
 
 ## [1.3.9] - 2026-09-28
 
