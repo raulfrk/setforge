@@ -28,9 +28,6 @@ _HEADING_RE: re.Pattern[str] = re.compile(
     r"^##\s+\[?v?(?P<ver>\d+\.\d+\.\d+)\]?",
     re.IGNORECASE,
 )
-# Used to detect the *next* release heading after we have begun
-# collecting the target's body. Same shape, used only to terminate.
-_NEXT_HEADING_RE: re.Pattern[str] = re.compile(r"^##\s+\[?v?\d+\.\d+\.\d+\]?")
 # Reference-link line; stripped from the tail of the captured body so
 # the user does not see a wall of ``[0.3.0]: https://...`` URL refs.
 _LINK_REF_RE: re.Pattern[str] = re.compile(r"^\[[^\]]+\]:\s+\S+")

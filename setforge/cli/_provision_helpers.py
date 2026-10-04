@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import typer
 
-from setforge.config import Config, ResolvedProfile
-from setforge.lockfile import LockFile
 from setforge.provision.dispatch import (
     ProvisioningPlan,
     apply_provisioning,
@@ -15,13 +13,7 @@ from setforge.provision.ownership import PackageAction
 from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResult
 
 
-def reconcile_packages(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    *,
-    lock: LockFile | None = None,
-    plan: ProvisioningPlan,
-) -> list[ReconcileResult]:
+def reconcile_packages(plan: ProvisioningPlan) -> list[ReconcileResult]:
     results = apply_provisioning(plan)
     for result in results:
         for outcome in result.outcomes:
@@ -47,12 +39,7 @@ def _echo_outcome(outcome: ProvisionOutcome) -> None:
             )
 
 
-def dry_run_packages(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    *,
-    plan: ProvisioningPlan,
-) -> None:
+def dry_run_packages(plan: ProvisioningPlan) -> None:
     typer.echo("=== would-be package provision ===")
     if plan.bundles:
         typer.echo(f"  bundles: {', '.join(plan.bundles)}")

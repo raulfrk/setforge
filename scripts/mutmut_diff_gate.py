@@ -165,18 +165,6 @@ class Survivor:
         return self.module_dotted.replace(".", "/") + ".py"
 
     @property
-    def function(self) -> str:
-        """The function (or method) the mutant lives in.
-
-        ``x_resolve_scalar`` -> ``resolve_scalar``; ``xǁStoreǁload`` -> ``load``;
-        ``xǁ_Absentǁ__repr__`` -> ``__repr__`` (the span target is the method,
-        not the class)."""
-        local = self._local_part(self._stem)
-        if _METHOD_SEP in local:
-            return local.rsplit(_METHOD_SEP, 1)[-1]
-        return local[2:] if local.startswith("x_") else local
-
-    @property
     def local(self) -> str:
         """The mutant-key local part, e.g. ``x_load`` or ``xǁStoreǁload``."""
         return self._local_part(self._stem)

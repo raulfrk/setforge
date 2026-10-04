@@ -111,21 +111,14 @@ def test_parse_results_carries_status() -> None:
     assert by_name["setforge.base_store_format.x_merge__mutmut_7"] == "suspicious"
 
 
-def test_survivor_module_path_and_function_plain_function() -> None:
+def test_survivor_module_path_plain_function() -> None:
     s = Survivor("setforge.scalar_merge.x_resolve_scalar__mutmut_4", "survived")
     assert s.module_path == "setforge/scalar_merge.py"
-    assert s.function == "resolve_scalar"
 
 
-def test_survivor_module_path_and_function_method() -> None:
+def test_survivor_module_path_method() -> None:
     s = Survivor("setforge.base_store.xǁStoreǁload__mutmut_2", "timeout")
     assert s.module_path == "setforge/base_store.py"
-    assert s.function == "load"
-
-
-def test_survivor_dunder_method() -> None:
-    s = Survivor("setforge.scalar_merge.xǁ_Absentǁ__repr____mutmut_1", "suspicious")
-    assert s.function == "__repr__"
 
 
 _SOURCE = textwrap.dedent(

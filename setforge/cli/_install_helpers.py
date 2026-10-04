@@ -1037,54 +1037,6 @@ def _run_predeploy_gates(
     )
 
 
-def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
-    """Unlink a symlink installed by setforge — refusing if the user mutated it.
-
-    Contract for ``setforge revert`` of a tracked_file deployed with
-    ``symlink:`` declared:
-
-    - If ``dst`` does not exist as a symlink AND does not exist as a
-      regular file, return ``False`` — nothing to revert (install
-      never landed, or revert already ran). Idempotency.
-    - If ``dst`` is a *regular file*, raise :class:`SetforgeError` —
-      the user replaced setforge's symlink with their own content;
-      revert refuses to delete user data.
-    - If ``dst`` is a symlink whose ``os.readlink`` does NOT equal
-      ``expected_target``, raise :class:`SetforgeError` — the user
-      retargeted setforge's symlink; revert refuses to unlink an
-      object that is no longer what setforge installed.
-    - Otherwise (``dst`` is a symlink with the expected target):
-      :func:`Path.unlink` with ``missing_ok=False``. Returns ``True``
-      to signal the link was removed.
-
-    ``missing_ok=False`` (NOT ``True``) is intentional: a successful
-    ``is_symlink()`` probe means the link MUST be unlink-able, and
-    swallowing :class:`FileNotFoundError` here would mask a TOCTOU
-    race (something deleted the link between the probe and the
-    unlink) that the caller should see.
-    """
-    if dst.is_symlink():
-        # str() keeps ``actual`` a plain string so the != compare against the
-        # string expected_target and the {actual!r} repr stay verbatim.
-        actual = str(dst.readlink())
-        if actual != expected_target:
-            raise SetforgeError(
-                f"refusing to unlink {dst}: symlink target changed since "
-                f"deploy ({actual!r} != {expected_target!r}). Re-point or "
-                f"remove the link manually if you want revert to proceed."
-            )
-        dst.unlink(missing_ok=False)
-        return True
-    if dst.exists():
-        raise SetforgeError(
-            f"refusing to unlink {dst}: a regular file is present where "
-            f"setforge previously installed a symlink "
-            f"(target {expected_target!r}). Remove the file manually if "
-            f"you want revert to proceed."
-        )
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Dry-run pipeline.
 #
@@ -1174,11 +1126,9 @@ def _dry_run_pipeline(
             verb = "add" if entry.prior is None else "update"
             typer.echo(f"  WOULD {verb:<7} {entry.name}")
     dry_run_packages(
-        ctx.cfg,
-        ctx.resolved,
-        plan=provisioning
+        provisioning
         if provisioning is not None
-        else plan_provisioning(ctx.cfg, ctx.resolved),
+        else plan_provisioning(ctx.cfg, ctx.resolved)
     )
     _dry_run_emit_transition_path(ctx, record=record_transition)
     typer.echo(_DRY_RUN_FINAL_LINE)

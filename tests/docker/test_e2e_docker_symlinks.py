@@ -258,11 +258,8 @@ def test_symlink_e2e_revert_reverses_target_content(
     it reverses the bytes at the recorded "touched paths." For a
     symlink-deployed tracked_file the recorded path is the symlink
     TARGET (where bytes land), not the link — so revert reverses the
-    target-file content cleanly. The symlink itself stays in place;
-    the dedicated symlink-aware revert step (via
-    :func:`setforge.cli._install_helpers.revert_symlink_deployment`)
-    is exercised by unit tests and would be wired through here in a
-    follow-up integration. The scenario asserts the basic round-trip
+    target-file content cleanly. The symlink itself stays in place.
+    The scenario asserts the basic round-trip
     contract: install + revert MUST complete without GNU patch
     refusing the symlink (the bug this scenario was originally
     introduced to catch).
@@ -304,9 +301,7 @@ def test_symlink_e2e_revert_unlinks_symlink(
 
     Spec acceptance #4: revert must reverse the install for symlink-
     deployed tracked_files — i.e. the LINK itself must be gone after
-    revert, not just the target-file content. Wires
-    :func:`setforge.cli._install_helpers.revert_symlink_deployment`
-    through the revert pipeline.
+    revert, not just the target-file content.
     """
     c = docker_container()
     _bootstrap(c, cfg_text=_BASE_CFG, src_text="payload\n")

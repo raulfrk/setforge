@@ -28,11 +28,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, Final
 
 from setforge.errors import CorruptIndexError, IndexVersionError, InvariantViolation
-from setforge.reconcile.types import UnitKind, content_sha
+from setforge.reconcile.types import HunkClass, UnitKind, content_sha
 
 CURRENT_VERSION: Final = "2.0"
 """The index schema version this engine writes."""
@@ -254,21 +253,6 @@ HunkKind = UnitKind
 """Backwards-compatible name for the persisted unit-kind discriminator."""
 
 
-class HunkCls(StrEnum):
-    """The valid ``cls`` values of a persisted hunk row — the on-disk mirror of
-    :class:`setforge.reconcile.types.HunkClass`'s value set.
-
-    Defined locally (not imported) to keep this codec a leaf with no dependency
-    on the staging layer; the values are a frozen part of the on-disk schema and
-    must stay byte-identical to ``types.HunkClass``.
-    """
-
-    LOCAL = "local"
-    SHARED = "shared"
-    PENDING = "pending"
-    SHARED_DRAFTED = "shared_drafted"
-
-
 #: Backwards-compatible aliases for the ``kind`` discriminators (the staging
 #: layer imports :data:`KIND_KEY`); both equal their bare on-disk string.
 KIND_LINE: Final = HunkKind.LINE
@@ -296,8 +280,8 @@ _HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "unit_id")
 _HUNK_ROW_KEYS_KEY: Final = ("cls", "label", "path", "value_hash")
 #: Valid ``kind`` discriminators; an absent ``kind`` defaults to ``line``.
 _HUNK_KINDS: Final = frozenset(HunkKind)
-#: Valid ``cls`` values, derived from the local :class:`HunkCls` StrEnum.
-_HUNK_CLASSES: Final = frozenset(HunkCls)
+#: Valid ``cls`` values, derived from :class:`HunkClass`.
+_HUNK_CLASSES: Final = frozenset(HunkClass)
 
 
 def _check_hunk_row(fid: str, row: object) -> None:
@@ -342,7 +326,7 @@ def _check_hunk_row(fid: str, row: object) -> None:
 def _check_optional_hunk_fields(fid: str, row: dict[object, object], kind: str) -> None:
     """Validate class-dependent and optional fields after core row validation."""
     draft_hash = row.get("draft_hash")
-    if row["cls"] == HunkCls.SHARED_DRAFTED:
+    if row["cls"] == HunkClass.SHARED_DRAFTED:
         if not isinstance(draft_hash, str):
             raise CorruptIndexError(
                 f"index entry for {fid!r} has a 'shared_drafted' hunk row with a "

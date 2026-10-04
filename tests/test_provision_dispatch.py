@@ -1108,7 +1108,7 @@ def test_dry_run_shared_direct_and_bundled_package_once(
     resolved = ResolvedProfile(
         packages=["shared"] if direct else [], bundles=["first", "second"]
     )
-    dry_run_packages(cfg, resolved, plan=plan_provisioning(cfg, resolved))
+    dry_run_packages(plan_provisioning(cfg, resolved))
     output = capsys.readouterr().out
     assert output.count("WOULD provision shared") == (0 if present else 1)
     assert "first" in output
@@ -1136,7 +1136,7 @@ def test_dry_run_same_name_across_providers_is_not_deduplicated(
         },
     )
     resolved = ResolvedProfile(packages=["cargo"], bundles=["tools"])
-    dry_run_packages(cfg, resolved, plan=plan_provisioning(cfg, resolved))
+    dry_run_packages(plan_provisioning(cfg, resolved))
     assert capsys.readouterr().out.count("WOULD provision ruff") == 2
 
 
@@ -1363,13 +1363,7 @@ def test_install_hard_failure_gates_exit_one(
     import setforge.cli._provision_helpers as ph
     from setforge.provision.driver import reconcile
 
-    def _fake_reconcile_packages(
-        cfg: Config,
-        resolved: ResolvedProfile,
-        *,
-        lock: object = None,
-        plan: object = None,
-    ) -> list[ReconcileResult]:
+    def _fake_reconcile_packages(plan: object) -> list[ReconcileResult]:
         items = [
             ProvisionItem(
                 type="stubprov", identity=Identity(key="ripgrep", display="ripgrep")
