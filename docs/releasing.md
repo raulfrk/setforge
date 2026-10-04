@@ -4,16 +4,25 @@ How CI gates `main` and how a versioned release is cut.
 
 ## CI
 
-Every push/PR to `main` runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+CI is split between GitHub and the home CI coordinator.
 
-- **Unit tests** — `uv run pytest`.
-- **Config validation** against the e2e test fixture —
-  `uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all`.
-- **Secrets scan** — gitleaks.
-- **E2E Docker tests** — the `tests/docker/` suite against a fresh container.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and
+pull request to `main`:
+
+- **Secrets scan** — gitleaks, run by GitHub on `ubuntu-latest`.
+- **Workbox trigger / unit** and **Workbox trigger / integration** — these
+  allocate no runner. They only record a job for the home CI coordinator to
+  poll; the coordinator then runs the checks on the exact SetForge commit
+  (the integration trigger covers the Docker and mutation checks for pull
+  requests).
+
+[`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml) runs on a
+daily schedule (and manually) and records one **Workbox trigger / full** job.
+The home CI coordinator runs the four nightly gates for it: Docker end-to-end,
+canary, deep, and mutation.
 
 The engine repo no longer carries a root `setforge.yaml` (it lives in your
-config repo), so CI validates against the e2e fixture instead.
+config repo).
 
 ## Cutting a release
 

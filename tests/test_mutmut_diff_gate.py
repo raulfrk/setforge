@@ -699,3 +699,178 @@ def test_base_override_bypasses_auto_selection(
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def _real_source(name: str) -> str:
+    return (gate.REPO_ROOT / "setforge" / f"{name}.py").read_text(encoding="utf-8")
+
+
+def _body_line(source: str, *, function: str, cls: str | None = None) -> int:
+    """A line strictly inside the named function's current span in ``source``."""
+    import ast
+
+    scope = ast.parse(source).body
+    if cls is not None:
+        scope = next(
+            n for n in scope if isinstance(n, ast.ClassDef) and n.name == cls
+        ).body
+    node = next(
+        n for n in scope if isinstance(n, ast.FunctionDef) and n.name == function
+    )
+    assert node.end_lineno is not None
+    assert node.end_lineno > node.lineno
+    return node.end_lineno
+
+
+def test_scoped_patterns_module_level_function_from_real_source() -> None:
+    source = _real_source("project_sync")
+    line = _body_line(source, function="plan_sync")
+    assert gate.scoped_patterns("setforge.project_sync", source, {line}) == [
+        "setforge.project_sync.x_plan_sync__mutmut_*"
+    ]
+
+
+def test_scoped_patterns_method_uses_class_and_separator_from_real_source() -> None:
+    source = _real_source("structural_merge")
+    line = _body_line(source, function="add", cls="_Json5Backend")
+    assert gate.scoped_patterns("setforge.structural_merge", source, {line}) == [
+        "setforge.structural_merge.xǁ_Json5Backendǁadd__mutmut_*"
+    ]
+
+
+def test_scoped_patterns_same_method_name_in_other_class_not_selected() -> None:
+    source = _real_source("structural_merge")
+    line = _body_line(source, function="add", cls="_Json5Backend")
+    patterns = gate.scoped_patterns("setforge.structural_merge", source, {line})
+    assert not any("_RuamelBackend" in p or "_MappingBackend" in p for p in patterns)
+
+
+def test_scoped_patterns_several_functions_sorted_and_deduplicated() -> None:
+    source = _real_source("structural_merge")
+    a = _body_line(source, function="add", cls="_Json5Backend")
+    b = _body_line(source, function="add", cls="_RuamelBackend")
+    assert gate.scoped_patterns("setforge.structural_merge", source, {a, a - 1, b}) == [
+        "setforge.structural_merge.xǁ_Json5Backendǁadd__mutmut_*",
+        "setforge.structural_merge.xǁ_RuamelBackendǁadd__mutmut_*",
+    ]
+
+
+_SCOPED_SOURCE = textwrap.dedent(
+    '''\
+    """doc"""
+    import os
+
+    LIMIT = 3
+
+
+    def add(x):
+        def inner(y):
+            return y
+
+        return inner(x)
+
+
+    def add_all(xs):
+        return xs
+
+
+    @decorator
+    def decorated(x):
+        return x
+
+
+    class Box:
+        size = 1
+
+        def put(self, v):
+            return v
+
+        class Inner:
+            def deep(self):
+                return 1
+    '''
+)
+
+
+def _line_of(text: str) -> int:
+    return _SCOPED_SOURCE.splitlines().index(text) + 1
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("        return y", ["m.x_add__mutmut_*"]),  # nested function -> enclosing
+        ("def add_all(xs):", ["m.x_add_all__mutmut_*"]),
+        ("@decorator", ["m.x_decorated__mutmut_*"]),
+        ("        return v", ["m.xǁBoxǁput__mutmut_*"]),
+        ("LIMIT = 3", ["m.*"]),  # module-level statement -> whole module
+        ("import os", ["m.*"]),
+        ("    size = 1", ["m.*"]),  # class attribute
+        ("        def deep(self):", ["m.*"]),  # method of a nested class
+    ],
+)
+def test_scoped_patterns_edge_cases(text: str, expected: list[str]) -> None:
+    assert gate.scoped_patterns("m", _SCOPED_SOURCE, {_line_of(text)}) == expected
+
+
+def test_scoped_patterns_add_does_not_match_add_all() -> None:
+    import fnmatch
+
+    [pattern] = gate.scoped_patterns(
+        "m", _SCOPED_SOURCE, {_line_of("        return y")}
+    )
+    assert fnmatch.fnmatch("m.x_add__mutmut_3", pattern)
+    assert not fnmatch.fnmatch("m.x_add_all__mutmut_3", pattern)
+
+
+def test_scoped_patterns_blank_and_comment_lines_between_units_select_nothing() -> None:
+    assert gate.scoped_patterns("m", _SCOPED_SOURCE, {5, 6}) == []
+
+
+def test_scoped_patterns_any_module_level_line_forces_whole_module() -> None:
+    lines = {_line_of("        return y"), _line_of("LIMIT = 3")}
+    assert gate.scoped_patterns("m", _SCOPED_SOURCE, lines) == ["m.*"]
+
+
+def test_diff_mode_passes_one_pattern_per_changed_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "def f():\n    return 1\n\n\ndef g():\n    return 2\n"
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -2 +2 @@ def f():\n"
+        "+    return 1\n"
+    )
+    seen: list[list[str]] = []
+    _stub_edge(
+        monkeypatch,
+        results="    setforge.scalar_merge.x_f__mutmut_1: killed",
+        diff=diff,
+    )
+
+    def record(patterns: list[str] | None) -> MutmutRun:
+        seen.append(patterns or [])
+        return MutmutRun(0, "")
+
+    monkeypatch.setattr(gate, "_run_mutmut", record)
+    monkeypatch.setattr(
+        gate, "_read_sources", lambda paths: {"setforge/scalar_merge.py": source}
+    )
+    assert gate.main([]) == EXIT_CLEAN
+    assert seen == [["setforge.scalar_merge.x_f__mutmut_*"]]
+
+
+def test_stale_allowlist_entries_flags_ids_with_no_matching_mutant() -> None:
+    results = (
+        "    setforge.scalar_merge.x_f__mutmut_1: killed\n"
+        "    setforge.scalar_merge.x_f__mutmut_2: survived\n"
+    )
+    allowlist = {
+        "setforge.scalar_merge.x_f__mutmut_2",
+        "setforge.scalar_merge.x_f__mutmut_9",
+        "setforge.base_store.x_other__mutmut_1",  # module not in the results
+    }
+    assert gate.stale_allowlist_entries(results, allowlist) == [
+        "setforge.scalar_merge.x_f__mutmut_9"
+    ]
