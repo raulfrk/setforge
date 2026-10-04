@@ -226,11 +226,15 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
 
 
 def _stored_files(record: RecordedProjectInjection) -> tuple[StoredProjectFile, ...]:
-    return _record_files(
+    files = _record_files(
         _load_manifest(record.manifest_path),
         schema=record.schema,
         target=record.target,
     )
+    # Removal must still read a record whose file id is empty; sync refuses it.
+    if any(not item.file_id for item in files):
+        raise SetforgeError("project injection state has an invalid file record")
+    return files
 
 
 def _read_live(
