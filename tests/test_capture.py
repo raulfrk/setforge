@@ -295,7 +295,7 @@ def test_staged_capture_keeps_host_local_section_out_of_tracked(
     legacy local.yaml ``host_local_sections`` strip.
 
     STAGE B retires the local.yaml host-local declaration; ``sync`` no longer
-    threads a ``host_local_sections_map`` into ``capture_profile``. A host-local
+    threads a ``host_local_sections_map`` into capture. A host-local
     section is instead a LOCAL unit in the reconcile store (a purely-additive
     ``## My Tweaks`` section carrying a minted ``reloc_anchor``). This pins that
     the reconcile-native staged capture keeps that LOCAL content host-only — it
