@@ -149,11 +149,7 @@ def is_fresh_host() -> bool:
     root = transitions.transitions_root()
     if not root.is_dir():
         return True
-    for child in root.iterdir():
-        if not child.is_dir():
-            continue
-        if not (child / "meta.json").is_file():
-            continue
+    for child in transitions.committed_transition_dirs(root):
         with contextlib.suppress(InvalidTransitionRecord):
             transitions.load_meta(transitions.TransitionDir(child))
             return False

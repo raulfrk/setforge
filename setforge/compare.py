@@ -18,17 +18,17 @@ listed in any resolved tracked_files entry. The ``cleanup-orphans``
 subcommand re-computes orphans under ``--apply`` and removes them.
 """
 
+import contextlib
 import difflib
-import json
 import os
 import stat
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from jinja2 import Template
 from rich.table import Table
@@ -46,7 +46,7 @@ from setforge.config import (
     resolve_profile,
     resolve_symlink_target,
 )
-from setforge.errors import BaseStoreError, ConfigError
+from setforge.errors import BaseStoreError, ConfigError, InvalidTransitionRecord
 from setforge.file_ownership import (
     FileAction,
     FileDecision,
@@ -60,7 +60,11 @@ from setforge.operations import journals_root
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
 from setforge.source import load_local_codex_overlay
-from setforge.transitions import state_root
+from setforge.transitions import (
+    committed_transition_dirs,
+    load_meta_payload,
+    state_root,
+)
 from setforge.tree_management import (
     plan_tree,
     read_inventory,
@@ -359,20 +363,21 @@ def _resolved_tracked_dsts(
     return tracked_paths
 
 
+def _recorded_meta_payloads(transitions_dir: Path) -> Iterator[dict[str, Any]]:
+    """Yield every readable ``meta.json`` object; a bad record is skipped."""
+    if not transitions_dir.is_dir():
+        return
+    for record in committed_transition_dirs(transitions_dir):
+        with contextlib.suppress(InvalidTransitionRecord):
+            yield load_meta_payload(record)
+
+
 def _recorded_file_destinations(
     transitions_dir: Path,
 ) -> Iterable[tuple[str, tuple[Path, ...]]]:
     """Read optional destination identities without requiring newer history."""
-    for meta_path in transitions_dir.glob("*/meta.json"):
-        try:
-            payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        mapping = (
-            payload.get("tracked_file_destinations")
-            if isinstance(payload, dict)
-            else None
-        )
+    for payload in _recorded_meta_payloads(transitions_dir):
+        mapping = payload.get("tracked_file_destinations")
         if not isinstance(mapping, dict):
             continue
         for name, paths in mapping.items():
@@ -455,16 +460,8 @@ def _touched_paths_from_meta(transitions_dir: Path) -> set[Path]:
     record is skipped, not fatal. Missing ``transitions_dir`` (no
     install history yet) returns an empty set.
     """
-    if not transitions_dir.exists():
-        return set()
     touched: set[Path] = set()
-    for meta_path in transitions_dir.glob("*/meta.json"):
-        try:
-            payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
+    for payload in _recorded_meta_payloads(transitions_dir):
         raw_paths = payload.get("paths")
         if not isinstance(raw_paths, list):
             continue

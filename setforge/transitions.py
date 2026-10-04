@@ -333,7 +333,7 @@ def make_meta(
     )
 
 
-def _load_meta_payload(transition_dir: Path) -> dict[str, Any]:
+def load_meta_payload(transition_dir: Path) -> dict[str, Any]:
     """Read ``<transition_dir>/meta.json`` as a JSON object or refuse it cleanly."""
     payload_path = transition_dir / "meta.json"
     try:
@@ -384,7 +384,7 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
     exception so the caller sees both.
     """
     return _meta_from_payload(
-        _load_meta_payload(transition_dir), transition_dir / "meta.json"
+        load_meta_payload(transition_dir), transition_dir / "meta.json"
     )
 
 
@@ -2304,7 +2304,7 @@ def load_record(transition_dir: TransitionDir) -> TransitionRecord:
     malformed, so a corrupt record is refused before a caller acts on it.
     """
     meta_file = transition_dir / "meta.json"
-    payload = _load_meta_payload(transition_dir)
+    payload = load_meta_payload(transition_dir)
     raw_paths = payload.get("paths", [])
     if not isinstance(raw_paths, list) or not all(
         isinstance(path, str) for path in raw_paths
@@ -2392,7 +2392,7 @@ def _sweep_stale_pending(root: Path) -> None:
                 continue
 
 
-def _committed_transition_dirs(root: Path) -> Iterator[Path]:
+def committed_transition_dirs(root: Path) -> Iterator[Path]:
     """Yield committed records: real directories holding the ``meta.json`` marker."""
     for child in root.iterdir():
         if (
@@ -2415,9 +2415,9 @@ def _filter_transition_entries(
     consistent with the broader transitions reader.
     """
     candidates: list[Path] = []
-    for d in _committed_transition_dirs(root):
+    for d in committed_transition_dirs(root):
         try:
-            payload = _load_meta_payload(d)
+            payload = load_meta_payload(d)
         except InvalidTransitionRecord:
             continue
         if payload.get("profile") != profile:
@@ -2587,7 +2587,7 @@ def _require_no_unpatched_changes(transition_dir: TransitionDir) -> None:
     """Refuse to report success when the metadata lists file changes that a
     missing or empty ``changes.patch`` can no longer undo."""
     try:
-        paths = _load_meta_payload(transition_dir).get("paths")
+        paths = load_meta_payload(transition_dir).get("paths")
     except InvalidTransitionRecord:
         return
     if not isinstance(paths, list) or not paths:
@@ -2700,7 +2700,7 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
     by :func:`list_transitions` to skip half-written / corrupted dirs
     without aborting the whole listing."""
     try:
-        payload = _load_meta_payload(transition_dir)
+        payload = load_meta_payload(transition_dir)
         timestamp = datetime.fromisoformat(payload["timestamp"])
         command = str(payload["command"])
         profile = str(payload["profile"])
@@ -2760,7 +2760,7 @@ def list_transitions(
         return []
     keep = set(profile_filter) if profile_filter else None
     listings: list[TransitionListing] = []
-    for child in _committed_transition_dirs(root):
+    for child in committed_transition_dirs(root):
         listing = _load_listing(child)
         if listing is None:
             continue
@@ -2794,7 +2794,7 @@ def resolve_transition_prefix(prefix: str) -> TransitionDir:
         return TransitionDir(exact)
     matches = sorted(
         child
-        for child in _committed_transition_dirs(root)
+        for child in committed_transition_dirs(root)
         if child.name.startswith(prefix)
     )
     if not matches:

@@ -2422,13 +2422,7 @@ def _committed_transition_names() -> tuple[str, ...]:
     if not root.exists():
         return ()
     return tuple(
-        sorted(
-            path.name
-            for path in root.iterdir()
-            if path.is_dir()
-            and not path.name.startswith(".pending-")
-            and (path / "meta.json").is_file()
-        )
+        sorted(path.name for path in transitions.committed_transition_dirs(root))
     )
 
 
@@ -2438,11 +2432,8 @@ def _remove_uncommitted_transition_records(journal: OperationJournal) -> None:
     if not root.exists():
         return
     baseline = set(journal.transition_names_before)
-    for path in root.iterdir():
-        if path.name in baseline or not path.is_dir():
-            continue
-        meta_path = path / "meta.json"
-        if not meta_path.is_file():
+    for path in transitions.committed_transition_dirs(root):
+        if path.name in baseline:
             continue
         try:
             meta = transitions.load_meta(transitions.TransitionDir(path))

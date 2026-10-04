@@ -13,7 +13,6 @@ shape doesn't fit.
 """
 
 import functools
-import json
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -1291,28 +1290,22 @@ def _write_reverse_transition(
     install chmod — the file-mode mirror of ``file_pre``. ``None`` / empty
     for callers reverting a transition that changed no file modes.
     """
-    ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
-    if ext_file.exists():
-        ext_raw = json.loads(ext_file.read_text())
-        ext_delta = transitions.extension_delta_from_json(ext_raw)
+    ext_delta = transitions.load_extension_delta(transition)
+    if ext_delta is not None:
         reverse_added, reverse_removed, _ = _reverse_extensions(ext_delta)
 
-    plugin_file = transition / "plugins.json"
     reverse_plugin_delta: transitions.PluginDelta | None = None
-    if plugin_file.exists():
-        plugin_raw = json.loads(plugin_file.read_text(encoding="utf-8"))
-        plugin_payload = transitions.plugin_delta_from_json(plugin_raw)
+    plugin_payload = transitions.load_plugin_delta(transition)
+    if plugin_payload is not None:
         reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
         if reverse_plugin_delta.is_empty():
             reverse_plugin_delta = None
 
-    codex_plugin_file = transition / "codex_plugins.json"
     reverse_codex_plugin_delta: transitions.CodexPluginDelta | None = None
-    if codex_plugin_file.exists():
-        codex_raw = json.loads(codex_plugin_file.read_text(encoding="utf-8"))
-        codex_payload = transitions.codex_plugin_delta_from_json(codex_raw)
+    codex_payload = transitions.load_codex_plugin_delta(transition)
+    if codex_payload is not None:
         reverse_codex_plugin_delta, codex_failures = _reverse_codex_plugins(
             codex_payload
         )
@@ -1324,11 +1317,9 @@ def _write_reverse_transition(
         if reverse_codex_plugin_delta.is_empty():
             reverse_codex_plugin_delta = None
 
-    mcp_file = transition / "mcp.json"
     reverse_mcp_delta: transitions.MCPDelta | None = None
-    if mcp_file.exists():
-        mcp_raw = json.loads(mcp_file.read_text(encoding="utf-8"))
-        mcp_payload = transitions.mcp_delta_from_json(mcp_raw)
+    mcp_payload = transitions.load_mcp_delta(transition)
+    if mcp_payload is not None:
         reverse_mcp_delta, mcp_failures = _reverse_mcp(mcp_payload)
         if mcp_failures:
             detail = "; ".join(f"{name}: {error}" for name, error in mcp_failures)
