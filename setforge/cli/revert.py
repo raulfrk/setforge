@@ -15,7 +15,7 @@ import os
 import stat
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -667,52 +667,91 @@ def revert(
     if choice is RevertChoice.ABORT:
         return
 
-    # Serialize the live mutation against concurrent install/sync/revert on
-    # the same profile, matching install.py / sync.py. The deploy model
-    # relies on a single-serialized-process assumption (the resolve->write
-    # staleness and symlink-ordering windows are only safe under this lock);
-    # acquiring it here — after the confirm wizard, before any patch-reverse
-    # or store restore — keeps revert inside that contract.
-    # Canonical order shared with install: global adapters, then profile files.
-    state_profiles = _revert_locked_profiles((record,), profile)
-    with (
-        mutation_locks(
-            resources=True,
-            config_identity_dir=_ownership_transfer_identity_dir((record,), config),
-            config_dir=config.resolve().parent,
-            target_roots=_ownership_transfer_lock_targets((record,)),
-            profiles=state_profiles,
-        ) as mutation_guards,
-        operations.recover_on_error(profile, "revert"),
-    ):
-        operations.refuse_active(profile)
-        current = transitions.load_latest(profile)
-        if current != transition:
-            raise SetforgeError(
-                "transition history changed after confirmation; retry revert"
+    _apply_confirmed_reverts(
+        (record,),
+        profile,
+        config,
+        chain=False,
+        history_unchanged=lambda: transitions.load_latest(profile) == transition,
+    )
+
+
+def _apply_confirmed_reverts(
+    records: tuple[transitions.TransitionRecord, ...],
+    profile: str,
+    config: Path,
+    *,
+    chain: bool,
+    history_unchanged: Callable[[], bool],
+) -> None:
+    """Revert ``records`` in order under one lock set and one journal.
+
+    Serializes the live mutation against concurrent install/sync/revert,
+    matching install.py / sync.py: the deploy model relies on a
+    single-serialized-process assumption, and each step's reverse patch is
+    defined against the state the previous step produced. The locks are
+    taken after the confirm wizard and before any patch-reverse or store
+    restore, in the canonical order shared with install (global adapters,
+    then profile files). ``history_unchanged`` re-checks the confirmed
+    selection once they are held. A failure rolls every applied step back,
+    and the recorded reverts are reported only after the journal completes.
+    """
+    scope = "chain" if chain else "revert"
+    recorded: list[Path] = []
+    try:
+        with (
+            mutation_locks(
+                resources=True,
+                config_identity_dir=_ownership_transfer_identity_dir(records, config),
+                config_dir=config.resolve().parent,
+                target_roots=_ownership_transfer_lock_targets(records),
+                profiles=_revert_locked_profiles(records, profile),
+            ) as mutation_guards,
+            operations.recover_on_error(profile, "revert"),
+        ):
+            operations.refuse_active(profile)
+            if not history_unchanged():
+                raise SetforgeError(
+                    "transition history changed after confirmation; retry revert"
+                )
+            journal = _prepare_revert_journal(records, profile, config)
+            journal = operations.begin_checkpoint(
+                journal,
+                name="revert-chain",
+                kind=operations.CheckpointKind.COMPENSATABLE,
+                recovery=(
+                    f"restore pre-{scope} files, stores, modes, and adapter inventories"
+                ),
             )
-        journal = _prepare_revert_journal((record,), profile, config)
-        journal = operations.begin_checkpoint(
-            journal,
-            name="revert-chain",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            recovery="restore pre-revert files, stores, modes, and adapter inventories",
-        )
-        identity_guard = (
-            mutation_guards.config_identity if mutation_guards is not None else None
-        )
-        recorded = _apply_revert(
-            record,
-            profile,
-            config,
-            path_guards=journal.path_guards,
-            config_identity_fd=(
+            identity_guard = (
+                mutation_guards.config_identity if mutation_guards is not None else None
+            )
+            config_identity_fd = (
                 identity_guard.directory_fd if identity_guard is not None else None
-            ),
-        )
-        journal = operations.finish_checkpoint(journal)
-        operations.complete(journal)
-    _report_recorded_revert(recorded, profile)
+            )
+            for record in records:
+                recorded.append(
+                    _apply_revert(
+                        record,
+                        profile,
+                        config,
+                        path_guards=journal.path_guards,
+                        config_identity_fd=config_identity_fd,
+                    )
+                )
+            journal = operations.finish_checkpoint(journal)
+            operations.complete(journal)
+    except BaseException as failure:
+        # recover_on_error attaches a note whenever its rollback was incomplete.
+        if chain and recorded and not getattr(failure, "__notes__", ()):
+            typer.echo(
+                f"rolled back {len(recorded)} already reverted step(s) of this "
+                "chain; nothing was changed",
+                err=True,
+            )
+        raise
+    for target in recorded:
+        _report_recorded_revert(target, profile)
 
 
 def _resolve_to_before_chain(
@@ -794,69 +833,15 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     if choice is RevertChoice.ABORT:
         return
 
-    # Hold the profile lock across the whole apply loop so the multi-step
-    # reverse chain cannot interleave with a concurrent install/sync/revert
-    # (each step's reverse patch is defined against the state the previous
-    # step produced; an interleaving deploy would invalidate that chain).
-    state_profiles = _revert_locked_profiles(records, profile)
-    recorded: list[Path] = []
-    try:
-        with (
-            mutation_locks(
-                resources=True,
-                config_identity_dir=_ownership_transfer_identity_dir(records, config),
-                config_dir=config.resolve().parent,
-                target_roots=_ownership_transfer_lock_targets(records),
-                profiles=state_profiles,
-            ) as mutation_guards,
-            operations.recover_on_error(profile, "revert"),
-        ):
-            operations.refuse_active(profile)
-            refreshed = _resolve_to_before_chain(profile, to_before)
-            if tuple(entry.directory for entry in refreshed) != tuple(
-                entry.directory for entry in chain
-            ):
-                raise SetforgeError(
-                    "transition history changed after confirmation; retry revert"
-                )
-            journal = _prepare_revert_journal(records, profile, config)
-            journal = operations.begin_checkpoint(
-                journal,
-                name="revert-chain",
-                kind=operations.CheckpointKind.COMPENSATABLE,
-                recovery=(
-                    "restore pre-chain files, stores, modes, and adapter inventories"
-                ),
-            )
-            identity_guard = (
-                mutation_guards.config_identity if mutation_guards is not None else None
-            )
-            config_identity_fd = (
-                identity_guard.directory_fd if identity_guard is not None else None
-            )
-            for record in records:
-                recorded.append(
-                    _apply_revert(
-                        record,
-                        profile,
-                        config,
-                        path_guards=journal.path_guards,
-                        config_identity_fd=config_identity_fd,
-                    )
-                )
-            journal = operations.finish_checkpoint(journal)
-            operations.complete(journal)
-    except BaseException as failure:
-        # recover_on_error attaches a note whenever its rollback was incomplete.
-        if recorded and not getattr(failure, "__notes__", ()):
-            typer.echo(
-                f"rolled back {len(recorded)} already reverted step(s) of this "
-                "chain; nothing was changed",
-                err=True,
-            )
-        raise
-    for target in recorded:
-        _report_recorded_revert(target, profile)
+    def chain_unchanged() -> bool:
+        refreshed = _resolve_to_before_chain(profile, to_before)
+        return [entry.directory for entry in refreshed] == [
+            entry.directory for entry in chain
+        ]
+
+    _apply_confirmed_reverts(
+        records, profile, config, chain=True, history_unchanged=chain_unchanged
+    )
 
 
 def _prepare_revert_journal(

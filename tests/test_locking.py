@@ -418,8 +418,7 @@ def test_global_resource_writers_share_one_lock() -> None:
         plugins.marketplace_add_cmd,
         plugins.marketplace_remove_cmd,
         plugins.marketplace_update_cmd,
-        revert.revert,
-        revert._revert_to_before,
+        revert._apply_confirmed_reverts,
     )
     missing: list[str] = []
     for writer in writers:
