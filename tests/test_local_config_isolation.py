@@ -10,6 +10,8 @@ computed from the real home at import time.
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 import sys
 import types
 from collections.abc import Iterator
@@ -18,7 +20,6 @@ from pathlib import Path
 import pytest
 
 import setforge
-import setforge.cli
 from setforge import claude_marketplace_cache, paths, secrets
 from tests.conftest import (
     REAL_HOME,
@@ -46,6 +47,15 @@ _ACCESSORS = (
 # generic directories the orphan scan must never treat as managed. It is
 # compared against, never read from or written to.
 _ALLOWED_IMPORT_TIME = {("setforge.compare", "GENERIC_DST_ROOTS")}
+
+
+# Every submodule is imported here, at collection time, while ``$HOME`` is
+# still the real one: a module first imported inside a test would compute its
+# import-time values from the redirected home and look clean.
+_ALL_MODULE_NAMES = tuple(
+    importlib.import_module(info.name).__name__
+    for info in pkgutil.walk_packages(setforge.__path__, "setforge.")
+)
 
 
 def _setforge_modules() -> list[tuple[str, types.ModuleType]]:
@@ -123,6 +133,12 @@ def test_local_config_redirect_reaches_every_module(
     target = tmp_path / "elsewhere" / "local.yaml"
     redirect_local_config_path(monkeypatch, target)
     assert paths.local_config_path() == target
+
+
+def test_every_submodule_is_scanned() -> None:
+    scanned = {name for name, _ in _setforge_modules()}
+    assert len(_ALL_MODULE_NAMES) > 150
+    assert set(_ALL_MODULE_NAMES) <= scanned
 
 
 def test_no_module_keeps_an_import_time_path_under_the_real_home() -> None:

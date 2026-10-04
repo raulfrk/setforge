@@ -836,7 +836,8 @@ def resolve_source(
     env_value = env.get(ENV_VAR)
     if env_value:
         return PathSource(path=Path(env_value))
-    local = _load_local_source_config(local_config_path or paths.local_config_path())
+    local_yaml = local_config_path or paths.local_config_path()
+    local = _load_local_source_config(local_yaml)
     if local.source is not None:
         return local.source
     cwd_resolved = cwd or Path.cwd()
@@ -849,7 +850,7 @@ def resolve_source(
         "no config source configured. Layers checked in order:\n"
         f"  1. CLI flag {CLI_FLAG} PATH (not provided)\n"
         f"  2. env {ENV_VAR}=PATH (unset or empty)\n"
-        f"  3. {local_config_path} `source:` block (absent or missing key)\n"
+        f"  3. {local_yaml} `source:` block (absent or missing key)\n"
         f"  4. CWD fallback {cwd_yaml} (file not found)\n"
         "First time here? Run `setforge init` to set up a config source."
     )
