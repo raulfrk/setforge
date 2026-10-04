@@ -19,7 +19,7 @@ The forward :meth:`SpanSurfaceRetireMigration.apply` is fully implemented:
   (INV-1 / INV-8; see :func:`_fold_sections`).
 * **Stamp + strip.** Advances ``schema_version`` to 4.0 and drops the retired
   ``host_local_sections`` / overlay-``spans`` keys from ``local.yaml``.
-* **Transition.** Commits ONE durable ``MIGRATE`` transition (text patch for
+* **Transition.** Commits ONE durable ``MIGRATE`` transition (file record for
   ``setforge.yaml`` + ``local.yaml`` PLUS byte-exact state snapshots of every
   mutated reconcile leg) so a crash or ``setforge revert --profile=migrate``
   restores the pre-cutover state exactly.
@@ -174,8 +174,8 @@ class SpanSurfaceRetireMigration:
         into its unit's LOCAL store (preserving the recorded ``local`` bytes AND the
         existing hunk classifications — INV-1 / INV-8), stamp schema 4.0, strip the
         retired ``host_local_sections`` / overlay-``spans`` from ``local.yaml``, then
-        COMMIT the one durable transition (state_snapshots + the cfg/local.yaml text
-        patch). Idempotent: a section already present as a LOCAL+reloc unit is
+        COMMIT the one durable transition (state_snapshots + the cfg/local.yaml file
+        record). Idempotent: a section already present as a LOCAL+reloc unit is
         skipped, so a re-run drains to an empty residual and no-ops.
 
         No ``local.yaml`` (the frozen-fixture case) ⇒ nothing to fold: advance
@@ -186,7 +186,7 @@ class SpanSurfaceRetireMigration:
         own text transition whenever any chain step owns one
         (:func:`setforge.cli.migrate._chain_owns_transition`). So a bare early
         return would leave the 3.0 -> 4.0 stamp outside every transition, and a
-        single ``revert`` would reverse an earlier step's ``-> 3.0`` patch against
+        single ``revert`` would reverse an earlier step's ``-> 3.0`` record against
         the on-disk 4.0 config and fail (INV-5: one revert reaches the origin).
         The recorded transition threads the chain-origin ``setforge.yaml`` (and
         ``local.yaml``) from ``pre_chain_snapshot`` and carries NO state_snapshots
@@ -245,7 +245,7 @@ class SpanSurfaceRetireMigration:
 
         The no-fold path (see :meth:`apply`). Covers ONLY ``setforge.yaml`` (and
         ``local.yaml`` when the chain touched it) — never a reconcile-store leg —
-        so the text patch cannot overlap an earlier cutover's binary
+        so the file record cannot overlap an earlier cutover's binary
         state_snapshots. Threads the chain-origin image from
         ``pre_chain_snapshot`` so a single ``revert`` reaches the chain's ORIGIN,
         not the intermediate 3.0 state (INV-5).
@@ -599,7 +599,7 @@ def _capture_span_snapshots(
     captured ONCE, outside the fid loop, so a 2nd+ fid never records a
     post-mutation index. A never-seeded leg captures ``payload=None`` so revert
     deletes the seed; an already-present leg captures its bytes so revert restores
-    them byte-exact (winning over the text patch for any overlapping path).
+    them byte-exact (winning over the file record for any overlapping path).
     """
     entries: list[StateSnapshotEntry] = []
     for fold in folds:
@@ -627,9 +627,9 @@ def _write_span_retire_transition(
 ) -> TransitionDir:
     """Record the cutover's single durable ``MIGRATE`` transition.
 
-    Carries BOTH a text patch for ``setforge.yaml`` + ``local.yaml``
+    Carries BOTH a file record for ``setforge.yaml`` + ``local.yaml``
     (``file_pre`` -> ``file_post``; the schema flip + section strip, reversed by
-    ``patch -R``) AND the binary ``state_snapshots`` of every mutated reconcile
+    revert) AND the binary ``state_snapshots`` of every mutated reconcile
     leg (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls this
     AFTER folding + stamping + stripping, so a crash or ``setforge revert`` after
     the commit restores the pre-cutover state exactly. Returns the transition dir.

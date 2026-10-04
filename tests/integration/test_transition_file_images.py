@@ -10,7 +10,6 @@ import pytest
 
 from setforge import operations, transitions
 from setforge.transitions import FilesystemKind
-from tests.shared_helpers import assert_patch_matches_images
 
 from .conftest import IntegrationEnv
 
@@ -55,7 +54,6 @@ def test_install_records_every_changed_file(
         note: (None, note.read_bytes()),
         settings: (None, settings.read_bytes()),
     }
-    assert_patch_matches_images(created)
 
     before = note.read_bytes()
     env.tracked("text/note.txt").write_bytes(b"changed\r\nbody")
@@ -71,8 +69,6 @@ def test_install_records_every_changed_file(
     by_path = {item.path: item for item in transitions.load_filesystem_deltas(updated)}
     assert by_path[settings].pre.mode == mode_before
     assert by_path[settings].post.mode == 0o600
-    assert transitions.load_file_modes(updated) == {settings: mode_before}
-    assert_patch_matches_images(updated)
 
 
 def test_sync_and_its_revert_record_every_changed_file(
@@ -89,7 +85,6 @@ def test_sync_and_its_revert_record_every_changed_file(
     assert result.exit_code == 0, result.output
     synced = _records(env)[-1]
     assert _file_changes(synced, env.repo) == {tracked: (before, b"live edit\n")}
-    assert_patch_matches_images(synced)
 
     result = env.run_verb(["revert", "--yes"])
     assert result.exit_code == 0, result.output

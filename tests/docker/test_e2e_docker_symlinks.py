@@ -254,15 +254,13 @@ def test_symlink_e2e_revert_reverses_target_content(
 ) -> None:
     """``setforge revert`` on a symlink-deployed tracked_file reverses target content.
 
-    The current revert pipeline is content-diff (``patch -R``) based:
-    it reverses the bytes at the recorded "touched paths." For a
-    symlink-deployed tracked_file the recorded path is the symlink
-    TARGET (where bytes land), not the link — so revert reverses the
-    target-file content cleanly. The symlink itself stays in place.
-    The scenario asserts the basic round-trip
-    contract: install + revert MUST complete without GNU patch
-    refusing the symlink (the bug this scenario was originally
-    introduced to catch).
+    Revert restores the recorded file images. For a symlink-deployed
+    tracked_file the recorded file is the symlink TARGET (where bytes
+    land), and the link is recorded as its own image — so revert reverses
+    the target-file content cleanly. The scenario asserts the basic
+    round-trip contract: install + revert MUST complete without refusing
+    the symlink (the bug this scenario was originally introduced to
+    catch).
     """
     c = docker_container()
     _bootstrap(c, cfg_text=_BASE_CFG, src_text="payload\n")
@@ -280,8 +278,8 @@ def test_symlink_e2e_revert_reverses_target_content(
     )
     assert revert.returncode == 0, revert.stdout + revert.stderr
     # rc==0 alone would miss a silent revert failure (the audit's top concern).
-    # Install recorded the target as a new-file diff (pre-install it did not
-    # exist), so ``patch -R`` reverses the creation and the target is REMOVED.
+    # Install recorded the target as a created file (pre-install it did not
+    # exist), so revert reverses the creation and the target is REMOVED.
     # Assert that via the same ``test -e`` existence idiom the sibling
     # revert-unlinks test uses for the link — a stale target here = revert no-op.
     assert c.exec(["test", "-e", _TARGET], check=False).returncode != 0, (

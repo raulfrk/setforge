@@ -395,11 +395,12 @@ transition: 20260615T083640Z-install-default
     M  ~/.config/sample/notes.md
 
 === what 'revert' will do ===
-  Reverse the 2 file mutation(s) using stored patch-reverse data.
+  Restore the 2 file mutation(s) from the recorded pre-transition images.
 
 === RISKS ===
-  - revert uses patch-reverse, not whole-file overwrite, and refuses cleanly
-    if any reverse-hunk collides with a live edit.
+  - Revert restores whole files: each must still hold what the transition
+    left (bytes, mode, link target; timestamps are ignored). A file edited
+    since refuses the revert, naming it, before anything is written.
 
 === REDO (after revert lands) ===
   setforge revert acts as an inverse op. To REDO this install — run:
@@ -920,8 +921,8 @@ $ setforge completion install zsh    # install shell completion (or bash / fish)
 subcommand (`setforge -o json compare`, not `setforge compare -o json`):
 
 - `--source PATH` — override config-source discovery.
-- `--code-bin` / `--claude-bin` / `--gitleaks-bin` / `--patch-bin` — override a
-  tool binary path.
+- `--code-bin` / `--claude-bin` / `--gitleaks-bin` — override a tool binary
+  path.
 - `-v` / `-vv` — INFO / DEBUG logging (DEBUG redacts secrets).
 - `-q` / `--quiet` — suppress success output on structured read-only commands;
   errors remain on stderr.

@@ -10,6 +10,7 @@ wizard that shows the full diff, RISKS, and REDO instructions before
 applying. ``--yes`` short-circuits the wizard for non-interactive use.
 """
 
+import difflib
 import json
 import os
 import tempfile
@@ -102,66 +103,36 @@ def _compact_age(timestamp: datetime, now: datetime) -> str:
     return format_age(now, timestamp)
 
 
-def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
-    """Parse a unified diff and return ``{abs_path: "+N -M"}`` per file.
+def _lines(payload: bytes | None) -> list[bytes]:
+    parts = (payload or b"").split(b"\n")
+    return [part + b"\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
 
-    Counts hunk-body ``+``/``-`` lines (skipping ``+++`` / ``---``
-    headers). Paths are rebuilt from the ``+++`` line per
-    :func:`transitions._diff_path` (root-relative; prepend ``/``), reversing
-    any C-style quoting via :func:`transitions._cunquote_path` so this stays
-    symmetric with :func:`transitions.summarize_transition`.
-    ``/dev/null`` paths use the corresponding ``--- a/<x>`` for deletions.
+
+def _file_change(delta: transitions.FilesystemDelta) -> tuple[str, str]:
+    """Return the ``+``/``-``/``M`` marker and ``+N -M`` line delta of one file.
+
+    The line delta counts the lines a unified diff of the two payloads adds
+    and removes; it is empty when neither side is a regular file.
     """
-    summaries: dict[str, str] = {}
-    current_path: str | None = None
-    plus = 0
-    minus = 0
-    # Only ``--- ``/``+++ `` lines in a FILE-HEADER region are path headers;
-    # inside a hunk body a deleted line whose content starts with ``-- ``
-    # renders as ``--- foo`` and must be counted as a deletion, not mistaken
-    # for a header (else the real file's counts reset and a phantom entry
-    # appears). ``in_hunk`` is True once ``@@`` opens a hunk body and stays
-    # True until the next ``diff``/``index`` opens a fresh header region.
-    in_hunk = False
-    for line in patch_text.splitlines():
-        if line.startswith(("diff ", "index ")):
-            in_hunk = False
-            continue
-        if not in_hunk and line.startswith("--- "):
-            from_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
-            current_path = (
-                _abs_diff_path(from_path) if from_path != "/dev/null" else None
-            )
-            continue
-        if not in_hunk and line.startswith("+++ "):
-            to_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
-            if to_path != "/dev/null":
-                current_path = _abs_diff_path(to_path)
-            plus = 0
-            minus = 0
-            continue
-        if line.startswith("@@"):
-            in_hunk = True
-            continue
-        if current_path is None:
-            continue
-        if line.startswith("+"):
-            plus += 1
-        elif line.startswith("-"):
-            minus += 1
-        summaries[current_path] = f"+{plus} -{minus}"
-    return summaries
-
-
-def _abs_diff_path(path: str) -> str:
-    """Prepend a single leading ``/`` to a diff-header path.
-
-    setforge emits paths root-relative (no leading ``/``), so the preview
-    re-anchors them absolute. A path that already carries a leading ``/``
-    (e.g. a hand-authored or externally sourced patch) must not become
-    ``//root/...`` — normalize so exactly one leading slash results.
-    """
-    return "/" + path.lstrip("/")
+    kinds = (delta.pre.kind, delta.post.kind)
+    marker = (
+        "+"
+        if kinds[0] is transitions.FilesystemKind.ABSENT
+        else "-"
+        if kinds[1] is transitions.FilesystemKind.ABSENT
+        else "M"
+    )
+    if transitions.FilesystemKind.FILE not in kinds:
+        return marker, ""
+    plus = minus = 0
+    matcher = difflib.SequenceMatcher(
+        None, _lines(delta.pre.payload), _lines(delta.post.payload), autojunk=False
+    )
+    for tag, pre_start, pre_end, post_start, post_end in matcher.get_opcodes():
+        if tag != "equal":
+            minus += pre_end - pre_start
+            plus += post_end - post_start
+    return marker, f"+{plus} -{minus}"
 
 
 def _plugin_reconciles_from_transition(
@@ -259,42 +230,28 @@ def _build_revert_plan(
     reverse each item. Plugin / extension reconciles are inferred from
     the transition's ``plugins.json`` / ``extensions.json`` payloads when
     present (via :func:`_plugin_reconciles_from_transition` and
-    :func:`_extension_reconciles_from_transition`). Collision detection
-    runs at apply time via ``patch --dry-run -R`` (see
-    :func:`transitions.apply_patch_reverse`).
+    :func:`_extension_reconciles_from_transition`). Drift is checked at
+    apply time against each file's recorded post image.
     """
     transition = record.directory
     meta = record.meta
     age = _human_age(meta.timestamp, datetime.now(UTC))
 
-    patch_file = transition / "changes.patch"
-    diff_summaries: dict[str, str] = {}
-    if patch_file.exists():
-        diff_summaries = _diff_summaries_from_patch(
-            patch_file.read_text(encoding="utf-8", errors="surrogateescape")
-        )
-
-    # Per-path mode restore: when the forward transition recorded a
-    # pre-install mode for a path, revert will chmod it back — surface that
-    # in the preview so a mode-only revert (empty content patch) is not
-    # silent. Missing file_modes.json (pre-bump) → empty map → no note.
-    recorded_modes = record.file_modes
-    touched = record.paths
-    # A content-NOOP + mode-only install records the path in file_modes but
-    # NOT in meta.json's ``paths`` (no content delta), so union the
-    # mode-only paths in — preserving the touched-paths order first — so the
-    # preview lists every file revert will mutate on EITHER axis.
-    touched_set = set(touched)
-    mode_only = [p for p in recorded_modes if p not in touched_set]
+    # A changed permission is noted per file so a mode-only revert is not
+    # silent in the preview.
     file_mutations = tuple(
         FileMutation(
-            path=p,
-            diff_summary=diff_summaries.get(str(p), "+0 -0"),
+            path=delta.path,
+            diff_summary=_file_change(delta)[1] or "+0 -0",
             mode_restore=(
-                f"mode → {recorded_modes[p]:#o}" if p in recorded_modes else None
+                f"mode → {delta.pre.mode:#o}"
+                if delta.pre.mode is not None
+                and delta.post.mode is not None
+                and delta.pre.mode != delta.post.mode
+                else None
             ),
         )
-        for p in [*touched, *mode_only]
+        for delta in record.filesystem_deltas
     )
 
     return RevertPlan(
@@ -614,9 +571,9 @@ def _apply_confirmed_reverts(
 
     Serializes the live mutation against concurrent install/sync/revert,
     matching install.py / sync.py: the deploy model relies on a
-    single-serialized-process assumption, and each step's reverse patch is
+    single-serialized-process assumption, and each step's recorded images are
     defined against the state the previous step produced. The locks are
-    taken after the confirm wizard and before any patch-reverse or store
+    taken after the confirm wizard and before any file or store
     restore, in the canonical order shared with install (global adapters,
     then profile files). ``history_unchanged`` re-checks the confirmed
     selection once they are held. A failure rolls every applied step back,
@@ -685,8 +642,8 @@ def _resolve_to_before_chain(
     Raises :class:`SetforgeError` if the prefix doesn't resolve, the
     resolved transition isn't for ``profile``, or no transitions exist
     for the profile. Newest-first order matches both the mockup-H
-    listing and the dry-run / apply order — the most-recent transition
-    reverts first so each step's reverse patch lines up against the
+    listing and the check / apply order — the most-recent transition
+    reverts first so each step's post images line up against the
     live tree it was recorded from.
     """
     target_path = transitions.resolve_transition_prefix(to_before)
@@ -1157,23 +1114,28 @@ def _render_ownership_transfers_show(
 def _render_files_section_show(
     target: transitions.TransitionDir, console: Console
 ) -> None:
-    """Render the ``files mutated (N):`` block with per-file diff stats."""
-    file_actions = transitions.summarize_transition(target)
-    if not file_actions:
+    """Render the ``files mutated (N):`` block with per-file diff stats.
+
+    A path the record lists without an image (an earlier version's text
+    patch) is shown with a ``?`` marker.
+    """
+    deltas = transitions.load_filesystem_deltas(target)
+    rows = {str(delta.path): _file_change(delta) for delta in deltas}
+    raw_paths = transitions.load_meta_payload(target).get("paths")
+    if isinstance(raw_paths, list) and not transitions.file_images_complete(target):
+        for raw in raw_paths:
+            rows.setdefault(str(raw), ("?", "recorded by an earlier version"))
+    if not rows:
         return
-    patch_file = target / "changes.patch"
-    diff_summaries: dict[str, str] = {}
-    if patch_file.exists():
-        diff_summaries = _diff_summaries_from_patch(
-            patch_file.read_text(encoding="utf-8", errors="surrogateescape")
+    console.print(f"  files mutated ({len(rows)}):")
+    for path, (marker, stats) in sorted(rows.items()):
+        suffix = (
+            f"  diff: {stats}"
+            if stats.startswith("+")
+            else f"  ({stats})"
+            if stats
+            else ""
         )
-    sorted_items = sorted(file_actions.items())
-    console.print(f"  files mutated ({len(sorted_items)}):")
-    action_marker = {"created": "+", "deleted": "-", "modified": "M"}
-    for path, action in sorted_items:
-        marker = action_marker.get(action, "?")
-        stats = diff_summaries.get(path, "")
-        suffix = f"  diff: {stats}" if stats else ""
         console.print(f"    {marker}  {path}{suffix}")
 
 

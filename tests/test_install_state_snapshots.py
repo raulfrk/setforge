@@ -5,8 +5,8 @@ temp config repo with a sandboxed ``$HOME`` + ``$SETFORGE_STATE_DIR`` and
 assert the transition's ``state_snapshots/`` payload captures the
 PRE-install state of every reconcile-store entry pass 2 can touch — the
 byte base, the reconcile local/absent/drafts legs, and the per-profile
-index — at the pass-2 barrier, and that the store files no longer ride
-``changes.patch``.
+index — at the pass-2 barrier, and that the store files are not among the
+recorded file images.
 """
 
 from __future__ import annotations
@@ -129,25 +129,23 @@ def test_second_install_snapshots_pre_install_store_state(repo: Path) -> None:
     assert by_store[SnapshotStore.INDEX].payload is not None
 
 
-def test_store_paths_absent_from_changes_patch(repo: Path) -> None:
-    """Store files leave the patch mechanism: their pre/post states ride
+def test_store_paths_absent_from_file_images(repo: Path) -> None:
+    """Store files are not file images: their pre/post states ride
     state_snapshots/ exclusively, so revert never double-restores them."""
     _write_tracked(repo, _DOC)
     config = _write_config(repo)
     assert _install(config).exit_code == 0
     # A second install with an upstream edit advances the byte base —
-    # exactly the delta the old mechanism recorded into changes.patch.
+    # exactly the delta an older mechanism recorded with the files.
     _write_tracked(repo, _DOC.replace("Shared body original.", "Shared body V2."))
     assert _install(config).exit_code == 0
 
     latest = transitions.load_latest(_PROFILE)
     assert latest is not None
-    patch_file = latest / "changes.patch"
-    assert patch_file.exists()
-    patch_text = patch_file.read_text(encoding="utf-8")
+    recorded = {item.path for item in transitions.load_filesystem_deltas(latest)}
+    assert recorded
 
-    base_rel = str(base_store.base_path(_PROFILE, _FILE_ID)).lstrip("/")
-    assert base_rel not in patch_text
+    assert base_store.base_path(_PROFILE, _FILE_ID) not in recorded
 
 
 def test_codex_base_only_install_records_transition_and_revert(repo: Path) -> None:

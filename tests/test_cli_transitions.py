@@ -5,6 +5,7 @@ directories under a tmp ``SETFORGE_STATE_DIR``. Read-only — no install
 or sync invocation needed.
 """
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -37,7 +38,7 @@ def _stub(
     paths: list[str] | None = None,
     extensions_added: list[str] | None = None,
     extensions_removed: list[str] | None = None,
-    patch_text: str | None = None,
+    file_changes: list[tuple[str, bytes | None, bytes | None]] | None = None,
 ) -> Path:
     """Materialize one transition directory and return its path. Mirrors
     the helper in test_transitions.py — kept independent here so the CLI
@@ -64,8 +65,31 @@ def _stub(
             ),
             encoding="utf-8",
         )
-    if patch_text is not None:
-        (target / "changes.patch").write_text(patch_text, encoding="utf-8")
+    if file_changes is not None:
+
+        def image(payload: bytes | None) -> dict[str, object]:
+            if payload is None:
+                return {"kind": "absent"}
+            return {
+                "kind": "file",
+                "payload_b64": base64.b64encode(payload).decode(),
+                "mode": 0o644,
+                "mtime_ns": 0,
+            }
+
+        (target / "filesystem_deltas.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "complete": True,
+                    "entries": [
+                        {"path": path, "pre": image(pre), "post": image(post)}
+                        for path, pre, post in file_changes
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     return target
 
 
@@ -178,14 +202,8 @@ def test_show_resolves_unique_prefix(
         dirname="20260507T120000000000Z-install-vmh",
         profile="vmh",
         paths=["/tmp/test-show-modified.txt"],
-        # Sentinel patch with one modified file.
-        patch_text=(
-            "--- tmp/test-show-modified.txt\n"
-            "+++ tmp/test-show-modified.txt\n"
-            "@@ -1 +1 @@\n"
-            "-old\n"
-            "+new\n"
-        ),
+        # One modified file.
+        file_changes=[("/tmp/test-show-modified.txt", b"old\n", b"new\n")],
     )
 
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1200"])
@@ -246,10 +264,10 @@ def test_show_zero_match_prefix_errors(
     assert isinstance(result.exception, SetforgeError)
 
 
-def test_show_omits_files_section_when_no_patch(
+def test_show_omits_files_section_when_no_file_changed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Extension-only transitions have no changes.patch; the FILES block
+    """Extension-only transitions record no file images; the FILES block
     is suppressed entirely (no empty section)."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
@@ -281,9 +299,7 @@ def test_show_omits_extensions_section_when_absent(
         dirname="20260507T120000000000Z-install-vmh",
         profile="vmh",
         paths=["/tmp/test-show-no-exts.txt"],
-        patch_text=(
-            "--- /dev/null\n+++ tmp/test-show-no-exts.txt\n@@ -0,0 +1 @@\n+hello\n"
-        ),
+        file_changes=[("/tmp/test-show-no-exts.txt", None, b"hello\n")],
     )
 
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1200"])
@@ -333,13 +349,7 @@ def test_show_renders_command_and_profile_per_mockup(
         profile="vm-headless",
         timestamp="2026-05-18T20:30:15+00:00",
         paths=["/tmp/test-show-polish.txt"],
-        patch_text=(
-            "--- tmp/test-show-polish.txt\n"
-            "+++ tmp/test-show-polish.txt\n"
-            "@@ -1 +1 @@\n"
-            "-old\n"
-            "+new\n"
-        ),
+        file_changes=[("/tmp/test-show-polish.txt", b"old\n", b"new\n")],
     )
 
     result = CliRunner().invoke(app, ["transitions", "show", "20260518T2030"])
@@ -409,3 +419,49 @@ def test_corrupt_adapter_sidecar_is_refused_cleanly_and_still_listed(
         assert sidecar in str(shown.exception)
     assert listed.exit_code == 0, listed.output
     assert target.name in _strip_ansi(listed.output)
+
+
+def test_show_lists_every_recorded_file_change_with_its_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Created, modified, deleted and zero-byte files and symlinks all show."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    target = _stub(
+        root,
+        dirname="20260507T120000000000Z-cleanup-orphans-vmh",
+        profile="vmh",
+        command="cleanup-orphans",
+        file_changes=[
+            ("/tmp/a-created", None, b"x\n"),
+            ("/tmp/b-modified", b"1\n", b"2\n3\n"),
+            ("/tmp/c-deleted", b"old\n", None),
+            ("/tmp/d-empty", None, b""),
+        ],
+    )
+    deltas = json.loads((target / "filesystem_deltas.json").read_text())
+    deltas["entries"].append(
+        {
+            "path": "/tmp/e-link",
+            "pre": {
+                "kind": "symlink",
+                "link_target": "t",
+                "mode": 0o777,
+                "mtime_ns": 0,
+            },
+            "post": {"kind": "absent"},
+        }
+    )
+    (target / "filesystem_deltas.json").write_text(json.dumps(deltas))
+
+    result = CliRunner().invoke(app, ["transitions", "show", target.name])
+
+    assert result.exit_code == 0, result.output
+    clean = _strip_ansi(result.output)
+    assert "files mutated (5):" in clean
+    assert "+  /tmp/a-created  diff: +1 -0" in clean
+    assert "M  /tmp/b-modified  diff: +2 -1" in clean
+    assert "-  /tmp/c-deleted  diff: +0 -1" in clean
+    assert "+  /tmp/d-empty  diff: +0 -0" in clean
+    assert "-  /tmp/e-link\n" in clean

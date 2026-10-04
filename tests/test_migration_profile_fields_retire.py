@@ -424,7 +424,3 @@ def test_apply_writes_terminal_transition(tmp_path: Path, state_dir: Path) -> No
     assert file_images(latest) == {
         roots.cfg_path: (origin.encode(), transformed.encode())
     }
-    patch = (latest / "changes.patch").read_text(encoding="utf-8")
-    assert patch == transitions.compute_patch(
-        {roots.cfg_path: origin}, {roots.cfg_path: transformed}
-    )

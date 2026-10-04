@@ -82,16 +82,13 @@ class FileMutation:
     """One file the revert will mutate.
 
     ``diff_summary`` is the human-readable line-delta string
-    (e.g. ``"+14 -3"``) shown in the per-file listing. Collision detection
-    happens at apply time via ``patch --dry-run -R`` inside
-    :func:`setforge.transitions.apply_patch_reverse`, which refuses
-    cleanly on conflict.
+    (e.g. ``"+14 -3"``) shown in the per-file listing. Drift is checked at
+    apply time against the file's recorded post image, refusing cleanly.
 
     ``mode_restore`` is a human-readable note (e.g. ``"mode → 0o600"``)
-    set when the revert will also chmod this path back to its pre-install
-    permission bits (the content patch carries bytes only, so a mode-only
-    install would otherwise be silently reverted on the mode axis). ``None``
-    when the install changed no mode for this path.
+    set when the revert also restores this path's pre-install permission
+    bits, so a mode-only revert is not silent. ``None`` when the install
+    changed no mode for this path.
     """
 
     path: Path

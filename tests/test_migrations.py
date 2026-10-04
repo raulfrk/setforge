@@ -1225,7 +1225,7 @@ def test_span_types_retire_records_the_config_change_as_images(
     tmp_path: Path,
 ) -> None:
     from setforge import transitions
-    from tests.shared_helpers import assert_patch_matches_images, file_images
+    from tests.shared_helpers import file_images
 
     cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_4_0)
     before = cfg.read_bytes()
@@ -1235,7 +1235,6 @@ def test_span_types_retire_records_the_config_change_as_images(
     recorded = transitions.load_latest(transitions.MIGRATE_TRANSITION_PROFILE)
     assert recorded is not None
     assert file_images(recorded) == {cfg: (before, cfg.read_bytes())}
-    assert_patch_matches_images(recorded)
 
 
 def test_span_types_retire_reverse_restamps_four_zero_not_strips(

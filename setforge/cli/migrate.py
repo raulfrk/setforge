@@ -345,7 +345,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     affected = _transition_affected_paths(chain=chain, roots=roots, cfg_path=cfg_path)
     # Snapshot BEFORE any mutation: file_pre is the (UTF-8 text) image
     # ``revert`` restores to. Captured here (not aliased to file_post) so the
-    # recorded patch reverses to the exact pre-migration state.
+    # record reverses to the exact pre-migration state.
     file_pre = transitions.capture_files(affected, strict=True)
     # Thread the pre-chain frozen image to a step that records its OWN
     # transition (the cutover). Without it, such a step captures only its
@@ -389,7 +389,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         except BaseException as recovery_error:
             primary.add_note(f"automatic recovery failed: {recovery_error}")
         raise
-    # file_post AFTER the chain so the recorded patch covers the full forward
+    # file_post AFTER the chain so the record covers the full forward
     # delta. (post-apply validate is read-only — it adds nothing to the delta;
     # it just gates here so a transition is only recorded for a valid result.)
     # ``_execute_chain`` raises ``typer.Exit`` on any failure, so reaching here
@@ -416,7 +416,7 @@ def _transition_affected_paths(
     ``schema_version`` stamp (and declares no other affected file) still
     has its ``setforge.yaml`` edit captured in the recorded transition. The
     chain's first-occurrence order is kept; ``cfg_path`` is prepended when
-    absent. Order is immaterial — ``compute_patch`` re-sorts by path.
+    absent. Order is immaterial — the record is sorted by path.
     """
     paths = list(_all_affected_paths(chain=chain, roots=roots))
     if cfg_path not in paths:
@@ -431,9 +431,8 @@ def _write_migrate_transition(
 ) -> None:
     """Record a revertible ``migrate`` transition for the applied chain.
 
-    The recorded ``changes.patch`` (computed from ``file_pre`` /
-    ``file_post``) is the SOLE reverse authority: ``setforge revert``
-    reverses it via ``patch -R`` to restore every mutated file —
+    The recorded file images (``file_pre`` -> ``file_post``) are the SOLE
+    reverse authority: ``setforge revert`` restores every mutated file —
     including ``setforge.yaml``'s ``schema_version`` — to its exact
     pre-migration content (UTF-8 text). Revert never re-runs the
     down-migration, so no ruamel re-dump skew can creep in. ``ext_delta`` /

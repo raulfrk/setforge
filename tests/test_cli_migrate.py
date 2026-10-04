@@ -582,7 +582,7 @@ def test_real_full_chain_latest_transition_reverts_to_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The latest owner records the final 6.5 image, so one revert reaches 1.0."""
-    from setforge import atomicio, transitions
+    from setforge import atomicio, operations, orphan_scan, transitions
 
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(
@@ -599,14 +599,14 @@ def test_real_full_chain_latest_transition_reverts_to_origin(
     def record_retained_payloads(
         path: Path, text: str, **kwargs: object
     ) -> Path | None:
-        if path.name == "changes.patch":
+        if path.name == "filesystem_deltas.json":
             retained_payloads.update(
                 {
                     str(item.relative_to(path.parent)): hashlib.sha256(
                         item.read_bytes()
                     ).hexdigest()
                     for item in sorted(path.parent.rglob("*"))
-                    if item.is_file() and item.name != "changes.patch"
+                    if item.is_file() and item.name != "filesystem_deltas.json"
                 }
             )
         return real_write(path, text, **kwargs)  # type: ignore[arg-type]
@@ -632,20 +632,24 @@ def test_real_full_chain_latest_transition_reverts_to_origin(
             item.read_bytes()
         ).hexdigest()
         for item in sorted(migrate_records[0].rglob("*"))
-        if item.is_file() and item.name != "changes.patch"
+        if item.is_file() and item.name != "filesystem_deltas.json"
     } == retained_payloads
     latest = transitions.load_latest(transitions.MIGRATE_TRANSITION_PROFILE)
     assert latest is not None
 
-    transitions.apply_patch_reverse(latest, dry_run=True)
-    transitions.apply_patch_reverse(latest)
+    deltas = transitions.load_record(latest).filesystem_deltas
+    transitions.validate_filesystem_deltas_reverse(deltas)
+    operations.apply_filesystem_deltas_reverse_anchored(
+        deltas,
+        orphan_scan.capture_parent_path_guards(tuple(item.path for item in deltas)),
+    )
     assert cfg.read_text(encoding="utf-8") == origin
 
 
 def test_owned_transition_finalization_failure_recovers_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed chain-final patch replacement restores files and owner history."""
+    """A failed chain-final record replacement restores files and owner history."""
     from setforge import atomicio, transitions
 
     state = tmp_path / "state"
@@ -660,13 +664,13 @@ def test_owned_transition_finalization_failure_recovers_chain(
     cfg.write_text(origin, encoding="utf-8")
     real_write = atomicio.atomic_write_text
 
-    def fail_final_patch(path: Path, text: str, **kwargs: object) -> Path | None:
-        if path.name == "changes.patch":
+    def fail_final_record(path: Path, text: str, **kwargs: object) -> Path | None:
+        if path.name == "filesystem_deltas.json":
             raise OSError("injected finalization failure")
         return real_write(path, text, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
-        "setforge.cli.migrate.atomicio.atomic_write_text", fail_final_patch
+        "setforge.cli.migrate.atomicio.atomic_write_text", fail_final_record
     )
     result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
 

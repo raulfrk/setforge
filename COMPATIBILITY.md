@@ -94,6 +94,18 @@ on the engine that *defined* it, not on the older engine reading the result.
 Downgrade restores the older *schema*; it cannot restore values the newer
 engine chose to drop.
 
+### Transition records
+
+Transition records are not config and carry no `schema_version`. Records
+written by releases that reverted files through GNU `patch` keep their file
+changes as `changes.patch` plus `file_modes.json`; newer releases record every
+changed file as a pre/post image in `filesystem_deltas.json` and refuse to
+revert the older records, naming the version that wrote them, before changing
+anything. Where the sections below promise that a transition stays revertible
+"while it is retained", that holds for records written by the same family of
+releases; an older record is reverted with the release that wrote it.
+`transitions list` and `transitions show` read records of either kind.
+
 ## Auto-on-install file migration — a separate class
 
 The guarantees above govern **`setforge.yaml` schema migrations**: explicit,

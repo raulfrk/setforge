@@ -201,7 +201,6 @@ def _commit_invocation_state(ctx: typer.Context) -> None:
         code=cast(str | None, params.get("code_bin")),
         claude=cast(str | None, params.get("claude_bin")),
         gitleaks=cast(str | None, params.get("gitleaks_bin")),
-        patch=cast(str | None, params.get("patch_bin")),
     )
     source_mod.set_cli_source(cast(Path | None, params.get("source")))
 
@@ -267,12 +266,6 @@ def _root(
         help="Override path to the 'gitleaks' binary. "
         "Takes precedence over SETFORGE_GITLEAKS_BIN and "
         "~/.config/setforge/local.yaml.",
-    ),
-    patch_bin: str | None = typer.Option(
-        None,
-        "--patch-bin",
-        help="Override path to the GNU 'patch' binary. "
-        "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/setforge/local.yaml.",
     ),
     source: Path | None = _SOURCE_OPTION,
     verbose: int = typer.Option(

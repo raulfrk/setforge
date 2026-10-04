@@ -26,7 +26,7 @@ to 5.0 from an older schema in one command, an EARLIER cutover
 — but this restamp advances the on-disk config to 5.0 AFTER it. A single
 ``revert`` reverses only the LATEST transition, so if this step did not record
 one the newest transition's 4.0 ``file_post`` would no longer match the on-disk
-5.0 and ``patch -R`` would fail. So the forward :meth:`apply` records its OWN
+5.0 and revert would fail. So the forward :meth:`apply` records its OWN
 terminal transition (``writes_own_transition`` = ``True``) threading the
 driver's ``pre_chain_snapshot`` as ``file_pre``, so that ONE ``revert`` reaches
 the chain's byte-exact ORIGIN.
@@ -38,15 +38,15 @@ reverse delta of the whole chain. So its ``file_pre`` is not restricted to
 ``local.yaml`` and each reconcile-store leg an EARLIER cutover
 (disposition-retire, span-surface-retire) mutated — with ``file_post``
 re-snapshotting those same paths now. It carries NO ``state_snapshots``, and
-that emptiness is load-bearing: with none to override the text patch, the
+that emptiness is load-bearing: with none to override the file record, the
 threaded ``file_pre`` -> ``file_post`` diff is the sole reverse authority for
-the store legs too, so ``patch -R`` restores each to its absent-at-origin
+the store legs too, so revert restores each to its absent-at-origin
 state (DELETING the seeds) and one revert reaches the TRUE origin — store and
 all — not the intermediate seeded shape the 3.0->4.0 terminal owner leaves
 behind (it attaches its folded legs as ``state_snapshots``, which win over the
-text patch and stop at the post-disposition-seed store). The two terminal
+file record and stop at the post-disposition-seed store). The two terminal
 owners diverge deliberately: this restamp folds nothing of its own, so it has
-no leg to snapshot and lets the origin-threaded text patch reach all the way
+no leg to snapshot and lets the origin-threaded file record reach all the way
 down. Text-threading the store legs is sound because the migrate transition
 system is text/UTF-8 throughout (the driver already snapshots the same paths
 as text to build ``pre_chain_snapshot``); binary tracked-file store is out of
@@ -131,11 +131,11 @@ def _write_stamp_transition(
     the intermediate 4.0 state; ``file_post`` re-snapshots the SAME paths now
     (schema 5.0). In a multi-owner chain that image spans more than
     ``setforge.yaml`` — ``local.yaml`` and every reconcile-store leg an earlier
-    cutover mutated — so the recorded text patch reverses ALL of them (see the
+    cutover mutated — so the recorded file images reverse ALL of them (see the
     module docstring). Applied OUTSIDE the driver (``pre_chain_snapshot is
     None``) the transition is a plain ``cfg_pre`` -> ``cfg_post`` restamp.
-    Carries NO ``state_snapshots`` — with none to override it, the threaded text
-    patch is the sole reverse authority, so ``patch -R`` restores each store leg
+    Carries NO ``state_snapshots`` — with none to override it, the threaded file
+    record is the sole reverse authority, so revert restores each store leg
     to its absent-at-origin state rather than an intermediate seeded one.
     """
     import sys

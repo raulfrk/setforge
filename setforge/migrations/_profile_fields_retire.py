@@ -38,7 +38,7 @@ Transition ownership (INV-5): this is a CHAIN-TERMINAL cutover. The forward
 ``pre_chain_snapshot`` as ``file_pre`` (so ONE ``revert`` reaches the chain's
 byte-exact ORIGIN), re-snapshots the transformed image as ``file_post``, and
 carries NO ``state_snapshots`` — this migration folds nothing into a binary
-store, so the origin-threaded text patch is the sole reverse authority. So
+store, so the origin-threaded file record is the sole reverse authority. So
 ``writes_own_transition`` is ``True`` on forward, ``False`` on reverse (a
 single-step down-migration the migrate driver records for).
 """
@@ -372,8 +372,8 @@ def _write_stamp_transition(
 ) -> TransitionDir:
     """Record the terminal cutover's origin-threading stamp transition.
 
-    Carries NO ``state_snapshots`` — with none to override it, the threaded text
-    patch is the sole reverse authority, so ``patch -R`` restores the config to
+    Carries NO ``state_snapshots`` — with none to override it, the threaded file
+    record is the sole reverse authority, so revert restores the config to
     its pre-chain origin (see the module docstring's INV-5 note). Returns the
     committed transition directory.
     """

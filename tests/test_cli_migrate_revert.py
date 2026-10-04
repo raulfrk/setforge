@@ -28,7 +28,7 @@ from setforge.migrations import (
 )
 from setforge.reconcile import file_id
 from setforge.reconcile.host_local_view import host_local_sections_from_store
-from tests.shared_helpers import assert_patch_matches_images, file_images
+from tests.shared_helpers import file_images
 
 runner = CliRunner()
 
@@ -214,7 +214,6 @@ def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
     recorded = _latest_migrate()
     assert recorded is not None
     assert file_images(recorded) == {cfg: (pre_bytes, cfg.read_bytes())}
-    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -245,7 +244,6 @@ def test_migrate_apply_records_revertible_transition(
     recorded = _latest_migrate()
     assert recorded is not None, "no migrate transition was recorded"
     assert file_images(recorded) == {cfg: (pre_bytes, cfg.read_bytes())}
-    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -307,7 +305,6 @@ def test_migrate_revert_round_trip_is_byte_exact(
         cfg: (pre_cfg, cfg.read_bytes()),
         sidecar: (None, b"migrated body\n"),
     }
-    assert_patch_matches_images(recorded)
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
@@ -419,7 +416,6 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
         _CHAIN_LOCAL_YAML.encode(),
         local_yaml.read_bytes(),
     )
-    assert_patch_matches_images(migrate_transitions[0].directory)
 
 
 def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(

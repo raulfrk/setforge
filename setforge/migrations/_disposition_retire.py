@@ -216,15 +216,15 @@ class DispositionRetireMigration:
             # (schema stamped = the 3.0 image). Applied outside the driver
             # (pre_chain_snapshot is None) keeps the prior behavior.
             #
-            # The text patch is scoped to cfg_path ALONE, never a store leg —
+            # The file record is scoped to cfg_path ALONE, never a store leg —
             # even though the threaded pre-chain image also carries this
             # cutover's own affected store paths. INV-5 depends on this: the two
-            # reverse mechanisms must NOT overlap. On revert the text patch
+            # reverse mechanisms must NOT overlap. On revert the file record
             # reverses FIRST, then restore_state_snapshots runs, so for any
             # shared path the (pre-cutover) snapshot would win and strand it at
             # the intermediate schema rather than the origin. Every store leg is
             # reversed by its binary state_snapshot alone; cfg_path is the sole
-            # text-patch path. (Mirrors _record_stamp_only_transition in
+            # file-record path. (Mirrors _record_stamp_only_transition in
             # _span_surface_retire.py.)
             pre = roots.pre_chain_snapshot
             if pre is not None and roots.cfg_path in pre:
@@ -459,9 +459,9 @@ def _write_cutover_transition(
 ) -> TransitionDir:
     """Record the cutover's single durable transition (MS1 commit-before-unlink).
 
-    A ``MIGRATE``-labelled transition carrying BOTH a text patch for
+    A ``MIGRATE``-labelled transition carrying BOTH a file record for
     ``setforge.yaml`` (``file_pre`` -> ``file_post``; the schema_version flip,
-    reversed by ``patch -R``) AND the binary ``state_snapshots`` of every mutated
+    reversed by revert) AND the binary ``state_snapshots`` of every mutated
     store (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls
     this AFTER capturing the pre-state + writing the additive unified store, but
     BEFORE unlinking any legacy artifact — so a crash or ``setforge revert`` after

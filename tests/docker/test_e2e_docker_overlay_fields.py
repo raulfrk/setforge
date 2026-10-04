@@ -497,7 +497,7 @@ def test_revert_after_install_with_host_local_overrides(
       ``stat`` on the dst fails because the 755 file is gone.
     - ``hook_script`` (``symlink_target`` overlay, dst absent
       pre-install): the transition records the symlink's TARGET as the
-      touched path, so ``patch -R`` removes the target file's content.
+      touched path, so revert removes the target file it created.
       The link OBJECT at dst is ALSO removed: revert folds the
       host-local overlay (``apply_host_local_tracked_file_overrides``)
       before its symlink-unlink pass, so the overlay-declared link is

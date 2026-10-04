@@ -85,12 +85,22 @@ def test_env_overrides_one_set(monkeypatch) -> None:
 def test_env_overrides_all_three_set(monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_CODE_BIN", "/env/code")
     monkeypatch.setenv("SETFORGE_CLAUDE_BIN", "/env/claude")
-    monkeypatch.setenv("SETFORGE_PATCH_BIN", "/env/patch")
+    monkeypatch.setenv("SETFORGE_GITLEAKS_BIN", "/env/gitleaks")
     assert binaries._env_overrides() == {
         "code": "/env/code",
         "claude": "/env/claude",
-        "patch": "/env/patch",
+        "gitleaks": "/env/gitleaks",
     }
+
+
+def test_retired_patch_overrides_load_and_are_ignored(monkeypatch) -> None:
+    """A ``patch`` entry from releases that used GNU patch breaks nothing."""
+    paths.local_config_path().write_text("binaries:\n  patch: /missing/patch\n")
+    monkeypatch.setenv("SETFORGE_PATCH_BIN", "/missing/patch")
+
+    assert binaries._env_overrides() == {}
+    assert dict(load_host_local_config().binaries) == {"patch": "/missing/patch"}
+    binaries.resolve_binary("code")
 
 
 def test_env_overrides_empty_string_treated_as_unset(monkeypatch) -> None:
@@ -99,15 +109,15 @@ def test_env_overrides_empty_string_treated_as_unset(monkeypatch) -> None:
 
 
 def test_set_cli_overrides_stores_provided_values() -> None:
-    binaries.set_cli_overrides(code="/cli/code", patch="/cli/patch")
+    binaries.set_cli_overrides(code="/cli/code", gitleaks="/cli/gitleaks")
     assert binaries._cli_overrides == {
         "code": "/cli/code",
-        "patch": "/cli/patch",
+        "gitleaks": "/cli/gitleaks",
     }
 
 
 def test_set_cli_overrides_none_skipped() -> None:
-    binaries.set_cli_overrides(code=None, claude=None, patch=None)
+    binaries.set_cli_overrides(code=None, claude=None, gitleaks=None)
     assert binaries._cli_overrides == {}
 
 

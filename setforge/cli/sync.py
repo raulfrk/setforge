@@ -502,7 +502,7 @@ def sync(
         file_pre = transitions.capture_files(src_paths)
         # Snapshot the per-host store state (byte bases / spans sidecars /
         # scalar bases) BEFORE _run_capture re-baselines them, so revert
-        # restores the stores in lockstep with the tracked patch. Without
+        # restores the stores in lockstep with the tracked files. Without
         # this, a sync that re-baselines a SHARED base followed by revert
         # would leave the base AHEAD of the reverted tracked src — the
         # corruption direction the codebase guards against.
@@ -663,7 +663,7 @@ def _write_sync_transition(
 
     ``state_snapshots`` carries the pre-sync per-host store state captured
     by :func:`_capture_sync_store_snapshots` so ``revert`` restores the
-    byte bases / spans sidecars in lockstep with the tracked patch.
+    byte bases / spans sidecars in lockstep with the tracked files.
 
     Skips the write only when capture produced neither file mutations nor
     per-host store mutations. A truly empty SYNC transition would shadow a

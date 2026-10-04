@@ -2842,9 +2842,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         files_applied = run.deploy_outcome is not None
         if files_applied:
             _refresh_file_claims_checkpoint(plan, run)
-        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome(
-            prior_modes={}
-        )
+        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome()
         with run.checkpoint(
             "mcp-servers",
             operations.CheckpointKind.COMPENSATABLE,
@@ -2927,7 +2925,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
                     state_snapshots=state_pre,
                     mcp_delta=mcp_delta,
-                    file_modes=deploy_outcome.prior_modes,
                     filesystem_deltas=tree_filesystem_deltas,
                     ownership_transfers=ownership_transfers,
                     tracked_file_destinations=tracked_file_destinations,

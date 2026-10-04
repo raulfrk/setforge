@@ -159,3 +159,51 @@ def test_transitions_list_and_show_still_list_a_patch_format_record(
     assert shown.exit_code == 0, shown.output
     assert "version: 1.3.9" in shown.output
     assert str(legacy["note"]) in shown.output
+
+
+def _record(tmp_path: Path, paths: list[str], files: dict[str, str]) -> Path:
+    record = tmp_path / "20261001T000000000000Z-install-p"
+    record.mkdir()
+    (record / "meta.json").write_text(
+        json.dumps(
+            {
+                "command": "install",
+                "profile": "p",
+                "timestamp": "2026-10-01T00:00:00+00:00",
+                "host": "h",
+                "version": "1.3.9",
+                "paths": paths,
+            }
+        )
+    )
+    for name, text in files.items():
+        (record / name).write_text(text)
+    return record
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {},
+        {"changes.patch": ""},
+        {"changes.patch": "--- a\n+++ a\n@@ -1 +1 @@\n-x\n+y\n"},
+        {"file_modes.json": "{}"},
+    ],
+)
+def test_a_record_listing_files_it_holds_no_image_of_is_refused(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    record = _record(tmp_path, ["/live/a"], files)
+
+    with pytest.raises(RevertFailed, match="restore by hand: /live/a"):
+        transitions.refuse_legacy_file_changes(
+            transitions.load_record(transitions.TransitionDir(record))
+        )
+
+
+def test_a_record_without_file_changes_is_not_refused(tmp_path: Path) -> None:
+    record = _record(tmp_path, [], {"changes.patch": ""})
+
+    transitions.refuse_legacy_file_changes(
+        transitions.load_record(transitions.TransitionDir(record))
+    )

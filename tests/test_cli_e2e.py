@@ -37,8 +37,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 
 # Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
-# fixture can forward non-code, non-claude invocations (e.g. the ``patch``
-# subprocess fired by ``transitions.apply_patch_reverse`` during revert)
+# fixture can forward non-code, non-claude invocations (e.g. ``git``)
 # through to the real implementation, even when both fakes have monkey-
 # patched ``subprocess.run`` away.
 _REAL_SUBPROCESS_RUN = subprocess.run

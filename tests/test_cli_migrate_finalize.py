@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 from setforge import transitions
 from setforge.cli import app
 from setforge.errors import ConfigError
-from tests.shared_helpers import assert_patch_matches_images, file_images
+from tests.shared_helpers import file_images
 
 _HL = (
     "intro\n"
@@ -217,7 +217,6 @@ def test_finalize_then_revert_restores_markers(tmp_path: Path) -> None:
     recorded = _latest_migrate_transition()
     assert recorded is not None
     assert file_images(recorded) == {src: (original, _HL_STRIPPED.encode())}
-    assert_patch_matches_images(recorded)
     rev = CliRunner().invoke(
         app, ["revert", "--profile=migrate", "--yes", f"--config={cfg}"]
     )
