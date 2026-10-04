@@ -54,6 +54,18 @@ def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
     return candidate
 
 
+def _is_identical_file(target: Path, data: bytes) -> bool:
+    try:
+        return (
+            not target.is_symlink()
+            and target.is_file()
+            and hashlib.sha256(target.read_bytes()).digest()
+            == hashlib.sha256(data).digest()
+        )
+    except OSError:
+        return False
+
+
 @register("local")
 class LocalProvisioner(Provisioner):
     type = "local"
@@ -182,8 +194,10 @@ class LocalProvisioner(Provisioner):
             checksum=pkg.checksum,
         )
         target = spec.install_dir.resolve() / (spec.rename or spec.binary)
-        if (target.exists() or target.is_symlink()) and not self._receipt_owns(
-            item.identity, target
+        if (
+            (target.exists() or target.is_symlink())
+            and not self._receipt_owns(item.identity, target)
+            and not _is_identical_file(target, data)
         ):
             detail = (
                 f"{target} already exists and was not installed by setforge; "
