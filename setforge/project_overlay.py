@@ -15,6 +15,7 @@ from typing import BinaryIO
 
 from setforge import atomicio
 from setforge.errors import SetforgeError
+from setforge.git_info import run_git
 from setforge.reconcile.hunks import extract_hunks
 from setforge.reconcile.merge import split_lines
 from setforge.transitions import state_root
@@ -230,16 +231,8 @@ def process_filter(
 
 
 def _filter_target() -> Path:
-    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     try:
-        value = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            env=environment,
-            text=True,
-            timeout=10,
-        ).stdout.strip()
+        value = run_git(Path.cwd(), ["rev-parse", "--show-toplevel"]).stdout.strip()
         return Path(value).resolve(strict=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise SetforgeError("Git filter is not running in a worktree") from exc

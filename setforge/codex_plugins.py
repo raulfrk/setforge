@@ -18,6 +18,7 @@ from typing import Any
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import MarketplaceSource, MarketplaceSourceKind, ReconcilePolicy
 from setforge.errors import PluginToolMissing, SetforgeError
+from setforge.git_info import run_git
 
 _TIMEOUT_S = 30
 _CODEX_BIN_NAME = "codex"
@@ -191,13 +192,7 @@ def _github_repo_from_remote(remote: str) -> str | None:
 
 def _source_from_root(root: Path) -> MarketplaceSource:
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "remote", "get-url", "origin"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
+        result = run_git(root, ["remote", "get-url", "origin"])
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return MarketplaceSource(source=MarketplaceSourceKind.PATH, path=root)
     repo = _github_repo_from_remote(result.stdout)
@@ -208,13 +203,7 @@ def _source_from_root(root: Path) -> MarketplaceSource:
 
 def _github_source_from_root(root: Path) -> MarketplaceSource:
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "remote", "get-url", "origin"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
+        result = run_git(root, ["remote", "get-url", "origin"])
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PluginToolMissing(
             f"cannot inspect Codex marketplace Git origin at {root}; refusing "

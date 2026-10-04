@@ -43,6 +43,7 @@ from typing import Final
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
 from setforge.errors import ConfigError, PluginToolMissing, SetforgeError
+from setforge.git_info import run_git
 
 __all__ = [
     "McpReconcileReport",
@@ -238,14 +239,7 @@ def inventory_context() -> tuple[str, str, str]:
     override = os.environ.get("CLAUDE_CONFIG_DIR")
     config_dir = Path(override).expanduser() if override else Path.home()
     try:
-        git = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={**os.environ, "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"},
-        )
+        git = run_git(cwd, ["rev-parse", "--show-toplevel"], check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SetforgeError("cannot determine native MCP local-project key") from exc
     if git.returncode == 0 and git.stdout.strip():
