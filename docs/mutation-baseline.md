@@ -38,10 +38,19 @@ from the denominator (mutmut's standard reporting).
 
 Mutation is restricted to the merge/reconcile/store **core** (RFC §6), the
 modules where "coverage ≠ assertion" historically let bugs through. The current
-8 `only_mutate` files:
+9 `only_mutate` files:
 
-`markdown_merge · scalar_merge · structural_merge · yaml_merge · base_store ·
-base_store_format · scalar_base_store · project_sync`
+`scalar_merge · structural_merge · base_store · base_store_format ·
+scalar_base_store · project_sync · project_record · reconcile_apply ·
+reconcile/merge`
+
+`project_record`, `reconcile_apply` and `reconcile/merge` joined the scope on
+2026-10-04, when the retired `markdown_merge` and `yaml_merge` modules were
+deleted. A partial local run on that scope (about 2,970 of 3,640 mutants
+decided) killed 2,676 and left 296 alive, roughly 90%; survivors were
+concentrated in `project_sync` (111), `reconcile_apply` (81),
+`structural_merge` (44) and `reconcile/merge` (33). The complete baseline
+and the allowlist renumbering come from the next full nightly run.
 
 The mutmut run executes a **sandbox-clean test selection** (see
 `pyproject.toml [tool.mutmut]`), because mutmut runs the suite from a copied
