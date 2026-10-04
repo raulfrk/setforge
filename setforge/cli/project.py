@@ -92,7 +92,6 @@ def _render_removal(plan: ProjectRemovePlan) -> None:
     typer.echo(f"target: {plan.target}")
     for item in plan.files:
         typer.echo(f"  restore {item.action.value}: {item.relative_destination}")
-    typer.echo("worktree auto-carry hook: unchanged")
 
 
 def _render_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
