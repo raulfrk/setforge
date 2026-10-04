@@ -20,21 +20,7 @@ from setforge.project_sync import (
     plan_sync,
     resolve_sync_plan,
 )
-from tests.test_project_sync import _config, _git_repo
-
-
-def _file_state(path: Path) -> tuple[bytes, int] | None:
-    if not path.exists():
-        return None
-    return path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
-
-
-def _private_files(state: Path) -> dict[Path, tuple[bytes, int] | None]:
-    return {
-        path.relative_to(state): _file_state(path)
-        for path in state.rglob("*")
-        if path.is_file() and "locks" not in path.relative_to(state).parts
-    }
+from tests.project_helpers import _config, _file_state, _git_repo, _private_files
 
 
 @pytest.mark.parametrize("change", ["add", "update", "remove"])

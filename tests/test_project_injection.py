@@ -43,6 +43,7 @@ from setforge.project_injection import (
     _verified_project_target,
     manifest_path,
 )
+from tests.project_helpers import _git_repo
 
 
 def _raise_missing_git(*_args: object, **_kwargs: object) -> None:
@@ -93,12 +94,6 @@ def _candidate_filter_entrypoint(
     entrypoint.chmod(0o755)
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1]))
-
-
-def _git_repo(path: Path) -> Path:
-    path.mkdir()
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
-    return path
 
 
 def _config(tmp_path: Path) -> Path:

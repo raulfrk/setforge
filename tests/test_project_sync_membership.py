@@ -12,11 +12,10 @@ from setforge.errors import SetforgeError
 from setforge.project_injection import manifest_path
 from setforge.project_overlay import build_overlay, overlay_path, write_overlay
 from setforge.project_sync import apply_sync, plan_sync
-from tests.test_project_sync import _config, _git_repo
-from tests.test_project_visibility import (
-    _candidate_filter_entrypoint as _candidate_filter_entrypoint,
+from tests.project_helpers import _config, _git, _git_repo
+from tests.project_helpers import (
+    candidate_filter_entrypoint as candidate_filter_entrypoint,
 )
-from tests.test_project_visibility import _git
 
 
 def _inject_overlay(

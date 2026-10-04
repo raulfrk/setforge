@@ -46,27 +46,7 @@ from setforge.reconcile.merge_model import ABSENT, Clean, Conflict, MergeResult
 from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import WizardResult
 from setforge.reconcile_apply import reconcile_structured_file
-
-
-def _git_repo(path: Path) -> Path:
-    path.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
-    return path
-
-
-def _config(tmp_path: Path) -> Path:
-    config_root = tmp_path / "config"
-    source = config_root / "project" / "demo"
-    source.mkdir(parents=True)
-    (source / "AGENTS.md").write_text("managed\n")
-    (source / "AGENTS.md").chmod(0o644)
-    config = config_root / "setforge.yaml"
-    config.write_text(
-        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n"
-        "    files:\n      agents:\n        src: AGENTS.md\n        dst: AGENTS.md\n"
-    )
-    subprocess.run(["git", "init", "-q", "-b", "main", str(config_root)], check=True)
-    return config
+from tests.project_helpers import _config, _git_repo
 
 
 def _named_config(tmp_path: Path, name: str, destination: str) -> Path:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -16,15 +15,7 @@ from setforge.git_visibility import (
     plan_claims,
     read_claims,
 )
-
-
-def _git(path: Path, *args: str, check: bool = True) -> str:
-    return subprocess.run(
-        ["git", "-C", str(path), *args],
-        check=check,
-        text=True,
-        capture_output=True,
-    ).stdout
+from tests.project_helpers import _git
 
 
 def _repo(path: Path) -> Path:

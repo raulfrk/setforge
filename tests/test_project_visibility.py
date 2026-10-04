@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,39 +18,10 @@ from setforge.project_visibility import (
     apply_project_visibility,
     plan_project_visibility,
 )
-
-
-@pytest.fixture(autouse=True)
-def _candidate_filter_entrypoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    binary_dir = tmp_path / "candidate-bin"
-    binary_dir.mkdir()
-    entrypoint = binary_dir / "setforge"
-    entrypoint.write_text(
-        f"#!{sys.executable}\n"
-        "import os\n"
-        "_original_cwd = os.getcwd()\n"
-        "try:\n"
-        f"    os.chdir({str(Path(__file__).parents[1])!r})\n"
-        "    from setforge.cli import main\n"
-        "finally:\n"
-        "    os.chdir(_original_cwd)\n"
-        "main()\n"
-    )
-    entrypoint.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
-    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1]))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-
-
-def _git(path: Path, *args: str, check: bool = True) -> str:
-    return subprocess.run(
-        ["git", "-C", str(path), *args],
-        check=check,
-        text=True,
-        capture_output=True,
-    ).stdout
+from tests.project_helpers import _git
+from tests.project_helpers import (
+    candidate_filter_entrypoint as candidate_filter_entrypoint,
+)
 
 
 def _config(tmp_path: Path, *, two_files: bool = False) -> Path:
