@@ -9,6 +9,7 @@ process: being killed, or a directory swapped by an external program."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -110,6 +111,7 @@ class Host:
         extra_yaml: str = "",
         profile_yaml: str = "",
         repo_parent: str = "",
+        dsts: Mapping[str, str] | None = None,
     ) -> None:
         self.root = tmp_path
         self.profile = profile
@@ -134,7 +136,8 @@ class Host:
             target = self.tracked_root / src
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(body if isinstance(body, bytes) else body.encode())
-            lines.append(f"  {_fid(src)}: {{src: {src}, dst: '~/.x/{src}'}}")
+            dst = (dsts or {}).get(src, f"~/.x/{src}")
+            lines.append(f"  {_fid(src)}: {{src: {src}, dst: '{dst}'}}")
         if extra_yaml:
             lines.append(extra_yaml.rstrip("\n"))
         lines += ["profiles:", f"  {profile}:", "    tracked_files:"]
@@ -142,15 +145,7 @@ class Host:
         if profile_yaml:
             lines.append(profile_yaml.rstrip("\n"))
         self.config.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        genv = {**os.environ, **_GIT_ENV}
-        for args in (
-            ["init", "-q", "-b", "main"],
-            ["add", "-A"],
-            ["commit", "-q", "-m", "seed"],
-        ):
-            subprocess.run(
-                ["git", *args], cwd=self.repo, env=genv, check=True, capture_output=True
-            )
+        _git_init(self.repo)
         monkeypatch.setenv("HOME", str(self.home))
         for name in _DROPPED_ENV:
             monkeypatch.delenv(name, raising=False)
@@ -225,6 +220,13 @@ class Host:
             check=False,
         )
 
+    def other_checkout(self) -> Path:
+        """A second, separate checkout of the same configuration (its own owner)."""
+        other = self.root / "repo2"
+        shutil.copytree(self.repo, other, ignore=shutil.ignore_patterns(".git"))
+        _git_init(other)
+        return other / "setforge.yaml"
+
     def arm(self, when: str) -> None:
         (self.bin_dir / "when").write_text(when, encoding="utf-8")
 
@@ -237,6 +239,18 @@ class Host:
 
     def proc_install(self, *extra: str) -> subprocess.CompletedProcess[str]:
         return self.proc("install", *INSTALL_FLAGS, *extra)
+
+
+def _git_init(repo: Path) -> None:
+    env = {**os.environ, **_GIT_ENV}
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "seed"],
+    ):
+        subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True, capture_output=True
+        )
 
 
 def _fid(src: str) -> str:
