@@ -68,14 +68,14 @@ _BUTTON_STYLE: Style = Style.from_dict(
 )
 
 
-def _theme_style() -> Style:
+def themed_style() -> Style:
     # Strip pt_style()'s "class:" prefix — Style.from_dict prepends its own.
     return Style.from_dict(
         {key.removeprefix("class:"): value for key, value in pt_style().items()}
     )
 
 
-_STYLE: BaseStyle = merge_styles([_theme_style(), _BUTTON_STYLE])
+_STYLE: BaseStyle = merge_styles([themed_style(), _BUTTON_STYLE])
 
 
 def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:

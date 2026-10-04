@@ -106,9 +106,9 @@ def button_bar[T](
 
 def _themed_style() -> Style:
     """Load prompt-toolkit styling on first interactive use."""
-    from setforge.reconcile._claude_ui import _themed_style as build
+    from setforge.ui.widgets import themed_style
 
-    return build()
+    return themed_style()
 
 
 class _ShareDraftProxy:

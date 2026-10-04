@@ -4,18 +4,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from prompt_toolkit.styles import Style
-
 from setforge._editor import run_editor
-from setforge.ui.theme import THEME, pt_style
 from setforge.ui.widgets import CANCEL, Cancelled
-
-
-def _themed_style() -> Style:
-    rules = {
-        key.removeprefix("class:"): value for key, value in pt_style(THEME).items()
-    }
-    return Style.from_dict(rules)
 
 
 def _fenced(label: str, data: bytes, token: str) -> str:

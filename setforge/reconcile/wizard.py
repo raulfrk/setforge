@@ -41,7 +41,6 @@ from enum import StrEnum
 from pathlib import Path
 
 from setforge._editor import run_editor
-from setforge.reconcile._claude_ui import _themed_style
 from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
@@ -50,7 +49,7 @@ from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.types import FileId
 from setforge.ui.primitives import CANCEL, Button, Cancelled
 from setforge.ui.text import sanitize_controls
-from setforge.ui.widgets import button_bar
+from setforge.ui.widgets import button_bar, themed_style
 
 __all__ = [
     "ClaudeMergeFn",
@@ -266,7 +265,7 @@ def _resolve_region(
             _region_buttons(conflict),
             title=_title(path, index, total),
             body=_render_conflict(conflict),
-            style=_themed_style(),
+            style=themed_style(),
         )
         if choice is CANCEL:
             return CANCEL
