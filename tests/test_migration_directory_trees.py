@@ -4,8 +4,11 @@ import pytest
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
-from setforge.migrations._directory_trees import DirectoryTreesMigration
+from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+
+
+def _step(from_version: str) -> Migration:
+    return next(m for m in MIGRATIONS if m.from_version == from_version)
 
 
 def _roots(tmp_path: Path, content: str) -> MigrationRoots:
@@ -23,7 +26,7 @@ def test_directory_tree_stamp_round_trip_without_tree_intent(tmp_path: Path) -> 
         tmp_path,
         "schema_version: '6.1'\nminimum_version: '6.1'\ntracked_files: {}\n",
     )
-    migration = DirectoryTreesMigration()
+    migration = _step("6.1")
     migration.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.2"
 
@@ -47,7 +50,7 @@ def test_directory_tree_reverse_refuses_lossy_downgrade(tmp_path: Path) -> None:
         "    tree: {}\n",
     )
     with pytest.raises(ConfigError, match=r"cannot downgrade schema 6\.2"):
-        DirectoryTreesMigration().reverse.apply(roots=roots)
+        _step("6.1").reverse.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.2"
 
 
@@ -71,6 +74,6 @@ def test_tree_reverse_preserves_unrelated_names(tmp_path: Path, body: str) -> No
         "minimum_version": "6.1",
     }
 
-    DirectoryTreesMigration().reverse.apply(roots=roots)
+    _step("6.1").reverse.apply(roots=roots)
 
     assert _data(roots.cfg_path) == expected

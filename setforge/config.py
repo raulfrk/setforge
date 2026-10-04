@@ -2046,6 +2046,16 @@ def validate_config_semantics(config: Config) -> None:
     _validate_project_profile_references(config)
 
 
+def _require_floor(config: Config, path: Path, floor: str, noun: str) -> None:
+    """Require ``schema_version`` and ``minimum_version`` to be at least ``floor``."""
+    if not _meets_floor(config.schema_version, floor) or config.minimum_version is None:
+        raise ConfigError(
+            f"{path}: {noun} require schema_version and minimum_version >= '{floor}'"
+        )
+    if not _meets_floor(config.minimum_version, floor):
+        raise ConfigError(f"{path}: {noun} require minimum_version >= '{floor}'")
+
+
 def _guard_generated_resources(config: Config, path: Path) -> None:
     """Require the 6.1 reader floor before accepting generated intent."""
     direct = any(item.generated is not None for item in config.tracked_files.values())
@@ -2054,17 +2064,8 @@ def _guard_generated_resources(config: Config, path: Path) -> None:
         for bundle in config.bundles.values()
         for component in bundle.components
     )
-    if not direct and not bundled:
-        return
-    if not _meets_floor(config.schema_version, "6.1") or config.minimum_version is None:
-        raise ConfigError(
-            f"{path}: generated tracked files require schema_version and "
-            "minimum_version >= '6.1'"
-        )
-    if not _meets_floor(config.minimum_version, "6.1"):
-        raise ConfigError(
-            f"{path}: generated tracked files require minimum_version >= '6.1'"
-        )
+    if direct or bundled:
+        _require_floor(config, path, "6.1", "generated tracked files")
 
 
 def _guard_directory_trees(config: Config, path: Path) -> None:
@@ -2075,14 +2076,8 @@ def _guard_directory_trees(config: Config, path: Path) -> None:
         for bundle in config.bundles.values()
         for component in bundle.components
     )
-    if not direct and not bundled:
-        return
-    if not _meets_floor(config.schema_version, "6.2") or config.minimum_version is None:
-        raise ConfigError(
-            f"{path}: managed trees require schema_version and minimum_version >= '6.2'"
-        )
-    if not _meets_floor(config.minimum_version, "6.2"):
-        raise ConfigError(f"{path}: managed trees require minimum_version >= '6.2'")
+    if direct or bundled:
+        _require_floor(config, path, "6.2", "managed trees")
 
 
 def _guard_platform_release_assets(config: Config, path: Path) -> None:
@@ -2097,17 +2092,8 @@ def _guard_platform_release_assets(config: Config, path: Path) -> None:
         for bundle in config.bundles.values()
         for component in bundle.components
     )
-    if not direct and not bundled:
-        return
-    if not _meets_floor(config.schema_version, "6.3") or config.minimum_version is None:
-        raise ConfigError(
-            f"{path}: platform release assets require schema_version and "
-            "minimum_version >= '6.3'"
-        )
-    if not _meets_floor(config.minimum_version, "6.3"):
-        raise ConfigError(
-            f"{path}: platform release assets require minimum_version >= '6.3'"
-        )
+    if direct or bundled:
+        _require_floor(config, path, "6.3", "platform release assets")
 
 
 def _guard_codex_contract(config: Config, path: Path) -> None:
@@ -2115,28 +2101,13 @@ def _guard_codex_contract(config: Config, path: Path) -> None:
         profile.codex is not None for profile in config.profiles.values()
     ):
         return
-    if not _meets_floor(config.schema_version, "6.4") or config.minimum_version is None:
-        raise ConfigError(
-            f"{path}: Codex resources require schema_version and "
-            "minimum_version >= '6.4'"
-        )
-    if not _meets_floor(config.minimum_version, "6.4"):
-        raise ConfigError(f"{path}: Codex resources require minimum_version >= '6.4'")
+    _require_floor(config, path, "6.4", "Codex resources")
     scoped_mcp = config.codex is not None and any(
         {"scope", "project"} & ref.model_fields_set
         for ref in config.codex.mcp_servers.values()
     )
-    if not scoped_mcp:
-        return
-    if not _meets_floor(config.schema_version, "6.5") or config.minimum_version is None:
-        raise ConfigError(
-            f"{path}: scoped Codex MCP resources require schema_version and "
-            "minimum_version >= '6.5'"
-        )
-    if not _meets_floor(config.minimum_version, "6.5"):
-        raise ConfigError(
-            f"{path}: scoped Codex MCP resources require minimum_version >= '6.5'"
-        )
+    if scoped_mcp:
+        _require_floor(config, path, "6.5", "scoped Codex MCP resources")
 
 
 def _validate_tolerant(data: object) -> Config:

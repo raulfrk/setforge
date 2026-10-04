@@ -4,8 +4,11 @@ import pytest
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
-from setforge.migrations._platform_release_assets import PlatformReleaseAssetsMigration
+from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+
+
+def _step(from_version: str) -> Migration:
+    return next(m for m in MIGRATIONS if m.from_version == from_version)
 
 
 def _roots(tmp_path: Path, content: str) -> MigrationRoots:
@@ -25,7 +28,7 @@ def test_platform_assets_stamp_round_trip_without_variant_intent(
         tmp_path,
         "schema_version: '6.2'\nminimum_version: '6.2'\npackages: {}\n",
     )
-    migration = PlatformReleaseAssetsMigration()
+    migration = _step("6.2")
     migration.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.3"
     migration.reverse.apply(roots=roots)
@@ -59,7 +62,7 @@ def test_platform_assets_reverse_refuses_variant_intent(
         "schema_version: '6.3'\nminimum_version: '6.3'\n" + body,
     )
     with pytest.raises(ConfigError, match=r"cannot downgrade schema 6\.3"):
-        PlatformReleaseAssetsMigration().reverse.apply(roots=roots)
+        _step("6.2").reverse.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.3"
 
 
@@ -75,5 +78,5 @@ def test_reverse_ignores_unrelated_nested_assets_key(tmp_path: Path) -> None:
         "          src: assets\n"
         "          dst: ~/.config/assets\n",
     )
-    PlatformReleaseAssetsMigration().reverse.apply(roots=roots)
+    _step("6.2").reverse.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.2"

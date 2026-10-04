@@ -4,8 +4,11 @@ import pytest
 
 from setforge.config import GitHubReleasePackage, load_config
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
-from setforge.migrations._codex_contract import CodexContractMigration
+from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+
+
+def _step(from_version: str) -> Migration:
+    return next(m for m in MIGRATIONS if m.from_version == from_version)
 
 
 def _roots(tmp_path: Path, body: str) -> MigrationRoots:
@@ -20,7 +23,7 @@ def test_codex_contract_forward_and_safe_reverse(tmp_path: Path) -> None:
         "version: 1\nschema_version: '6.3'\nminimum_version: '6.4'\n"
         "tracked_files: {}\nprofiles: {}\n",
     )
-    migration = CodexContractMigration()
+    migration = _step("6.3")
 
     migration.apply(roots=roots)
     assert "schema_version: '6.4'" in roots.cfg_path.read_text()
@@ -53,7 +56,7 @@ profiles: {}
 """,
     )
 
-    CodexContractMigration().reverse.apply(roots=roots)
+    _step("6.3").reverse.apply(roots=roots)
 
     config = load_config(roots.cfg_path)
     assert config.schema_version == "6.3"
@@ -81,5 +84,5 @@ def test_codex_contract_reverse_refuses_declarations(
     before = roots.cfg_path.read_bytes()
 
     with pytest.raises(ConfigError, match="while Codex declarations are present"):
-        CodexContractMigration().reverse.apply(roots=roots)
+        _step("6.3").reverse.apply(roots=roots)
     assert roots.cfg_path.read_bytes() == before
