@@ -72,7 +72,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   drift and for a symlink destination occupied by a regular file, which the
   real install refuses.
 - `sync` and `capture` refuse a staged file whose stored draft is not UTF-8
-  before prompting, instead of failing with a decode error afterwards.
+  while planning, in every mode including `--auto=keep-tracked`, instead of
+  failing with a decode error after the prompt.
 
 ### Changed
 
