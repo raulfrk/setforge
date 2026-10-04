@@ -1130,6 +1130,44 @@ def test_file_selection_refuses_without_resource_effects(
     assert operations.active("p") is None
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_unmanaged_tree_selection_refuses_before_its_held_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dry_run: bool
+) -> None:
+    config, live = _mixed_config(tmp_path, monkeypatch, ("one", "tree", "two"))
+    runner = CliRunner()
+    args = [
+        "install",
+        "--profile=p",
+        f"--config={config}",
+        "--yes",
+        "--no-fetch",
+        "--no-git-check",
+    ]
+    installed = runner.invoke(app, args)
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    ownership = OwnershipStore()
+    claim = ownership.read(file_resource_id(live / "tree"))
+    assert claim is not None
+    with locking.mutation_locks(resources=True):
+        ownership.release_locked(
+            claim.resource_id,
+            expected_owner=claim.owner_id,
+            expected_generation=claim.generation,
+        )
+    (live / "tree/item").unlink()
+    (live / "tree/item").mkdir()
+    mode = ["--dry-run"] if dry_run else []
+
+    whole_profile = runner.invoke(app, [*args, "--dry-run"])
+    selected = runner.invoke(app, [*args, "--file=tree", *mode])
+
+    assert "managed tree conflicts require review" in str(whole_profile.exception)
+    assert selected.exit_code == 1, (selected.output, selected.exception)
+    assert "file-only install requires already-managed files" in str(selected.exception)
+    assert (live / "tree/item").is_dir()
+
+
 def test_selected_directory_does_not_prune_named_sibling_or_retired_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
