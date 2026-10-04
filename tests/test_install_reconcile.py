@@ -1,7 +1,7 @@
 """Integration: a PLAIN tracked file installs through the 3-way engine.
 
 A0 routes a plain tracked file (no disposition, no spans, no host-local
-overlay) through ``reconcile_apply.reconcile_plain_file`` instead of a
+overlay) through ``reconcile_apply.reconcile_file`` instead of a
 verbatim copy, so a local edit is merged against the recorded base rather
 than silently overwritten. These tests drive the real ``install`` CLI
 against a sandboxed ``$HOME`` + ``$SETFORGE_STATE_DIR`` and pin the
@@ -640,13 +640,13 @@ def test_claude_merge_wired_only_when_interactive(
         captured["cm"] = kw["claude_merge"]
         return ReconcileOutcome(ReconcileKind.NOOP)
 
-    monkeypatch.setattr(ih.reconcile_apply, "reconcile_plain_file", _fake_rpf)
+    monkeypatch.setattr(ih.reconcile_apply, "reconcile_file", _fake_rpf)
 
-    ih._resolve_plain_reconcile(
+    ih._resolve_reconcile(
         "p", "note", src, dst, tf, interactive=True, section_auto=None
     )
     assert captured["cm"] is sentinel
-    ih._resolve_plain_reconcile(
+    ih._resolve_reconcile(
         "p", "note", src, dst, tf, interactive=False, section_auto=None
     )
     assert captured["cm"] is claude_merge_unavailable

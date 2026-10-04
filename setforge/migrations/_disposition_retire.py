@@ -474,7 +474,7 @@ def _write_cutover_transition(
         transitions.make_meta(
             transitions.TransitionCommand.MIGRATE,
             transitions.MIGRATE_TRANSITION_PROFILE,
-            end_timestamp=transitions.now_utc().isoformat(),
+            record_end=True,
             command_line=redact_argv(sys.argv[1:]),
         ),
         file_pre,

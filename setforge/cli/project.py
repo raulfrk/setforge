@@ -91,7 +91,10 @@ def _render_removal(plan: ProjectRemovePlan) -> None:
     typer.echo(f"project profile: {plan.profile}")
     typer.echo(f"target: {plan.target}")
     for item in plan.files:
-        typer.echo(f"  restore {item.action.value}: {item.relative_destination}")
+        if item.relative_destination in plan.git_removed:
+            typer.echo(f"  leave absent: {item.relative_destination}")
+        else:
+            typer.echo(f"  restore {item.action.value}: {item.relative_destination}")
 
 
 def _render_stale_removal(plan: ProjectStaleRemovalPlan) -> None:

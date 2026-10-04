@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,7 +35,11 @@ def _latest_transition_meta(env: IntegrationEnv) -> dict[str, object]:
 def _assert_transition_command(meta: dict[str, object], command: str) -> None:
     """Pin the command metadata at the fast CLI/filesystem boundary."""
     assert meta["command"] == command
-    assert isinstance(meta.get("end_timestamp"), str)
+    end_timestamp = meta.get("end_timestamp")
+    assert isinstance(end_timestamp, str)
+    assert datetime.fromisoformat(end_timestamp) >= datetime.fromisoformat(
+        str(meta["timestamp"])
+    )
     command_line = meta.get("command_line")
     # CliRunner stays in the pytest process, so the captured argv is pytest's;
     # xdist workers may expose an empty argv. The dedicated redaction test below

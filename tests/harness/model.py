@@ -78,7 +78,7 @@ class StubReconcileModel:
         live: bytes | Absent = (
             self.live[fid_str].encode("utf-8") if fid_str in self.live else ABSENT
         )
-        outcome = reconcile_apply.reconcile_plain_file(
+        outcome = reconcile_apply.reconcile_file(
             self.profile, fid, live=live, tracked=tracked
         )
         if outcome.kind is ReconcileKind.WRITE:

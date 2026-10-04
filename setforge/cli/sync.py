@@ -9,7 +9,6 @@
 import stat
 import sys
 from dataclasses import dataclass
-from datetime import UTC
 from pathlib import Path
 from uuid import UUID
 
@@ -691,7 +690,7 @@ def _write_sync_transition(
         transitions.make_meta(
             transitions.TransitionCommand.SYNC,
             ctx.profile,
-            end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+            record_end=True,
             command_line=redact_argv(sys.argv[1:]),
         ),
         file_pre,

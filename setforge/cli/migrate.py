@@ -274,9 +274,7 @@ def _migration_transition_dirs() -> frozenset[Path]:
     if not root.exists():
         return frozenset()
     found: set[Path] = set()
-    for candidate in root.iterdir():
-        if not candidate.is_dir() or candidate.name.startswith(".pending-"):
-            continue
+    for candidate in transitions.committed_transition_dirs(root, tolerant=True):
         try:
             meta = transitions.load_meta(transitions.TransitionDir(candidate))
         except transitions.InvalidTransitionRecord:
@@ -443,7 +441,7 @@ def _write_migrate_transition(
         transitions.make_meta(
             transitions.TransitionCommand.MIGRATE,
             transitions.MIGRATE_TRANSITION_PROFILE,
-            end_timestamp=transitions.now_utc().isoformat(),
+            record_end=True,
             command_line=redact_argv(sys.argv[1:]),
         ),
         file_pre,

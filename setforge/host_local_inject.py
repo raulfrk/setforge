@@ -52,13 +52,6 @@ from setforge.source import (
     HostLocalSection,
 )
 
-# Provenance tag emitted by every install / install --dry-run / compare
-# code path that surfaces a host-local section. Centralised here so all
-# user-visible sites stay in lock-step; tests can keep their literal
-# assertions to guarantee the wire format does not silently drift.
-HOST_LOCAL_PROVENANCE_TAG: Final[str] = "[host-local via local.yaml]"
-
-
 # Matches an ATX-style markdown heading: 1-6 leading ``#`` followed by a
 # space and the heading text. Setext (underline-style) headings are
 # intentionally NOT supported — the anchor grammar is byte-exact text

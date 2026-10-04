@@ -2315,6 +2315,92 @@ def test_manifest_parent_escape_is_rejected_without_external_cleanup(
     assert (target / "AGENTS.md").exists()
 
 
+@pytest.mark.parametrize("schema", [1, 2])
+def test_remove_reads_a_record_written_with_an_older_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema: int
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    arguments = ["demo", str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(app, ["project", "inject", *arguments])
+    assert injected.exit_code == 0, injected.exception
+    state = manifest_path(target, "demo")
+    payload = json.loads(state.read_text())
+    payload["schema"] = schema
+    for entry in payload["files"]:
+        del entry["visibility"]
+    if schema == 1:
+        del payload["config_path"]
+        for entry in payload["files"]:
+            del entry["applied_payload"]
+            del entry["upstream_mode"]
+            del entry["upstream_payload"]
+    state.write_text(json.dumps(payload))
+
+    removed = CliRunner().invoke(app, ["project", "remove", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert "  restore create: AGENTS.md\n" in removed.output
+    assert not (target / "AGENTS.md").exists()
+    assert not state.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+
+
+def _non_mapping_entry(entry: dict[str, object]) -> object:
+    return list(entry)
+
+
+def _edited_entry(**changes: object) -> Callable[[dict[str, object]], object]:
+    return lambda entry: {**entry, **changes}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        pytest.param(_non_mapping_entry, id="non-mapping-entry"),
+        pytest.param(_edited_entry(unexpected=1), id="unknown-field"),
+        pytest.param(_edited_entry(upstream_payload="***"), id="payload-not-base64"),
+        pytest.param(_edited_entry(upstream_mode="rw"), id="mode-not-a-number"),
+        pytest.param(_edited_entry(action="bogus"), id="unknown-action"),
+        pytest.param(_edited_entry(visibility="bogus"), id="unknown-visibility"),
+        pytest.param(_edited_entry(destination="/etc/passwd"), id="absolute-path"),
+        pytest.param(_edited_entry(destination="../AGENTS.md"), id="escaping-path"),
+        pytest.param(_edited_entry(created_parents=["/etc"]), id="absolute-parent"),
+        pytest.param(_edited_entry(created_parents=["unrelated"]), id="foreign-parent"),
+    ],
+)
+def test_remove_refuses_a_malformed_file_record_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: Callable[[dict[str, object]], object],
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    (target / "unrelated").mkdir()
+    arguments = ["demo", str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(app, ["project", "inject", *arguments])
+    assert injected.exit_code == 0, injected.exception
+    state = manifest_path(target, "demo")
+    payload = json.loads(state.read_text())
+    payload["files"][0] = tamper(payload["files"][0])
+    state.write_text(json.dumps(payload))
+    before_manifest = state.read_bytes()
+    before_file = (target / "AGENTS.md").read_bytes()
+    claim_path, before_claim = _rewrite_only_claim(lambda claim: claim)
+
+    removed = CliRunner().invoke(app, ["project", "remove", *arguments])
+
+    assert removed.exit_code == 1
+    assert isinstance(removed.exception, SetforgeError)
+    assert str(removed.exception).startswith("project injection state has ")
+    assert state.read_bytes() == before_manifest
+    assert (target / "AGENTS.md").read_bytes() == before_file
+    assert (target / "unrelated").is_dir()
+    assert claim_path.read_bytes() == before_claim
+
+
 def test_duplicate_manifest_destination_is_rejected_without_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2709,6 +2795,8 @@ def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
     removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
 
     assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert "  leave absent: AGENTS.md\n" in removed.output
+    assert "restore" not in removed.output
     assert not destination.exists()
     assert not manifest_path(target, "demo").exists()
     assert not list((state_root / "project-overlays").glob("*.json"))

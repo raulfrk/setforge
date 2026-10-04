@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -162,6 +163,42 @@ def test_detect_orphans_ignores_corrupt_meta(tmp_path: Path, payload: bytes) -> 
     detection = detect_orphans(
         resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
     )
+    assert detection.orphans == [OrphanEntry(path=live_orphan)]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can enter any directory")
+def test_detect_orphans_skips_a_record_directory_it_cannot_enter(
+    tmp_path: Path,
+) -> None:
+    transitions_dir = tmp_path / "transitions"
+    locked = _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(tmp_path / "live" / "unseen.txt")],
+    )
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("body\n", encoding="utf-8")
+    (tmp_path / "live" / "unseen.txt").write_text("body\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir,
+        "20260518T130000000000Z-install-p",
+        [str(live_orphan)],
+    )
+    config = _make_config_with(
+        {
+            "kept": TrackedFile(
+                src=Path("kept.txt"), dst=str(tmp_path / "live" / "kept.txt")
+            )
+        }
+    )
+    locked.chmod(0o000)
+    try:
+        detection = detect_orphans(
+            resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+        )
+    finally:
+        locked.chmod(0o700)
     assert detection.orphans == [OrphanEntry(path=live_orphan)]
 
 

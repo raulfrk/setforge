@@ -172,7 +172,7 @@ class _OwnTransitionStep:
             transitions.make_meta(
                 transitions.TransitionCommand.MIGRATE,
                 transitions.MIGRATE_TRANSITION_PROFILE,
-                end_timestamp=transitions.now_utc().isoformat(),
+                record_end=True,
                 command_line=None,
             ),
             file_pre,

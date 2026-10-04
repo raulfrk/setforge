@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -158,7 +159,7 @@ class _StoreCutoverStep:
             transitions.make_meta(
                 transitions.TransitionCommand.MIGRATE,
                 transitions.MIGRATE_TRANSITION_PROFILE,
-                end_timestamp=transitions.now_utc().isoformat(),
+                record_end=True,
                 command_line=None,
             ),
             file_pre,
@@ -275,7 +276,7 @@ class _ConcurrentInstallStep:
             transitions.make_meta(
                 transitions.TransitionCommand.INSTALL,
                 "some-other-profile",
-                end_timestamp=transitions.now_utc().isoformat(),
+                record_end=True,
                 command_line=None,
             ),
             {sentinel: None},
@@ -346,3 +347,22 @@ def test_store_snapshot_captured_at_chain_start_preserves_prior_leg(
     assert leg.read_bytes() == b"PRIOR-INSTALL-CONTENT\n", (
         f"rollback restored wrong bytes (late snapshot?): {leg.read_bytes()!r}"
     )
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can enter any directory")
+def test_migration_record_scan_skips_a_record_directory_it_cannot_enter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from setforge.cli import migrate as migrate_mod
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    locked = transitions.transitions_root() / "20260518T120000000000Z-install-p"
+    locked.mkdir(parents=True)
+    (locked / "meta.json").write_text("{}", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        found = migrate_mod._migration_transition_dirs()
+    finally:
+        locked.chmod(0o700)
+
+    assert found == frozenset()
