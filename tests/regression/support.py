@@ -309,3 +309,53 @@ def extension_host(
     )
     host.shim("code", _FAKE_CODE)
     return host
+
+
+PROJECT_YAML = (
+    "project_profiles:\n"
+    "  demo:\n"
+    "    files:\n"
+    "      agents:\n"
+    "        src: AGENTS.md\n"
+    "        dst: AGENTS.md\n"
+)
+
+
+def git(path: Path, *args: str, check: bool = True) -> str:
+    env = {**os.environ, **_GIT_ENV}
+    done = subprocess.run(
+        ["git", "-C", str(path), *args],
+        check=check,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    return done.stdout
+
+
+def git_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    git(path, "init", "-q", "-b", "main")
+    return path
+
+
+def candidate_setforge_on_path(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the Git filter children of tracked overlays run this source tree."""
+    binary_dir = root / "candidate-bin"
+    binary_dir.mkdir()
+    entrypoint = binary_dir / "setforge"
+    entrypoint.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "_original_cwd = os.getcwd()\n"
+        "try:\n"
+        f"    os.chdir({str(REPO_ROOT)!r})\n"
+        "    from setforge.cli import main\n"
+        "finally:\n"
+        "    os.chdir(_original_cwd)\n"
+        "main()\n",
+        encoding="utf-8",
+    )
+    entrypoint.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
