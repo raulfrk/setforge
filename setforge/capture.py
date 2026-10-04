@@ -12,7 +12,7 @@ never reaches this module's writer.
 """
 
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -56,52 +56,6 @@ def _require_utf8(sub_name: str, *contents: bytes) -> None:
         raise InvariantViolation(
             f"staged file {sub_name!r} is not valid UTF-8 text"
         ) from err
-
-
-def _preflight_staged_file(
-    profile: str,
-    sub_name: str,
-    dst: Path,
-    fmt: su_mod.StructuredFormat | None,
-) -> bool:
-    """Validate one participating file without writing; false when opted out."""
-    fid = file_id(sub_name)
-    entry = reconcile_store.read_index(profile).files.get(str(fid))
-    if entry is None or not entry.staged:
-        return False
-    base = reconcile_store.read_base(profile, fid)
-    if base is None:
-        raise InvariantViolation(
-            f"staged file {sub_name!r} has no recorded reconciliation base"
-        )
-    if not dst.is_file():
-        raise InvariantViolation(f"staged file {sub_name!r} has no live file")
-    try:
-        live = dst.read_bytes()
-    except OSError as err:
-        raise InvariantViolation(
-            f"staged file {sub_name!r} live bytes cannot be read: {err}"
-        ) from err
-    drafts = reconcile_store.read_drafts(profile, fid)
-    if fmt is None:
-        index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
-        _require_utf8(sub_name, base, live)
-        hunks = reconcile_hunks.classify(
-            reconcile_hunks.extract_hunks(base, live), entry.hunks
-        )
-        bound = reconcile_hunks.bind_drafts(hunks, drafts)
-        reconcile_hunks.reconstruct(base, live, hunks, bound)
-        return True
-    index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
-    try:
-        fresh = su_mod.extract_structured_units(base, live, fmt)
-    except StructuredParseError as err:
-        raise InvariantViolation(
-            f"staged file {sub_name!r} cannot be parsed as {fmt.value}"
-        ) from err
-    units = su_mod.classify_structured(fresh, entry.hunks, fmt)
-    su_mod.reconstruct_structured(base, live, units, drafts, fmt)
-    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +131,100 @@ def _item(
     )
 
 
-def plan_capture(  # noqa: C901 - one decision per route
+def _held_back_warnings(
+    name: str,
+    units: Sequence[reconcile_hunks.Hunk] | Sequence[su_mod.KeyUnit],
+    noun: str,
+) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if any(unit.cls is HunkClass.PENDING for unit in units):
+        warnings.append(
+            f"{name}: unstaged local changes kept host-only — "
+            f"run `setforge stage {name}` to share any of them"
+        )
+    # A classified unit whose content drifted is held at base, not promoted:
+    # say so, so a shared unit that just left tracked/ is not a surprise.
+    if any(unit.changed and unit.cls is HunkClass.SHARED for unit in units):
+        warnings.append(
+            f"{name}: a previously-staged {noun} changed and was kept host-only — "
+            f"re-run `setforge stage {name}` to re-confirm it"
+        )
+    return tuple(warnings)
+
+
+def _plan_staged(
+    profile: str, sub_name: str, src: Path, dst: Path, entry: index_model.FileEntry
+) -> CaptureItem:
+    """Plan one staged file: only its SHARED units reach ``tracked/``.
+
+    The tracked content is rebuilt from the recorded base plus the units still
+    shared (never patched), so a demoted unit leaves ``tracked/`` by itself. A
+    staged file fails closed when its base, live bytes, encoding, routing or
+    identities cannot be reconciled; it never falls back to the whole-file
+    writeback.
+    """
+    fid = file_id(sub_name)
+    base = reconcile_store.read_base(profile, fid)
+    if base is None:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} has no recorded reconciliation base"
+        )
+    if not dst.is_file():
+        raise InvariantViolation(f"staged file {sub_name!r} has no live file")
+    try:
+        live = dst.read_bytes()
+    except OSError as err:
+        raise InvariantViolation(
+            f"staged file {sub_name!r} live bytes cannot be read: {err}"
+        ) from err
+    stored_drafts = reconcile_store.read_drafts(profile, fid)
+    fmt = su_mod.structured_format(dst)
+    if fmt is None:
+        stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
+        _require_utf8(sub_name, base, live)
+        hunks = reconcile_hunks.classify(
+            reconcile_hunks.extract_hunks(base, live), stored
+        )
+        # A migrated v1 draft key is bound to its v2 unit here, and the bound
+        # manifest is the one recorded, so the upgrade lands with the index row.
+        drafts = reconcile_hunks.bind_drafts(hunks, stored_drafts)
+        proposed = reconcile_hunks.reconstruct(base, live, hunks, drafts)
+        _require_utf8(sub_name, proposed)
+        rows = reconcile_hunks.serialize(
+            hunks, allow_relocation=src.suffix.lower() in {".md", ".markdown"}
+        )
+        warnings = _held_back_warnings(src.name, hunks, "hunk")
+    else:
+        stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
+        try:
+            fresh = su_mod.extract_structured_units(base, live, fmt)
+        except StructuredParseError as err:
+            raise InvariantViolation(
+                f"staged file {sub_name!r} cannot be parsed as {fmt.value}"
+            ) from err
+        units = su_mod.classify_structured(fresh, stored, fmt)
+        drafts = su_mod.bind_structured_drafts(units, stored_drafts)
+        proposed = su_mod.reconstruct_structured(base, live, units, drafts, fmt)
+        rows = su_mod.serialize_structured(units)
+        warnings = _held_back_warnings(src.name, units, "key")
+    return _item(
+        sub_name,
+        src,
+        dst,
+        proposed,
+        warnings=warnings,
+        entry=entry,
+        record=StoreRecord(base=base, local=live, hunks=rows, drafts=drafts),
+        store_update=(
+            not entry.present
+            or entry.local_hash != content_sha(live)
+            or entry.hunks != rows
+            or stored_drafts != drafts
+        ),
+    )
+
+
+def plan_capture(
     config: Config,
     profile_name: str,
     repo_root: Path,
@@ -186,7 +233,12 @@ def plan_capture(  # noqa: C901 - one decision per route
     ownership_authorized: Mapping[str, bool],
     auto: "CaptureAuto | None" = None,
 ) -> tuple[CaptureItem, ...]:
-    """Decide every tracked write and store record of a capture; write nothing."""
+    """Decide every tracked write and store record of a capture; write nothing.
+
+    ``ownership_authorized`` maps each tracked sub-file to whether this checkout
+    holds its container claim; a staged file without it is refused. Every file
+    is validated here, so a plan that exists has no invalid participant.
+    """
     items: list[CaptureItem] = []
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
@@ -203,104 +255,28 @@ def plan_capture(  # noqa: C901 - one decision per route
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            fmt = su_mod.structured_format(sub_dst)
-            if not sub_dst.exists():
-                _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
-                items.append(
-                    _item(sub_name, sub_src, sub_dst, None, reason="live missing")
-                )
-                continue
-            fid = file_id(sub_name)
-            entry = reconcile_store.read_index(profile_name).files.get(str(fid))
+            entry = reconcile_store.read_index(profile_name).files.get(
+                str(file_id(sub_name))
+            )
             if entry is not None and entry.staged:
-                if not ownership_authorized[sub_name]:
+                if sub_dst.exists() and not ownership_authorized[sub_name]:
                     raise InvariantViolation(
                         f"staged file {sub_name!r} has no current container "
                         f"ownership claim; run `setforge stage {sub_name}` to adopt it"
                     )
-                _preflight_staged_file(profile_name, sub_name, sub_dst, fmt)
-                base = reconcile_store.read_base(profile_name, fid)
-                assert base is not None
-                live = sub_dst.read_bytes()
-                stored_drafts = reconcile_store.read_drafts(profile_name, fid)
-                warnings: list[str] = []
-                if fmt is None:
-                    stored = index_model.require_unit_kind(entry.hunks, UnitKind.LINE)
-                    line_units = reconcile_hunks.classify(
-                        reconcile_hunks.extract_hunks(base, live), stored
-                    )
-                    drafts = reconcile_hunks.bind_drafts(line_units, stored_drafts)
-                    proposed = reconcile_hunks.reconstruct(
-                        base, live, line_units, drafts
-                    )
-                    _require_utf8(sub_name, proposed)
-                    rows = reconcile_hunks.serialize(
-                        line_units,
-                        allow_relocation=sub_src.suffix.lower() in {".md", ".markdown"},
-                    )
-                    if any(unit.cls is HunkClass.PENDING for unit in line_units):
-                        warnings.append(
-                            f"{sub_src.name}: unstaged local changes kept host-only — "
-                            f"run `setforge stage {sub_src.name}` to share any of them"
-                        )
-                    if any(
-                        unit.changed and unit.cls is HunkClass.SHARED
-                        for unit in line_units
-                    ):
-                        warnings.append(
-                            f"{sub_src.name}: a previously-staged hunk changed and "
-                            "was kept host-only — re-run "
-                            f"`setforge stage {sub_src.name}` to re-confirm it"
-                        )
-                else:
-                    stored = index_model.require_unit_kind(entry.hunks, UnitKind.KEY)
-                    key_units = su_mod.classify_structured(
-                        su_mod.extract_structured_units(base, live, fmt), stored, fmt
-                    )
-                    drafts = su_mod.bind_structured_drafts(key_units, stored_drafts)
-                    proposed = su_mod.reconstruct_structured(
-                        base, live, key_units, drafts, fmt
-                    )
-                    rows = su_mod.serialize_structured(key_units)
-                    if any(unit.cls is HunkClass.PENDING for unit in key_units):
-                        warnings.append(
-                            f"{sub_src.name}: unstaged local changes kept host-only — "
-                            f"run `setforge stage {sub_src.name}` to share any of them"
-                        )
-                    if any(
-                        unit.changed and unit.cls is HunkClass.SHARED
-                        for unit in key_units
-                    ):
-                        warnings.append(
-                            f"{sub_src.name}: a previously-staged key changed and was "
-                            "kept host-only — re-run "
-                            f"`setforge stage {sub_src.name}` to re-confirm it"
-                        )
                 items.append(
-                    _item(
-                        sub_name,
-                        sub_src,
-                        sub_dst,
-                        proposed,
-                        warnings=tuple(warnings),
-                        entry=entry,
-                        record=StoreRecord(
-                            base=base, local=live, hunks=rows, drafts=drafts
-                        ),
-                        store_update=(
-                            not entry.present
-                            or entry.local_hash != content_sha(live)
-                            or entry.hunks != rows
-                            or stored_drafts != drafts
-                        ),
-                    )
+                    _plan_staged(profile_name, sub_name, sub_src, sub_dst, entry)
                 )
-                continue
-            if auto is not CaptureAuto.KEEP_TRACKED:
-                _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
-            items.append(
-                _item(sub_name, sub_src, sub_dst, sub_dst.read_bytes(), entry=entry)
-            )
+            elif not sub_dst.exists():
+                items.append(
+                    _item(sub_name, sub_src, sub_dst, None, reason="live missing")
+                )
+            else:
+                if auto is not CaptureAuto.KEEP_TRACKED:
+                    _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
+                items.append(
+                    _item(sub_name, sub_src, sub_dst, sub_dst.read_bytes(), entry=entry)
+                )
     return tuple(items)
 
 
