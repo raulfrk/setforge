@@ -369,7 +369,7 @@ def list_projects() -> tuple[ProjectListFile, ...]:
                     visibility = None
                     error = (
                         "injected project file is missing; "
-                        f"{missing_file_remedy(target)}"
+                        f"{missing_file_remedy(target, profile, stored.action)}"
                     )
                 except (OSError, SetforgeError) as exc:
                     visibility = None

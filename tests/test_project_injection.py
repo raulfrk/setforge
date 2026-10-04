@@ -2718,3 +2718,35 @@ def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
         capture_output=True,
     ).stdout
     assert status == "D  AGENTS.md\n"
+
+
+def test_missing_tracked_overlay_file_names_project_remove_not_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    destination = target / "AGENTS.md"
+    destination.unlink()
+    runner = CliRunner()
+    remedy = (
+        f"run `setforge project remove demo {target}` to remove the injection, or "
+        "restore the file with Git"
+    )
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert (
+        f"  error: AGENTS.md: injected project file is missing; {remedy} "
+    ) in listed.output
+    reinjected = runner.invoke(app, ["project", "inject", "demo", *arguments])
+    assert reinjected.exit_code == 1
+    assert str(reinjected.exception) == (
+        f"injected project file is missing: {destination}; {remedy}"
+    )
+    subprocess.run(
+        ["git", "-C", str(target), "checkout", "--", "AGENTS.md"], check=True
+    )
+    assert destination.read_text() == "team instructions\nmanaged instructions\n"
+    assert runner.invoke(app, ["project", "list"]).output == (
+        f"{target}  [demo]\n  tracked-overlay: AGENTS.md\n"
+    )

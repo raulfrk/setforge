@@ -174,8 +174,16 @@ def identity_remedy(
     return None
 
 
-def missing_file_remedy(target: Path) -> str:
-    """Name the commands that settle a recorded file missing from the project."""
+def missing_file_remedy(target: Path, profile: object, action: object) -> str:
+    """Name the commands that settle a recorded file missing from the project.
+
+    Sync cannot restore a member overlaid on a file Git tracks.
+    """
+    if action == ProjectFileAction.OVERLAY:
+        return (
+            f"run `setforge project remove {profile} {target}` to remove the "
+            "injection, or restore the file with Git"
+        )
     return (
         f"run `setforge project sync {target} --auto=use-profile` to restore it, "
         f"or `setforge project sync {target}` to keep it deleted"
@@ -1032,9 +1040,11 @@ def _validate_existing_injection(  # noqa: C901 - one fail-closed record compari
         try:
             info = item.destination.lstat()
         except FileNotFoundError as exc:
+            remedy = missing_file_remedy(
+                plan.target, plan.profile, record.get("action")
+            )
             raise SetforgeError(
-                f"injected project file is missing: {item.destination}; "
-                f"{missing_file_remedy(plan.target)}"
+                f"injected project file is missing: {item.destination}; {remedy}"
             ) from exc
         live_payload = item.destination.read_bytes()
         valid_payload = _sha256(live_payload) == str(record.get("applied_digest"))
@@ -1647,7 +1657,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         if info is None and not live_matches_absent and not removable_missing:
             raise SetforgeError(
                 f"injected project file is missing: {destination}; "
-                f"{missing_file_remedy(root)}"
+                f"{missing_file_remedy(root, profile, action)}"
             )
         # A local file that a sync kept instead of the profile content already
         # equals what removal restores, so removing it writes nothing.
