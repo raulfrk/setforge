@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 import pytest
 
 from setforge import vscode_extensions
-from setforge.config import Extensions, ReconcilePolicy
+from setforge.config import Extensions, ReconcilePolicy, load_config
 from setforge.errors import (
     ConfigError,
     ExtensionInstallFailed,
@@ -913,3 +913,180 @@ def test_install_pinned_unrelated_error_propagates(
     # been masked as an ExtensionInstallFailed download failure.
     with pytest.raises(KeyError):
         vscode_extensions._install_pinned("pub.ext", _ext_pin())
+
+
+# Regression tests for the extension-ID regex / case-handling audit fix.
+#
+# `code --list-extensions` echoes IDs with their publisher's original
+# casing (e.g. `GitHub.copilot`). The old lowercase-only `_EXT_ID_RE`
+# silently dropped any uppercase-bearing ID from `list_installed()`,
+# which made reconcile re-install such an extension on every run because
+# it never appeared in the installed set. These tests assert that:
+#
+# 1. uppercase-publisher IDs survive `list_installed()`, and
+# 2. reconcile is idempotent for an already-installed uppercase ID (and
+#    case-insensitive when the declared casing differs from the live one).
+#
+# The fake-``code`` harness mirrors the one in test_vscode_extensions.py.
+
+
+def test_list_installed_keeps_uppercase_publisher_ids(fake_code) -> None:
+    """Real IDs carry uppercase letters; they must not be dropped."""
+    fake_code(
+        [
+            "GitHub.copilot",
+            "VisualStudioExptTeam.vscodeintellicode",
+            "ms-vscode.PowerShell",
+            "ms-python.python",
+        ]
+    )
+    assert list_installed() == {
+        "GitHub.copilot",
+        "VisualStudioExptTeam.vscodeintellicode",
+        "ms-vscode.PowerShell",
+        "ms-python.python",
+    }
+
+
+def test_list_installed_still_drops_ssh_header(fake_code) -> None:
+    """Case-insensitive regex must still reject the Remote-SSH header line."""
+    fake = fake_code([])
+    fake.installed = [
+        "Extensions installed on SSH: 1.2.3.4:",
+        "GitHub.copilot",
+    ]
+    assert list_installed() == {"GitHub.copilot"}
+
+
+def test_reconcile_idempotent_for_installed_uppercase_id(fake_code) -> None:
+    """An already-installed uppercase-publisher extension is never reinstalled."""
+    fake = fake_code(["GitHub.copilot", "ms-python.python"])
+    ext = Extensions(include=["GitHub.copilot"], reconcile=ReconcilePolicy.ADDITIVE)
+    report = reconcile(ext)
+    assert report.to_install == []
+    assert fake.install_args == []
+
+
+def test_reconcile_case_insensitive_match_no_churn(fake_code) -> None:
+    """Declared casing differing from live casing must not churn under PRUNE."""
+    fake = fake_code(["GitHub.copilot"])
+    ext = Extensions(include=["github.copilot"], reconcile=ReconcilePolicy.PRUNE)
+    report = reconcile(ext)
+    assert report.to_install == []
+    assert report.to_uninstall == []
+    assert fake.install_args == []
+    assert fake.uninstall_args == []
+
+
+@pytest.mark.parametrize("bad", ["--install-extension", "a b.c", "pub.name;rm", "x"])
+def test_add_to_include_rejects_malformed_id_before_editing(
+    tmp_path: Path, bad: str
+) -> None:
+    from setforge.errors import ConfigError
+    from setforge.vscode_extensions import add_to_include
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\ntracked_files: {}\nprofiles:\n  base:\n    tracked_files: []\n",
+        encoding="utf-8",
+    )
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigError, match="invalid extension id"):
+        add_to_include(cfg, "base", bad)
+
+    assert cfg.read_bytes() == before
+
+
+def test_manifest_rejects_malformed_extension_package_id() -> None:
+    from pydantic import ValidationError
+
+    from setforge.config import ExtensionPackage
+
+    with pytest.raises(ValidationError, match=r"publisher\.name"):
+        ExtensionPackage(extension="--install-extension")
+    assert ExtensionPackage(extension="GitHub.copilot-chat").extension
+
+
+# Regression tests: `exclude` must win case-insensitively.
+#
+# VSCode treats extension IDs case-insensitively and `code --list-extensions`
+# echoes the publisher's canonical casing (e.g. ``GitHub.copilot``). A user who
+# types ``exclude: [github.copilot]`` (lowercase) against an installed/included
+# ``GitHub.copilot`` must still have it excluded. The pre-fix code subtracted
+# ``exclude`` from ``include`` (and ``installed``) case-SENSITIVELY, silently
+# defeating the "exclude always wins" invariant in both :func:`reconcile`
+# (PRUNE/ADDITIVE) and :func:`capture_extensions`.
+#
+# The ``subprocess.run`` driver and config fixtures mirror
+# ``tests/test_vscode_extensions.py``.
+
+
+def test_exclude_wins_under_case_mismatch_prune(fake_code) -> None:
+    """PRUNE: a lowercase exclude must drop a canonically-cased included id."""
+    fake = fake_code(["GitHub.copilot", "keep.me"])
+    ext = Extensions(
+        include=["GitHub.copilot", "keep.me"],
+        exclude=["github.copilot"],  # lowercase, as commonly typed
+        reconcile=ReconcilePolicy.PRUNE,
+    )
+    report = reconcile(ext)
+
+    assert report.to_uninstall == ["GitHub.copilot"]
+    assert report.to_install == []
+    assert fake.uninstall_args == ["GitHub.copilot"]
+    assert "GitHub.copilot" not in fake.installed
+
+
+def test_exclude_wins_under_case_mismatch_additive(fake_code) -> None:
+    """ADDITIVE: a lowercase exclude must not re-install the included id."""
+    fake = fake_code([])
+    ext = Extensions(
+        include=["GitHub.copilot", "keep.me"],
+        exclude=["github.copilot"],
+        reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(ext)
+
+    assert report.to_install == ["keep.me"]
+    assert "GitHub.copilot" not in report.to_install
+    assert fake.install_args == ["keep.me"]
+
+
+_CASING_FIXTURE_YAML = """\
+version: 1
+
+tracked_files:
+  d:
+    src: x
+    dst: y
+
+profiles:
+  base:
+    tracked_files:
+      - d
+    reconcile:
+      extensions:
+        exclude:
+          - github.copilot
+"""
+
+
+def test_capture_excludes_case_insensitively(tmp_path: Path, fake_code) -> None:
+    """capture must not write an excluded id back into the include set just
+    because the installed set uses different casing."""
+    from setforge import reconcile_adapter
+    from setforge.config import resolve_profile
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(_CASING_FIXTURE_YAML, encoding="utf-8")
+    fake_code(["GitHub.copilot", "keep.me"])  # canonical casing from `code`
+
+    capture_extensions(cfg, "base")
+
+    reloaded = load_config(cfg)
+    resolved = resolve_profile(reloaded, "base")
+    include = reconcile_adapter.extensions_input(reloaded, resolved).include
+    assert "GitHub.copilot" not in include
+    assert "github.copilot" not in include
+    assert "keep.me" in include
