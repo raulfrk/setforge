@@ -21,6 +21,15 @@ def _host(
     return Host(tmp_path, monkeypatch, kind=kind, **kw)  # type: ignore[arg-type]
 
 
+def test_cross_device_home_is_on_another_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _host(tmp_path, monkeypatch, "cross-device")
+    assert host.home.is_symlink()
+    assert host.real_home.stat().st_dev != host.repo.stat().st_dev
+    assert host.real_home.stat().st_dev != host.state.parent.stat().st_dev
+
+
 @pytest.mark.parametrize("kind", HOME_KINDS)
 @pytest.mark.parametrize(
     "state_in_home", [True, False], ids=["state-in-home", "state-apart"]
@@ -60,7 +69,9 @@ def test_install_sync_capture_revert_match_a_plain_home(
     ]
 
 
-@pytest.mark.parametrize("kind", ["symlink", "trailing-slash", "ancestor"])
+@pytest.mark.parametrize(
+    "kind", ["symlink", "trailing-slash", "ancestor", "cross-device"]
+)
 def test_snapshot_create_and_restore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -76,7 +87,7 @@ def test_snapshot_create_and_restore(
     assert host.live("note.txt").read_bytes() == b"one\n"
 
 
-@pytest.mark.parametrize("kind", ["symlink", "relative", "ancestor"])
+@pytest.mark.parametrize("kind", ["symlink", "relative", "ancestor", "cross-device"])
 def test_orphan_cleanup_removes_only_the_dropped_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -118,7 +129,9 @@ _PROJECT = (
 )
 
 
-@pytest.mark.parametrize("kind", ["symlink", "trailing-slash", "ancestor"])
+@pytest.mark.parametrize(
+    "kind", ["symlink", "trailing-slash", "ancestor", "cross-device"]
+)
 def test_project_inject_and_remove_inside_a_symlinked_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -154,7 +167,7 @@ _KILL_ON_EXTENSION = (
 )
 
 
-@pytest.mark.parametrize("kind", ["symlink", "ancestor"])
+@pytest.mark.parametrize("kind", ["symlink", "ancestor", "cross-device"])
 def test_recover_after_a_killed_install_restores_the_pre_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -183,7 +196,7 @@ def test_recover_after_a_killed_install_restores_the_pre_state(
     assert "no unfinished operation" in again.stderr + again.stdout
 
 
-@pytest.mark.parametrize("kind", ["plain", "symlink"])
+@pytest.mark.parametrize("kind", ["plain", "symlink", "cross-device"])
 def test_directory_swapped_for_a_symlink_after_planning_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:

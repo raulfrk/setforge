@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -25,7 +26,17 @@ from ..conftest import redirect_local_config_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-HOME_KINDS = ("plain", "symlink", "relative", "trailing-slash", "ancestor")
+HOME_KINDS = (
+    "plain",
+    "symlink",
+    "relative",
+    "trailing-slash",
+    "ancestor",
+    "cross-device",
+)
+
+_SECOND_DEVICE = Path("/dev/shm")
+CROSS_DEVICE_DIRS: list[Path] = []
 
 _GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -63,6 +74,8 @@ def make_home(root: Path, kind: str) -> tuple[Path, Path]:
         home = root / "home"
         home.mkdir()
         return home, home
+    if kind == "cross-device":
+        return _cross_device_home(root)
     mnt = root / "mnt"
     mnt.mkdir()
     if kind == "ancestor":
@@ -81,6 +94,19 @@ def make_home(root: Path, kind: str) -> tuple[Path, Path]:
         home.symlink_to(f"{real}/", target_is_directory=True)
     else:
         raise ValueError(kind)
+    return home, real
+
+
+def _cross_device_home(root: Path) -> tuple[Path, Path]:
+    """A symlinked home whose files live on another filesystem (an NFS home)."""
+    if not (_SECOND_DEVICE.is_dir() and os.access(_SECOND_DEVICE, os.W_OK)):
+        pytest.skip(f"{_SECOND_DEVICE} is not a writable directory")
+    real = Path(tempfile.mkdtemp(prefix="setforge-xdev-", dir=_SECOND_DEVICE))
+    CROSS_DEVICE_DIRS.append(real)
+    if real.stat().st_dev == root.stat().st_dev:
+        pytest.skip(f"{_SECOND_DEVICE} is on the same device as {root}")
+    home = root / "home"
+    home.symlink_to(real, target_is_directory=True)
     return home, real
 
 
