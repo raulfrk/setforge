@@ -176,6 +176,11 @@ class Survivor:
             return local.rsplit(_METHOD_SEP, 1)[-1]
         return local[2:] if local.startswith("x_") else local
 
+    @property
+    def local(self) -> str:
+        """The mutant-key local part, e.g. ``x_load`` or ``xǁStoreǁload``."""
+        return self._local_part(self._stem)
+
     @staticmethod
     def _local_part(stem: str) -> str:
         """The mutant-local part of ``stem`` (after the module dotted-path).
@@ -276,30 +281,40 @@ def parse_results(results_text: str) -> list[Survivor]:
     ]
 
 
-def function_spans(source: str) -> dict[str, tuple[int, int]]:
-    """Map every function/method name in ``source`` to its ``(start, end)``
-    line span (1-based, inclusive) via AST.
-
-    ``ast.walk`` visits ALL depths, and duplicate names collapse to the LAST
-    definition seen. ASSUMPTION (holds for the core): mutmut mutates only
-    top-level functions and one-level-deep methods, and the merge/reconcile/
-    store modules do not reuse a function/method name across scopes — so the
-    bare-name lookup a mutant needs is unambiguous. If a future core module
-    reused a name, the last-wins collapse could pick the wrong span; the
-    modules are small and name-unique today, so this is safe."""
-    spans: dict[str, tuple[int, int]] = {}
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
+def _mutant_units(source: str) -> list[tuple[int, int, str]]:
+    """``(start, end, local)`` for every unit mutmut mutates: top-level functions
+    and methods of top-level classes. ``local`` is the mutant-key local part
+    (``x_<function>`` / ``xǁ<Class>ǁ<method>``), so same-named methods of
+    different classes stay distinct. A decorator line starts its unit."""
+    units: list[tuple[int, int, str]] = []
+    for node in ast.parse(source).body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            end = node.end_lineno or node.lineno
-            spans[node.name] = (node.lineno, end)
-    return spans
+            members = [(node, f"x_{node.name}")]
+        elif isinstance(node, ast.ClassDef):
+            members = [
+                (m, f"x{_METHOD_SEP}{node.name}{_METHOD_SEP}{m.name}")
+                for m in node.body
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+        else:
+            continue
+        for member, local in members:
+            start = min([member.lineno, *(d.lineno for d in member.decorator_list)])
+            units.append((start, member.end_lineno or member.lineno, local))
+    return units
+
+
+def function_spans(source: str) -> dict[str, tuple[int, int]]:
+    """Map each mutated unit's mutant-key local name (``x_<function>`` /
+    ``xǁ<Class>ǁ<method>``) in ``source`` to its ``(start, end)`` line span
+    (1-based, inclusive)."""
+    return {local: (start, end) for start, end, local in _mutant_units(source)}
 
 
 def span_for_mutant(survivor: Survivor, source: str) -> tuple[int, int] | None:
     """The line span of ``survivor``'s function within ``source``, or ``None``
     if that function is not found (e.g. renamed away)."""
-    return function_spans(source).get(survivor.function)
+    return function_spans(source).get(survivor.local)
 
 
 def survivors_on_changed_lines(
@@ -337,21 +352,7 @@ def scoped_patterns(module: str, source: str, changed: set[int]) -> list[str]:
     statements, class attributes, nested classes) makes the result the single
     whole-module pattern ``<module>.*``."""
     whole = [f"{module}.*"]
-    units: list[tuple[int, int, str]] = []
-    for node in ast.parse(source).body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            members = [(node, f"x_{node.name}")]
-        elif isinstance(node, ast.ClassDef):
-            members = [
-                (m, f"x{_METHOD_SEP}{node.name}{_METHOD_SEP}{m.name}")
-                for m in node.body
-                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
-            ]
-        else:
-            continue
-        for member, local in members:
-            start = min([member.lineno, *(d.lineno for d in member.decorator_list)])
-            units.append((start, member.end_lineno or member.lineno, local))
+    units = _mutant_units(source)
     lines = source.splitlines()
     selected: set[str] = set()
     for line in changed:
@@ -632,6 +633,8 @@ def _run_diff(allowlist: set[str], base_ref: str, *, results_only: bool = False)
             path.removesuffix(".py").replace("/", "."), sources[path], changed[path]
         )
     ]
+    if not patterns:
+        return EXIT_CLEAN
     run = MutmutRun(0, "") if results_only else _run_mutmut(patterns)
 
     results_text = _mutmut_results()
