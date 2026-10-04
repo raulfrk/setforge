@@ -1920,7 +1920,7 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
     raise SetforgeError(f"unsupported anchored filesystem replacement: {snapshot.path}")
 
 
-def _restore_path_anchored(  # noqa: C901
+def _restore_path_anchored(
     snapshot: PathSnapshot,
     guard_identities: dict[Path, tuple[int, int, int] | None],
     *,
@@ -1946,45 +1946,9 @@ def _restore_path_anchored(  # noqa: C901
                 pass
             else:
                 return False
-        if snapshot.kind is SnapshotKind.ABSENT:
-            _restore_path_at(parent_fd, snapshot)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        if snapshot.kind is SnapshotKind.DIRECTORY:
-            try:
-                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                os.mkdir(name, mode=snapshot.mode or 0o700, dir_fd=parent_fd)
-            else:
-                if not stat.S_ISDIR(info.st_mode):
-                    raise SetforgeError(
-                        "refusing to replace non-directory during recovery: "
-                        f"{snapshot.path}"
-                    )
-            directory_fd = os.open(
-                name,
-                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=parent_fd,
-            )
-            try:
-                if snapshot.mode is not None:
-                    os.fchmod(directory_fd, snapshot.mode)
-                if snapshot.mtime_ns is not None:
-                    os.utime(
-                        directory_fd,
-                        ns=(snapshot.mtime_ns, snapshot.mtime_ns),
-                    )
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-            os.fsync(parent_fd)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        if snapshot.kind in (SnapshotKind.FILE, SnapshotKind.SYMLINK):
-            _restore_path_at(parent_fd, snapshot)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
+        _restore_path_at(parent_fd, snapshot)
+        _verify_parent_binding(parent_fd, snapshot.path.parent)
+        return True
 
 
 def _restore_path(
