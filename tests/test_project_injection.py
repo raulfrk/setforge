@@ -2818,3 +2818,45 @@ def test_tracked_overlay_injects_into_repository_without_info_directory(
     assert not (target / "NOTES.md").exists()
     assert not (info / "attributes").exists()
     assert (info / "exclude").read_bytes() == b""
+
+
+def test_moved_project_whose_old_path_is_now_a_symlink_drops_its_stale_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    moved = tmp_path / "moved"
+    runner = CliRunner()
+    injected = runner.invoke(
+        app, ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
+    )
+    assert injected.exit_code == 0, injected.output
+    stale_record = manifest_path(target, "demo")
+    target.rename(moved)
+    target.symlink_to(moved, target_is_directory=True)
+
+    listed = runner.invoke(app, ["project", "list"])
+    assert listed.exit_code == 1
+    assert listed.output == (
+        f"{target}  [demo]\n"
+        "  error: project directory no longer exists; run "
+        f"`setforge project remove demo {target}` to drop the stale record "
+        f"({stale_record.name})\n"
+    )
+
+    dropped = runner.invoke(
+        app, ["project", "remove", "demo", str(target), "--config", str(config), "-y"]
+    )
+
+    assert dropped.exit_code == 0, (dropped.output, dropped.exception)
+    assert f"target: {target}\n" in dropped.output
+    assert "stale injection: project directory no longer exists\n" in dropped.output
+    assert dropped.output.endswith("stale injection dropped\n")
+    assert not stale_record.exists()
+    assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]
+    assert (moved / "AGENTS.md").read_text() == "managed instructions\n"
+    assert target.is_symlink()
+    assert runner.invoke(app, ["project", "list"]).output == (
+        "no project injections recorded\n"
+    )

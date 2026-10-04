@@ -2095,11 +2095,15 @@ def plan_stale_removal(  # noqa: C901 - record-backed and record-less leftovers
     is left. Project files are never touched: their identity is unverifiable.
     A caller that already holds the config identity lock passes ``owner_id``.
     """
-    root = target.expanduser().resolve()
+    lexical = Path(os.path.normpath(target.expanduser().absolute()))
+    root = lexical.resolve()
     canonical_config_path = config_path.resolve(strict=True)
     git_dir: Path | None = None
     live: os.stat_result | None = None
-    if root.is_dir():
+    if root != lexical and manifest_path(lexical, profile).exists():
+        # The recorded directory is gone: its path now leads elsewhere.
+        root = lexical
+    elif root.is_dir():
         root, git_dir, live = _verified_project_target(root)
     claim_git_dir = str(git_dir) if git_dir is not None else None
     state_path = manifest_path(root, profile)
@@ -2192,7 +2196,11 @@ def apply_stale_removal(plan: ProjectStaleRemovalPlan) -> None:
         resources=True,
         config_identity_dir=resolve_owner_common_dir(config_root),
         config_dir=config_root,
-        target_roots=(plan.target,) if plan.target.is_dir() else (),
+        target_roots=(
+            (plan.target,)
+            if plan.target.is_dir() and plan.target.resolve() == plan.target
+            else ()
+        ),
         profile=operation_profile,
     ) as guards:
         identity = guards.config_identity

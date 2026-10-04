@@ -282,7 +282,8 @@ def _validated_record(
     record: Path, raw: dict[str, object], payload: bytes
 ) -> tuple[RecordedProjectInjection, tuple[StoredProjectFile, ...]]:
     target = Path(str(raw["target"]))
-    if not target.is_dir():
+    # A recorded path that now leads elsewhere through a symlink is gone too.
+    if not target.is_dir() or target.resolve() != target:
         raise SetforgeError(
             "project directory no longer exists; run "
             f"`setforge project remove {raw['profile']} {target}` "
@@ -291,8 +292,6 @@ def _validated_record(
     root, git_dir, target_info = _verified_project_target(target)
     target_device = raw["target_device"]
     assert isinstance(target_device, int)
-    if str(root) != raw["target"]:
-        raise SetforgeError("project target identity does not match the record")
     remedy = identity_remedy(raw, root, target_info.st_ino, git_dir)
     if remedy is not None:
         raise SetforgeError(
