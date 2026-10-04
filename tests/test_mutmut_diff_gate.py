@@ -734,26 +734,26 @@ def test_scoped_patterns_module_level_function_from_real_source() -> None:
 
 def test_scoped_patterns_method_uses_class_and_separator_from_real_source() -> None:
     source = _real_source("structural_merge")
-    line = _body_line(source, function="add", cls="_Json5Backend")
+    line = _body_line(source, function="add_theirs", cls="_Json5Backend")
     assert gate.scoped_patterns("setforge.structural_merge", source, {line}) == [
-        "setforge.structural_merge.xǁ_Json5Backendǁadd__mutmut_*"
+        "setforge.structural_merge.xǁ_Json5Backendǁadd_theirs__mutmut_*"
     ]
 
 
 def test_scoped_patterns_same_method_name_in_other_class_not_selected() -> None:
     source = _real_source("structural_merge")
-    line = _body_line(source, function="add", cls="_Json5Backend")
+    line = _body_line(source, function="add_theirs", cls="_Json5Backend")
     patterns = gate.scoped_patterns("setforge.structural_merge", source, {line})
     assert not any("_RuamelBackend" in p or "_MappingBackend" in p for p in patterns)
 
 
 def test_scoped_patterns_several_functions_sorted_and_deduplicated() -> None:
     source = _real_source("structural_merge")
-    a = _body_line(source, function="add", cls="_Json5Backend")
-    b = _body_line(source, function="add", cls="_RuamelBackend")
+    a = _body_line(source, function="add_theirs", cls="_Json5Backend")
+    b = _body_line(source, function="add_theirs", cls="_RuamelBackend")
     assert gate.scoped_patterns("setforge.structural_merge", source, {a, a - 1, b}) == [
-        "setforge.structural_merge.xǁ_Json5Backendǁadd__mutmut_*",
-        "setforge.structural_merge.xǁ_RuamelBackendǁadd__mutmut_*",
+        "setforge.structural_merge.xǁ_Json5Backendǁadd_theirs__mutmut_*",
+        "setforge.structural_merge.xǁ_RuamelBackendǁadd_theirs__mutmut_*",
     ]
 
 

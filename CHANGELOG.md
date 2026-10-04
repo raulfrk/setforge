@@ -45,6 +45,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is no longer wrapped at 80 columns. `inspect` rejects ambiguous names.
 - Mutation-test workers are capped in memory, so a runaway mutant can no longer
   exhaust the host running the nightly gate.
+- `install`, `compare` and `sync` no longer refuse a Markdown file that merely
+  documents the retired user-section markers.
+- A failed `stage` rolls back while still holding its locks. A checkpoint over
+  a path with no saved pre-image is refused instead of silently left out of
+  recovery, and an operation journal stays loadable after a parent of its
+  config directory becomes a symlink.
+- `cleanup-orphans` never offers SetForge's own state, journals, cache or
+  snapshots for deletion when they sit under a managed root.
+- `cleanup` and `cleanup-orphans` write `local.yaml` atomically and keep its
+  comments and layout.
+- A `type: local` package no longer overwrites a different file already at its
+  destination; an identical file is adopted.
+- `project sync` merges YAML and JSON members exactly as `install` does, so
+  untouched lines keep their bytes and a JSON file with a duplicate key gives a
+  conflict instead of a crash. `project remove` no longer recreates a file Git
+  removed and works after a re-clone; injecting into a repository without
+  `.git/info` works; a stale record whose old path is now a symlink can be
+  dropped.
+- `install --dry-run` reports the same drift-gate count the real run enforces.
+- A corrupt adapter record in a transition gives a clean error from `revert`,
+  `transitions show` and `transitions list`.
 
 ### Changed
 
@@ -55,6 +76,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `snapshot create --keep` prunes per profile. `migrate` without an action flag
   exits 2. Extension ids must have the `publisher.name` form.
 - `--auto=keep-live` and `--auto=use-tracked` resolve held managed-tree entries.
+- A file or tree claimed by another configuration is treated as not yet
+  authorised by `compare`, `status`, `sync` and `capture`, as `install` and
+  `stage` already did: staged drift shows as unexpected and `sync` asks for
+  `stage` first.
+- `install`, `install --dry-run` and `compare` no longer print the blocks that
+  described the retired host-local injection, `transitions show` no longer
+  prints `overlay:`, and `project inject` no longer prints the worktree
+  auto-carry line.
+- The unused `diff-match-patch` dependency is removed.
 
 ## [1.3.9] - 2026-09-28
 
