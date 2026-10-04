@@ -27,7 +27,7 @@ can walk the chain forward.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -38,7 +38,12 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 from setforge.errors import ConfigError
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations._yaml_ops import (
+    _has_tracked_file_field,
+    atomic_write_yaml,
+    load_yaml_mapping,
+    yaml_rt,
+)
 
 # A schema version is exactly ``MAJOR.MINOR`` — two non-negative integer
 # components. This is stricter than the ``--pin`` token (which tolerates
@@ -211,17 +216,13 @@ def _lower_floor(data: CommentedMap, to_version: str) -> None:
 
 __all__ = [
     "MIGRATIONS",
-    "CodexContractMigration",
-    "CodexMcpScopeMigration",
     "Contract20Migration",
     "DispositionRetireMigration",
-    "GeneratedResourcesMigration",
     "ManifestEntry",
     "ManifestType",
     "MarkerRetireMigration",
     "Migration",
     "MigrationRoots",
-    "PlatformReleaseAssetsMigration",
     "ProfileFieldsRetireMigration",
     "RestampMigration",
     "SpanSurfaceRetireMigration",
@@ -585,6 +586,20 @@ class _VersionStampReverse:
 
 
 @dataclass(slots=True, frozen=True)
+class FeatureGate:
+    """What a feature-introducing restamp refuses to downgrade past.
+
+    ``in_use`` reports whether the document still declares the feature the
+    newer schema introduced; ``refusal`` is the error raised then.
+    """
+
+    enable_description: str
+    disable_description: str
+    in_use: Callable[[CommentedMap], bool]
+    refusal: str
+
+
+@dataclass(slots=True, frozen=True)
 class RestampMigration:
     """Symmetric schema-version stamp for an ``X.Y`` ↔ ``X.Z`` bump.
 
@@ -612,6 +627,8 @@ class RestampMigration:
 
     from_version: str
     to_version: str
+    gate: FeatureGate | None = None
+    downgrade: bool = False
 
     @property
     def reverse(self) -> RestampMigration:
@@ -624,18 +641,26 @@ class RestampMigration:
         key-present versions correct.
         """
         return RestampMigration(
-            from_version=self.to_version, to_version=self.from_version
+            from_version=self.to_version,
+            to_version=self.from_version,
+            gate=self.gate,
+            downgrade=not self.downgrade,
         )
 
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
         """Single-file in-place stamp: an EDIT of the ``schema_version`` value."""
+        if self.gate is None:
+            description = (
+                f"restamp schema_version: {self.from_version!r} → {self.to_version!r}"
+            )
+        elif self.downgrade:
+            description = self.gate.disable_description
+        else:
+            description = self.gate.enable_description
         return (
             ManifestEntry(
                 type=ManifestType.EDIT,
-                description=(
-                    f"restamp schema_version: {self.from_version!r} → "
-                    f"{self.to_version!r}"
-                ),
+                description=description,
                 affected_path=roots.cfg_path,
             ),
         )
@@ -649,36 +674,80 @@ class RestampMigration:
 
         Raises :class:`ConfigError` (never a bare ``TypeError`` /
         ``AttributeError``) when ``setforge.yaml``'s root is not a mapping.
+        A gated downgrade refuses while its feature is declared, and lowers
+        ``minimum_version`` when that sat at the version being left.
         """
-        yaml = yaml_rt()
-        with roots.cfg_path.open("r", encoding="utf-8") as fh:
-            data = yaml.load(fh)
-        data = _require_mapping_root(data, roots.cfg_path)
+        data = load_yaml_mapping(roots.cfg_path)
+        gate = self.gate if self.downgrade else None
+        if gate is not None and gate.in_use(data):
+            raise ConfigError(gate.refusal)
         # Overwrite-in-place: assignment to an existing key preserves its
         # position in the CommentedMap (a del + reinsert would move it to
         # the end and reorder the document). Idempotent on replay.
         data["schema_version"] = self.to_version
+        minimum = data.get("minimum_version")
+        if (
+            gate is not None
+            and minimum is not None
+            and _meets_floor(str(minimum), self.from_version)
+        ):
+            data["minimum_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
+
+
+def _uses_platform_assets(data: CommentedMap) -> bool:
+    packages = data.get("packages")
+    if isinstance(packages, Mapping) and any(
+        isinstance(package, Mapping) and "assets" in package
+        for package in packages.values()
+    ):
+        return True
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping):
+        return False
+    for bundle in bundles.values():
+        if not isinstance(bundle, Mapping):
+            continue
+        components = bundle.get("components")
+        if not isinstance(components, Sequence) or isinstance(components, (str, bytes)):
+            continue
+        if any(
+            isinstance(component, Mapping)
+            and isinstance(component.get("github_release"), Mapping)
+            and "assets" in component["github_release"]
+            for component in components
+        ):
+            return True
+    return False
+
+
+def _uses_codex(data: CommentedMap) -> bool:
+    profiles = data.get("profiles")
+    profile_uses_codex = isinstance(profiles, dict) and any(
+        isinstance(profile, dict) and "codex" in profile
+        for profile in profiles.values()
+    )
+    return "codex" in data or profile_uses_codex
+
+
+def _uses_scoped_codex_mcp(data: CommentedMap) -> bool:
+    codex = data.get("codex")
+    servers = codex.get("mcp_servers") if isinstance(codex, dict) else None
+    return isinstance(servers, dict) and any(
+        isinstance(server, dict) and ("scope" in server or "project" in server)
+        for server in servers.values()
+    )
 
 
 # Imported here (after every name it depends on is defined) to avoid a
 # circular import: _contract_2_0 / _marker_retire import ManifestEntry /
 # ManifestType / MigrationRoots (and friends) from this package, all defined
 # above this point.
-from setforge.migrations._codex_contract import CodexContractMigration  # noqa: E402
-from setforge.migrations._codex_mcp_scope import CodexMcpScopeMigration  # noqa: E402
 from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
-from setforge.migrations._directory_trees import DirectoryTreesMigration  # noqa: E402
 from setforge.migrations._disposition_retire import (  # noqa: E402
     DispositionRetireMigration,
 )
-from setforge.migrations._generated_resources import (  # noqa: E402
-    GeneratedResourcesMigration,
-)
 from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
-from setforge.migrations._platform_release_assets import (  # noqa: E402
-    PlatformReleaseAssetsMigration,
-)
 from setforge.migrations._profile_fields_retire import (  # noqa: E402
     ProfileFieldsRetireMigration,
 )
@@ -698,11 +767,73 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     SpanSurfaceRetireMigration(),
     SpanTypesRetireMigration(),
     ProfileFieldsRetireMigration(),
-    GeneratedResourcesMigration(),
-    DirectoryTreesMigration(),
-    PlatformReleaseAssetsMigration(),
-    CodexContractMigration(),
-    CodexMcpScopeMigration(),
+    RestampMigration(
+        from_version="6.0",
+        to_version="6.1",
+        gate=FeatureGate(
+            enable_description="enable typed generated tracked-file resources",
+            disable_description="disable generated resources when none are declared",
+            in_use=lambda data: _has_tracked_file_field(data, "generated"),
+            refusal=(
+                "cannot downgrade schema 6.1 while generated tracked-file "
+                "intent is declared; remove it before downgrading"
+            ),
+        ),
+    ),
+    RestampMigration(
+        from_version="6.1",
+        to_version="6.2",
+        gate=FeatureGate(
+            enable_description="enable managed directory trees",
+            disable_description="disable managed trees when none are declared",
+            in_use=lambda data: _has_tracked_file_field(data, "tree"),
+            refusal=(
+                "cannot downgrade schema 6.2 while managed tree intent is declared; "
+                "remove it before downgrading"
+            ),
+        ),
+    ),
+    RestampMigration(
+        from_version="6.2",
+        to_version="6.3",
+        gate=FeatureGate(
+            enable_description="enable platform-qualified release assets",
+            disable_description=(
+                "disable platform release assets when none are declared"
+            ),
+            in_use=_uses_platform_assets,
+            refusal=(
+                "cannot downgrade schema 6.3 while platform release assets are "
+                "declared; remove them before downgrading"
+            ),
+        ),
+    ),
+    RestampMigration(
+        from_version="6.3",
+        to_version="6.4",
+        gate=FeatureGate(
+            enable_description="enable product-aware Codex declarations",
+            disable_description="disable the Codex contract when unused",
+            in_use=_uses_codex,
+            refusal=(
+                "cannot downgrade schema 6.4 while Codex declarations are "
+                "present; remove them before downgrading"
+            ),
+        ),
+    ),
+    RestampMigration(
+        from_version="6.4",
+        to_version="6.5",
+        gate=FeatureGate(
+            enable_description="enable project-scoped Codex MCP declarations",
+            disable_description="disable project-scoped Codex MCP declarations",
+            in_use=_uses_scoped_codex_mcp,
+            refusal=(
+                "cannot downgrade schema 6.5 while scoped Codex MCP "
+                "declarations are present"
+            ),
+        ),
+    ),
 )
 """Ordered registry of available FORWARD migrations.
 
@@ -711,12 +842,8 @@ Holds the version-stamp chain 1.0 → 1.1 (:class:`VersionStampMigration`)
 breaking preserve_* contraction) → 2.1 (:class:`MarkerRetireMigration`)
 → 3.0 (:class:`DispositionRetireMigration`) → 4.0
 (:class:`SpanSurfaceRetireMigration`) → 5.0 (:class:`SpanTypesRetireMigration`)
-→ 6.0 (:class:`ProfileFieldsRetireMigration`) → 6.1
-(:class:`GeneratedResourcesMigration`) → 6.2
-(:class:`DirectoryTreesMigration`) → 6.3
-(:class:`PlatformReleaseAssetsMigration`) → 6.4
-(:class:`CodexContractMigration`) → 6.5
-(:class:`CodexMcpScopeMigration`). Future migrations are
+→ 6.0 (:class:`ProfileFieldsRetireMigration`) → 6.1 → 6.2 → 6.3 → 6.4 → 6.5
+(each a gated :class:`RestampMigration`). Future migrations are
 appended in ``from_version`` order so :func:`find_migration_path` can
 walk the chain forward. Each migration's reverse is attached to its
 forward instance, never added here — that would make the forward walk

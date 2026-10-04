@@ -3,8 +3,11 @@ from pathlib import Path
 import pytest
 
 from setforge.errors import ConfigError
-from setforge.migrations import MigrationRoots
-from setforge.migrations._codex_mcp_scope import CodexMcpScopeMigration
+from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+
+
+def _step(from_version: str) -> Migration:
+    return next(m for m in MIGRATIONS if m.from_version == from_version)
 
 
 def _roots(tmp_path: Path, body: str) -> MigrationRoots:
@@ -19,7 +22,7 @@ def test_codex_mcp_scope_forward_and_safe_reverse(tmp_path: Path) -> None:
         "version: 1\nschema_version: '6.4'\nminimum_version: '6.5'\n"
         "tracked_files: {}\nprofiles: {}\n",
     )
-    migration = CodexMcpScopeMigration()
+    migration = _step("6.4")
 
     migration.apply(roots=roots)
     assert "schema_version: '6.5'" in roots.cfg_path.read_text()
@@ -43,5 +46,5 @@ def test_codex_mcp_scope_reverse_refuses_new_fields(tmp_path: Path, field: str) 
     before = roots.cfg_path.read_bytes()
 
     with pytest.raises(ConfigError, match="scoped Codex MCP"):
-        CodexMcpScopeMigration().reverse.apply(roots=roots)
+        _step("6.4").reverse.apply(roots=roots)
     assert roots.cfg_path.read_bytes() == before

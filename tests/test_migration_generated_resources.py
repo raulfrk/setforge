@@ -4,12 +4,11 @@ import pytest
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
-from setforge.migrations import Migration, MigrationRoots
-from setforge.migrations._codex_contract import CodexContractMigration
-from setforge.migrations._codex_mcp_scope import CodexMcpScopeMigration
-from setforge.migrations._directory_trees import DirectoryTreesMigration
-from setforge.migrations._generated_resources import GeneratedResourcesMigration
-from setforge.migrations._platform_release_assets import PlatformReleaseAssetsMigration
+from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+
+
+def _step(from_version: str) -> Migration:
+    return next(m for m in MIGRATIONS if m.from_version == from_version)
 
 
 def _roots(tmp_path: Path, body: str) -> MigrationRoots:
@@ -25,11 +24,11 @@ def _data(path: Path) -> dict[str, object]:
 @pytest.mark.parametrize(
     "migration",
     [
-        GeneratedResourcesMigration(),
-        DirectoryTreesMigration(),
-        PlatformReleaseAssetsMigration(),
-        CodexContractMigration(),
-        CodexMcpScopeMigration(),
+        _step("6.0"),
+        _step("6.1"),
+        _step("6.2"),
+        _step("6.3"),
+        _step("6.4"),
     ],
 )
 def test_contract_stamp_migrations_preserve_mapping_root_diagnostic(
@@ -52,7 +51,7 @@ def test_generated_resources_stamp_round_trip_without_generated_intent(
         tmp_path,
         "schema_version: '6.0'\nminimum_version: '6.0'\nprofiles: {}\n",
     )
-    migration = GeneratedResourcesMigration()
+    migration = _step("6.0")
 
     migration.apply(roots=roots)
     assert _data(roots.cfg_path)["schema_version"] == "6.1"
@@ -78,7 +77,7 @@ def test_generated_resources_reverse_refuses_lossy_downgrade(tmp_path: Path) -> 
     )
 
     with pytest.raises(ConfigError, match="cannot downgrade"):
-        GeneratedResourcesMigration().reverse.apply(roots=roots)
+        _step("6.0").reverse.apply(roots=roots)
 
     assert _data(roots.cfg_path)["schema_version"] == "6.1"
 
@@ -103,18 +102,14 @@ def test_generated_reverse_preserves_unrelated_registry_names(
         "minimum_version": "6.0",
     }
 
-    GeneratedResourcesMigration().reverse.apply(roots=roots)
+    _step("6.0").reverse.apply(roots=roots)
 
     assert _data(roots.cfg_path) == expected
 
 
 @pytest.mark.parametrize("feature", ["generated", "tree"])
 def test_reverse_refuses_feature_on_bundle_file(tmp_path: Path, feature: str) -> None:
-    migration = (
-        GeneratedResourcesMigration()
-        if feature == "generated"
-        else DirectoryTreesMigration()
-    )
+    migration = _step("6.0") if feature == "generated" else _step("6.1")
     body = "{inputs: {home: home}}" if feature == "generated" else "{}"
     roots = _roots(
         tmp_path,
