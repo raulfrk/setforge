@@ -1,9 +1,10 @@
 """capture / sync subcommands — live → tracked capture flow.
 
-- ``capture`` and ``sync`` drive the ``capture_mod.capture_profile``
-  pipeline, with ``--auto={use-live,keep-tracked}`` as the
-  non-interactive escape. ``capture`` is the pipeline alone; ``sync``
-  also records a transition so ``revert`` can replay it.
+- ``capture`` and ``sync`` plan with ``capture_mod.plan_capture`` and,
+  once confirmed, write that plan with ``capture_mod.apply_capture``;
+  ``--auto={use-live,keep-tracked}`` is the non-interactive escape.
+  ``capture`` is the pipeline alone; ``sync`` also records a transition
+  so ``revert`` can replay it.
 """
 
 import stat
@@ -51,8 +52,6 @@ from setforge.cli._helpers import (
 )
 from setforge.compare import container_authorized
 from setforge.config import (
-    Config,
-    ResolvedProfile,
     load_config,
     refuse_unmigrated_host_local_leak,
     resolve_effective_profile,
@@ -66,12 +65,17 @@ from setforge.reconcile.types import content_sha, file_id
 
 @dataclass(frozen=True, slots=True)
 class _CaptureSnapshot:
-    """Whole-profile inputs and exact outputs frozen for one confirmation."""
+    """Whole-profile inputs and exact outputs frozen for one confirmation.
+
+    ``plan`` is what ``apply_capture`` writes; ``preview`` is the plan plus the
+    rows shown for the Codex and extension writes.
+    """
 
     config_hash: str
     effective_hash: str
     ownership: tuple[FileDecision, ...]
     ownership_authorized: tuple[tuple[str, bool], ...]
+    plan: tuple[capture_mod.CaptureItem, ...]
     preview: tuple[capture_mod.CaptureItem, ...]
     codex_plans: tuple[codex_resources_mod.CodexConfigPlan, ...]
     extension_content: str | None
@@ -182,16 +186,15 @@ def _load_capture_preview(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     ownership, authorized = _capture_ownership(ctx, owner_id)
-    preview = list(
-        capture_mod.plan_capture(
-            cfg,
-            profile,
-            repo_root,
-            resolved=resolved,
-            ownership_authorized=authorized,
-            auto=auto,
-        )
+    items = capture_mod.plan_capture(
+        cfg,
+        profile,
+        repo_root,
+        resolved=resolved,
+        ownership_authorized=authorized,
+        auto=auto,
     )
+    preview = list(items)
     codex_plans = codex_resources_mod.plan_config_resources(
         cfg,
         resolved,
@@ -267,6 +270,7 @@ def _load_capture_preview(
             effective_hash=content_sha(repr(effective).encode("utf-8")),
             ownership=ownership,
             ownership_authorized=tuple(sorted(authorized.items())),
+            plan=items,
             preview=tuple(preview),
             codex_plans=codex_plans,
             extension_content=extension_content,
@@ -392,7 +396,7 @@ def capture(
         yes=yes,
     )
     with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
-        locked_ctx, locked_snapshot = _load_capture_preview(
+        _locked_ctx, locked_snapshot = _load_capture_preview(
             config,
             profile,
             repo_root,
@@ -403,16 +407,13 @@ def capture(
         _require_same_preview(initial_snapshot, locked_snapshot)
         try:
             results = _run_capture(
-                locked_ctx.cfg,
                 profile,
-                repo_root,
-                resolved=locked_ctx.resolved,
-                ownership_authorized=dict(locked_snapshot.ownership_authorized),
+                locked_snapshot.plan,
                 codex_plans=locked_snapshot.codex_plans,
             )
         except KeyboardInterrupt:
             # Plain ``capture`` takes no snapshot (only ``sync`` records a
-            # transition + restorable snapshots), and ``capture_profile`` has
+            # transition + restorable snapshots), and ``apply_capture`` has
             # no internal rollback — so writes already committed survive.
             # Report that truthfully instead of a false "restored" claim.
             typer.secho(
@@ -494,8 +495,6 @@ def sync(
             auto=auto_enum,
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
-        cfg = ctx.cfg
-        resolved = ctx.resolved
         if not no_transition:
             transitions.ensure_state_dir_writable()
 
@@ -524,11 +523,8 @@ def sync(
 
         try:
             results = _run_capture(
-                cfg,
                 profile,
-                repo_root,
-                resolved=resolved,
-                ownership_authorized=dict(locked_snapshot.ownership_authorized),
+                locked_snapshot.plan,
                 codex_plans=locked_snapshot.codex_plans,
             )
             _render_capture_results(results)
@@ -539,7 +535,7 @@ def sync(
                 warning=locked_snapshot.extension_warning,
             )
         except (KeyboardInterrupt, OSError) as exc:
-            # capture_profile writes tracked srcs and re-baselines stores
+            # apply_capture writes tracked srcs and re-baselines stores
             # one at a time with no internal rollback, so a Ctrl-C OR a
             # mid-capture OSError (e.g. ENOSPC) can leave a partial tracked
             # write and a base advanced ahead of its src. Restore the
@@ -766,35 +762,19 @@ def _render_capture_results(results: list[capture_mod.CaptureResult]) -> None:
 
 
 def _run_capture(
-    cfg: Config,
     profile: str,
-    repo_root: Path,
+    plan: tuple[capture_mod.CaptureItem, ...],
     *,
-    resolved: ResolvedProfile,
-    ownership_authorized: dict[str, bool],
     codex_plans: tuple[codex_resources_mod.CodexConfigPlan, ...],
 ) -> list[capture_mod.CaptureResult]:
-    """Run ``capture_profile``.
+    """Write the confirmed plan, then the Codex config captures.
 
-    ``KeyboardInterrupt`` is NOT swallowed here: ``capture_profile``
-    performs no internal snapshot/restore, so the caller owns the Ctrl-C
-    contract — ``sync`` restores from the pre-capture snapshot it took and
-    ``capture`` reports the partial-write truth.
-
-    The already-resolved path/package overlays are passed in. No legacy
-    host-local *section-body* overlay is loaded: host-local content is now a
-    LOCAL unit in the reconcile store, and ``capture_profile``'s per-hunk staged path
-    (:func:`setforge.capture._capture_staged_plain`) already promotes ONLY
-    the SHARED hunks into tracked and keeps LOCAL host-only content out, so
-    the legacy local.yaml ``host_local_sections`` strip is redundant.
+    ``KeyboardInterrupt`` is NOT swallowed here: ``apply_capture`` performs
+    no internal snapshot/restore, so the caller owns the Ctrl-C contract —
+    ``sync`` restores from the pre-capture snapshot it took and ``capture``
+    reports the partial-write truth.
     """
-    results = capture_mod.capture_profile(
-        cfg,
-        profile,
-        repo_root,
-        resolved=resolved,
-        ownership_authorized=ownership_authorized,
-    )
+    results = capture_mod.apply_capture(profile, plan)
     for codex_plan in codex_plans:
         if not codex_plan.sources and not codex_plan.generated_bytes:
             continue

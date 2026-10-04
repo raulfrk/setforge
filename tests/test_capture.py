@@ -586,6 +586,127 @@ def test_staged_capture_pending_hint(
     assert any("stage" in w for w in result.warnings)  # the "run setforge stage" hint
 
 
+def _staged_and_plain(tmp_path: Path) -> tuple[Config, Path, Path, Path, Path]:
+    """A staged ``CLAUDE.md`` (Shell shared) and an unstaged ``notes``."""
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    staged_src = repo / "tracked" / "CLAUDE.md"
+    staged_dst = tmp_path / "live" / "CLAUDE.md"
+    plain_dst = tmp_path / "live" / "notes"
+    _write(staged_src, _A5_BASE.decode())
+    _write(staged_dst, _A5_LIVE.decode())
+    _write(plain_dst, "planned\n")
+    _stage_index(
+        "p",
+        file_id("CLAUDE.md"),
+        _A5_BASE,
+        _A5_LIVE,
+        {"## Shell": HunkClass.SHARED},
+    )
+    config = Config(
+        tracked_files={
+            "CLAUDE.md": TrackedFile(src=Path("CLAUDE.md"), dst=str(staged_dst)),
+            "notes": TrackedFile(src=Path("notes"), dst=str(plain_dst)),
+        },
+        profiles={"p": Profile(tracked_files=["CLAUDE.md", "notes"])},
+    )
+    return config, repo, staged_src, staged_dst, plain_dst
+
+
+def test_apply_writes_the_planned_bytes_not_a_later_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live edit made after planning reaches neither tracked nor the store."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.capture import apply_capture
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    config, repo, staged_src, staged_dst, plain_dst = _staged_and_plain(tmp_path)
+    plan = preview_capture_profile(config, "p", repo)
+    planned = [item.proposed for item in plan]
+    assert planned[1] == b"planned\n"
+
+    staged_dst.write_bytes(_A5_LIVE + b"\n## Later\nunseen\n")
+    plain_dst.write_bytes(b"later\n")
+    apply_capture("p", plan)
+
+    assert [staged_src.read_bytes(), (repo / "tracked" / "notes").read_bytes()] == (
+        planned
+    )
+    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    store.verify("p")
+
+
+def test_apply_checks_the_bytes_read_back_before_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """INV-8: a tracked file that does not hold the planned bytes is not recorded."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import capture as capture_mod
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    config, repo, _staged_src, staged_dst, _plain_dst = _staged_and_plain(tmp_path)
+    staged_dst.write_bytes(_A5_LIVE + b"\n## Later\nhost only\n")
+    plan = preview_capture_profile(config, "p", repo)
+    assert plan[0].action is CaptureAction.UPDATED
+    assert plan[0].store_update is True
+
+    def torn_write(path: Path, data: bytes, **_kwargs: object) -> None:
+        path.write_bytes(data[:-1])
+
+    monkeypatch.setattr(capture_mod.atomicio, "atomic_write_bytes", torn_write)
+    with pytest.raises(InvariantViolation, match="INV-8"):
+        capture_mod.apply_capture("p", plan)
+
+    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    assert not (repo / "tracked" / "notes").exists()
+
+
+def test_staged_plan_refuses_a_reconstruction_that_is_not_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A draft that is not UTF-8 is refused while planning, before any write."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from dataclasses import replace
+
+    from setforge import locking
+    from setforge.reconcile import hunks, store
+    from setforge.reconcile.types import HunkClass, content_sha, file_id
+
+    base = b"keep\nold\n"
+    live = b"keep\nhost\n"
+    draft = b"caf\xe9\n"
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, base.decode())
+    _write(dst, live.decode())
+    (fresh,) = hunks.extract_hunks(base, live)
+    drafted = replace(
+        fresh, cls=HunkClass.SHARED_DRAFTED, draft_hash=content_sha(draft)
+    )
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("CLAUDE.md"),
+            base=base,
+            local=live,
+            staged=True,
+            hunks=hunks.serialize([drafted]),
+            drafts={drafted.ref: draft},
+        )
+
+    config = _a5_config(dst)
+    with pytest.raises(InvariantViolation, match="not valid UTF-8"):
+        preview_capture_profile(config, "p", repo)
+    with pytest.raises(InvariantViolation, match="not valid UTF-8"):
+        capture_profile(config, "p", repo)
+    assert src.read_bytes() == base
+
+
 # --------------------------------------------------------------------------- #
 # A5b staged STRUCTURED (YAML/JSON) capture — only SHARED keys promote (INV-8)
 # --------------------------------------------------------------------------- #
