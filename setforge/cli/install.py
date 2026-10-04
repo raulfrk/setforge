@@ -207,6 +207,7 @@ class InstallPlan:
     codex_trusted_projects: tuple[Path, ...] = ()
     preserved_store_ids: frozenset[FileId] = frozenset()
     tree_held: TreeHoldResolution | None = None
+    symlink_conflicts: tuple[str, ...] = ()
 
     def tree_paths(self) -> tuple[Path, ...]:
         """Return every path the frozen tree plans may mutate."""
@@ -771,6 +772,7 @@ def _plan_files(
         codex_trusted_projects=codex_trusted_projects,
         preserved_store_ids=preserved_store_ids,
         tree_held=tree_held,
+        symlink_conflicts=_symlink_dst_conflicts(tracked_entries),
     )
 
 
@@ -1524,6 +1526,7 @@ def _render_install_plan(
     scan_result: SecretsScanResult,
     *,
     transition: bool = True,
+    refusals: tuple[str, ...] = (),
 ) -> None:
     """Render the same immutable plan the real install path consumes."""
     _dry_run_pipeline(
@@ -1538,6 +1541,7 @@ def _render_install_plan(
         immutable_plan=True,
         secrets_scan=scan_result,
         record_transition=transition and not _install_plan_recorded_nothing(plan),
+        refusals=refusals,
     )
     changed_codex = [codex for codex in plan.codex_configs if codex.changed]
     if changed_codex:
@@ -2484,7 +2488,16 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             tracked_root=config.parent / "tracked",
             skip=no_secrets_scan,
         )
-        _render_install_plan(plan, scan_result, transition=not no_transition)
+        _render_install_plan(
+            plan,
+            scan_result,
+            transition=not no_transition,
+            refusals=_plan_refusals(
+                plan,
+                auto_accept_tracked=auto_accept_tracked,
+                auto_accept_live=auto_accept_live,
+            ),
+        )
         return
 
     with mutation_locks(resources=True):
@@ -2598,7 +2611,14 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 inventory=inventory,
                 yes=yes,
                 run_dry_run=lambda: _render_install_plan(
-                    plan, scan_result, transition=not no_transition
+                    plan,
+                    scan_result,
+                    transition=not no_transition,
+                    refusals=_plan_refusals(
+                        plan,
+                        auto_accept_tracked=auto_accept_tracked,
+                        auto_accept_live=auto_accept_live,
+                    ),
                 ),
             )
             if welcome_choice is not WelcomeChoice.PROCEED:
@@ -2636,15 +2656,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     "file ownership inputs changed after confirmation; retry"
                 )
 
-        # Refuse-before-write: pre-flight the symlink-dst clobber refusal.
-        # deploy_symlinked_file() raises when a regular file or directory
-        # already sits at a symlink tracked_file's dst, but that check only
-        # fires at pass-2 WRITE time — a symlink ordered after regular files
-        # would let those earlier writes land, then abort with no transition
-        # recorded (un-revertable partial install). Surfacing the same
-        # condition HERE, before any mutation (seed commit, overlay migration,
-        # or deploy), keeps the install all-or-nothing.
-        _refuse_on_symlink_dst_conflicts(ctx)
+        # Refuse-before-write: deploy_symlinked_file() raises on an occupied
+        # symlink dst only at write time, after earlier files have landed.
+        if plan.symlink_conflicts:
+            raise SetforgeError("\n".join(plan.symlink_conflicts))
 
         secret_plan = _plan_secret_findings(scan_result, yes=yes)
         if secret_plan is None:
@@ -3031,33 +3046,42 @@ def _install_adapter_snapshots(
     return tuple(snapshots)
 
 
-def _refuse_on_symlink_dst_conflicts(ctx: ProfileContext) -> None:
-    """Refuse the install when a symlink tracked_file's dst is already occupied.
+def _symlink_dst_conflicts(
+    tracked_entries: tuple[tuple[TrackedFile, str, Path, Path], ...],
+) -> tuple[str, ...]:
+    """Name every symlink tracked_file whose dst is already occupied.
 
     Mirrors the refusal in :func:`deploy.deploy_symlinked_file` (a regular file
     or a directory — but NOT a pre-existing symlink — sitting at the link's
-    ``dst``), but runs as a pass-1 refuse-before-write gate so the abort fires
-    BEFORE any file is written or any store / local.yaml is mutated. Without
-    this pre-flight the same condition only surfaces at pass-2 write time, where
-    a symlink ordered after regular-file tracked_files would let those earlier
-    writes land and then raise with no transition recorded — an un-revertable
-    partial install. Every conflicting dst is collected so the user sees the
-    complete set in one aggregated error rather than one failure per attempt.
+    ``dst``). The planner records it so the preview reports the refusal and
+    apply raises it before any file is written or any store is mutated: at
+    write time a symlink ordered after regular-file tracked_files would let
+    those earlier writes land and then raise with no transition recorded. Every
+    conflicting dst is named so the user sees the complete set at once.
     """
-    failures: list[str] = []
-    for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if tracked_file.symlink is None:
-            continue
-        if sub_dst.is_symlink() or not sub_dst.exists():
-            continue
-        kind = "directory" if sub_dst.is_dir() else "regular file"
-        failures.append(
-            f"refusing to deploy symlink at {sub_dst}: a {kind} is already "
-            f"present. Move it aside or remove it before deploying "
-            f"tracked_file with symlink: {tracked_file.symlink!r}."
-        )
-    if failures:
-        raise SetforgeError("\n".join(failures))
+    return tuple(
+        f"refusing to deploy symlink at {sub_dst}: a "
+        f"{'directory' if sub_dst.is_dir() else 'regular file'} is already "
+        f"present. Move it aside or remove it before deploying "
+        f"tracked_file with symlink: {tracked_file.symlink!r}."
+        for tracked_file, _sub_name, _sub_src, sub_dst in tracked_entries
+        if tracked_file.symlink is not None
+        and not sub_dst.is_symlink()
+        and sub_dst.exists()
+    )
+
+
+def _plan_refusals(
+    plan: InstallPlan, *, auto_accept_tracked: bool, auto_accept_live: bool
+) -> tuple[str, ...]:
+    """Return what apply refuses for this plan, in the order apply checks it."""
+    drift = install_helpers_mod._unexpected_drift_refusal(
+        plan.drift_report,
+        plan.ctx,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+    )
+    return (*(() if drift is None else (drift,)), *plan.symlink_conflicts)
 
 
 def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:

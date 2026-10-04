@@ -5,7 +5,7 @@ ordered AFTER regular-file tracked_files whose ``dst`` already holds a regular
 file used to let the earlier regular files deploy and THEN abort in pass 2 with
 no transition recorded (an un-revertable partial install). The fix moves the
 ``deploy_symlinked_file`` dst-conflict refusal to a pass-1 refuse-before-write
-gate (:func:`setforge.cli.install._refuse_on_symlink_dst_conflicts`), so the
+gate (the planner's :func:`setforge.cli.install._symlink_dst_conflicts`), so the
 install aborts before any write — nothing deployed, no transition landed.
 
 Drives the real ``setforge install`` CLI against a temp config repo with a

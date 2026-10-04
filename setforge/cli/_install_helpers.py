@@ -102,6 +102,29 @@ def _gated_drift_count(drift_report: compare_mod.CompareReport) -> int:
     )
 
 
+def _unexpected_drift_refusal(
+    drift_report: compare_mod.CompareReport,
+    ctx: ProfileContext,
+    *,
+    auto_accept_tracked: bool,
+    auto_accept_live: bool,
+) -> str | None:
+    """Return the message a bare install rejects unexpected drift with, if any.
+
+    The only unexpected-drift axis the gate rejects is ``mode_drift``
+    (permission bits), and only when neither ``--auto-accept-tracked`` nor
+    ``--auto-accept-live`` is set.
+    """
+    unexpected_count = _gated_drift_count(drift_report)
+    if not unexpected_count or auto_accept_tracked or auto_accept_live:
+        return None
+    return (
+        f"permission-mode drift in {unexpected_count} file(s) "
+        f"(profile '{ctx.profile}'): "
+        f"pass --auto-accept-tracked or --auto-accept-live to resolve"
+    )
+
+
 def _check_unexpected_drift(
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
@@ -111,24 +134,18 @@ def _check_unexpected_drift(
 ) -> None:
     """Reject unexpected drift on a bare install, or return when a flag resolves it.
 
-    The only unexpected-drift axis this gate rejects is ``mode_drift``
-    (permission bits). When a ``DRIFTED`` entry carries it and neither
-    ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set, print an
-    actionable error and raise ``typer.Exit(1)``. With a flag set, the
-    confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
+    Prints the actionable error and raises ``typer.Exit(1)``. With a flag set,
+    the confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
     run, so this is a no-op. No-op when nothing carries unexpected drift.
     """
-    unexpected_count = _gated_drift_count(drift_report)
-    if not unexpected_count:
-        return
-    if not (auto_accept_tracked or auto_accept_live):
-        typer.secho(
-            f"permission-mode drift in {unexpected_count} file(s) "
-            f"(profile '{ctx.profile}'): "
-            f"pass --auto-accept-tracked or --auto-accept-live to resolve",
-            err=True,
-            fg=typer.colors.RED,
-        )
+    message = _unexpected_drift_refusal(
+        drift_report,
+        ctx,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+    )
+    if message is not None:
+        typer.secho(message, err=True, fg=typer.colors.RED)
         raise typer.Exit(1)
 
 
@@ -1031,6 +1048,7 @@ def _dry_run_pipeline(
     immutable_plan: bool = False,
     record_transition: bool = True,
     secrets_scan: SecretsScanResult | None = None,
+    refusals: tuple[str, ...] = (),
 ) -> None:
     """Simulate every install phase without mutating filesystem or state.
 
@@ -1075,6 +1093,11 @@ def _dry_run_pipeline(
         else plan_provisioning(ctx.cfg, ctx.resolved)
     )
     _dry_run_emit_transition_path(ctx, record=record_transition)
+    if refusals:
+        typer.echo("=== would-be refusal ===")
+        for message in refusals:
+            for line in message.splitlines():
+                typer.echo(f"  {line}")
     typer.echo(_DRY_RUN_FINAL_LINE)
 
 
