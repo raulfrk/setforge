@@ -152,10 +152,10 @@ _SOURCE = textwrap.dedent(
 
 def test_function_spans_top_level_and_methods() -> None:
     spans = function_spans(_SOURCE)
-    assert spans["top"] == (1, 2)
-    assert spans["resolve_scalar"] == (5, 8)
-    assert spans["load"] == (12, 13)
-    assert spans["save"] == (15, 16)
+    assert spans["x_top"] == (1, 2)
+    assert spans["x_resolve_scalar"] == (5, 8)
+    assert spans["xǁStoreǁload"] == (12, 13)
+    assert spans["xǁStoreǁsave"] == (15, 16)
 
 
 def test_span_for_mutant_resolves_via_ast() -> None:
@@ -874,3 +874,105 @@ def test_stale_allowlist_entries_flags_ids_with_no_matching_mutant() -> None:
     assert gate.stale_allowlist_entries(results, allowlist) == [
         "setforge.scalar_merge.x_f__mutmut_9"
     ]
+
+
+_TWO_CLASSES = textwrap.dedent(
+    """\
+    class A:
+        def go(self):
+            return 1
+
+    class B:
+        def go(self):
+            return 2
+    """
+)
+_A_GO = "setforge.scalar_merge.xǁAǁgo__mutmut_1"
+_B_GO = "setforge.scalar_merge.xǁBǁgo__mutmut_1"
+
+
+def test_span_lookup_is_class_qualified_for_same_named_methods() -> None:
+    assert span_for_mutant(Survivor(_A_GO, "survived"), _TWO_CLASSES) == (2, 3)
+    assert span_for_mutant(Survivor(_B_GO, "survived"), _TWO_CLASSES) == (6, 7)
+
+
+@pytest.mark.parametrize(
+    ("changed_line", "expected"),
+    [(3, [_A_GO]), (7, [_B_GO])],
+)
+def test_survivor_in_non_last_same_named_method_uses_its_own_span(
+    changed_line: int, expected: list[str]
+) -> None:
+    survivors = [Survivor(_A_GO, "survived"), Survivor(_B_GO, "survived")]
+    kept = survivors_on_changed_lines(
+        survivors,
+        {"setforge/scalar_merge.py": {changed_line}},
+        {"setforge/scalar_merge.py": _TWO_CLASSES},
+    )
+    assert [s.name for s in kept] == expected
+
+
+def test_other_class_same_named_not_checked_mutant_is_not_incomplete() -> None:
+    # A changed line in A.go leaves B.go's mutants `not checked`; that must not
+    # trip the incomplete-run check.
+    incomplete = [Survivor(_B_GO, "not checked")]
+    assert (
+        survivors_on_changed_lines(
+            incomplete,
+            {"setforge/scalar_merge.py": {3}},
+            {"setforge/scalar_merge.py": _TWO_CLASSES},
+        )
+        == []
+    )
+
+
+def test_same_named_methods_of_real_structural_merge_backends_stay_distinct() -> None:
+    import ast
+
+    source = _real_source("structural_merge")
+    by_name: dict[str, list[str]] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef):
+                    by_name.setdefault(member.name, []).append(node.name)
+    name, classes = next(
+        (n, c) for n, c in by_name.items() if len(c) >= 2 and "_Json5Backend" in c
+    )
+    other = next(c for c in classes if c != "_Json5Backend")
+    sep = gate._METHOD_SEP
+    spans = function_spans(source)
+    mine = spans[f"x{sep}_Json5Backend{sep}{name}"]
+    theirs = spans[f"x{sep}{other}{sep}{name}"]
+    assert mine != theirs
+    survivor = Survivor(
+        f"setforge.structural_merge.x{sep}{other}{sep}{name}__mutmut_1", "not checked"
+    )
+    assert (
+        survivors_on_changed_lines(
+            [survivor],
+            {"setforge/structural_merge.py": {mine[0]}},
+            {"setforge/structural_merge.py": source},
+        )
+        == []
+    )
+
+
+def test_diff_mode_with_only_blank_or_comment_changes_is_a_clean_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "def f():\n    return 1\n\n\n# note\ndef g():\n    return 2\n"
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -3 +3,3 @@ def f():\n"
+        "+\n"
+        "+\n"
+        "+# note\n"
+    )
+    calls = _stub_edge(monkeypatch, results="", diff=diff)
+    monkeypatch.setattr(
+        gate, "_read_sources", lambda paths: {"setforge/scalar_merge.py": source}
+    )
+    assert gate.main([]) == EXIT_CLEAN
+    assert calls["run"] == 0
