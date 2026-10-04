@@ -525,7 +525,7 @@ def prepare(
             ),
             path_guards=tuple(sorted(path_guards, key=lambda item: str(item.path))),
         )
-        _write(journal, create=True)
+        _write(journal)
         return journal
 
 
@@ -663,18 +663,6 @@ def conflicting_journals(
         )
         or bool(expected_profiles.intersection(journal.reserved_profiles))
     )
-
-
-def refuse_config_mutation(config_dir: Path) -> None:
-    """Refuse a config write covered by any unfinished operation journal."""
-    expected = config_dir.resolve()
-    for journal in _load_all():
-        if expected in journal.reserved_config_dirs:
-            raise SetforgeError(
-                f"unfinished {journal.command} operation {journal.operation_id} "
-                "blocks this config mutation; run "
-                f"`setforge recover --profile={journal.profile}`"
-            )
 
 
 def begin_checkpoint(
@@ -1551,9 +1539,6 @@ def mark_manual(journal: OperationJournal) -> OperationJournal:
 def complete(journal: OperationJournal) -> None:
     """Durably remove the active record after transition/recovery commit."""
     target = journal_path(journal.profile)
-    current = load(journal.profile)
-    if current.operation_id != journal.operation_id:
-        raise SetforgeError("operation journal identity changed before completion")
     with _registry_lock():
         current = load(journal.profile)
         if current.operation_id != journal.operation_id:
@@ -1599,8 +1584,6 @@ def _open_guarded_parent(  # noqa: C901
     directory identity recorded for it.
     """
     path = path.expanduser().absolute()
-    if not path.is_absolute():  # pragma: no cover - absolute() is defensive
-        raise SetforgeError(f"recovery path must be absolute: {path}")
     follow_flags = os.O_RDONLY | os.O_DIRECTORY
     flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
     descriptors: list[int] = []
@@ -2042,12 +2025,10 @@ def _remove_replaceable(path: Path) -> None:
         path.unlink()
 
 
-def _write(journal: OperationJournal, *, create: bool = False) -> None:
+def _write(journal: OperationJournal) -> None:
     _from_json(_to_json(journal))
     target = journal_path(journal.profile)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if create and target.exists():
-        raise SetforgeError(f"operation journal already exists: {target}")
     atomicio.atomic_write_text(
         target,
         json.dumps(_to_json(journal), indent=2, sort_keys=True) + "\n",

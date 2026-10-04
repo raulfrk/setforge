@@ -37,7 +37,6 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
-from setforge import operations
 from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
 from setforge.cli import (
     _require_output_condition,
@@ -549,7 +548,6 @@ def _run_add(
     """
     scope = _resolve_scope(local=local, tracked=tracked)
     with mutation_locks(config_dir=_scope_yaml_path(scope).parent):
-        operations.refuse_config_mutation(_scope_yaml_path(scope).parent)
         _check_profile_arg(path, profile)
         if path == "marketplaces.add":
             _add_marketplace(scope, value, source=source, repo=repo, yes=yes)
@@ -615,7 +613,6 @@ def config_remove(
     """Pop-from-list OR unset-scalar at the dotted path."""
     scope = _resolve_scope(local=local, tracked=tracked)
     with mutation_locks(config_dir=_scope_yaml_path(scope).parent):
-        operations.refuse_config_mutation(_scope_yaml_path(scope).parent)
         _check_profile_arg(path, profile)
         node = _resolve_path(scope, path)
         if node is None:

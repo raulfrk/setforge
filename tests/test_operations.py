@@ -164,10 +164,14 @@ def test_active_operation_blocks_same_config_but_not_other_repo(
 ) -> None:
     _prepare(tmp_path)
 
-    with pytest.raises(SetforgeError, match="blocks this config mutation"):
-        operations.refuse_config_mutation(tmp_path)
+    with pytest.raises(SetforgeError, match="blocks this mutation"):
+        operations.refuse_conflicting_mutation(
+            resources=False, config_dir=tmp_path, profile=None
+        )
 
-    operations.refuse_config_mutation(tmp_path / "other")
+    operations.refuse_conflicting_mutation(
+        resources=False, config_dir=tmp_path / "other", profile=None
+    )
 
 
 def test_checkpoint_intent_is_durable_before_completion(

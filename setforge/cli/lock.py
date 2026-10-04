@@ -134,7 +134,6 @@ def lock(
     # the lockfile is profile-independent.
     with mutation_locks(config_dir=path.parent, profile=profile):
         operations.refuse_active(profile)
-        operations.refuse_config_mutation(path.parent)
         cfg = load_config(config)
         resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
         items = enumerate_lock_items(cfg, resolved)
