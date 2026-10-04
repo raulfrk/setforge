@@ -188,6 +188,42 @@ def test_checkpoint_intent_is_durable_before_completion(
     assert completed.checkpoints[-1].completed
 
 
+def test_checkpoint_refuses_path_without_a_journaled_preimage(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journaled = tmp_path / "journaled.txt"
+    journaled.write_text("before", encoding="utf-8")
+    journal = _prepare(tmp_path, paths=(journaled,))
+
+    with pytest.raises(SetforgeError, match="absent from the journal"):
+        operations.begin_checkpoint(
+            journal,
+            name="tracked-files",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore captured paths",
+            paths=(journaled, tmp_path / "unjournaled.txt"),
+        )
+
+    assert operations.load("p") == journal
+
+
+def test_checkpoint_covers_path_below_journaled_absent_ancestor(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    created = tmp_path / "created"
+    journal = _prepare(tmp_path, paths=(created,))
+
+    applying = operations.begin_checkpoint(
+        journal,
+        name="tracked-files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore captured paths",
+        paths=(created / "nested" / "leaf.txt",),
+    )
+
+    assert applying.checkpoints[-1].paths == (str(created),)
+
+
 def test_extend_paths_snapshots_late_identity_before_publication(
     tmp_path: Path, operation_state: Path
 ) -> None:

@@ -723,8 +723,14 @@ def begin_checkpoint(
             and any(item.path in requested.parents for requested in requested_objects)
         )
     )
-    available_paths = {str(item.path) for item in journal.paths}
-    if not set(scoped_paths) <= available_paths:
+    available_paths = {item.path for item in journal.paths}
+    absent_paths = {
+        item.path for item in journal.paths if item.kind is SnapshotKind.ABSENT
+    }
+    if any(
+        requested not in available_paths and absent_paths.isdisjoint(requested.parents)
+        for requested in requested_objects
+    ):
         raise SetforgeError("checkpoint references a path absent from the journal")
     scoped_adapters = (
         tuple(item.kind for item in journal.adapters) if adapters is None else adapters
