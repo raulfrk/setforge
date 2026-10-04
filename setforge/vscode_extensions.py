@@ -34,6 +34,7 @@ from ruamel.yaml.comments import (
 from setforge import reconcile_adapter
 from setforge.atomicio import atomic_write_text
 from setforge.binaries import resolve_binary, stderr_of
+from setforge.claude_yaml_editor import _ensure_list, _load_yaml_doc
 from setforge.config import (
     EXT_ID_RE,
     Config,
@@ -50,7 +51,7 @@ from setforge.errors import (
     ProfileNotFound,
     ResolveError,
 )
-from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
+from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml
 from setforge.overlay_provenance import OverlayOrigin, ResolvedExtension
 from setforge.provision import driver
 from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
@@ -486,13 +487,6 @@ def uninstall_one(ext_id: str) -> None:
 _EXT_YAML_INDENT = (2, 4, 2)
 
 
-def _load_yaml_doc(config_path: Path) -> CommentedMap:
-    if not config_path.exists():
-        raise ConfigError(f"config file not found: {config_path}")
-    with config_path.open("r", encoding="utf-8") as fh:
-        return yaml_rt().load(fh)
-
-
 def _dump_yaml_doc(doc: CommentedMap, config_path: Path) -> None:
     """Atomically serialize ``doc`` back to ``config_path``.
 
@@ -503,12 +497,6 @@ def _dump_yaml_doc(doc: CommentedMap, config_path: Path) -> None:
     indentation style, line endings, BOM and permission bits are kept.
     """
     atomic_write_yaml(config_path, doc, fallback=_EXT_YAML_INDENT)
-
-
-def _ensure_list(block: CommentedMap, key: str) -> CommentedSeq:
-    if key not in block:
-        block[key] = CommentedSeq()
-    return block[key]
 
 
 def _profile_reconcile_exclude(doc: CommentedMap, profile: str) -> CommentedSeq:
