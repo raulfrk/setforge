@@ -1427,13 +1427,17 @@ def capture_files(
     """Capture what each path shows, keyed by the path as given.
 
     The image is taken at the symlink-resolved location, where a write through
-    the path lands. ``strict=True`` is for configuration files (migration
-    inputs), which are text: a file that is not valid UTF-8 raises
-    :class:`SetforgeError`.
+    the path lands. Every missing directory above that location (outside
+    SetForge's own state tree) is captured as absent too, so a later capture
+    of the same keys records the directories a command created.
+    ``strict=True`` is for configuration files (migration inputs), which are
+    text: a file that is not valid UTF-8 raises :class:`SetforgeError`.
     """
+    state = Path(os.path.realpath(state_root()))
     out: dict[Path, FilesystemImage] = {}
     for path in paths:
-        image = snapshot_filesystem_image(Path(os.path.realpath(path)))
+        resolved = Path(os.path.realpath(path))
+        image = snapshot_filesystem_image(resolved)
         if strict and image.payload is not None:
             try:
                 image.payload.decode("utf-8")
@@ -1442,6 +1446,10 @@ def capture_files(
                     f"cannot snapshot {path}: file is not valid UTF-8"
                 ) from exc
         out[path] = image
+        for parent in resolved.parents:
+            if parent.is_relative_to(state) or os.path.lexists(parent):
+                break
+            out.setdefault(parent, _ABSENT)
     return out
 
 
@@ -1750,8 +1758,9 @@ def write_transition(
     ``file_pre`` / ``file_post`` are :func:`capture_files` images; every path
     whose image changed becomes a ``filesystem_deltas.json`` entry next to the
     caller's ``filesystem_deltas``, and the file marks itself complete.
-    ``meta.json`` ``paths`` lists the paths as given whose content changed plus
-    the caller's delta paths, unless ``paths`` names them.
+    A directory the caller already records is not recorded twice.
+    ``meta.json`` ``paths`` lists the paths as given whose file content changed
+    plus the caller's delta paths, unless ``paths`` names them.
 
     Returns the absolute path of the committed directory.
 
@@ -1772,7 +1781,12 @@ def write_transition(
                 *(
                     path
                     for path in changed_paths(file_pre, file_post)
-                    if not images_match(
+                    if FilesystemKind.DIRECTORY
+                    not in (
+                        file_pre.get(path, _ABSENT).kind,
+                        file_post.get(path, _ABSENT).kind,
+                    )
+                    and not images_match(
                         replace(file_pre.get(path, _ABSENT), mode=None),
                         replace(file_post.get(path, _ABSENT), mode=None),
                     )
@@ -1782,8 +1796,17 @@ def write_transition(
             key=str,
         )
     )
+    covered = {_canonical_filesystem_path(item.path) for item in filesystem_deltas}
     filesystem_deltas = _canonicalize_filesystem_deltas(
-        (*filesystem_deltas, *_file_deltas(file_pre, file_post))
+        (
+            *filesystem_deltas,
+            *(
+                item
+                for item in _file_deltas(file_pre, file_post)
+                if item.path not in covered
+                or FilesystemKind.DIRECTORY not in (item.pre.kind, item.post.kind)
+            ),
+        )
     )
     filesystem_payload = _serialize_filesystem_deltas(filesystem_deltas)
     ownership_transfer_payload = _serialize_ownership_transfers(ownership_transfers)

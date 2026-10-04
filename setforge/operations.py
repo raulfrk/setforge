@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -961,6 +962,22 @@ def _replace_filesystem_delta_anchored(
                 f"filesystem path changed since transition: {delta.path}"
             )
         _verify_parent_binding(parent_fd, delta.path.parent)
+        if (
+            replacement.kind is SnapshotKind.ABSENT
+            and current.kind is SnapshotKind.DIRECTORY
+        ):
+            # A directory is removed only once empty: one still holding
+            # entries the reversal does not remove is kept, with them.
+            try:
+                os.rmdir(delta.path.name, dir_fd=parent_fd)
+            except OSError as exc:
+                if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                    raise
+                kept = os.stat(delta.path.name, dir_fd=parent_fd, follow_symlinks=False)
+                return (kept.st_dev, kept.st_ino, kept.st_mode)
+            os.fsync(parent_fd)
+            _verify_parent_binding(parent_fd, delta.path.parent)
+            return None
         if replacement == expected and replacement.kind is SnapshotKind.SYMLINK:
             unchanged = os.stat(
                 delta.path.name, dir_fd=parent_fd, follow_symlinks=False

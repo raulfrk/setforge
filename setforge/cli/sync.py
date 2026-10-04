@@ -565,7 +565,7 @@ def sync(
             raise
 
         journal = operations.finish_checkpoint(journal)
-        file_post = transitions.capture_files(src_paths)
+        file_post = transitions.capture_files(file_pre)
         if not no_transition:
             _write_sync_transition(
                 ctx,

@@ -396,7 +396,12 @@ link target), plus uninstalling extensions that were installed (and
 reinstalling ones that were uninstalled). Each file must still hold exactly what
 the command left; timestamps are ignored. A file edited since — even on a line
 the command did not touch — refuses the whole revert, naming the file, before
-anything is written; save or undo that edit first. A second `revert` acts as
+anything is written; save or undo that edit first. Directories the command
+created are removed once the files in them are; a directory that still holds
+anything else (your own files, or the `.bak` copies `install` keeps) is left in
+place with its contents, and a directory that existed before the command is
+never removed, even when empty (releases that used GNU `patch` removed empty
+parent directories, including pre-existing ones). A second `revert` acts as
 redo. Transition records live under `~/.local/state/setforge/transitions/` and
 are kept indefinitely; if that directory grows large you can remove it.
 
