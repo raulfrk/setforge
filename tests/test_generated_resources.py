@@ -22,7 +22,11 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, InvariantViolation
 from setforge.file_ownership import file_resource_id, observe_file
-from setforge.generated import resolve_generated
+from setforge.generated import (
+    rendered_source,
+    resolve_generated,
+    resolve_generated_file,
+)
 from setforge.ownership import OwnershipStore, ProvenanceFactKind, read_owner_id
 from tests.verb_calls import capture_profile, compare_profile, preview_capture_profile
 
@@ -437,3 +441,17 @@ def test_install_refuses_changed_host_input_before_write(
     assert "generated host inputs changed after planning" in str(result.exception)
     assert not live.exists()
     assert OwnershipStore().read(file_resource_id(live)) is None
+
+
+def test_template_file_is_read_one_way_by_every_verb(tmp_path: Path) -> None:
+    """Install, compare and inspect resolve the same text from a template file."""
+    template = tmp_path / "template"
+    template.write_bytes(b"home={{ host.home }}\r\nnext\n")
+
+    resolution = resolve_generated_file(template, _generated())
+
+    assert resolution == resolve_generated("home={{ host.home }}\nnext\n", _generated())
+    assert rendered_source(template, _generated()) == resolution.rendered
+    template.write_bytes(b"caf\xe9 {{ host.home }}\n")
+    with pytest.raises(ConfigError, match="not valid UTF-8"):
+        resolve_generated_file(template, _generated())

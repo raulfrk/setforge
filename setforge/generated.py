@@ -112,14 +112,19 @@ def resolve_generated(source: str, spec: GeneratedContent) -> GeneratedResolutio
     )
 
 
-def rendered_source(path: Path, spec: GeneratedContent | None) -> str:
-    """Read one source and render it only when generator intent is declared."""
-    if spec is None:
-        return read_text_exact(path)
+def resolve_generated_file(path: Path, spec: GeneratedContent) -> GeneratedResolution:
+    """Read one template file and resolve it."""
     try:
-        source = path.read_bytes().decode("utf-8")
+        source = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise ConfigError(
             f"generated tracked-file template {path} is not valid UTF-8"
         ) from exc
-    return resolve_generated(source, spec).rendered
+    return resolve_generated(source, spec)
+
+
+def rendered_source(path: Path, spec: GeneratedContent | None) -> str:
+    """Read one source and render it only when generator intent is declared."""
+    if spec is None:
+        return read_text_exact(path)
+    return resolve_generated_file(path, spec).rendered

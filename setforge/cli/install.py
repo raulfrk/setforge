@@ -109,7 +109,7 @@ from setforge.file_ownership import (
     observe_tree,
     publish_file_claim_locked,
 )
-from setforge.generated import resolve_generated
+from setforge.generated import resolve_generated_file
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import MutationLockGuards, TargetLockGuard, mutation_locks
 from setforge.ownership import (
@@ -1032,10 +1032,7 @@ def _assert_plan_inputs_unchanged(plan: InstallPlan) -> None:
         spec = record.tracked_file.generated
         if record.generated is None or spec is None:
             continue
-        if (
-            resolve_generated(record.sub_src.read_text(encoding="utf-8"), spec)
-            != record.generated
-        ):
+        if resolve_generated_file(record.sub_src, spec) != record.generated:
             generated_changed.append(record.sub_name)
     if generated_changed:
         names = ", ".join(generated_changed)

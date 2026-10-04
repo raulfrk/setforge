@@ -78,7 +78,7 @@ from setforge.errors import (
     PluginToolMissing,
     SetforgeError,
 )
-from setforge.generated import GeneratedResolution, resolve_generated
+from setforge.generated import GeneratedResolution, resolve_generated_file
 from setforge.provision.dispatch import ProvisioningPlan
 from setforge.reconcile import FileId
 from setforge.reconcile import store as reconcile_store
@@ -464,7 +464,7 @@ def _resolve_one_pending(
     classify falls back to a verbatim tracked deploy.
     """
     generated = (
-        resolve_generated(sub_src.read_text(encoding="utf-8"), tracked_file.generated)
+        resolve_generated_file(sub_src, tracked_file.generated)
         if tracked_file.generated is not None
         else None
     )
