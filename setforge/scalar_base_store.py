@@ -1,64 +1,16 @@
-"""Per-host stored-base store for individual FORKED scalar key-paths.
+"""Where the retired forked-scalar base manifests live on disk.
 
-Sibling to the verbatim-bytes store (:mod:`setforge.base_store`). Where
-that store keeps the last-deployed *bytes* of a whole tracked file, this
-store keeps the last-deployed *value of a single forked scalar key-path* —
-the common ancestor a forked-scalar three-way merge
-(:func:`setforge.scalar_merge.resolve_scalar`) needs to tell "the user
-edited the live value" apart from "tracked moved the value upstream".
-
-Layout + format
----------------
-One JSON manifest per ``(profile, file-id)`` at
-``<state_root>/scalar-base/<profile>/<file-id>.json`` — a SIBLING root to
-``<state_root>/base/`` (the bytes store). Each manifest maps a dotted
-key-path to a record::
-
-    { "<dotted-path>": {"present": bool, "value": <json scalar>} }
-
-The dotted-path string is used verbatim as the manifest key — no
-normalize step is applied on either set or get, so the raw key written by
-:func:`set_bases` is the exact key :func:`get_base` looks up.
-
-* ``present: false`` -> the key-path was deployed *absent* (no ``value``
-  key is written).
-* ``present: true, value: null`` -> the key-path was deployed as a literal
-  ``null``.
-
-These two states are DISTINCT and must never collapse — a forked-scalar
-merge treats field-absence (:data:`setforge.scalar_merge.ABSENT`) as an
-operand wholly separate from a present ``None``.
-
-Type fidelity rides JSON's native scalar types: ``1`` round-trips as
-``int``, ``1.0`` as ``float``, ``true`` as ``bool``, ``"x"`` as ``str``.
-No numeric coercion is applied before serialization. ``json.dumps`` runs
-with ``allow_nan=False`` so a ``NaN``/``Inf`` value is REJECTED at write
-(JSON has no such literals) rather than emitting non-standard tokens.
-
-Single-writer invariant
-------------------------
-``setforge install`` is a single process, so the manifest has exactly one
-writer at a time. :func:`set_bases` is the PRIMARY entry point: it does ONE
-read-modify-write of the whole manifest for every path it is given, which
-closes the lost-update race a per-path read-modify-write would open.
-:func:`set_base` and :func:`re_baseline` are thin one-key shims over
-:func:`set_bases`; correctness still relies on the single-writer
-invariant, since two concurrent writers could interleave their read and
-write phases.
-
-No install/deploy/revert wiring lives here — the scope is the store
-primitive only.
+The store itself was retired with the disposition model at schema 3.0. One
+JSON manifest per ``(profile, file-id)`` used to sit at
+``<state_root>/scalar-base/<profile>/<file-id>.json``; the path is still needed
+to restore a pre-3.0 transition's snapshot and to remove the manifests during
+the 2.1 -> 3.0 migration.
 """
 
-import json
 from pathlib import Path
 
-from setforge import atomicio, base_store_format
-from setforge.errors import BaseStoreError, BaseStoreIOError
-from setforge.scalar_merge import ABSENT
+from setforge.errors import BaseStoreError
 from setforge.transitions import state_root
-
-type _Manifest = dict[str, dict[str, object]]
 
 
 def scalar_base_root() -> Path:
@@ -97,156 +49,8 @@ def _resolve_target(profile: str, file_id: str) -> Path:
 def manifest_path(profile: str, file_id: str) -> Path:
     """Return the on-disk manifest path for ``(profile, file_id)``.
 
-    Public so the transition state-snapshot integration (Invariant I5)
-    can capture and restore the manifest's verbatim bytes alongside the
-    byte base and the spans sidecar. Applies the same traversal guard as
-    the read/write entry points.
+    Guards traversal, so restoring an old transition or unlinking a
+    manifest during migration never touches a path outside
+    ``scalar-base/<profile>/``.
     """
     return _resolve_target(profile, file_id)
-
-
-def _read_manifest(profile: str, file_id: str) -> _Manifest:
-    """Return the parsed manifest for ``(profile, file_id)``.
-
-    A missing manifest (no key-path ever stored) reads as an empty dict —
-    every path is then :data:`ABSENT`. A corrupt/hand-edited manifest
-    raises :class:`BaseStoreError`; it is NEVER silently treated as empty.
-    Corruption includes a non-object top level and any path whose record
-    is not itself an object — both are validated here so the
-    :data:`_Manifest` shape this returns is a true contract, not a lie at
-    the trust boundary.
-    """
-    base_store_format.check_format_version(_profile_root(profile))
-    target = _resolve_target(profile, file_id)
-    try:
-        raw = target.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except OSError as err:
-        raise BaseStoreIOError(
-            f"failed to read scalar base for {profile}/{file_id}: {err}"
-        ) from err
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as err:
-        raise BaseStoreError(
-            f"corrupt scalar-base manifest for {profile}/{file_id}: {err}"
-        ) from err
-    if not isinstance(parsed, dict):
-        raise BaseStoreError(
-            f"corrupt scalar-base manifest for {profile}/{file_id}: "
-            f"top level must be an object, got {type(parsed).__name__}"
-        )
-    for path, record in parsed.items():
-        if not isinstance(record, dict):
-            raise BaseStoreError(
-                f"corrupt scalar-base manifest for {profile}/{file_id}: "
-                f"record for {path!r} must be an object, got "
-                f"{type(record).__name__}"
-            )
-    return parsed
-
-
-def _write_manifest(profile: str, file_id: str, manifest: _Manifest) -> None:
-    """Atomically serialize and write ``manifest`` for ``(profile, file_id)``.
-
-    Serializes with ``allow_nan=False`` so a ``NaN``/``Inf`` scalar is
-    rejected (wrapped as :class:`BaseStoreError`) before any disk write.
-    """
-    target = _resolve_target(profile, file_id)
-    try:
-        text = json.dumps(manifest, allow_nan=False, indent=2, sort_keys=True)
-    except ValueError as err:
-        raise BaseStoreError(
-            f"non-finite scalar value for {profile}/{file_id}: {err}"
-        ) from err
-    try:
-        atomicio.atomic_write_text(target, text + "\n")
-    except OSError as err:
-        raise BaseStoreIOError(
-            f"failed to write scalar base for {profile}/{file_id}: {err}"
-        ) from err
-
-
-def _record(value_or_absent: object) -> dict[str, object]:
-    """Build the on-disk record for ``value_or_absent``.
-
-    :data:`ABSENT` yields ``{"present": False}`` (no ``value`` key); any
-    present scalar — including ``None`` — yields
-    ``{"present": True, "value": <scalar>}``.
-    """
-    if value_or_absent is ABSENT:
-        return {"present": False}
-    return {"present": True, "value": value_or_absent}
-
-
-def get_base(profile: str, file_id: str, path: str) -> object:
-    """Return the stored base value for ``path`` under ``(profile, file_id)``.
-
-    Returns the typed scalar (``int``/``float``/``bool``/``str``), ``None``
-    for a stored literal ``null``, or :data:`ABSENT` for both a
-    ``present: false`` record AND a missing path/manifest. The ``present``
-    flag is read explicitly — never inferred from a value lookup — so a
-    stored ``null`` is never confused with absence.
-    """
-    manifest = _read_manifest(profile, file_id)
-    record = manifest.get(path)
-    if record is None or not record.get("present", False):
-        return ABSENT
-    return record.get("value")
-
-
-def set_bases(profile: str, file_id: str, values: dict[str, object]) -> None:
-    """Record base values for every path in ``values`` (PRIMARY entry point).
-
-    Does ONE read-modify-write of the whole manifest: untouched paths are
-    preserved, and each given path is set to its value (or, if the value is
-    :data:`ABSENT`, to a ``present: false`` record). Performing every
-    update in a single write closes the lost-update race that a per-path
-    read-modify-write would open.
-    """
-    manifest = _read_manifest(profile, file_id)
-    for path, value in values.items():
-        manifest[path] = _record(value)
-    _write_manifest(profile, file_id, manifest)
-    try:
-        base_store_format.stamp_format_version(_profile_root(profile))
-    except OSError as err:
-        raise BaseStoreIOError(
-            f"failed to stamp scalar-base format version for {profile}: {err}"
-        ) from err
-
-
-def set_base(profile: str, file_id: str, path: str, value: object) -> None:
-    """Record ``value`` as the base for a single ``path``.
-
-    Thin one-key shim over :func:`set_bases`. Passing
-    :data:`ABSENT` records ``present: false`` (deployed-absent).
-    """
-    set_bases(profile, file_id, {path: value})
-
-
-def re_baseline(profile: str, file_id: str, path: str, value_or_absent: object) -> None:
-    """Overwrite the base for ``path`` post-resolution.
-
-    Rewrites the stored ancestor to whatever actually landed live after a
-    merge resolves. Passing :data:`ABSENT` records ``present: false``
-    (deployed-absent) — DISTINCT from :func:`prune`, which removes the
-    manifest entry entirely. Semantically identical to :func:`set_base`;
-    named separately to mark the post-deploy re-baseline call site.
-    """
-    set_bases(profile, file_id, {path: value_or_absent})
-
-
-def prune(profile: str, file_id: str, live_paths: set[str]) -> None:
-    """Drop manifest entries for ``(profile, file_id)`` not in ``live_paths``.
-
-    Strictly scoped to the one manifest: no other ``(profile, file_id)``
-    pair is touched. A path absent from ``live_paths`` has its record
-    REMOVED (distinct from a ``present: false`` record, which records a
-    deployed-absent value). A missing manifest is a no-op.
-    """
-    manifest = _read_manifest(profile, file_id)
-    pruned = {path: record for path, record in manifest.items() if path in live_paths}
-    if pruned != manifest:
-        _write_manifest(profile, file_id, pruned)
