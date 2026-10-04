@@ -178,6 +178,24 @@ def open_dir_at(
         raise
 
 
+def names_directory(
+    path: str | Path,
+    descriptor: int,
+    *,
+    dir_fd: int | None = None,
+    follow_symlinks: bool = False,
+) -> bool:
+    """Return whether ``path`` still names the directory held as ``descriptor``.
+
+    Device and inode must match; a missing entry or a non-directory does not.
+    """
+    try:
+        live = os.stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+    except OSError:
+        return False
+    return stat.S_ISDIR(live.st_mode) and os.path.samestat(live, os.fstat(descriptor))
+
+
 @contextlib.contextmanager
 def staged_file_at(
     parent_fd: int,

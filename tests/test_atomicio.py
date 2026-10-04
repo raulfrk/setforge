@@ -200,6 +200,38 @@ def test_open_dir_at_creates_only_missing_components_and_only_when_asked(
     assert modes == [0o755, 0o700, 0o700]
 
 
+def test_names_directory_tracks_the_held_directory_not_the_name(
+    tmp_path: Path,
+) -> None:
+    held = tmp_path / "held"
+    held.mkdir()
+    descriptor = os.open(held, os.O_RDONLY | os.O_DIRECTORY)
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert atomicio.names_directory(held, descriptor)
+        assert atomicio.names_directory("held", descriptor, dir_fd=parent_fd)
+
+        held.rename(tmp_path / "moved")
+        assert not atomicio.names_directory(held, descriptor)
+        assert atomicio.names_directory("moved", descriptor, dir_fd=parent_fd)
+
+        held.mkdir()
+        assert not atomicio.names_directory(held, descriptor)
+        assert not atomicio.names_directory("held", descriptor, dir_fd=parent_fd)
+
+        held.rmdir()
+        held.symlink_to(tmp_path / "moved", target_is_directory=True)
+        assert not atomicio.names_directory(held, descriptor)
+        assert atomicio.names_directory(held, descriptor, follow_symlinks=True)
+
+        held.unlink()
+        held.write_bytes(b"")
+        assert not atomicio.names_directory(held, descriptor, follow_symlinks=True)
+    finally:
+        os.close(parent_fd)
+        os.close(descriptor)
+
+
 def _reject_rename_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     def reject(
         source_fd: int, source: str, destination_fd: int, destination: str, flags: int

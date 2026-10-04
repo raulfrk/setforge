@@ -943,12 +943,7 @@ def _locked_common_dir(config_dir: Path) -> Iterator[int]:
 
 def _require_common_dir_binding(config_dir: Path, common_fd: int) -> None:
     rebound = _git_common_dir(config_dir)
-    rebound_info = rebound.stat()
-    held_info = os.fstat(common_fd)
-    if (rebound_info.st_dev, rebound_info.st_ino) != (
-        held_info.st_dev,
-        held_info.st_ino,
-    ):
+    if not atomicio.names_directory(rebound, common_fd, follow_symlinks=True):
         raise OwnershipError("Git common directory changed while holding UUID lock")
 
 
@@ -1074,27 +1069,15 @@ def _open_dir_chain(root: Path, *children: str, create: bool) -> Iterator[int | 
     if descriptor is None:
         yield None
         return
-    info = os.fstat(descriptor)
-    identity = info.st_dev, info.st_ino
     try:
         yield descriptor
-        _verify_directory_binding(path, descriptor, expected=identity)
+        _verify_directory_binding(path, descriptor)
     finally:
         os.close(descriptor)
 
 
-def _verify_directory_binding(
-    path: Path, descriptor: int, *, expected: tuple[int, int] | None = None
-) -> None:
-    held = os.fstat(descriptor)
-    identity = expected or (held.st_dev, held.st_ino)
-    try:
-        live = path.lstat()
-    except OSError as exc:
-        raise CorruptOwnershipState(
-            f"ownership state directory binding changed: {path}"
-        ) from exc
-    if not stat.S_ISDIR(live.st_mode) or (live.st_dev, live.st_ino) != identity:
+def _verify_directory_binding(path: Path, descriptor: int) -> None:
+    if not atomicio.names_directory(path, descriptor):
         raise CorruptOwnershipState(
             f"ownership state directory binding changed: {path}"
         )
@@ -1149,17 +1132,7 @@ def _open_bound_child(
 def _verify_bound_child(
     parent_fd: int, parent_path: Path, name: str, child_fd: int
 ) -> None:
-    held = os.fstat(child_fd)
-    try:
-        live = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except OSError as exc:
-        raise CorruptOwnershipState(
-            f"ownership state directory binding changed: {parent_path / name}"
-        ) from exc
-    if not stat.S_ISDIR(live.st_mode) or (live.st_dev, live.st_ino) != (
-        held.st_dev,
-        held.st_ino,
-    ):
+    if not atomicio.names_directory(name, child_fd, dir_fd=parent_fd):
         raise CorruptOwnershipState(
             f"ownership state directory binding changed: {parent_path / name}"
         )

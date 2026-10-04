@@ -1082,19 +1082,19 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
                     f"filesystem path changed since transition: {replacement.path}"
                 )
             _verify_staging_create_event(watch_fd, temporary, replacement.path)
-            if not _coordinate_matches_fd(parent_fd, temporary, directory_fd):
+            if not atomicio.names_directory(temporary, directory_fd, dir_fd=parent_fd):
                 raise SetforgeError(
                     f"filesystem path changed since transition: {replacement.path}"
                 )
             try:
                 atomicio.rename_noreplace_at(parent_fd, temporary, name)
             except FileExistsError as exc:
-                if _coordinate_matches_fd(parent_fd, temporary, directory_fd):
+                if atomicio.names_directory(temporary, directory_fd, dir_fd=parent_fd):
                     os.rmdir(temporary, dir_fd=parent_fd)
                 raise SetforgeError(
                     f"filesystem path changed since transition: {replacement.path}"
                 ) from exc
-            if not _coordinate_matches_fd(parent_fd, name, directory_fd):
+            if not atomicio.names_directory(name, directory_fd, dir_fd=parent_fd):
                 with suppress(OSError):
                     atomicio.rename_noreplace_at(parent_fd, name, temporary)
                 raise SetforgeError(
@@ -1141,19 +1141,6 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
             os.close(directory_fd)
         if watch_fd is not None:
             os.close(watch_fd)
-
-
-def _coordinate_matches_fd(parent_fd: int, name: str, descriptor: int) -> bool:
-    try:
-        coordinate = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        opened = os.fstat(descriptor)
-    except OSError:
-        return False
-    return (coordinate.st_dev, coordinate.st_ino, coordinate.st_mode) == (
-        opened.st_dev,
-        opened.st_ino,
-        opened.st_mode,
-    )
 
 
 def _watch_parent_directory(parent_fd: int) -> int:
@@ -1613,18 +1600,7 @@ def _remove_replaceable_at(parent_fd: int, name: str, path: Path) -> None:
 
 def _verify_parent_binding(parent_fd: int, parent: Path) -> None:
     """Confirm the lexical parent still resolves to the held descriptor."""
-    try:
-        lexical = parent.stat()
-        opened = os.fstat(parent_fd)
-    except OSError as exc:
-        raise SetforgeError(
-            f"journaled path parent changed before write: {parent}"
-        ) from exc
-    if (lexical.st_dev, lexical.st_ino, lexical.st_mode) != (
-        opened.st_dev,
-        opened.st_ino,
-        opened.st_mode,
-    ):
+    if not atomicio.names_directory(parent, parent_fd, follow_symlinks=True):
         raise SetforgeError(f"journaled path parent changed before write: {parent}")
 
 

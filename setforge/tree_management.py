@@ -752,18 +752,12 @@ def apply_tree(
     )
 
 
-def _same_object(left_fd: int, right_fd: int) -> bool:
-    left = os.fstat(left_fd)
-    right = os.fstat(right_fd)
-    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
-
-
 def _verify_relative_binding(
     anchor_fd: int, relative_parts: tuple[str, ...], expected_fd: int
 ) -> None:
     current_fd = atomicio.open_dir_at(anchor_fd, relative_parts)
     try:
-        if not _same_object(current_fd, expected_fd):
+        if not os.path.sameopenfile(current_fd, expected_fd):
             raise SetforgeError("managed tree root binding changed during apply")
     finally:
         os.close(current_fd)
