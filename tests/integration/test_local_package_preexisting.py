@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import tarfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -74,3 +76,34 @@ def test_install_refuses_symlink_to_identical_file(
 
     assert link.is_symlink(), result.output
     assert result.exit_code != 0
+
+
+def test_install_refuses_identical_extracted_binary_without_receipt(
+    integration_env: Callable[..., IntegrationEnv],
+    integration_subprocess: object,
+    tmp_path: Path,
+) -> None:
+    env = integration_env()
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    body = b"#!/bin/sh\necho hi\n"
+    existing = install_dir / "mytool"
+    existing.write_bytes(body)
+    _declare_local_package(env, install_dir)
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        info = tarfile.TarInfo("mytool")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    (env.repo / "tracked" / "mytool.tar.gz").write_bytes(buffer.getvalue())
+    text = env.config.read_text()
+    env.config.write_text(
+        text.replace("path: mytool", "path: mytool.tar.gz").replace(
+            "extract: false", "extract: true"
+        )
+    )
+
+    result = _install(env)
+
+    assert result.exit_code != 0
+    assert existing.read_bytes() == body
