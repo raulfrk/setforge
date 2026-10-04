@@ -8,14 +8,13 @@ from setforge.errors import CorruptIndexError, IndexVersionError, InvariantViola
 from setforge.reconcile.index_model import (
     CURRENT_VERSION,
     FileEntry,
-    HunkCls,
     HunkKind,
     Index,
     dumps,
     loads,
     require_unit_kind,
 )
-from setforge.reconcile.types import UnitKind
+from setforge.reconcile.types import HunkClass, UnitKind
 
 
 def test_round_trip() -> None:
@@ -68,7 +67,7 @@ def test_require_unit_kind_accepts_only_current_routing() -> None:
 def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
     """The local StrEnums persist byte-identically to the frozen on-disk schema.
 
-    ``HunkKind``/``HunkCls`` members ARE ``str`` and equal their ``.value``, so
+    ``HunkKind``/``HunkClass`` members ARE ``str`` and equal their ``.value``, so
     ``dumps`` must emit the bare discriminator strings — no ``"HunkKind.KEY"`` /
     enum-qualified leak. Asserting on the raw JSON text proves the StrEnum
     conversion did not change the persisted format.
@@ -76,14 +75,14 @@ def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
     # members equal their exact on-disk byte-strings
     assert HunkKind.LINE == "line"
     assert HunkKind.KEY == "key"
-    assert HunkCls.LOCAL == "local"
-    assert HunkCls.SHARED == "shared"
-    assert HunkCls.PENDING == "pending"
-    assert HunkCls.SHARED_DRAFTED == "shared_drafted"
+    assert HunkClass.LOCAL == "local"
+    assert HunkClass.SHARED == "shared"
+    assert HunkClass.PENDING == "pending"
+    assert HunkClass.SHARED_DRAFTED == "shared_drafted"
 
     row = {
         "kind": HunkKind.KEY,
-        "cls": HunkCls.SHARED_DRAFTED,
+        "cls": HunkClass.SHARED_DRAFTED,
         "label": "editor.fontSize",
         "path": "editor.fontSize",
         "value_hash": "sha256:v",
@@ -101,7 +100,7 @@ def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
     assert '"kind": "key"' in text
     assert '"cls": "shared_drafted"' in text
     assert "HunkKind" not in text
-    assert "HunkCls" not in text
+    assert "HunkClass" not in text
     # and the bytes round-trip back to the same literal strings
     out = loads(text)
     hunk = out.files["s.yaml"].hunks[0]

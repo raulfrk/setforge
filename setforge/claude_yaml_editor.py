@@ -12,10 +12,7 @@ Round-trip preserves comments and key ordering via ruamel.yaml's ``rt`` mode.
 
 from __future__ import annotations
 
-import contextlib
-import os
 import stat
-import tempfile
 from pathlib import Path
 
 from ruamel.yaml.comments import (
@@ -23,6 +20,7 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
+from setforge.atomicio import atomic_write_text
 from setforge.config import (
     Config,
     MarketplaceSource,
@@ -184,19 +182,7 @@ def _atomic_yaml_dump(doc: CommentedMap, config_path: Path) -> None:
     text = render_yaml(
         doc, config_path.read_bytes().decode("utf-8"), fallback=(2, 4, 2)
     )
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(config_path.parent), prefix=f".{config_path.name}.", suffix=".tmp"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fchmod(fh.fileno(), original_mode)
-        tmp_path.replace(config_path)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink(missing_ok=True)
+    atomic_write_text(config_path, text, mode=original_mode)
 
 
 def _ensure_top_level_block(doc: CommentedMap, key: str) -> CommentedMap:

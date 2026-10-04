@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import stat
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -22,6 +23,7 @@ from typing import Any, assert_never
 import typer
 from rich.console import Console
 
+from setforge.atomicio import atomic_write_text
 from setforge.binaries import _STUB_TEMPLATE, LOCAL_CONFIG_PATH
 from setforge.cli import app
 from setforge.cli._config_repo import (
@@ -433,15 +435,8 @@ def _wire_source_block(target_dir: Path, *, console: Console) -> bool:
     spec = SourceSpec(choice=SourceChoice.PATH, path=target_dir)
     existing = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
     new_content = existing + _build_source_block(spec)
-    mode = LOCAL_CONFIG_PATH.stat().st_mode
-    tmp = LOCAL_CONFIG_PATH.with_name(f"{LOCAL_CONFIG_PATH.name}.tmp")
-    try:
-        tmp.write_text(new_content, encoding="utf-8")
-        tmp.chmod(mode)
-        tmp.replace(LOCAL_CONFIG_PATH)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    mode = stat.S_IMODE(LOCAL_CONFIG_PATH.stat().st_mode)
+    atomic_write_text(LOCAL_CONFIG_PATH, new_content, mode=mode)
     console.print(f"  wired local.yaml source: → {target_dir}")
     return True
 

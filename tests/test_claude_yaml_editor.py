@@ -5,6 +5,7 @@ via ruamel.yaml round-trip mode; tests assert idempotency and comment
 preservation across edits.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -256,7 +257,7 @@ def test_failed_replace_leaves_original_intact(
     def boom(_src: object, _dst: object) -> None:
         raise OSError("simulated crash")
 
-    monkeypatch.setattr(mod.os, "replace", boom)
+    monkeypatch.setattr(os, "replace", boom)
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
     with pytest.raises(OSError, match="simulated crash"):
         mod.yaml_add_marketplace(p, "new-mp", src)
