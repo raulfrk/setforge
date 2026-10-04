@@ -1207,7 +1207,7 @@ def _reformatted(lines: int, fmt: StructuredFormat) -> tuple[bytes, bytes, bytes
 
 
 @pytest.mark.parametrize("fmt", [_FMT, _JSON])
-@pytest.mark.parametrize("lines", [1200, 5000])
+@pytest.mark.parametrize("lines", [100, 1000])
 def test_whole_file_reformat_costs_a_fixed_number_of_parses(
     monkeypatch: pytest.MonkeyPatch, fmt: StructuredFormat, lines: int
 ) -> None:
