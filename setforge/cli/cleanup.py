@@ -7,7 +7,6 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 import typer
 from rich.console import Console
@@ -61,14 +60,6 @@ __all__ = [
 ]
 
 _PROVISION_IGNORE_KEY = "provision_ignore"
-
-
-def __getattr__(name: str) -> Any:  # noqa: ANN401
-    if name == "button_bar":
-        from setforge.ui.widgets import button_bar
-
-        return button_bar
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class ConfinementError(Exception):
@@ -427,15 +418,14 @@ def _declared_package_items(
 
 
 def _pick_action(item: CleanupItem) -> CleanupAction:
-    from setforge.cli import cleanup as _self
-    from setforge.ui.widgets import CANCEL, Button
+    from setforge.ui.widgets import CANCEL, Button, button_bar
 
     where = str(item.path) if item.path is not None else "(no recorded path)"
     buttons = [Button("skip (default)", CleanupAction.SKIP)]
     if item.managed:
         buttons.append(Button("delete managed package", CleanupAction.DELETE))
     buttons.append(Button("mark orphan (keep package)", CleanupAction.MARK_ORPHAN))
-    choice = _self.button_bar(
+    choice = button_bar(
         buttons,
         title=f"setforge cleanup — {item.identity.display}",
         body=f"Undeclared provisioned binary at {where}. What would you like to do?",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from setforge.config import (
     BundleComponent,
@@ -42,10 +43,6 @@ def _inline_model(component: BundleComponent) -> Package | None:
     raise AssertionError(  # pragma: no cover
         f"bundle component {component.id!r} declares no source"
     )
-
-
-def _is_file_component(component: BundleComponent) -> bool:
-    return component.file is not None
 
 
 def _resolve_item(
@@ -124,33 +121,6 @@ def _apply_item_lock(
     )[0]
 
 
-def topo_order(bundle: BundleSpec) -> list[BundleComponent]:
-    order_index = {c.id: i for i, c in enumerate(bundle.components)}
-    by_id = {c.id: c for c in bundle.components}
-    indegree = {c.id: 0 for c in bundle.components}
-    dependents: dict[str, list[str]] = {c.id: [] for c in bundle.components}
-    for component in bundle.components:
-        for dep in component.depends_on:
-            indegree[component.id] += 1
-            dependents[dep].append(component.id)
-
-    ready = sorted(
-        (cid for cid, deg in indegree.items() if deg == 0), key=order_index.__getitem__
-    )
-    result: list[BundleComponent] = []
-    while ready:
-        cid = ready.pop(0)
-        result.append(by_id[cid])
-        newly_ready: list[str] = []
-        for dependent in dependents[cid]:
-            indegree[dependent] -= 1
-            if indegree[dependent] == 0:
-                newly_ready.append(dependent)
-        # Re-sort the frontier by declaration order so the tiebreak stays stable.
-        ready = sorted(ready + newly_ready, key=order_index.__getitem__)
-    return result
-
-
 def _ownership_skip(
     item: ProvisionItem,
     component: BundleComponent,
@@ -186,6 +156,7 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
     lock: LockFile | None = None,
     platform_os: str | None = None,
     platform_arch: str | None = None,
+    tracked_root: Path | None = None,
 ) -> ReconcileResult:
     validated = validate_bundle(bundle, cfg)
     if graph is not None and graph != validated:
@@ -251,7 +222,11 @@ def execute_bundle(  # noqa: C901 - dependency gates include frozen direct-packa
             continue
         outcome = planned_apply(item) if planned_apply is not None else None
         if outcome is None:
-            target = provisioner if provisioner is not None else build(item)
+            target = (
+                provisioner
+                if provisioner is not None
+                else build(item, tracked_root=tracked_root)
+            )
             outcome = _apply(target, item)
         outcomes.append(outcome)
         if outcome.outcome in (Outcome.OK, Outcome.SKIP):

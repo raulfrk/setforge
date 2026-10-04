@@ -83,7 +83,7 @@ from setforge.errors import (
 )
 from setforge.generated import GeneratedResolution, resolve_generated
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
-from setforge.provision.dispatch import ProvisioningPlan
+from setforge.provision.dispatch import ProvisioningPlan, plan_provisioning
 from setforge.reconcile import FileId
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.conflict_choices import (
@@ -1363,7 +1363,13 @@ def _dry_run_pipeline(
         for entry in mcp.value.entries:
             verb = "add" if entry.prior is None else "update"
             typer.echo(f"  WOULD {verb:<7} {entry.name}")
-    dry_run_packages(ctx.cfg, ctx.resolved, plan=provisioning)
+    dry_run_packages(
+        ctx.cfg,
+        ctx.resolved,
+        plan=provisioning
+        if provisioning is not None
+        else plan_provisioning(ctx.cfg, ctx.resolved),
+    )
     _dry_run_emit_transition_path(ctx, record=record_transition)
     typer.echo(_DRY_RUN_FINAL_LINE)
 

@@ -10,7 +10,6 @@ from setforge.provision.dispatch import (
     ProvisioningPlan,
     apply_provisioning,
     report_provisioning,
-    run_provisioning,
 )
 from setforge.provision.ownership import PackageAction
 from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResult
@@ -21,13 +20,9 @@ def reconcile_packages(
     resolved: ResolvedProfile,
     *,
     lock: LockFile | None = None,
-    plan: ProvisioningPlan | None = None,
+    plan: ProvisioningPlan,
 ) -> list[ReconcileResult]:
-    results = (
-        apply_provisioning(plan)
-        if plan is not None
-        else run_provisioning(cfg, resolved, lock=lock)
-    )
+    results = apply_provisioning(plan)
     for result in results:
         for outcome in result.outcomes:
             _echo_outcome(outcome)
@@ -56,27 +51,19 @@ def dry_run_packages(
     cfg: Config,
     resolved: ResolvedProfile,
     *,
-    plan: ProvisioningPlan | None = None,
+    plan: ProvisioningPlan,
 ) -> None:
     typer.echo("=== would-be package provision ===")
-    bundles = plan.bundles if plan is not None else resolved.bundles
-    if bundles:
-        typer.echo(f"  bundles: {', '.join(bundles)}")
-    if plan is not None:
-        for decision in plan.ownership:
-            if decision.action is PackageAction.ADOPT:
-                typer.echo(
-                    f"  WOULD adopt {decision.item.identity.display} (metadata only)"
-                )
-            elif decision.action is PackageAction.HOLD:
-                typer.echo(
-                    f"  HOLD {decision.item.identity.display}: {decision.detail}"
-                )
-    results = (
-        report_provisioning(plan)
-        if plan is not None
-        else run_provisioning(cfg, resolved, report_only=True)
-    )
+    if plan.bundles:
+        typer.echo(f"  bundles: {', '.join(plan.bundles)}")
+    for decision in plan.ownership:
+        if decision.action is PackageAction.ADOPT:
+            typer.echo(
+                f"  WOULD adopt {decision.item.identity.display} (metadata only)"
+            )
+        elif decision.action is PackageAction.HOLD:
+            typer.echo(f"  HOLD {decision.item.identity.display}: {decision.detail}")
+    results = report_provisioning(plan)
     planned = [
         identity
         for result in results

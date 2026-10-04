@@ -37,15 +37,6 @@ class LocalSourceError(Exception):
     pass
 
 
-_manifest_tracked_root: Path | None = None
-
-
-def set_manifest_tracked_root(root: Path | None) -> None:
-    """Pin the ``tracked/`` directory of the manifest being installed."""
-    global _manifest_tracked_root
-    _manifest_tracked_root = root
-
-
 def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
     # realpath both sides: catches a symlink under tracked/ aimed outside it too.
     real_root = Path(tracked_root).resolve()
@@ -61,6 +52,18 @@ def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
             "(expected a regular file under the tracked root)"
         )
     return candidate
+
+
+def _is_identical_file(target: Path, data: bytes) -> bool:
+    try:
+        return (
+            not target.is_symlink()
+            and target.is_file()
+            and hashlib.sha256(target.read_bytes()).digest()
+            == hashlib.sha256(data).digest()
+        )
+    except OSError:
+        return False
 
 
 @register("local")
@@ -190,6 +193,18 @@ class LocalProvisioner(Provisioner):
             chmod=pkg.chmod,
             checksum=pkg.checksum,
         )
+        target = spec.install_dir.resolve() / (spec.rename or spec.binary)
+        if (
+            (target.exists() or target.is_symlink())
+            and not self._receipt_owns(item.identity, target)
+            and not _is_identical_file(target, data)
+        ):
+            detail = (
+                f"{target} already exists and was not installed by setforge; "
+                "left untouched (move it aside to let setforge install it)"
+            )
+            LOGGER.warning("local install refused for %s: %s", pkg.path, detail)
+            return ProvisionOutcome(item=item, outcome=Outcome.HARD, detail=detail)
         try:
             # Checksum optional here (bit-rot guard, not required like github_release).
             dest = install_from_bytes(data, spec, checksum_required=False)
@@ -213,6 +228,10 @@ class LocalProvisioner(Provisioner):
             item=item, outcome=Outcome.OK, detail=f"installed {dest}"
         )
 
+    def _receipt_owns(self, identity: Identity, target: Path) -> bool:
+        recorded = self._receipts.path_for(identity, provider=self.type)
+        return recorded is not None and recorded.resolve() == target
+
     def uninstall_one(self, identity: Identity) -> None:
         recorded = self._receipts.path_for(identity, provider=self.type)
         if recorded is not None:
@@ -223,7 +242,5 @@ class LocalProvisioner(Provisioner):
         # Lazy: mirrors install.py's tracked_root derivation via the source layer.
         if self._tracked_root is not None:
             return self._tracked_root
-        if _manifest_tracked_root is not None:
-            return _manifest_tracked_root
         source_dir = resolve_source_dir(get_resolved_source())
         return source_dir / "tracked"

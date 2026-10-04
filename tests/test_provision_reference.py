@@ -16,7 +16,7 @@ from setforge.provision.protocol import (
     ProvisionItem,
 )
 from setforge.provision.receipt import ReceiptStore
-from setforge.provision.reference import InMemoryProvisioner
+from tests.provision_reference import InMemoryProvisioner
 
 
 def _item(key: str) -> ProvisionItem:
