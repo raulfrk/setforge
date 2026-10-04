@@ -15,6 +15,7 @@ import os
 import stat
 import sys
 import tempfile
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,6 @@ from setforge.config import (
     resolve_symlink_target,
 )
 from setforge.errors import (
-    InvalidTransitionRecord,
     NoTransitionFound,
     ProfileNotFound,
     RevertFailed,
@@ -177,9 +177,9 @@ def _abs_diff_path(path: str) -> str:
 
 
 def _plugin_reconciles_from_transition(
-    transition: transitions.TransitionDir,
+    delta: transitions.PluginDelta | None,
 ) -> tuple[PluginReconcile, ...]:
-    """Build :class:`PluginReconcile` tuple from a transition's plugins.json.
+    """Build :class:`PluginReconcile` tuple from a transition's plugin delta.
 
     Maps the forward ``PluginDelta`` to the post-revert state that the
     panel surfaces (matches the dispatch semantics in
@@ -196,11 +196,8 @@ def _plugin_reconciles_from_transition(
     is per-plugin; marketplace ops are a separate axis and would need
     their own renderer.
     """
-    plugin_file = transition / "plugins.json"
-    if not plugin_file.exists():
+    if delta is None:
         return ()
-    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
-    delta = transitions.plugin_delta_from_json(payload)
     source = "[from transition record]"
     reconciles: list[PluginReconcile] = []
     for plugin_id in delta.installed:
@@ -231,9 +228,9 @@ def _plugin_reconciles_from_transition(
 
 
 def _extension_reconciles_from_transition(
-    transition: transitions.TransitionDir,
+    delta: transitions.ExtensionDelta | None,
 ) -> tuple[ExtensionReconcile, ...]:
-    """Build :class:`ExtensionReconcile` tuple from a transition's extensions.json.
+    """Build :class:`ExtensionReconcile` tuple from a transition's extension delta.
 
     Maps the forward ``ExtensionDelta`` to the post-revert state:
 
@@ -242,11 +239,8 @@ def _extension_reconciles_from_transition(
     - forward ``removed`` → revert reinstalls → :attr:`ExtensionOperation.INSTALLED`
       (panel marker ``+``).
     """
-    ext_file = transition / "extensions.json"
-    if not ext_file.exists():
+    if delta is None:
         return ()
-    payload = json.loads(ext_file.read_text(encoding="utf-8"))
-    delta = transitions.extension_delta_from_json(payload)
     source = "[from transition record]"
     reconciles: list[ExtensionReconcile] = []
     for ext_id in delta.added:
@@ -268,44 +262,10 @@ def _extension_reconciles_from_transition(
     return tuple(reconciles)
 
 
-def _load_meta_touched_paths(transition: transitions.TransitionDir) -> list[Path]:
-    """Read the ``paths`` array recorded on ``transition``'s meta.json.
-
-    ``paths`` is not a :class:`transitions.TransitionMeta` field (it is
-    appended separately by :func:`transitions.write_meta`), so this reads
-    the raw payload rather than going through :func:`transitions.load_meta`.
-    Guards the payload shape explicitly — a corrupt/wrong-shape meta.json
-    (e.g. a top-level JSON list) must surface as a clean
-    :class:`InvalidTransitionRecord` here rather than an unwrapped
-    ``AttributeError`` from calling ``.get`` on a list.
-    """
-    payload = _load_meta_payload(transition)
-    raw_paths = payload.get("paths", [])
-    if not isinstance(raw_paths, list):
-        raise InvalidTransitionRecord(
-            f"meta.json at {transition / 'meta.json'} has a non-list 'paths' field"
-        )
-    return [Path(p) for p in raw_paths]
-
-
-def _load_meta_payload(transition: transitions.TransitionDir) -> dict[str, Any]:
-    """Read ``transition``'s raw meta.json object or refuse it cleanly."""
-    meta_file = transition / "meta.json"
-    try:
-        payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise InvalidTransitionRecord(
-            f"cannot read meta.json at {meta_file}: {exc}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise InvalidTransitionRecord(f"meta.json at {meta_file} is not a JSON object")
-    return payload
-
-
 def _build_revert_plan(
-    transition: transitions.TransitionDir, profile: str
+    record: transitions.TransitionRecord, profile: str
 ) -> RevertPlan:
-    """Read ``transition`` + compute per-file diff summaries → RevertPlan.
+    """Compute per-file diff summaries for ``record`` → RevertPlan.
 
     The plan reflects what the FORWARD transition did; revert will
     reverse each item. Plugin / extension reconciles are inferred from
@@ -315,7 +275,8 @@ def _build_revert_plan(
     runs at apply time via ``patch --dry-run -R`` (see
     :func:`transitions.apply_patch_reverse`).
     """
-    meta = transitions.load_meta(transition)
+    transition = record.directory
+    meta = record.meta
     age = _human_age(meta.timestamp, datetime.now(UTC))
 
     patch_file = transition / "changes.patch"
@@ -329,8 +290,8 @@ def _build_revert_plan(
     # pre-install mode for a path, revert will chmod it back — surface that
     # in the preview so a mode-only revert (empty content patch) is not
     # silent. Missing file_modes.json (pre-bump) → empty map → no note.
-    recorded_modes = transitions.load_file_modes(transition)
-    touched = _load_meta_touched_paths(transition)
+    recorded_modes = record.file_modes
+    touched = record.paths
     # A content-NOOP + mode-only install records the path in file_modes but
     # NOT in meta.json's ``paths`` (no content delta), so union the
     # mode-only paths in — preserving the touched-paths order first — so the
@@ -354,8 +315,8 @@ def _build_revert_plan(
         profile=profile,
         age_human=age,
         file_mutations=file_mutations,
-        plugin_reconciles=_plugin_reconciles_from_transition(transition),
-        extension_reconciles=_extension_reconciles_from_transition(transition),
+        plugin_reconciles=_plugin_reconciles_from_transition(record.plugins),
+        extension_reconciles=_extension_reconciles_from_transition(record.extensions),
         redo_command=f"setforge revert --profile={profile}",
     )
 
@@ -403,7 +364,7 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
 
 
 def _apply_revert(
-    transition: transitions.TransitionDir,
+    record: transitions.TransitionRecord,
     profile: str,
     config: Path,
     *,
@@ -444,16 +405,16 @@ def _apply_revert(
     an empty map and skips mode work entirely (backward-compat).
     """
     transitions.ensure_state_dir_writable()
+    transition = record.directory
     typer.echo(f"reverting: {transition}")
 
-    touched_paths = _load_meta_touched_paths(transition)
-    filesystem_deltas = transitions.load_filesystem_deltas(transition)
-    ownership_transfers = transitions.load_ownership_transfers(transition)
+    filesystem_deltas = record.filesystem_deltas
+    ownership_transfers = record.ownership_transfers
     filesystem_paths = {item.path for item in filesystem_deltas}
-    text_paths = [path for path in touched_paths if path not in filesystem_paths]
+    text_paths = [path for path in record.paths if path not in filesystem_paths]
     file_pre = transitions.snapshot_paths(text_paths)
 
-    pre_store_state = transitions.load_state_snapshots(transition)
+    pre_store_state = record.state_snapshots
     reverse_store_state: tuple[transitions.StateSnapshotEntry, ...] = ()
     if pre_store_state is not None:
         # Recapture the SAME (store, key) set as it stands now — before
@@ -467,10 +428,10 @@ def _apply_revert(
     # restore so the reverse transition can redo the install chmod. Empty
     # for a pre-bump transition (no file_modes.json → {}), which then
     # records no file_modes on the reverse record (omit-when-empty).
-    pre_command_modes = transitions.load_file_modes(transition)
+    pre_command_modes = record.file_modes
     reverse_modes = _recapture_modes(pre_command_modes)
 
-    _refuse_legacy_symlink_record(transition, config, profile)
+    _refuse_legacy_symlink_record(record, config, profile)
     transitions.validate_filesystem_deltas_reverse(filesystem_deltas)
     ownership_store = OwnershipStore()
     _validate_ownership_transfer_reverse(
@@ -585,13 +546,13 @@ def _validate_ownership_transfer_reverse(
 
 
 def _ownership_transfer_lock_targets(
-    transition_dirs: tuple[transitions.TransitionDir, ...],
+    records: tuple[transitions.TransitionRecord, ...],
 ) -> tuple[Path, ...]:
     """Freeze filesystem containers referenced by ownership sidecars."""
     locators = {
         Path(item.after.locator).absolute()
-        for transition_dir in transition_dirs
-        for item in transitions.load_ownership_transfers(transition_dir)
+        for record in records
+        for item in record.ownership_transfers
         if item.after.resource_id.kind == "file"
     }
     targets = {
@@ -602,17 +563,14 @@ def _ownership_transfer_lock_targets(
 
 
 def _ownership_transfer_identity_dir(
-    transition_dirs: tuple[transitions.TransitionDir, ...], config: Path
+    records: tuple[transitions.TransitionRecord, ...], config: Path
 ) -> Path | None:
-    if any(
-        transitions.load_ownership_transfers(transition_dir)
-        for transition_dir in transition_dirs
-    ):
+    if any(record.ownership_transfers for record in records):
         return resolve_owner_common_dir(config.resolve().parent)
     return None
 
 
-def _recapture_modes(recorded: dict[Path, int]) -> dict[Path, int]:
+def _recapture_modes(recorded: Mapping[Path, int]) -> dict[Path, int]:
     """Snapshot the CURRENT mode of every path in ``recorded`` (redo data).
 
     Returns ``{path: live_mode}`` for each path that still exists — the
@@ -632,7 +590,7 @@ def _recapture_modes(recorded: dict[Path, int]) -> dict[Path, int]:
     return out
 
 
-def _restore_modes(recorded: dict[Path, int]) -> None:
+def _restore_modes(recorded: Mapping[Path, int]) -> None:
     """chmod each recorded path back to its pre-command mode.
 
     Runs AFTER the patch reverse restored the path's bytes, so the mode
@@ -693,7 +651,8 @@ def revert(
     if transition is None:
         raise NoTransitionFound(f"no transition history for profile {profile!r}")
 
-    plan = _build_revert_plan(transition, profile)
+    record = transitions.load_record(transition)
+    plan = _build_revert_plan(record, profile)
     choice = confirm_revert_operation(plan=plan, yes=yes)
     if choice is RevertChoice.ABORT:
         return
@@ -715,13 +674,13 @@ def revert(
     # acquiring it here — after the confirm wizard, before any patch-reverse
     # or store restore — keeps revert inside that contract.
     # Canonical order shared with install: global adapters, then profile files.
-    state_profiles = _revert_locked_profiles((transition,), profile)
+    state_profiles = _revert_locked_profiles((record,), profile)
     with (
         mutation_locks(
             resources=True,
-            config_identity_dir=_ownership_transfer_identity_dir((transition,), config),
+            config_identity_dir=_ownership_transfer_identity_dir((record,), config),
             config_dir=config.resolve().parent,
-            target_roots=_ownership_transfer_lock_targets((transition,)),
+            target_roots=_ownership_transfer_lock_targets((record,)),
             profiles=state_profiles,
         ) as mutation_guards,
         operations.recover_on_error(profile, "revert"),
@@ -732,7 +691,7 @@ def revert(
             raise SetforgeError(
                 "transition history changed after confirmation; retry revert"
             )
-        journal = _prepare_revert_journal((transition,), profile, config)
+        journal = _prepare_revert_journal((record,), profile, config)
         journal = operations.begin_checkpoint(
             journal,
             name="revert-chain",
@@ -743,7 +702,7 @@ def revert(
             mutation_guards.config_identity if mutation_guards is not None else None
         )
         recorded = _apply_revert(
-            transition,
+            record,
             profile,
             config,
             path_guards=journal.path_guards,
@@ -828,7 +787,8 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
             f"no live changes made:\n{exc}"
         ) from exc
 
-    step_plans = tuple(_build_revert_plan(entry.directory, profile) for entry in chain)
+    records = tuple(transitions.load_record(entry.directory) for entry in chain)
+    step_plans = tuple(_build_revert_plan(record, profile) for record in records)
     plan = MultiStepRevertPlan(profile=profile, steps=step_plans)
     choice = confirm_multi_step_revert_operation(plan=plan, yes=yes)
     if choice is RevertChoice.ABORT:
@@ -838,18 +798,15 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
     # reverse chain cannot interleave with a concurrent install/sync/revert
     # (each step's reverse patch is defined against the state the previous
     # step produced; an interleaving deploy would invalidate that chain).
-    transition_dirs = tuple(entry.directory for entry in chain)
-    state_profiles = _revert_locked_profiles(transition_dirs, profile)
+    state_profiles = _revert_locked_profiles(records, profile)
     recorded: list[Path] = []
     try:
         with (
             mutation_locks(
                 resources=True,
-                config_identity_dir=_ownership_transfer_identity_dir(
-                    transition_dirs, config
-                ),
+                config_identity_dir=_ownership_transfer_identity_dir(records, config),
                 config_dir=config.resolve().parent,
-                target_roots=_ownership_transfer_lock_targets(transition_dirs),
+                target_roots=_ownership_transfer_lock_targets(records),
                 profiles=state_profiles,
             ) as mutation_guards,
             operations.recover_on_error(profile, "revert"),
@@ -862,7 +819,7 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
                 raise SetforgeError(
                     "transition history changed after confirmation; retry revert"
                 )
-            journal = _prepare_revert_journal(transition_dirs, profile, config)
+            journal = _prepare_revert_journal(records, profile, config)
             journal = operations.begin_checkpoint(
                 journal,
                 name="revert-chain",
@@ -877,10 +834,10 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
             config_identity_fd = (
                 identity_guard.directory_fd if identity_guard is not None else None
             )
-            for entry in chain:
+            for record in records:
                 recorded.append(
                     _apply_revert(
-                        entry.directory,
+                        record,
                         profile,
                         config,
                         path_guards=journal.path_guards,
@@ -903,7 +860,7 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
 
 
 def _prepare_revert_journal(
-    chain: tuple[transitions.TransitionDir, ...], profile: str, config: Path
+    chain: tuple[transitions.TransitionRecord, ...], profile: str, config: Path
 ) -> operations.OperationJournal:
     """Capture the whole confirmed reverse chain before its first mutation."""
     from setforge import mcp_servers
@@ -918,40 +875,32 @@ def _prepare_revert_journal(
     has_codex_plugins = False
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     generic_paths: dict[Path, None] = {}
-    for transition in chain:
+    for record in chain:
         transfer_claim_paths = {
             OwnershipStore().claim_path(item.after.resource_id): None
-            for item in transitions.load_ownership_transfers(transition)
+            for item in record.ownership_transfers
         }
         touched.update(transfer_claim_paths)
         generic_paths.update(transfer_claim_paths)
-        touched.update(dict.fromkeys(_load_meta_touched_paths(transition)))
+        touched.update(dict.fromkeys(record.paths))
         generic_paths.update(
-            dict.fromkeys(
-                item.path for item in transitions.load_filesystem_deltas(transition)
-            )
+            dict.fromkeys(item.path for item in record.filesystem_deltas)
         )
-        snapshots = transitions.load_state_snapshots(transition) or ()
-        for snapshot in snapshots:
+        for snapshot in record.state_snapshots or ():
             identity = (snapshot.store, snapshot.profile, snapshot.key)
             state_keys[identity] = transitions.snapshot_store_state(*identity)
-        has_extensions |= (transition / "extensions.json").exists()
-        has_plugins |= (transition / "plugins.json").exists()
-        has_codex_plugins |= (transition / "codex_plugins.json").exists()
-        mcp_path = transition / "mcp.json"
-        if mcp_path.exists():
-            delta = transitions.mcp_delta_from_json(
-                json.loads(mcp_path.read_text(encoding="utf-8"))
-            )
+        has_extensions |= record.extensions is not None
+        has_plugins |= record.plugins is not None
+        has_codex_plugins |= record.codex_plugins is not None
+        if record.mcp is not None:
+            delta = record.mcp
             if not delta.is_empty():
                 mcp_servers.require_inventory_context(delta.context, delta.scopes)
             for name, command, scope in (*delta.added, *delta.updated):
                 endpoints = mcp_endpoints.setdefault(name, [])
                 if (command, scope) not in endpoints:
                     endpoints.append((command, scope))
-        _refuse_legacy_symlink_record(
-            transition, config, transitions.load_meta(transition).profile
-        )
+        _refuse_legacy_symlink_record(record, config, record.meta.profile)
     return operations.prepare(
         command="revert",
         profile=profile,
@@ -971,36 +920,21 @@ def _prepare_revert_journal(
 
 
 def _revert_locked_profiles(
-    chain: tuple[transitions.TransitionDir, ...], journal_profile: str
+    chain: tuple[transitions.TransitionRecord, ...], journal_profile: str
 ) -> tuple[str, ...]:
     """Return the sorted profile lock envelope for a reverse chain."""
     profiles = {journal_profile}
-    for transition in chain:
-        profiles.update(
-            snapshot.profile
-            for snapshot in transitions.load_state_snapshots(transition) or ()
-        )
+    for record in chain:
+        profiles.update(snapshot.profile for snapshot in record.state_snapshots or ())
     return tuple(sorted(profiles))
 
 
 def _refuse_legacy_symlink_record(
-    transition: transitions.TransitionDir, config: Path, profile: str
+    record: transitions.TransitionRecord, config: Path, profile: str
 ) -> None:
     """Refuse uncertain legacy link inverses; typed images handle current links."""
-    covered = {delta.path for delta in transitions.load_filesystem_deltas(transition)}
-    touched = frozenset(_load_meta_touched_paths(transition))
-    attribution = _load_meta_payload(transition).get("tracked_file_destinations", {})
-    if not isinstance(attribution, dict) or any(
-        not isinstance(name, str)
-        or not isinstance(paths, list)
-        or any(
-            not isinstance(path, str) or not Path(path).is_absolute() for path in paths
-        )
-        for name, paths in attribution.items()
-    ):
-        raise InvalidTransitionRecord(
-            f"invalid tracked_file_destinations in {transition / 'meta.json'}"
-        )
+    covered = {delta.path for delta in record.filesystem_deltas}
+    touched = frozenset(record.paths)
     cfg = load_config(config)
     repo_root = config.resolve().parent
     try:
@@ -1017,9 +951,8 @@ def _refuse_legacy_symlink_record(
             continue
         target = resolve_symlink_target(destination, tracked.symlink)
         attributed = any(
-            destination in {Path(os.path.normpath(path)) for path in paths}
-            and touched.intersection(Path(os.path.normpath(path)) for path in paths)
-            for paths in attribution.values()
+            destination in paths and touched.intersection(paths)
+            for paths in record.tracked_file_destinations.values()
         )
         if destination in touched or target in touched or attributed:
             raise SetforgeError(
@@ -1354,12 +1287,8 @@ def _render_plugins_section_show(
     target: transitions.TransitionDir, console: Console
 ) -> None:
     """Render the ``plugins:`` block if a plugins.json sidecar exists."""
-    plugin_file = target / "plugins.json"
-    if not plugin_file.exists():
-        return
-    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
-    delta = transitions.plugin_delta_from_json(payload)
-    if delta.is_empty():
+    delta = transitions.load_plugin_delta(target)
+    if delta is None or delta.is_empty():
         return
     console.print("  plugins:")
     for plugin_id in delta.installed:
@@ -1377,12 +1306,8 @@ def _render_plugins_section_show(
 def _render_codex_plugins_section_show(
     target: transitions.TransitionDir, console: Console
 ) -> None:
-    plugin_file = target / "codex_plugins.json"
-    if not plugin_file.exists():
-        return
-    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
-    delta = transitions.codex_plugin_delta_from_json(payload)
-    if delta.is_empty():
+    delta = transitions.load_codex_plugin_delta(target)
+    if delta is None or delta.is_empty():
         return
     console.print("  Codex plugins:")
     for plugin_id in delta.installed:
@@ -1399,16 +1324,11 @@ def _render_extensions_section_show(
     target: transitions.TransitionDir, console: Console
 ) -> None:
     """Render the ``extensions:`` block if an extensions.json sidecar exists."""
-    ext_file = target / "extensions.json"
-    if not ext_file.exists():
-        return
-    ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
-    added = ext_payload.get("added", []) or []
-    removed = ext_payload.get("removed", []) or []
-    if not (added or removed):
+    delta = transitions.load_extension_delta(target)
+    if delta is None or delta.is_empty():
         return
     console.print("  extensions:")
-    for ext_id in added:
+    for ext_id in delta.added:
         console.print(f"    + {ext_id}  (installed)")
-    for ext_id in removed:
+    for ext_id in delta.removed:
         console.print(f"    - {ext_id}  (uninstalled)")

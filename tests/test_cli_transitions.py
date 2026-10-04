@@ -13,6 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.errors import InvalidTransitionRecord
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -371,5 +372,40 @@ def test_show_and_list_accept_record_with_retired_overlay_field(
     assert shown.exit_code == 0, shown.output
     assert "profile: vmh" in _strip_ansi(shown.output)
     assert "preserve_user_keys_applied" not in shown.output
+    assert listed.exit_code == 0, listed.output
+    assert target.name in _strip_ansi(listed.output)
+
+
+@pytest.mark.parametrize(
+    "sidecar", ["extensions.json", "plugins.json", "codex_plugins.json", "mcp.json"]
+)
+@pytest.mark.parametrize(
+    "payload",
+    [b"\xff\xfe\x00not utf-8\x80", b'{"added": [', b"[]"],
+    ids=["not-utf8", "truncated", "not-an-object"],
+)
+def test_corrupt_adapter_sidecar_is_refused_cleanly_and_still_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sidecar: str, payload: bytes
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    target = _stub(
+        tmp_path / "transitions",
+        dirname="20260507T120000000000Z-install-vmh",
+        profile="vmh",
+    )
+    (target / sidecar).write_bytes(payload)
+
+    reverted = CliRunner().invoke(
+        app,
+        ["revert", "--profile=vmh", f"--config={tmp_path / 'setforge.yaml'}", "--yes"],
+    )
+    shown = CliRunner().invoke(app, ["transitions", "show", target.name])
+    listed = CliRunner().invoke(app, ["transitions", "list"])
+
+    assert isinstance(reverted.exception, InvalidTransitionRecord)
+    assert sidecar in str(reverted.exception)
+    if sidecar != "mcp.json":
+        assert isinstance(shown.exception, InvalidTransitionRecord)
+        assert sidecar in str(shown.exception)
     assert listed.exit_code == 0, listed.output
     assert target.name in _strip_ansi(listed.output)

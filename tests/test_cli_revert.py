@@ -954,7 +954,6 @@ def test_revert_refuses_unreadable_transition_meta_cleanly(
     tmp_path: Path, payload: bytes
 ) -> None:
     from setforge import transitions
-    from setforge.cli import revert as revert_mod
     from setforge.errors import InvalidTransitionRecord
 
     transition = transitions.TransitionDir(tmp_path / "20260101T000000Z-install-vmh")
@@ -962,8 +961,4 @@ def test_revert_refuses_unreadable_transition_meta_cleanly(
     (transition / "meta.json").write_bytes(payload)
 
     with pytest.raises(InvalidTransitionRecord, match=r"meta\.json"):
-        revert_mod._load_meta_touched_paths(transition)
-    with pytest.raises(InvalidTransitionRecord, match=r"meta\.json"):
-        revert_mod._refuse_legacy_symlink_record(
-            transition, tmp_path / "setforge.yaml", "vmh"
-        )
+        transitions.load_record(transition)

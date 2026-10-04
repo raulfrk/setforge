@@ -165,7 +165,9 @@ def test_revert_journal_guards_claim_and_filesystem_delta_ancestry(
         encoding="utf-8",
     )
 
-    journal = revert_mod._prepare_revert_journal((transition,), "p", config)
+    journal = revert_mod._prepare_revert_journal(
+        (transitions.load_record(transition),), "p", config
+    )
     try:
         guarded = {guard.path for guard in journal.path_guards}
         assert claim_path.parent in guarded
