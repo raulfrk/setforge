@@ -159,6 +159,9 @@ def test_transitions_list_and_show_still_list_a_patch_format_record(
     assert shown.exit_code == 0, shown.output
     assert "version: 1.3.9" in shown.output
     assert str(legacy["note"]) in shown.output
+    assert "--to-before" not in shown.output
+    assert "cannot revert" in shown.output
+    assert "setforge 1.3.9" in shown.output
 
 
 def _record(tmp_path: Path, paths: list[str], files: dict[str, str]) -> Path:

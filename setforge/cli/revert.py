@@ -58,6 +58,7 @@ from setforge.config import (
     resolve_symlink_target,
 )
 from setforge.errors import (
+    InvalidTransitionRecord,
     NoTransitionFound,
     ProfileNotFound,
     RevertFailed,
@@ -1090,6 +1091,16 @@ def transitions_show(
     _render_ownership_transfers_show(target, console)
 
     console.print("=== reverse this transition ===")
+    try:
+        transitions.refuse_legacy_file_changes(transitions.load_record(target))
+    except RevertFailed:
+        console.print(
+            "  recorded by an earlier version in a format this version cannot "
+            f"revert; use setforge {meta.version}, which recorded it"
+        )
+        return
+    except InvalidTransitionRecord:
+        pass
     console.print(f"  setforge revert --profile={profile} --to-before={target.name}")
     console.print(
         "    (will undo this transition AND every newer transition for this profile)"
