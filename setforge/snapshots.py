@@ -42,7 +42,7 @@ import shutil
 import stat
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -125,23 +125,6 @@ def _parse_meta_files(raw: object) -> tuple[Path, ...]:
         seen.add(path)
         files.append(path)
     return tuple(files)
-
-
-@dataclass(slots=True, frozen=True)
-class PreSnapshotCtx:
-    """Named bundle of the four args needed to capture a pre-restore snapshot.
-
-    ``restore_snapshot(..., pre_snapshot=True)`` writes a fresh snapshot
-    of current live state BEFORE applying the restore. That fresh
-    snapshot needs the same ``(cfg, resolved, repo_root, profile)`` tuple
-    ``create_snapshot`` does; bundling them as a named dataclass keeps
-    the CLI seam readable and the call signature self-documenting.
-    """
-
-    cfg: Config
-    resolved: ResolvedProfile
-    repo_root: Path
-    profile: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -773,28 +756,21 @@ def _require_safe_restore_destinations(target: SnapshotMeta) -> None:
 def _plan_restore_snapshot(
     snapshot_id_or_label: str,
     *,
-    cfg: Config | None = None,
-    resolved: ResolvedProfile | None = None,
-    repo_root: Path | None = None,
-    profile: str | None = None,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
     owner_id: UUID | None = None,
 ) -> _RestorePlan:
     """Validate and freeze every source consumed by an additive restore."""
-    context_values = (cfg, resolved, repo_root, profile)
-    if any(value is not None for value in context_values) and any(
-        value is None for value in context_values
-    ):
-        raise SetforgeError("snapshot restore: incomplete effective-profile context")
     target = resolve_snapshot(snapshot_id_or_label, profile=profile)
-    if cfg is not None and resolved is not None and repo_root is not None:
-        assert profile is not None
-        allowed = set(_resolve_dst_paths(cfg, resolved, repo_root, profile=profile))
-        unmanaged = tuple(path for path in target.files if path not in allowed)
-        if unmanaged:
-            raise SetforgeError(
-                f"snapshot {target.snapshot_id}: destination is no longer managed "
-                f"by profile {profile!r}: {unmanaged[0]}"
-            )
+    allowed = set(_resolve_dst_paths(cfg, resolved, repo_root, profile=profile))
+    unmanaged = tuple(path for path in target.files if path not in allowed)
+    if unmanaged:
+        raise SetforgeError(
+            f"snapshot {target.snapshot_id}: destination is no longer managed "
+            f"by profile {profile!r}: {unmanaged[0]}"
+        )
     snapshot_dir = snapshots_root() / target.snapshot_id
     _require_safe_restore_destinations(target)
     try:
@@ -900,73 +876,6 @@ def _apply_restore_plan(plan: _RestorePlan, *, validate: bool = True) -> Snapsho
     return plan.target
 
 
-def _run_pre_snapshot(
-    target: SnapshotMeta, pre_snapshot_ctx: PreSnapshotCtx
-) -> SnapshotMeta:
-    """Capture a fresh ``pre-restore-<target.snapshot_id>`` snapshot.
-
-    Returns the new pre-restore snapshot's meta. Called by
-    :func:`restore_snapshot` before the overlay so the user has a
-    single-step undo if the restored state is undesirable.
-    """
-    return create_snapshot(
-        pre_snapshot_ctx.cfg,
-        pre_snapshot_ctx.resolved,
-        pre_snapshot_ctx.repo_root,
-        pre_snapshot_ctx.profile,
-        f"pre-restore-{target.snapshot_id}",
-    )
-
-
-def restore_snapshot(
-    snapshot_id_or_label: str,
-    *,
-    pre_snapshot: bool,
-    pre_snapshot_ctx: PreSnapshotCtx | None = None,
-) -> SnapshotMeta:
-    """Overlay the snapshot's files onto live (additive overlay).
-
-    When ``pre_snapshot=True``, captures a fresh snapshot of current
-    live state BEFORE applying the restore — gives the user a
-    single-step undo if the restored state is undesirable. The
-    pre-snapshot is labeled ``pre-restore-<snapshot_id>`` and uses
-    ``pre_snapshot_ctx`` (required in that case).
-
-    Restore is an additive overlay: files present in the snapshot get
-    overlaid onto their live destinations; files that exist live but
-    not in the snapshot are left alone.
-
-    Returns the restored snapshot's :class:`SnapshotMeta`. Raises
-    :class:`SetforgeError` on missing/corrupt snapshot or when
-    ``pre_snapshot=True`` without a ``pre_snapshot_ctx``.
-    """
-    plan = _plan_restore_snapshot(
-        snapshot_id_or_label,
-        cfg=pre_snapshot_ctx.cfg if pre_snapshot_ctx is not None else None,
-        resolved=pre_snapshot_ctx.resolved if pre_snapshot_ctx is not None else None,
-        repo_root=pre_snapshot_ctx.repo_root if pre_snapshot_ctx is not None else None,
-        profile=pre_snapshot_ctx.profile if pre_snapshot_ctx is not None else None,
-    )
-    target = plan.target
-    with restore_locks(
-        target.files,
-        repo_root=pre_snapshot_ctx.repo_root if pre_snapshot_ctx is not None else None,
-        config_dirs=(pre_snapshot_ctx.repo_root,)
-        if pre_snapshot_ctx is not None
-        else (),
-        profile=target.profile,
-    ) as owner_id:
-        plan = replace(plan, owner_id=owner_id)
-        _validate_restore_plan(plan)
-        if pre_snapshot:
-            if pre_snapshot_ctx is None:
-                raise SetforgeError(
-                    "snapshot restore: --pre-snapshot requires a profile context"
-                )
-            _run_pre_snapshot(target, pre_snapshot_ctx)
-        return _apply_restore_plan(plan)
-
-
 def prune_snapshots(keep: int, *, profile: str | None = None) -> int:
     """Delete oldest snapshots until at most ``keep`` remain. Returns count removed.
 
@@ -1057,7 +966,6 @@ def format_size(num_bytes: int) -> str:
 
 __all__ = [
     "DEFAULT_KEEP",
-    "PreSnapshotCtx",
     "SnapshotMeta",
     "create_snapshot",
     "directory_size_bytes",
@@ -1066,6 +974,5 @@ __all__ = [
     "list_snapshots",
     "prune_snapshots",
     "resolve_snapshot",
-    "restore_snapshot",
     "snapshots_root",
 ]

@@ -28,6 +28,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from setforge import snapshots as snap_mod
+from setforge.cli import snapshot as cli_snap
+from setforge.cli._helpers import ProfileContext
 from setforge.config import (
     Config,
     Profile,
@@ -113,12 +115,44 @@ def _create(
     )
 
 
-def _pre_ctx(ctx: _Ctx) -> snap_mod.PreSnapshotCtx:
-    return snap_mod.PreSnapshotCtx(
-        cfg=ctx.cfg,
-        resolved=ctx.resolved,
-        repo_root=ctx.repo_root,
-        profile=ctx.profile,
+def restore_through_cli(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+    snapshot: str,
+    *,
+    pre_snapshot: bool = False,
+) -> None:
+    """Run ``snapshot restore`` itself with an in-memory profile context."""
+    choice = (
+        cli_snap.RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT
+        if pre_snapshot
+        else cli_snap.RestoreChoice.RESTORE
+    )
+    context = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cli_snap, "_build_profile_ctx", lambda *_args: context)
+        patch.setattr(cli_snap, "_prompt_restore_choice", lambda *_a, **_kw: choice)
+        cli_snap.snapshot_restore(
+            snapshot,
+            profile=profile,
+            config=repo_root / "setforge.yaml",
+            yes=False,
+            non_interactive=False,
+        )
+
+
+def _restore(ctx: _Ctx, snapshot: str, *, pre_snapshot: bool = False) -> None:
+    restore_through_cli(
+        ctx.cfg,
+        ctx.resolved,
+        ctx.repo_root,
+        ctx.profile,
+        snapshot,
+        pre_snapshot=pre_snapshot,
     )
 
 
@@ -264,9 +298,7 @@ def test_snapshot_restores_payload_only_for_declared_symlinks(
     dst.unlink()
     dst.symlink_to("different-target")
 
-    snap_mod.restore_snapshot(
-        meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
-    )
+    _restore(ctx, meta.snapshot_id)
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == raw_target
@@ -460,11 +492,8 @@ def test_managed_tree_snapshot_restores_files_and_preserved_links(
     live_only = destination / "live-only.txt"
     live_only.write_text("preserve this addition\n")
 
-    restored = snap_mod.restore_snapshot(
-        meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
-    )
+    _restore(ctx, meta.snapshot_id)
 
-    assert restored == meta
     for relative, body in files.items():
         expected_body = (
             "live " + body if relative in expected else "changed excluded file\n"
@@ -497,9 +526,7 @@ def test_managed_tree_restore_refuses_newly_excluded_member(fake_home: Path) -> 
     with pytest.raises(
         SetforgeError, match=r"destination is no longer managed.*dangling-link"
     ):
-        snap_mod.restore_snapshot(
-            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
-        )
+        _restore(ctx, meta.snapshot_id)
 
     assert (destination / "retained.txt").read_text() == "changed live contents\n"
     assert not (destination / "dangling-link").is_symlink()
@@ -612,11 +639,8 @@ def test_snapshot_label_restore_scopes_same_label_to_requested_profile(
     first_dst.write_text("first drift\n")
     second_dst.write_text("second drift\n")
 
-    restored = snap_mod.restore_snapshot(
-        "shared", pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(first_ctx)
-    )
+    _restore(first_ctx, "shared")
 
-    assert restored.snapshot_id == first.snapshot_id
     assert first_dst.read_text() == "first\n"
     assert second_dst.read_text() == "second drift\n"
 
@@ -859,7 +883,7 @@ def test_restore_snapshot_overlays_only_files_in_snapshot(
     sibling = dst.parent / "live-only.txt"
     sibling.write_text("untouched live-only body\n")
 
-    snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
+    _restore(ctx, meta.snapshot_id)
     assert dst.read_text() == "original\n"
     assert sibling.read_text() == "untouched live-only body\n"
 
@@ -1220,12 +1244,6 @@ def test_freeze_file_refuses_directory(fake_home: Path) -> None:
         snap_mod._freeze_file(directory)
 
 
-def test_restore_plan_requires_complete_effective_context(fake_home: Path) -> None:
-    with pytest.raises(SetforgeError) as exc:
-        snap_mod._plan_restore_snapshot("missing", profile="test")
-    assert str(exc.value) == "snapshot restore: incomplete effective-profile context"
-
-
 def test_restore_refuses_changed_snapshot_metadata_before_write(
     fake_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1242,9 +1260,7 @@ def test_restore_refuses_changed_snapshot_metadata_before_write(
     )
 
     with pytest.raises(SetforgeError) as exc:
-        snap_mod.restore_snapshot(
-            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
-        )
+        _restore(ctx, meta.snapshot_id)
 
     assert str(exc.value) == (
         f"snapshot {meta.snapshot_id}: metadata changed before planning; retry"
@@ -1295,9 +1311,7 @@ def test_restore_refuses_changed_snapshot_directory_before_write(
     monkeypatch.setattr(Path, "lstat", changed_lstat)
 
     with pytest.raises(SetforgeError) as exc:
-        snap_mod.restore_snapshot(
-            meta.snapshot_id, pre_snapshot=False, pre_snapshot_ctx=_pre_ctx(ctx)
-        )
+        _restore(ctx, meta.snapshot_id)
 
     assert str(exc.value) == f"snapshot {meta.snapshot_id}: {diagnostic}"
     assert dst.read_text(encoding="utf-8") == "live body\n"
@@ -1392,7 +1406,7 @@ def test_restore_plan_preserves_frozen_mode_and_mtime(fake_home: Path) -> None:
     dst.write_text("drift\n")
     dst.chmod(0o600)
 
-    snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
+    _restore(ctx, meta.snapshot_id)
 
     assert stat.S_IMODE(dst.stat().st_mode) == 0o640
     assert dst.stat().st_mtime_ns == expected_mtime_ns
@@ -1410,7 +1424,7 @@ def test_restore_plan_recreates_frozen_symlink(fake_home: Path) -> None:
     dst.unlink()
     dst.write_text("regular drift\n")
 
-    snap_mod.restore_snapshot(meta.snapshot_id, pre_snapshot=False)
+    _restore(ctx, meta.snapshot_id)
 
     assert dst.is_symlink()
     assert dst.readlink() == target
@@ -1443,22 +1457,11 @@ def test_restore_snapshot_with_pre_snapshot_captures_current_state(
     dst.write_text("v1\n")
     _create(ctx, "v1")
     dst.write_text("v2\n")
-    snap_mod.restore_snapshot("v1", pre_snapshot=True, pre_snapshot_ctx=_pre_ctx(ctx))
+    _restore(ctx, "v1", pre_snapshot=True)
     # Live now == v1; the pre-restore snapshot captured v2.
     assert dst.read_text() == "v1\n"
     labels = [s.label for s in snap_mod.list_snapshots()]
     assert any(label.startswith("pre-restore-") for label in labels)
-
-
-def test_restore_snapshot_pre_snapshot_requires_ctx(
-    fake_home: Path,
-) -> None:
-    ctx, _, dst = _build_ctx(fake_home)
-    dst.parent.mkdir(parents=True)
-    dst.write_text("body\n")
-    _create(ctx, "alpha")
-    with pytest.raises(SetforgeError, match="requires a profile context"):
-        snap_mod.restore_snapshot("alpha", pre_snapshot=True, pre_snapshot_ctx=None)
 
 
 def test_restore_snapshot_unlinks_live_symlink_before_write(
@@ -1474,7 +1477,7 @@ def test_restore_snapshot_unlinks_live_symlink_before_write(
     other.write_text("symlink target body\n")
     dst.unlink()
     dst.symlink_to(other)
-    snap_mod.restore_snapshot("regular", pre_snapshot=False)
+    _restore(ctx, "regular")
     # dst is now a regular file, not a symlink, and the original
     # symlink target was NOT overwritten.
     assert not dst.is_symlink()
