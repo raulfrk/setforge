@@ -21,15 +21,6 @@ from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
 from setforge.compare import CompareReport, CompareStatus, DriftClass, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
 
-_LIVE_WITH_MARKERS = (
-    "intro\n"
-    "<!-- setforge:user-section start shared R -->\n"
-    "body\n"
-    "<!-- setforge:user-section end shared R -->\n"
-    "outro\n"
-)
-_STRIPPED = "intro\nbody\noutro\n"
-
 
 def test_install_helpers_module_imports() -> None:
     """The public-to-install helpers are exported and callable."""
