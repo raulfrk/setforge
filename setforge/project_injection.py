@@ -24,13 +24,14 @@ from setforge.config import (
 )
 from setforge.errors import SetforgeError
 from setforge.file_ownership import file_resource_id, refuse_active_file_claims
+from setforge.git_info import run_git
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
-    _parse_attributes,
     apply_overlay_git,
     overlay_claim_id,
     plan_overlay_git,
+    read_overlay_claims,
 )
 from setforge.git_visibility import (
     VisibilityClaim,
@@ -214,26 +215,6 @@ def manifest_path(target: Path, profile: str) -> Path:
     )
 
 
-def _run_git(
-    target: Path, args: list[str], *, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    environment = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "Never",
-        "LANG": "C",
-        "LC_ALL": "C",
-    }
-    return subprocess.run(
-        ["git", "-C", str(target), *args],
-        check=check,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        env=environment,
-    )
-
-
 def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
     lexical = path.expanduser().absolute()
     try:
@@ -246,9 +227,9 @@ def _verified_git_worktree(path: Path) -> tuple[Path, Path, os.stat_result]:
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
         top = Path(
-            _run_git(resolved, ["rev-parse", "--show-toplevel"]).stdout.strip()
+            run_git(resolved, ["rev-parse", "--show-toplevel"]).stdout.strip()
         ).resolve()
-        git_dir_raw = _run_git(resolved, ["rev-parse", "--git-dir"]).stdout.strip()
+        git_dir_raw = run_git(resolved, ["rev-parse", "--git-dir"]).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise SetforgeError(
             f"project target must be an existing Git worktree root: {resolved}"
@@ -284,7 +265,7 @@ def _verified_project_target(
     if not resolved.is_dir():
         raise SetforgeError(f"project target is not a directory: {resolved}")
     try:
-        result = _run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
+        result = run_git(resolved, ["rev-parse", "--show-toplevel"], check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         # A missing git binary or a hung git must not escape as a raw traceback.
         raise SetforgeError(
@@ -300,7 +281,7 @@ def _verified_project_target(
 
 def _is_tracked(target: Path, relative: Path) -> bool:
     try:
-        result = _run_git(
+        result = run_git(
             target,
             ["ls-files", "--error-unmatch", "--", relative.as_posix()],
             check=False,
@@ -1762,11 +1743,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         )
     )
     if visibility_plan is not None and claim_git_dir != git_dir:
-        attributes = visibility_plan.exclude_path.with_name("attributes")
         held = set(
-            _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[
-                1
-            ]
+            read_overlay_claims(visibility_plan.exclude_path.with_name("attributes"))
         )
         overlay_to_remove = tuple(claim for claim in overlay_to_remove if claim in held)
     overlay_git_plan = (
@@ -2039,10 +2017,7 @@ def _stale_git_plans(
     """Plan releasing only the private Git entries this injection still holds."""
     exclude_path, _, _, hidden_claims = read_claims(root)
     hidden = set(hidden_claims)
-    attributes = exclude_path.with_name("attributes")
-    filtered = set(
-        _parse_attributes(attributes.read_bytes() if attributes.is_file() else b"")[1]
-    )
+    filtered = set(read_overlay_claims(exclude_path.with_name("attributes")))
     hidden_to_remove = tuple(
         claim
         for claim in (

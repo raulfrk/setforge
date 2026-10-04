@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import os
 import stat
-import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 
 from setforge import atomicio, operations
 from setforge.config import ProjectVisibility
 from setforge.errors import SetforgeError
+from setforge.git_info import run_git
 from setforge.git_overlay import (
     OverlayClaim,
     OverlayGitPlan,
@@ -102,28 +103,7 @@ class ProjectVisibilityPlan:
         )
 
 
-def _run_git(
-    target: Path, args: list[str], *, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    environment = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "Never",
-        "LANG": "C",
-        "LC_ALL": "C",
-    }
-    try:
-        return subprocess.run(
-            ["git", "-C", str(target), *args],
-            check=check,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            env=environment,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        detail = getattr(exc, "stderr", None) or str(exc)
-        raise SetforgeError(f"cannot inspect project visibility: {detail}") from exc
+_run_git = partial(run_git, failure="cannot inspect project visibility")
 
 
 def _records() -> tuple[Path, ...]:

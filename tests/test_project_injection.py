@@ -1504,6 +1504,7 @@ def test_visibility_conflict_between_profiles_does_not_blame_linked_worktrees(
         "project_overlay",
         "git_overlay",
         "git_visibility",
+        "git_info",
     ],
 )
 def test_project_messages_carry_no_internal_milestone_names(module: str) -> None:
