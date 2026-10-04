@@ -93,6 +93,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prints `overlay:`, and `project inject` no longer prints the worktree
   auto-carry line.
 - The unused `diff-match-patch` dependency is removed.
+- `revert` restores the recorded copy of every changed file instead of
+  reversing a text patch, so it no longer needs the GNU `patch` program.
+  If a recorded file was edited after the transition, `revert` refuses that
+  file by name and changes nothing, even when the edit is on other lines; a
+  `touch` or `git checkout` that leaves the bytes equal no longer blocks it.
+  A `--to-before` chain checks every step before the first write. `show` and
+  the preview now list every recorded path, including tree entries, symlinks,
+  claim files, orphan deletions and empty files.
+- Transitions recorded by 1.3.9 or earlier 1.4 development builds in the old
+  patch format cannot be reverted by this version: `revert` refuses them with a
+  message naming the version that recorded them and the paths to restore by
+  hand. They still appear in `transitions list` and `show`.
+- `--patch-bin` is removed (scripts passing it now fail with exit 2);
+  `SETFORGE_PATCH_BIN` and a `patch:` key in `local.yaml` are accepted and
+  ignored.
 - Project overlay state written by this release is not readable by 1.3.9;
   state written by earlier releases still reads.
 - Operation journals no longer record the command line. `project remove`
