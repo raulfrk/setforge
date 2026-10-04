@@ -17,7 +17,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from setforge.binaries import _STUB_TEMPLATE
 from setforge.cli import app
+from setforge.cli import init as init_mod
 from setforge.cli._config_repo import (
     ConfigRepoScaffoldError,
     default_config_repo_dir,
@@ -302,3 +304,212 @@ def test_git_init_available_on_host() -> None:
         ).returncode
         == 0
     )
+
+
+# Regression tests: a stub + hand-appended source: block is NOT pristine.
+#
+# Audit finding ``init_stub_appended``: ``_local_yaml_is_pristine_stub`` used a
+# bare ``text.startswith(_STUB_TEMPLATE)`` check. Because the stub template is a
+# PREFIX of any file that has had a ``source:``/``plugins:``/``extensions:``
+# block appended after it — exactly what the stub's own instructions tell users
+# to do — such a file was misclassified as pristine. In the not-initialized
+# window (``is_initialized() == False``), ``_apply_bootstrap(force=False)`` then
+# overwrote it with a fresh stub and made NO ``.bak``, silently discarding the
+# user's appended source/overlay config.
+#
+# The fix requires the suffix after the stub to be empty or an init-generated,
+# marker-tagged source block. These tests fail on the old (startswith)
+# behavior and pass with the suffix guard.
+
+_STUB_PLUS_HAND_SOURCE = (
+    _STUB_TEMPLATE + "\nsource:\n  kind: path\n  path: /some/hand/edited/repo\n"
+)
+
+
+def _write_stub_plus_hand_source(home: Path) -> Path:
+    """Write a stub + hand-appended source: block, host-local dir absent."""
+    cfg = home / ".config" / "setforge"
+    cfg.mkdir(parents=True)
+    local_yaml = cfg / "local.yaml"
+    local_yaml.write_text(_STUB_PLUS_HAND_SOURCE, encoding="utf-8")
+    assert not host_local_dir_path().exists()  # guard: not-initialized state
+    return local_yaml
+
+
+def _backup_text(local_yaml: Path) -> str | None:
+    """Return the content of a ``local.yaml.bak.*`` sibling, if any."""
+    backups = list(local_yaml.parent.glob("local.yaml.bak.*"))
+    if not backups:
+        return None
+    assert len(backups) == 1, backups
+    return backups[0].read_text(encoding="utf-8")
+
+
+def test_stub_plus_hand_source_predicate_non_pristine(home: Path) -> None:
+    """Predicate: a stub with a hand-appended source: block is customized."""
+    _write_stub_plus_hand_source(home)
+    # The bug: startswith(_STUB_TEMPLATE) is True (prefix match) yet the file
+    # carries user customization, so the predicate must classify it non-pristine.
+    assert _STUB_PLUS_HAND_SOURCE.startswith(_STUB_TEMPLATE)  # the old trap
+    assert init_mod._local_yaml_is_pristine_stub() is False
+
+
+def test_bare_init_preserves_or_backs_up_hand_appended_source(home: Path) -> None:
+    """Bare ``init --no-prompt`` must not discard a hand-appended source: block.
+
+    With a stub + hand-written source: block present but the host-local dir
+    absent, the old behavior overwrote with a bare stub and made no backup.
+    The fix backs the customized content up before rewriting.
+    """
+    local_yaml = _write_stub_plus_hand_source(home)
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    live = local_yaml.read_text(encoding="utf-8")
+    backup = _backup_text(local_yaml)
+    survived = "/some/hand/edited/repo" in live or (
+        backup is not None and "/some/hand/edited/repo" in backup
+    )
+    assert survived, f"hand-appended source lost — live={live!r} backup={backup!r}"
+
+
+def test_bare_init_backup_holds_hand_appended_source(home: Path) -> None:
+    """The .bak snapshot must hold the OLD hand-appended source: block."""
+    local_yaml = _write_stub_plus_hand_source(home)
+    runner = CliRunner()
+    runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+
+    backup = _backup_text(local_yaml)
+    assert backup is not None, "expected a local.yaml.bak.* snapshot"
+    assert "/some/hand/edited/repo" in backup
+    assert host_local_dir_path().exists()
+
+
+def test_init_generated_source_block_stays_pristine(home: Path) -> None:
+    """A stub + init-generated (marker-tagged) source block is still pristine.
+
+    The marker comment ``# Pre-configured by `setforge init`` is what init
+    itself writes; such a file carries no user customization and must NOT
+    spawn a spurious .bak.
+    """
+    from setforge.cli.init import SourceChoice, SourceSpec, _build_source_block
+
+    cfg = home / ".config" / "setforge"
+    cfg.mkdir(parents=True)
+    local_yaml = cfg / "local.yaml"
+    generated = _build_source_block(
+        SourceSpec(choice=SourceChoice.PATH, path=Path("/init/wrote/this"))
+    )
+    local_yaml.write_text(_STUB_TEMPLATE + generated, encoding="utf-8")
+    assert not host_local_dir_path().exists()
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert _backup_text(local_yaml) is None  # no spurious backup
+
+
+# Regression tests: init must not silently clobber a customized local.yaml.
+#
+# Audit finding ``init_clobber_localyaml``: ``setforge init --config-repo``
+# (and bare ``init --no-prompt``) reach ``_apply_bootstrap`` whenever the
+# host-local layer is not fully initialized (``is_initialized() == False``).
+# That path unconditionally rewrote ``local.yaml`` with the bare stub,
+# destroying a hand-edited host-local config with no confirm and no backup
+# when the ``~/.local/share/setforge/host-local/`` dir was absent.
+#
+# The fix snapshots a non-pristine-stub ``local.yaml`` to a timestamped
+# ``.bak`` before the overwrite. These tests fail on the old (clobbering)
+# behavior and pass with the backup guard.
+
+_CUSTOM_LOCAL_YAML = (
+    "# setforge host-local config\n"
+    "source:\n"
+    "  kind: path\n"
+    '  path: "/some/hand/edited/config-repo"\n'
+    "custom: marker\n"
+)
+
+
+def _write_custom_local_yaml(home: Path) -> Path:
+    """Write a customized local.yaml WITHOUT creating the host-local dir.
+
+    This is the dangerous combination: ``is_initialized()`` is False (no
+    host-local dir) but the file carries user content the overwrite path
+    must not discard.
+    """
+    cfg = home / ".config" / "setforge"
+    cfg.mkdir(parents=True)
+    local_yaml = cfg / "local.yaml"
+    local_yaml.write_text(_CUSTOM_LOCAL_YAML, encoding="utf-8")
+    assert not host_local_dir_path().exists()  # guard: not-initialized state
+    return local_yaml
+
+
+def _assert_marker_survived(local_yaml: Path) -> None:
+    """Assert ``custom: marker`` survives in the live file or a .bak snapshot."""
+    live = local_yaml.read_text(encoding="utf-8")
+    backup = _backup_text(local_yaml)
+    survived = "custom: marker" in live or (
+        backup is not None and "custom: marker" in backup
+    )
+    assert survived, f"custom content lost — live={live!r} backup={backup!r}"
+
+
+def test_config_repo_does_not_clobber_custom_local_yaml_when_host_local_missing(
+    home: Path,
+) -> None:
+    """init --config-repo must preserve (or back up) a custom local.yaml.
+
+    With a customized local.yaml present but the host-local dir absent,
+    the old behavior overwrote the file with the bare stub. The fix backs
+    the custom content up to a ``.bak`` sibling before rewriting.
+    """
+    local_yaml = _write_custom_local_yaml(home)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["init", "--config-repo", "--no-prompt"], catch_exceptions=False
+    )
+    assert result.exit_code == 0, result.output
+    _assert_marker_survived(local_yaml)
+
+
+def test_bare_init_does_not_clobber_custom_local_yaml_when_host_local_missing(
+    home: Path,
+) -> None:
+    """Bare ``init --no-prompt`` must not discard a custom local.yaml unbacked."""
+    local_yaml = _write_custom_local_yaml(home)
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    _assert_marker_survived(local_yaml)
+
+
+def test_bare_init_backs_up_then_writes_fresh_stub(home: Path) -> None:
+    """The backup holds the OLD custom content; live holds the fresh stub."""
+    local_yaml = _write_custom_local_yaml(home)
+    runner = CliRunner()
+    runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+
+    backup = _backup_text(local_yaml)
+    assert backup is not None, "expected a local.yaml.bak.* snapshot"
+    assert "custom: marker" in backup
+    # Live file is now the freshly-written stub (host-local bootstrap ran).
+    assert local_yaml.read_text(encoding="utf-8").startswith(_STUB_TEMPLATE)
+    assert host_local_dir_path().exists()
+
+
+def test_pristine_stub_is_not_backed_up(home: Path) -> None:
+    """A pristine stub (root-callback default) must NOT spawn a .bak noise file."""
+    cfg = home / ".config" / "setforge"
+    cfg.mkdir(parents=True)
+    local_yaml = cfg / "local.yaml"
+    local_yaml.write_text(_STUB_TEMPLATE, encoding="utf-8")
+    assert not host_local_dir_path().exists()
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-prompt"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    assert _backup_text(local_yaml) is None  # no spurious backup
+    assert local_yaml.read_text(encoding="utf-8").startswith(_STUB_TEMPLATE)
