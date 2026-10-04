@@ -25,12 +25,21 @@ On any failure the temp file is unlinked so no ``.tmp`` debris leaks.
 """
 
 import contextlib
+import ctypes
+import errno
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
+
+from setforge.errors import SetforgeError
+
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 
 
 def atomic_write_bytes(
@@ -187,6 +196,76 @@ def atomic_write_bytes_at(
     temporary = f".{name}.setforge-{uuid4().hex}.tmp"
     with staged_file_at(parent_fd, temporary, data, mode):
         os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+
+
+def renameat2(
+    source_fd: int, source: str, destination_fd: int, destination: str, flags: int
+) -> None:
+    """Rename between held directories with ``RENAME_*`` ``flags``."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "renameat2", None)
+    if function is None:
+        raise SetforgeError(
+            "filesystem publication requires renameat2 support on this platform"
+        )
+    result = function(
+        source_fd,
+        os.fsencode(source),
+        destination_fd,
+        os.fsencode(destination),
+        flags,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
+
+
+def rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
+    """Move ``source`` onto an absent ``destination`` inside one held directory.
+
+    An existing destination raises ``FileExistsError`` and is left alone.
+    """
+    try:
+        renameat2(parent_fd, source, parent_fd, destination, RENAME_NOREPLACE)
+    except OSError as exc:
+        if exc.errno not in RENAME_FLAGS_UNSUPPORTED:
+            raise
+        # NFS rejects every rename flag.
+        rename_onto_claim_at(parent_fd, source, destination)
+
+
+def rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None:
+    """Exclusively claim an absent destination, then rename over the claim.
+
+    The source moves atomically, an existing destination is refused, and the
+    only entry a plain rename can replace is the empty claim made here.
+    """
+    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
+    directory = stat.S_ISDIR(observed.st_mode)
+    if directory:
+        os.mkdir(destination, 0o700, dir_fd=parent_fd)
+    else:
+        os.close(
+            os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        )
+    try:
+        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            if directory:
+                os.rmdir(destination, dir_fd=parent_fd)
+            else:
+                os.unlink(destination, dir_fd=parent_fd)
+        if isinstance(exc, OSError) and exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise FileExistsError(
+                errno.EEXIST, os.strerror(errno.EEXIST), destination
+            ) from exc
+        raise
 
 
 def fsync_path(path: Path, *, strict: bool) -> None:

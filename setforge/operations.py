@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import binascii
 import ctypes
-import errno
 import hashlib
 import json
 import os
@@ -26,7 +25,6 @@ from setforge import atomicio, transitions
 from setforge.errors import SetforgeError
 
 JOURNAL_SCHEMA_VERSION: Final[int] = 1
-_RENAME_NOREPLACE: Final[int] = 1
 _IN_CREATE: Final[int] = 0x00000100
 _IN_DELETE: Final[int] = 0x00000200
 _IN_MOVED_FROM: Final[int] = 0x00000040
@@ -1089,7 +1087,7 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
                     f"filesystem path changed since transition: {replacement.path}"
                 )
             try:
-                _rename_noreplace_at(parent_fd, temporary, name)
+                atomicio.rename_noreplace_at(parent_fd, temporary, name)
             except FileExistsError as exc:
                 if _coordinate_matches_fd(parent_fd, temporary, directory_fd):
                     os.rmdir(temporary, dir_fd=parent_fd)
@@ -1098,7 +1096,7 @@ def _restore_directory_delta_at(  # noqa: C901 - fail-closed publication cases
                 ) from exc
             if not _coordinate_matches_fd(parent_fd, name, directory_fd):
                 with suppress(OSError):
-                    _rename_noreplace_at(parent_fd, name, temporary)
+                    atomicio.rename_noreplace_at(parent_fd, name, temporary)
                 raise SetforgeError(
                     f"filesystem path changed since transition: {replacement.path}"
                 )
@@ -1202,38 +1200,6 @@ def _verify_staging_create_event(watch_fd: int, temporary: str, path: Path) -> N
                 events.append((mask & _INOTIFY_MASK, event_name))
     if events != [(_IN_CREATE, temporary)]:
         raise SetforgeError(f"filesystem path changed since transition: {path}")
-
-
-def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise SetforgeError("filesystem recovery requires renameat2 support")
-    result = renameat2(
-        parent_fd,
-        os.fsencode(source),
-        parent_fd,
-        os.fsencode(destination),
-        _RENAME_NOREPLACE,
-    )
-    if result == 0:
-        return
-    error = ctypes.get_errno()
-    if error not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
-        raise OSError(error, os.strerror(error), destination)
-    # NFS rejects every rename flag. Claim the absent destination with mkdir,
-    # then rename the directory over that empty claim; nothing else is replaced.
-    os.mkdir(destination, 0o700, dir_fd=parent_fd)
-    try:
-        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-    except OSError as exc:
-        with suppress(OSError):
-            os.rmdir(destination, dir_fd=parent_fd)
-        if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
-            raise FileExistsError(
-                errno.EEXIST, os.strerror(errno.EEXIST), destination
-            ) from exc
-        raise
 
 
 def has_irreversible_effect(journal: OperationJournal) -> bool:

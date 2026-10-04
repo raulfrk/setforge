@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ctypes
 import errno
 import hashlib
 import json
@@ -24,9 +23,6 @@ from setforge.transitions import state_root
 _SCHEMA = "1.0"
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
-_RENAME_NOREPLACE = 1
-_RENAME_EXCHANGE = 2
-_RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 _HARD_LINKS_UNSUPPORTED = frozenset(
     {errno.EPERM, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK}
 )
@@ -634,40 +630,21 @@ def _atomic_symlink_at(parent_fd: int, name: str, target: str) -> None:
             os.unlink(temporary, dir_fd=parent_fd)
 
 
-def _renameat2(
-    source_fd: int, source: str, destination_fd: int, destination: str, flags: int
-) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise SetforgeError(
-            "managed tree publication requires renameat2 support on this platform"
-        )
-    result = renameat2(
-        source_fd,
-        os.fsencode(source),
-        destination_fd,
-        os.fsencode(destination),
-        flags,
-    )
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
-
-
 def _publish_noreplace_at(parent_fd: int, source: str, name: str) -> None:
     """Move a journal-owned sibling onto an absent name without replacing."""
     try:
-        _renameat2(parent_fd, source, parent_fd, name, _RENAME_NOREPLACE)
+        atomicio.renameat2(
+            parent_fd, source, parent_fd, name, atomicio.RENAME_NOREPLACE
+        )
         return
     except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+        if exc.errno not in atomicio.RENAME_FLAGS_UNSUPPORTED:
             raise
     # NFS rejects every rename flag. A hard link is the atomic no-replace
     # publication there; a directory cannot be linked and takes the claim.
     observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
     if stat.S_ISDIR(observed.st_mode):
-        _rename_onto_claim_at(parent_fd, source, name)
+        atomicio.rename_onto_claim_at(parent_fd, source, name)
         return
     try:
         os.link(
@@ -685,46 +662,6 @@ def _publish_noreplace_at(parent_fd: int, source: str, name: str) -> None:
             f"publish managed tree entry without risking an overwrite: {name}"
         ) from exc
     os.unlink(source, dir_fd=parent_fd)
-
-
-def _isolate_noreplace_at(parent_fd: int, name: str, quarantine: str) -> None:
-    """Move a live entry onto its absent journal-owned sibling in one step."""
-    try:
-        _renameat2(parent_fd, name, parent_fd, quarantine, _RENAME_NOREPLACE)
-    except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
-            raise
-        _rename_onto_claim_at(parent_fd, name, quarantine)
-
-
-def _rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None:
-    """Exclusively claim an absent destination, then rename over the claim.
-
-    The source moves atomically, an existing destination is refused, and the
-    only entry a plain rename can replace is the empty claim made here.
-    """
-    observed = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
-    directory = stat.S_ISDIR(observed.st_mode)
-    if directory:
-        os.mkdir(destination, _DIR_MODE, dir_fd=parent_fd)
-    else:
-        os.close(
-            os.open(
-                destination,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                _FILE_MODE,
-                dir_fd=parent_fd,
-            )
-        )
-    try:
-        os.rename(source, destination, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-    except BaseException:
-        with suppress(OSError):
-            if directory:
-                os.rmdir(destination, dir_fd=parent_fd)
-            else:
-                os.unlink(destination, dir_fd=parent_fd)
-        raise
 
 
 def _open_or_create_root_at(
@@ -951,7 +888,7 @@ def _entry_at(parent_fd: int, name: str, relative: str) -> TreeEntry:
 
 
 def _restore_exchange(parent_fd: int, temporary: str, name: str) -> None:
-    _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
+    atomicio.renameat2(parent_fd, temporary, parent_fd, name, atomicio.RENAME_EXCHANGE)
 
 
 def _exchange_verified_at(
@@ -959,9 +896,11 @@ def _exchange_verified_at(
 ) -> None:
     """Publish the staged sibling only while the live entry is still planned."""
     try:
-        _renameat2(parent_fd, temporary, parent_fd, name, _RENAME_EXCHANGE)
+        atomicio.renameat2(
+            parent_fd, temporary, parent_fd, name, atomicio.RENAME_EXCHANGE
+        )
     except OSError as exc:
-        if exc.errno not in _RENAME_FLAGS_UNSUPPORTED:
+        if exc.errno not in atomicio.RENAME_FLAGS_UNSUPPORTED:
             raise
         _replace_verified_at(parent_fd, temporary, name, expected)
         return
@@ -982,7 +921,7 @@ def _replace_verified_at(
     replacement can be overwritten.
     """
     quarantine = temporary_entry_name(name, "remove")
-    _isolate_noreplace_at(parent_fd, name, quarantine)
+    atomicio.rename_noreplace_at(parent_fd, name, quarantine)
     try:
         if _entry_at(parent_fd, quarantine, expected.path) != expected:
             raise SetforgeError(
@@ -1035,7 +974,7 @@ def _apply_removals(plan: TreePlan, root_fd: int) -> None:
         quarantine = temporary_entry_name(name, "remove")
         isolated = False
         try:
-            _isolate_noreplace_at(parent_fd, name, quarantine)
+            atomicio.rename_noreplace_at(parent_fd, name, quarantine)
             isolated = True
             if _entry_at(parent_fd, quarantine, entry.path) != entry:
                 raise SetforgeError(

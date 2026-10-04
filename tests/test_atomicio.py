@@ -1,6 +1,7 @@
 """Tests for the shared atomic-write primitive."""
 
 import ast
+import errno
 import os
 import stat
 from pathlib import Path
@@ -100,6 +101,104 @@ def test_staged_file_at_refuses_and_keeps_an_existing_staged_name(
         assert staged.read_bytes() == b"theirs\n"
     else:
         assert staged.is_symlink()
+
+
+def _reject_rename_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    def reject(
+        source_fd: int, source: str, destination_fd: int, destination: str, flags: int
+    ) -> None:
+        del source_fd, source, destination_fd, flags
+        raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), destination)
+
+    monkeypatch.setattr(atomicio, "renameat2", reject)
+
+
+def _make_entry(path: Path, kind: str, marker: str) -> None:
+    if kind == "directory":
+        path.mkdir()
+        (path / marker).write_bytes(b"")
+    else:
+        path.write_text(marker, encoding="utf-8")
+
+
+def _entry(path: Path) -> object:
+    if path.is_dir():
+        return sorted(child.name for child in path.iterdir())
+    return path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("flags", ["supported", "rejected"])
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_rename_noreplace_at_moves_onto_an_absent_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: str, kind: str
+) -> None:
+    _make_entry(tmp_path / "source", kind, "ours")
+    if flags == "rejected":
+        _reject_rename_flags(monkeypatch)
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        atomicio.rename_noreplace_at(parent_fd, "source", "destination")
+    finally:
+        os.close(parent_fd)
+
+    assert [path.name for path in tmp_path.iterdir()] == ["destination"]
+    assert _entry(tmp_path / "destination") == (
+        ["ours"] if kind == "directory" else "ours"
+    )
+
+
+@pytest.mark.parametrize("flags", ["supported", "rejected"])
+@pytest.mark.parametrize("kind", ["directory", "file"])
+@pytest.mark.parametrize("occupant", ["directory", "file"])
+def test_rename_noreplace_at_refuses_and_keeps_an_existing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: str,
+    kind: str,
+    occupant: str,
+) -> None:
+    _make_entry(tmp_path / "source", kind, "ours")
+    _make_entry(tmp_path / "destination", occupant, "theirs")
+    if flags == "rejected":
+        _reject_rename_flags(monkeypatch)
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(FileExistsError):
+            atomicio.rename_noreplace_at(parent_fd, "source", "destination")
+    finally:
+        os.close(parent_fd)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "destination",
+        "source",
+    ]
+    assert _entry(tmp_path / "source") == (["ours"] if kind == "directory" else "ours")
+    assert _entry(tmp_path / "destination") == (
+        ["theirs"] if occupant == "directory" else "theirs"
+    )
+
+
+def test_rename_onto_claim_at_reports_a_claim_filled_by_someone_else_as_existing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "source").mkdir()
+    real_rename = os.rename
+
+    def fill_claim_then_rename(source: str, destination: str, **kwargs: int) -> None:
+        (tmp_path / destination / "theirs").write_bytes(b"")
+        real_rename(source, destination, **kwargs)
+
+    monkeypatch.setattr(os, "rename", fill_claim_then_rename)
+    parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(FileExistsError) as raised:
+            atomicio.rename_onto_claim_at(parent_fd, "source", "destination")
+    finally:
+        os.close(parent_fd)
+
+    assert raised.value.errno == errno.EEXIST
+    assert (tmp_path / "source").is_dir()
+    assert _entry(tmp_path / "destination") == ["theirs"]
 
 
 def test_atomic_write_bytes_round_trip(tmp_path: Path) -> None:

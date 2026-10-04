@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge import operations, orphan_scan, transitions
+from setforge import atomicio, operations, orphan_scan, transitions
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 
 
@@ -332,7 +332,7 @@ def test_filesystem_delta_collision_cleanup_preserves_swapped_staging(
     parent.rmdir()
     guards = orphan_scan.capture_parent_path_guards((parent,))
     parent.mkdir()
-    original_rename = operations._rename_noreplace_at
+    original_rename = atomicio.rename_noreplace_at
 
     def swap_then_collide(parent_fd: int, source: str, destination: str) -> None:
         staged = tmp_path / source
@@ -341,7 +341,7 @@ def test_filesystem_delta_collision_cleanup_preserves_swapped_staging(
         staged.chmod(0o711)
         original_rename(parent_fd, source, destination)
 
-    monkeypatch.setattr(operations, "_rename_noreplace_at", swap_then_collide)
+    monkeypatch.setattr(atomicio, "rename_noreplace_at", swap_then_collide)
     with pytest.raises(SetforgeError, match="changed since transition"):
         operations.apply_filesystem_deltas_reverse_anchored((delta,), guards)
 
