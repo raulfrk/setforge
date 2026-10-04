@@ -6,7 +6,6 @@ import base64
 import binascii
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +14,7 @@ import stat
 import struct
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -124,7 +123,6 @@ class OperationCheckpoint:
     restore_transitions: bool = False
     adapters: tuple[AdapterKind, ...] = ()
     completed: bool = False
-    recovered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,22 +156,6 @@ class OperationJournal:
     path_guards: tuple[PathGuard, ...] = ()
 
 
-def locked_profiles(journal: OperationJournal) -> tuple[str, ...]:
-    """Return every profile namespace reserved by ``journal`` in lock order."""
-    if journal.reserved_profiles:
-        return journal.reserved_profiles
-    return tuple(
-        sorted({journal.profile, *(item.profile for item in journal.state_snapshots)})
-    )
-
-
-def locked_config_dirs(journal: OperationJournal) -> tuple[Path, ...]:
-    """Return every canonical config namespace reserved by ``journal``."""
-    if journal.reserved_config_dirs:
-        return journal.reserved_config_dirs
-    return (journal.config_dir,) if journal.config_dir is not None else ()
-
-
 def _config_dirs_digest(config_dirs: tuple[Path, ...]) -> str:
     """Return an integrity witness for one exact config-lock envelope."""
     payload = json.dumps([str(path) for path in config_dirs], separators=(",", ":"))
@@ -195,19 +177,11 @@ def journal_path(profile: str) -> Path:
     return journals_root() / f"{digest}.json"
 
 
-@contextmanager
-def _registry_lock() -> Iterator[None]:
+def _registry_lock() -> AbstractContextManager[None]:
     """Serialize global journal discovery and creation across processes."""
-    from setforge.locking import _acquire_fd
+    from setforge.locking import _flock
 
-    root = journals_root()
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / ".registry.lock").open("a") as fd:
-        _acquire_fd(fd, timeout=None, timeout_message="")
-        try:
-            yield
-        finally:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+    return _flock(journals_root() / ".registry.lock", timeout=None, timeout_message="")
 
 
 def _load_all() -> tuple[OperationJournal, ...]:
@@ -541,7 +515,7 @@ def prepare(
             ),
             path_guards=tuple(sorted(path_guards, key=lambda item: str(item.path))),
         )
-        _write(journal, create=True)
+        _write(journal)
         return journal
 
 
@@ -674,22 +648,11 @@ def conflicting_journals(
         if (resources and journal.resources_lock)
         or (
             expected_config is not None
-            and expected_config in locked_config_dirs(journal)
+            and expected_config
+            in {path.resolve() for path in journal.reserved_config_dirs}
         )
-        or bool(expected_profiles.intersection(locked_profiles(journal)))
+        or bool(expected_profiles.intersection(journal.reserved_profiles))
     )
-
-
-def refuse_config_mutation(config_dir: Path) -> None:
-    """Refuse a config write covered by any unfinished operation journal."""
-    expected = config_dir.resolve()
-    for journal in _load_all():
-        if expected in locked_config_dirs(journal):
-            raise SetforgeError(
-                f"unfinished {journal.command} operation {journal.operation_id} "
-                "blocks this config mutation; run "
-                f"`setforge recover --profile={journal.profile}`"
-            )
 
 
 def begin_checkpoint(
@@ -723,8 +686,14 @@ def begin_checkpoint(
             and any(item.path in requested.parents for requested in requested_objects)
         )
     )
-    available_paths = {str(item.path) for item in journal.paths}
-    if not set(scoped_paths) <= available_paths:
+    available_paths = {item.path for item in journal.paths}
+    absent_paths = {
+        item.path for item in journal.paths if item.kind is SnapshotKind.ABSENT
+    }
+    if any(
+        requested not in available_paths and absent_paths.isdisjoint(requested.parents)
+        for requested in requested_objects
+    ):
         raise SetforgeError("checkpoint references a path absent from the journal")
     scoped_adapters = (
         tuple(item.kind for item in journal.adapters) if adapters is None else adapters
@@ -902,7 +871,7 @@ def _operation_lock_files(journal: OperationJournal) -> frozenset[Path]:
 
     return frozenset(
         _profile_lock_path(profile).expanduser().absolute()
-        for profile in locked_profiles(journal)
+        for profile in journal.reserved_profiles
     )
 
 
@@ -1267,23 +1236,6 @@ def _rename_noreplace_at(parent_fd: int, source: str, destination: str) -> None:
         raise
 
 
-def finish_recovery(journal: OperationJournal) -> OperationJournal:
-    """Durably mark every executable checkpoint compensated/restored."""
-    updated = replace(
-        journal,
-        phase=OperationPhase.RECOVERING,
-        checkpoints=tuple(
-            replace(
-                item,
-                recovered=item.kind is not CheckpointKind.IRREVERSIBLE,
-            )
-            for item in journal.checkpoints
-        ),
-    )
-    _write(updated)
-    return updated
-
-
 def has_irreversible_effect(journal: OperationJournal) -> bool:
     """Return whether recovery requires explicit operator remediation."""
     return any(item.kind is CheckpointKind.IRREVERSIBLE for item in journal.checkpoints)
@@ -1301,7 +1253,7 @@ def recover_automatically(journal: OperationJournal) -> bool:
         raise SetforgeError("operation journal changed before automatic recovery")
     validate_recovery(current)
     recover_adapters(current)
-    recovered = finish_recovery(recover_files(current))
+    recovered = recover_files(current)
     if has_irreversible_effect(recovered):
         mark_manual(recovered)
         return False
@@ -1560,9 +1512,6 @@ def mark_manual(journal: OperationJournal) -> OperationJournal:
 def complete(journal: OperationJournal) -> None:
     """Durably remove the active record after transition/recovery commit."""
     target = journal_path(journal.profile)
-    current = load(journal.profile)
-    if current.operation_id != journal.operation_id:
-        raise SetforgeError("operation journal identity changed before completion")
     with _registry_lock():
         current = load(journal.profile)
         if current.operation_id != journal.operation_id:
@@ -1608,8 +1557,6 @@ def _open_guarded_parent(  # noqa: C901
     directory identity recorded for it.
     """
     path = path.expanduser().absolute()
-    if not path.is_absolute():  # pragma: no cover - absolute() is defensive
-        raise SetforgeError(f"recovery path must be absolute: {path}")
     follow_flags = os.O_RDONLY | os.O_DIRECTORY
     flags = follow_flags | getattr(os, "O_NOFOLLOW", 0)
     descriptors: list[int] = []
@@ -1929,7 +1876,7 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
     raise SetforgeError(f"unsupported anchored filesystem replacement: {snapshot.path}")
 
 
-def _restore_path_anchored(  # noqa: C901
+def _restore_path_anchored(
     snapshot: PathSnapshot,
     guard_identities: dict[Path, tuple[int, int, int] | None],
     *,
@@ -1955,45 +1902,9 @@ def _restore_path_anchored(  # noqa: C901
                 pass
             else:
                 return False
-        if snapshot.kind is SnapshotKind.ABSENT:
-            _restore_path_at(parent_fd, snapshot)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        if snapshot.kind is SnapshotKind.DIRECTORY:
-            try:
-                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                os.mkdir(name, mode=snapshot.mode or 0o700, dir_fd=parent_fd)
-            else:
-                if not stat.S_ISDIR(info.st_mode):
-                    raise SetforgeError(
-                        "refusing to replace non-directory during recovery: "
-                        f"{snapshot.path}"
-                    )
-            directory_fd = os.open(
-                name,
-                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=parent_fd,
-            )
-            try:
-                if snapshot.mode is not None:
-                    os.fchmod(directory_fd, snapshot.mode)
-                if snapshot.mtime_ns is not None:
-                    os.utime(
-                        directory_fd,
-                        ns=(snapshot.mtime_ns, snapshot.mtime_ns),
-                    )
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-            os.fsync(parent_fd)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        if snapshot.kind in (SnapshotKind.FILE, SnapshotKind.SYMLINK):
-            _restore_path_at(parent_fd, snapshot)
-            _verify_parent_binding(parent_fd, snapshot.path.parent)
-            return True
-        raise AssertionError(f"unhandled snapshot kind: {snapshot.kind}")
+        _restore_path_at(parent_fd, snapshot)
+        _verify_parent_binding(parent_fd, snapshot.path.parent)
+        return True
 
 
 def _restore_path(
@@ -2087,12 +1998,10 @@ def _remove_replaceable(path: Path) -> None:
         path.unlink()
 
 
-def _write(journal: OperationJournal, *, create: bool = False) -> None:
+def _write(journal: OperationJournal) -> None:
     _from_json(_to_json(journal))
     target = journal_path(journal.profile)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if create and target.exists():
-        raise SetforgeError(f"operation journal already exists: {target}")
     atomicio.atomic_write_text(
         target,
         json.dumps(_to_json(journal), indent=2, sort_keys=True) + "\n",
@@ -2120,10 +2029,12 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
         "command": journal.command,
         "profile": journal.profile,
         "config_dir": str(journal.config_dir) if journal.config_dir else None,
-        "reserved_config_dirs": [str(path) for path in locked_config_dirs(journal)],
-        "reserved_config_dirs_digest": _config_dirs_digest(locked_config_dirs(journal)),
+        "reserved_config_dirs": [str(path) for path in journal.reserved_config_dirs],
+        "reserved_config_dirs_digest": _config_dirs_digest(
+            journal.reserved_config_dirs
+        ),
         "state_dir": str(journal.state_dir),
-        "reserved_profiles": list(locked_profiles(journal)),
+        "reserved_profiles": list(journal.reserved_profiles),
         "resources_lock": journal.resources_lock,
         "phase": journal.phase.value,
         "created_at": journal.created_at,
@@ -2171,7 +2082,8 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
                 "restore_transitions": item.restore_transitions,
                 "adapters": [kind.value for kind in item.adapters],
                 "completed": item.completed,
-                "recovered": item.recovered,
+                # Unused, but readers up to 1.3.9 reject a checkpoint without it.
+                "recovered": False,
             }
             for item in journal.checkpoints
         ],
@@ -2185,11 +2097,10 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     resources_lock = _require_bool(raw, "resources_lock")
     reserved_profiles = _require_str_tuple(raw, "reserved_profiles")
     path_rows = raw["paths"]
-    path_guard_rows = raw.get("path_guards", [])
-    has_reserved_config_dirs = "reserved_config_dirs" in raw
+    path_guard_rows = raw["path_guards"]
     state_rows = raw["state_snapshots"]
     checkpoint_rows = raw["checkpoints"]
-    adapter_rows = raw.get("adapters", [])
+    adapter_rows = raw["adapters"]
     if not isinstance(path_rows, list) or not isinstance(state_rows, list):
         raise TypeError("paths/state_snapshots must be lists")
     if not isinstance(path_guard_rows, list):
@@ -2235,8 +2146,6 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     ):
         raise ValueError("path guards must be ancestors of journaled paths")
     if command == "snapshot restore":
-        if not has_reserved_config_dirs:
-            raise ValueError("snapshot restore journal requires reserved_config_dirs")
         expected_guards = {
             parent
             for snapshot in paths
@@ -2288,45 +2197,29 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     if config_raw is not None and not isinstance(config_raw, str):
         raise TypeError("config_dir must be an absolute path or null")
     config_dir = Path(config_raw) if config_raw is not None else None
-    config_dir_rows = raw.get(
-        "reserved_config_dirs", [str(config_dir)] if config_dir is not None else []
+    reserved_config_dirs = tuple(
+        Path(item) for item in _require_str_tuple(raw, "reserved_config_dirs")
     )
-    if not isinstance(config_dir_rows, list) or not all(
-        isinstance(item, str) for item in config_dir_rows
-    ):
-        raise TypeError("reserved_config_dirs must be a list of paths")
-    reserved_config_dirs = tuple(Path(item) for item in config_dir_rows)
-    config_dirs_digest = raw.get("reserved_config_dirs_digest")
     state_dir = Path(_require_str(raw, "state_dir"))
     if config_dir is not None and not config_dir.is_absolute():
         raise ValueError("config_dir must be absolute")
     if not state_dir.is_absolute():
         raise ValueError("state_dir must be absolute")
-    if config_dir is not None and config_dir != config_dir.resolve():
-        raise ValueError("config_dir must be canonical")
     if (
         tuple(sorted(set(reserved_config_dirs), key=str)) != reserved_config_dirs
-        or any(
-            not path.is_absolute() or path != path.resolve()
-            for path in reserved_config_dirs
-        )
+        or any(not path.is_absolute() for path in reserved_config_dirs)
         or (config_dir is not None and config_dir not in reserved_config_dirs)
     ):
         raise ValueError(
-            "reserved_config_dirs must be sorted, unique, canonical, and include "
+            "reserved_config_dirs must be sorted, unique, absolute, and include "
             "config_dir"
         )
-    if config_dirs_digest is not None and (
-        not isinstance(config_dirs_digest, str)
-        or config_dirs_digest != _config_dirs_digest(reserved_config_dirs)
+    if any(".." in path.parts for path in (state_dir, *reserved_config_dirs)):
+        raise ValueError("state_dir and reserved_config_dirs must not contain '..'")
+    if _require_str(raw, "reserved_config_dirs_digest") != _config_dirs_digest(
+        reserved_config_dirs
     ):
         raise ValueError("reserved_config_dirs integrity witness does not match")
-    if command == "snapshot restore" and config_dirs_digest is None:
-        raise ValueError(
-            "snapshot restore journal requires a config reservation witness"
-        )
-    if state_dir != state_dir.resolve():
-        raise ValueError("state_dir must be canonical")
     return OperationJournal(
         operation_id=_require_str(raw, "operation_id"),
         command=command,
@@ -2342,7 +2235,7 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         reserved_profiles=reserved_profiles,
         adapters=adapters,
         checkpoints=checkpoints,
-        transition_names_before=_optional_str_tuple(raw, "transition_names_before"),
+        transition_names_before=_require_str_tuple(raw, "transition_names_before"),
         reserved_config_dirs=reserved_config_dirs,
         path_guards=path_guards,
     )
@@ -2486,7 +2379,6 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
     restore_transitions = row.get("restore_transitions")
     adapter_rows = row.get("adapters")
     completed = row.get("completed")
-    recovered = row.get("recovered")
     if not isinstance(name, str) or not name:
         raise TypeError("checkpoint name must be non-empty text")
     if not isinstance(kind_raw, str) or not kind_raw:
@@ -2503,8 +2395,8 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
         raise TypeError("checkpoint restore_state must be boolean")
     if not isinstance(restore_transitions, bool):
         raise TypeError("checkpoint restore_transitions must be boolean")
-    if not isinstance(completed, bool) or not isinstance(recovered, bool):
-        raise TypeError("checkpoint state flags must be booleans")
+    if not isinstance(completed, bool):
+        raise TypeError("checkpoint completed must be boolean")
     _require_unique(iter(paths), "checkpoint path")
     _require_unique(iter(adapter_rows), "checkpoint adapter")
     return OperationCheckpoint(
@@ -2516,7 +2408,6 @@ def _parse_checkpoint(row: dict[object, object]) -> OperationCheckpoint:
         restore_transitions=restore_transitions,
         adapters=tuple(AdapterKind(item) for item in adapter_rows),
         completed=completed,
-        recovered=recovered,
     )
 
 
@@ -2901,13 +2792,6 @@ def _require_bool(raw: dict[str, object], key: str) -> bool:
 
 def _require_str_tuple(raw: dict[str, object], key: str) -> tuple[str, ...]:
     value = raw[key]
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise TypeError(f"{key} must be a list of strings")
-    return tuple(value)
-
-
-def _optional_str_tuple(raw: dict[str, object], key: str) -> tuple[str, ...]:
-    value = raw.get(key, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise TypeError(f"{key} must be a list of strings")
     return tuple(value)

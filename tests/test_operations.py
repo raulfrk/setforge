@@ -164,10 +164,14 @@ def test_active_operation_blocks_same_config_but_not_other_repo(
 ) -> None:
     _prepare(tmp_path)
 
-    with pytest.raises(SetforgeError, match="blocks this config mutation"):
-        operations.refuse_config_mutation(tmp_path)
+    with pytest.raises(SetforgeError, match="blocks this mutation"):
+        operations.refuse_conflicting_mutation(
+            resources=False, config_dir=tmp_path, profile=None
+        )
 
-    operations.refuse_config_mutation(tmp_path / "other")
+    operations.refuse_conflicting_mutation(
+        resources=False, config_dir=tmp_path / "other", profile=None
+    )
 
 
 def test_checkpoint_intent_is_durable_before_completion(
@@ -186,6 +190,42 @@ def test_checkpoint_intent_is_durable_before_completion(
     completed = operations.finish_checkpoint(applying)
     assert operations.load("p") == completed
     assert completed.checkpoints[-1].completed
+
+
+def test_checkpoint_refuses_path_without_a_journaled_preimage(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    journaled = tmp_path / "journaled.txt"
+    journaled.write_text("before", encoding="utf-8")
+    journal = _prepare(tmp_path, paths=(journaled,))
+
+    with pytest.raises(SetforgeError, match="absent from the journal"):
+        operations.begin_checkpoint(
+            journal,
+            name="tracked-files",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore captured paths",
+            paths=(journaled, tmp_path / "unjournaled.txt"),
+        )
+
+    assert operations.load("p") == journal
+
+
+def test_checkpoint_covers_path_below_journaled_absent_ancestor(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    created = tmp_path / "created"
+    journal = _prepare(tmp_path, paths=(created,))
+
+    applying = operations.begin_checkpoint(
+        journal,
+        name="tracked-files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore captured paths",
+        paths=(created / "nested" / "leaf.txt",),
+    )
+
+    assert applying.checkpoints[-1].paths == (str(created),)
 
 
 def test_extend_paths_snapshots_late_identity_before_publication(
@@ -732,7 +772,7 @@ def test_prepare_round_trips_config_reservations_and_path_guards(
     loaded = operations.load("p")
 
     assert loaded == journal
-    assert operations.locked_config_dirs(loaded) == tuple(
+    assert loaded.reserved_config_dirs == tuple(
         sorted((tmp_path.resolve(), extra_config.resolve()), key=str)
     )
     assert loaded.path_guards == tuple(sorted(guards, key=lambda item: str(item.path)))
@@ -768,10 +808,68 @@ def test_snapshot_restore_allows_tracked_path_with_local_config_suffix(
     )
 
     assert operations.load("p") == journal
-    assert operations.locked_config_dirs(journal) == (tmp_path.resolve(),)
+    assert journal.reserved_config_dirs == (tmp_path.resolve(),)
 
 
-def test_schema_one_legacy_journal_fields_remain_recoverable(
+@pytest.mark.parametrize(
+    "key",
+    [
+        "path_guards",
+        "adapters",
+        "reserved_config_dirs",
+        "reserved_config_dirs_digest",
+        "transition_names_before",
+    ],
+)
+def test_journal_missing_a_required_key_is_invalid(
+    tmp_path: Path, operation_state: Path, key: str
+) -> None:
+    path = tmp_path / "live" / "file"
+    path.parent.mkdir()
+    path.write_text("before", encoding="utf-8")
+    operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw.pop(key)
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="invalid operation journal"):
+        operations.load("p")
+
+
+def test_snapshot_restore_journal_cannot_narrow_path_guards(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    path = tmp_path / "live" / "file"
+    path.parent.mkdir()
+    path.write_text("before", encoding="utf-8")
+    operations.prepare(
+        command="snapshot restore",
+        profile="p",
+        config_dir=tmp_path,
+        resources_lock=False,
+        command_line=("snapshot", "restore"),
+        paths=(path,),
+        path_guards=_path_guards(path),
+    )
+    journal_path = operations.journal_path("p")
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    raw["path_guards"] = raw["path_guards"][1:]
+    journal_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SetforgeError, match="invalid operation journal"):
+        operations.load("p")
+
+
+def test_journal_stays_compatible_with_earlier_releases(
     tmp_path: Path, operation_state: Path
 ) -> None:
     path = tmp_path / "file"
@@ -784,69 +882,18 @@ def test_schema_one_legacy_journal_fields_remain_recoverable(
     )
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("path_guards")
-    raw.pop("reserved_config_dirs")
-    raw.pop("reserved_config_dirs_digest")
-    for row in raw["paths"]:
-        row.pop("mtime_ns")
+    for row in raw["checkpoints"]:
+        assert row["recovered"] is False
+        row["recovered"] = True
     journal_path.write_text(json.dumps(raw), encoding="utf-8")
     path.write_text("after", encoding="utf-8")
 
     loaded = operations.load("p")
-    operations.recover_files(loaded)
+    assert loaded == journal
+    assert operations.recover_automatically(loaded)
 
-    assert loaded.operation_id == journal.operation_id
-    assert loaded.path_guards == ()
-    assert operations.locked_config_dirs(loaded) == (tmp_path.resolve(),)
     assert path.read_text(encoding="utf-8") == "before"
-
-
-def test_snapshot_restore_journal_cannot_drop_path_guards(
-    tmp_path: Path, operation_state: Path
-) -> None:
-    path = tmp_path / "live" / "file"
-    path.parent.mkdir()
-    path.write_text("before", encoding="utf-8")
-    operations.prepare(
-        command="snapshot restore",
-        profile="p",
-        config_dir=tmp_path,
-        resources_lock=False,
-        command_line=("snapshot", "restore"),
-        paths=(path,),
-        path_guards=_path_guards(path),
-    )
-    journal_path = operations.journal_path("p")
-    raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("path_guards")
-    journal_path.write_text(json.dumps(raw), encoding="utf-8")
-
-    with pytest.raises(SetforgeError, match="invalid operation journal"):
-        operations.load("p")
-
-
-def test_snapshot_restore_journal_cannot_drop_config_reservations(
-    tmp_path: Path, operation_state: Path
-) -> None:
-    path = tmp_path / "live" / "file"
-    path.parent.mkdir()
-    path.write_text("before", encoding="utf-8")
-    operations.prepare(
-        command="snapshot restore",
-        profile="p",
-        config_dir=tmp_path,
-        resources_lock=False,
-        command_line=("snapshot", "restore"),
-        paths=(path,),
-        path_guards=_path_guards(path),
-    )
-    journal_path = operations.journal_path("p")
-    raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("reserved_config_dirs")
-    journal_path.write_text(json.dumps(raw), encoding="utf-8")
-
-    with pytest.raises(SetforgeError, match="invalid operation journal"):
-        operations.load("p")
+    assert operations.active("p") is None
 
 
 def test_recovery_refuses_parent_swap_after_preflight(
@@ -2037,7 +2084,7 @@ def test_cross_profile_state_snapshot_reserves_its_profile_namespace(
         state_snapshots=(state,),
     )
 
-    assert operations.locked_profiles(journal) == ("actual", "migrate")
+    assert journal.reserved_profiles == ("actual", "migrate")
     assert operations.conflicting_journals(
         resources=False,
         config_dir=None,
@@ -2061,7 +2108,6 @@ def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
     loaded = operations.load("migrate")
 
     assert loaded.reserved_profiles == ("migrate", "team/dev")
-    assert operations.locked_profiles(loaded) == ("migrate", "team/dev")
     assert operations.conflicting_journals(
         resources=False,
         config_dir=None,
@@ -2186,6 +2232,73 @@ def test_state_root_mismatch_refuses_before_adapter_recovery(
         operations.validate_recovery(journal)
 
     assert calls == 0
+
+
+def test_journal_recovers_after_config_ancestor_became_a_symlink(
+    tmp_path: Path, operation_state: Path
+) -> None:
+    config_dir = tmp_path / "real" / "cfg"
+    config_dir.mkdir(parents=True)
+    path = tmp_path / "live.txt"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        operations.prepare(
+            command="sync",
+            profile="p",
+            config_dir=config_dir,
+            resources_lock=False,
+            command_line=("sync", "--profile=p"),
+            paths=(path,),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    (tmp_path / "real").rename(tmp_path / "moved")
+    (tmp_path / "real").symlink_to("moved")
+
+    operations.refuse_conflicting_mutation(
+        resources=False, config_dir=None, profile="other"
+    )
+    with pytest.raises(SetforgeError, match="unfinished sync operation"):
+        operations.refuse_conflicting_mutation(
+            resources=False, config_dir=config_dir, profile=None
+        )
+    assert operations.load("p") == journal
+    assert operations.recover_automatically(journal)
+
+    assert path.read_text(encoding="utf-8") == "before"
+    assert operations.active("p") is None
+
+
+def test_journal_reports_retryable_error_after_state_ancestor_became_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "real" / "state"
+    state_root.mkdir(parents=True)
+    monkeypatch.setattr(transitions, "state_root", lambda: state_root)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    path = tmp_path / "live.txt"
+    path.write_text("before", encoding="utf-8")
+    journal = operations.begin_checkpoint(
+        _prepare(tmp_path, paths=(path,)),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+    path.write_text("after", encoding="utf-8")
+    (tmp_path / "real").rename(tmp_path / "moved")
+    (tmp_path / "real").symlink_to("moved")
+
+    assert operations.load("p") == journal
+    with pytest.raises(SetforgeError, match="SETFORGE_STATE_DIR"):
+        operations.recover_automatically(journal)
+
+    (tmp_path / "real").unlink()
+    (tmp_path / "moved").rename(tmp_path / "real")
+    assert operations.recover_automatically(journal)
+    assert path.read_text(encoding="utf-8") == "before"
 
 
 def test_active_journal_is_visible_across_transition_state_roots(

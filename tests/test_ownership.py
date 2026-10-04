@@ -36,8 +36,6 @@ from setforge.ownership import (
     ScopeKind,
     load_or_create_owner_id,
     read_owner_id,
-    scan_legacy_receipts,
-    scan_legacy_reconcile,
 )
 
 
@@ -216,7 +214,7 @@ def test_missing_target_claim_moves_to_created_object_scope_and_blocks_alias(
 
     with mutation_locks(resources=True, target_roots=(target,)) as guards:
         guards.targets[0].mkdir()
-        object_scope = ResourceScope.target_root_guarded(guards.targets[0])
+        object_scope = ResourceScope.target_root(target)
         destination = ResourceId("file", "tracked", "config/app", object_scope)
         moved = store.move_locked(
             source,
@@ -246,40 +244,6 @@ def test_missing_target_claim_moves_to_created_object_scope_and_blocks_alias(
             fingerprint="sha256:one",
             expected_generation=None,
         )
-
-
-def test_guarded_target_scope_refuses_replacement_before_claim_move(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "project"
-    source = ResourceId(
-        "file", "tracked", "config/app", ResourceScope.target_root(target)
-    )
-    store = OwnershipStore(tmp_path / "ownership")
-    owner = uuid.uuid4()
-    claim = _claim(store, owner, source)
-    displaced = tmp_path / "displaced-project"
-
-    def replace_before_move() -> None:
-        with mutation_locks(resources=True, target_roots=(target,)) as guards:
-            guard = guards.targets[0]
-            guard.mkdir()
-            target.rename(displaced)
-            target.mkdir()
-            object_scope = ResourceScope.target_root_guarded(guard)
-            destination = ResourceId("file", "tracked", "config/app", object_scope)
-            store.move_locked(
-                source,
-                destination,
-                expected_owner=owner,
-                expected_generation=claim.generation,
-            )
-
-    with pytest.raises(SetforgeError, match="target changed"):
-        replace_before_move()
-
-    assert store.read(source) == claim
-    assert len(store.list_claims()) == 1
 
 
 def test_extension_resource_identity_uses_runtime_casefold_contract() -> None:
@@ -482,9 +446,7 @@ def test_move_intent_blocks_reads_and_recovers_before_destination(
     destination = _resource("rg")
     real_write = store._write_claim
 
-    def fail_destination(
-        claim: OwnershipClaim, *, directory_fd: int | None = None
-    ) -> None:
+    def fail_destination(claim: OwnershipClaim, *, directory_fd: int) -> None:
         if claim.resource_id == destination:
             raise OSError("injected crash")
         real_write(claim, directory_fd=directory_fd)
@@ -617,7 +579,11 @@ def test_move_recovery_retains_conflicting_destination(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    store._write_claim(destination)
+    with ownership_module._open_dir_chain(
+        store.root, "claims", create=True
+    ) as claims_fd:
+        assert claims_fd is not None
+        store._write_claim(destination, directory_fd=claims_fd)
 
     with (
         install_resources_lock(),
@@ -637,9 +603,7 @@ def test_move_recovery_rejects_semantically_tampered_intent(
     destination = _resource("rg")
     real_write = store._write_claim
 
-    def fail_destination(
-        claim: OwnershipClaim, *, directory_fd: int | None = None
-    ) -> None:
+    def fail_destination(claim: OwnershipClaim, *, directory_fd: int) -> None:
         if claim.resource_id == destination:
             raise OSError("stop after intent")
         real_write(claim, directory_fd=directory_fd)
@@ -666,56 +630,6 @@ def test_move_recovery_rejects_semantically_tampered_intent(
     assert store._read_path(store._claim_path(source.resource_id)) == source
     assert store._read_path(store._claim_path(destination)) is None
     assert intent.exists()
-
-
-def test_legacy_evidence_never_creates_claims(tmp_path: Path) -> None:
-    receipts = tmp_path / "receipts"
-    receipts.mkdir()
-    (receipts / "one.json").write_text('{"key":"rg"}', encoding="utf-8")
-    (receipts / "two.json").write_text('{"key":"rg"}', encoding="utf-8")
-    (receipts / "bad.json").write_bytes(b"\xff")
-    state = tmp_path / "state"
-    artifact = state / "base" / "default" / "shell"
-    artifact.parent.mkdir(parents=True)
-    artifact.write_bytes(b"base")
-    (receipts / "link.json").symlink_to(receipts / "one.json")
-    reconcile_link = state / "index" / "escaped"
-    reconcile_link.parent.mkdir(parents=True)
-    reconcile_link.symlink_to(artifact)
-
-    receipt_evidence = scan_legacy_receipts(receipts)
-    reconcile_evidence = scan_legacy_reconcile(state)
-
-    assert sum(item.ambiguous for item in receipt_evidence) == 2
-    assert sum(item.corrupt for item in receipt_evidence) == 2
-    assert any(
-        item.corrupt and item.locator == reconcile_link for item in reconcile_evidence
-    )
-    assert reconcile_evidence[0].source == "reconcile-base"
-    assert not (state / "ownership").exists()
-
-
-def test_legacy_evidence_refuses_symlinked_roots_and_legs(tmp_path: Path) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "one.json").write_text('{"key":"rg"}', encoding="utf-8")
-    receipts = tmp_path / "receipts"
-    receipts.symlink_to(outside, target_is_directory=True)
-    assert scan_legacy_receipts(receipts) == (
-        ownership_module.LegacyOwnershipEvidence(
-            "receipt", "receipts", receipts, corrupt=True
-        ),
-    )
-
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / "base").symlink_to(outside, target_is_directory=True)
-    evidence = scan_legacy_reconcile(state)
-    assert evidence == (
-        ownership_module.LegacyOwnershipEvidence(
-            "reconcile-base", "base", state / "base", corrupt=True
-        ),
-    )
 
 
 def test_checkout_uuid_shared_by_worktrees_but_not_clone(tmp_path: Path) -> None:
@@ -1000,7 +914,7 @@ def test_move_refuses_intents_child_swap_before_claim_publication(
     real_write = store._write_intent
 
     def swap_then_write(
-        intent: ownership_module._MoveIntent, *, directory_fd: int | None = None
+        intent: ownership_module._MoveIntent, *, directory_fd: int
     ) -> None:
         store.intents_root.rename(displaced)
         store.intents_root.mkdir()

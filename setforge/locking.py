@@ -228,26 +228,33 @@ def _target_snapshot(request: TargetLockRequest) -> _TargetLockSnapshot:
 
 
 @contextmanager
+def _flock(
+    path: Path, *, timeout: float | None, timeout_message: str
+) -> Iterator[None]:
+    """Hold an exclusive flock on ``path``, creating the lock file if needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as fd:
+        _acquire_fd(fd, timeout=timeout, timeout_message=timeout_message)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
 def _global_named_lock(
     *, rank: LockRank, key: str, prefix: str, timeout: float | None
 ) -> Iterator[None]:
-    with _ranked(rank, key):
-        locks_dir = _user_global_locks_dir()
-        locks_dir.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256(key.encode()).hexdigest()[:24]
-        fd = (locks_dir / f"{prefix}-{digest}.lock").open("a")
-        try:
-            _acquire_fd(
-                fd,
-                timeout=timeout,
-                timeout_message=f"another setforge process holds the {prefix} lock",
-            )
-            try:
-                yield
-            finally:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        finally:
-            fd.close()
+    digest = hashlib.sha256(key.encode()).hexdigest()[:24]
+    with (
+        _ranked(rank, key),
+        _flock(
+            _user_global_locks_dir() / f"{prefix}-{digest}.lock",
+            timeout=timeout,
+            timeout_message=f"another setforge process holds the {prefix} lock",
+        ),
+    ):
+        yield
 
 
 @contextmanager
@@ -384,26 +391,17 @@ def _mutation_gate_lock(timeout: float | None = None) -> Iterator[None]:
     and transition-state overrides while still allowing an operation to acquire
     its narrower resource/config/profile locks in canonical order.
     """
-    with _ranked(LockRank.MUTATION, "mutation-gate"):
-        locks_dir = _user_global_locks_dir()
-        locks_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = locks_dir / "mutation-gate.lock"
-        fd = lock_path.open("a")
-        try:
-            _acquire_fd(
-                fd,
-                timeout=timeout,
-                timeout_message=(
-                    "another setforge command holds the global mutation gate; "
-                    "retry shortly"
-                ),
-            )
-            try:
-                yield
-            finally:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        finally:
-            fd.close()
+    with (
+        _ranked(LockRank.MUTATION, "mutation-gate"),
+        _flock(
+            _user_global_locks_dir() / "mutation-gate.lock",
+            timeout=timeout,
+            timeout_message=(
+                "another setforge command holds the global mutation gate; retry shortly"
+            ),
+        ),
+    ):
+        yield
 
 
 @contextmanager
@@ -427,28 +425,20 @@ def profile_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
         SetforgeError: When ``timeout`` is set and the lock cannot be
             acquired within the deadline.
     """
-    with _ranked(LockRank.PROFILE, profile):
-        # Capture state_root() once at acquire time; do not re-read it inside the
-        # body so a $SETFORGE_STATE_DIR change mid-lock cannot shift the path.
-        lock_path = _profile_lock_path(profile)
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-
-        fd = lock_path.open("a")
-        try:
-            _acquire_fd(
-                fd,
-                timeout=timeout,
-                timeout_message=(
-                    f"another setforge process holds the lock for profile "
-                    f"{profile!r}; retry shortly"
-                ),
-            )
-            try:
-                yield
-            finally:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        finally:
-            fd.close()
+    # state_root() is read once, at acquire time, so a $SETFORGE_STATE_DIR
+    # change mid-lock cannot shift the path.
+    with (
+        _ranked(LockRank.PROFILE, profile),
+        _flock(
+            _profile_lock_path(profile),
+            timeout=timeout,
+            timeout_message=(
+                f"another setforge process holds the lock for profile "
+                f"{profile!r}; retry shortly"
+            ),
+        ),
+    ):
+        yield
 
 
 @contextmanager
@@ -460,26 +450,17 @@ def install_resources_lock(timeout: float | None = None) -> Iterator[None]:
     than ``SETFORGE_STATE_DIR``; alternate transition roots must not split the
     lock protecting the same external inventories.
     """
-    with _ranked(LockRank.RESOURCES, "install-resources"):
-        locks_dir = _user_global_locks_dir()
-        locks_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = locks_dir / "install-resources.lock"
-        fd = lock_path.open("a")
-        try:
-            _acquire_fd(
-                fd,
-                timeout=timeout,
-                timeout_message=(
-                    "another setforge command holds the global resource lock; "
-                    "retry shortly"
-                ),
-            )
-            try:
-                yield
-            finally:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        finally:
-            fd.close()
+    with (
+        _ranked(LockRank.RESOURCES, "install-resources"),
+        _flock(
+            _user_global_locks_dir() / "install-resources.lock",
+            timeout=timeout,
+            timeout_message=(
+                "another setforge command holds the global resource lock; retry shortly"
+            ),
+        ),
+    ):
+        yield
 
 
 @contextmanager
@@ -515,28 +496,19 @@ def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[No
             within the deadline.
     """
     config_key = str(config_dir.resolve())
-    with _ranked(LockRank.CONFIG, config_key):
-        locks_dir = _user_global_locks_dir()
-        locks_dir.mkdir(parents=True, exist_ok=True)
-        key = hashlib.sha256(config_key.encode()).hexdigest()[:24]
-        lock_path = locks_dir / f"config-{key}.lock"
-
-        fd = lock_path.open("a")
-        try:
-            _acquire_fd(
-                fd,
-                timeout=timeout,
-                timeout_message=(
-                    f"another setforge process holds the setforge.lock/config "
-                    f"lock for {config_dir}; retry shortly"
-                ),
-            )
-            try:
-                yield
-            finally:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        finally:
-            fd.close()
+    key = hashlib.sha256(config_key.encode()).hexdigest()[:24]
+    with (
+        _ranked(LockRank.CONFIG, config_key),
+        _flock(
+            _user_global_locks_dir() / f"config-{key}.lock",
+            timeout=timeout,
+            timeout_message=(
+                f"another setforge process holds the setforge.lock/config "
+                f"lock for {config_dir}; retry shortly"
+            ),
+        ),
+    ):
+        yield
 
 
 def _acquire_fd(fd: object, *, timeout: float | None, timeout_message: str) -> None:
