@@ -43,7 +43,6 @@ from setforge.project_injection import (
     _PRIOR_MANIFEST_SCHEMA,
     ProjectFileAction,
     ProjectFilePlan,
-    StoredProjectFile,
     _claim_fingerprint,
     _claim_matches_plan,
     _exclude_paths,
@@ -53,7 +52,6 @@ from setforge.project_injection import (
     _overlay_git_paths,
     _plan_file,
     _project_transaction,
-    _record_files,
     _remove_created_parent,
     _require_compatible_visibility,
     _require_guards,
@@ -74,6 +72,7 @@ from setforge.project_overlay import (
     update_local_content,
     write_overlay,
 )
+from setforge.project_record import StoredProjectFile, _record_files
 from setforge.reconcile.merge import merge as line_merge
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.merge_model import (
