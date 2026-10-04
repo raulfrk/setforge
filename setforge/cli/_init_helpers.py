@@ -16,7 +16,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from setforge.binaries import LOCAL_CONFIG_PATH, resolve_binary
+from setforge import paths
+from setforge.binaries import resolve_binary
 
 __all__ = [
     "BinaryProbe",
@@ -119,12 +120,12 @@ class EnvProbe:
 
 def config_dir_path() -> Path:
     """Return ``~/.config/setforge/`` per the canonical layout."""
-    return Path.home() / ".config" / "setforge"
+    return paths.config_root()
 
 
 def host_local_dir_path() -> Path:
     """Return ``~/.local/share/setforge/host-local/`` per the canonical layout."""
-    return Path.home() / ".local" / "share" / "setforge" / "host-local"
+    return paths.data_root() / "host-local"
 
 
 def _probe_binaries() -> tuple[BinaryProbe, ...]:
@@ -158,7 +159,7 @@ def _resolve_uv() -> Path | None:
 def _probe_dirs() -> tuple[DirProbe, ...]:
     """Probe the three init-created paths; ``will_create`` is True iff absent."""
     cfg_dir = config_dir_path()
-    local_yaml = LOCAL_CONFIG_PATH
+    local_yaml = paths.local_config_path()
     host_local = host_local_dir_path()
     return (
         DirProbe(
@@ -266,16 +267,15 @@ def is_initialized(probe: EnvProbe) -> bool:
        bootstrap contract. A user-created or partially written ``local.yaml``
        alone does not prove that ``init`` completed.
 
-    Reads through ``LOCAL_CONFIG_PATH`` directly (probe carries
-    existence only, not content) so the same helper works against a
-    monkeypatched path.
+    Reads ``local.yaml`` directly (probe carries existence only, not
+    content).
     """
-    if not LOCAL_CONFIG_PATH.exists():
+    if not paths.local_config_path().exists():
         return False
     if not host_local_dir_path().exists():
         return False
     try:
-        text = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+        text = paths.local_config_path().read_text(encoding="utf-8")
     except OSError:
         return False
     if _SENTINEL in text:

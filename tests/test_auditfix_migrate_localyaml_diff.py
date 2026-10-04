@@ -106,7 +106,9 @@ def test_invalid_utf8_local_input_fails_before_migration_writes(
     local.write_bytes(b"broken: \xff\n")
     before = cfg.read_bytes()
     monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_TwoFileMigration(),))
+    monkeypatch.setattr(
+        "setforge.migrations.registry.MIGRATIONS", (_TwoFileMigration(),)
+    )
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
@@ -151,7 +153,7 @@ def test_apply_preview_shows_diff_for_home_derived_local_yaml(
     monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
 
     chain = (_TwoFileMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
@@ -190,7 +192,7 @@ def test_apply_preview_still_shows_cfg_path_diff(
     monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
 
     chain = (_TwoFileMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)

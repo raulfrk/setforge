@@ -22,9 +22,9 @@ from ruamel.yaml import YAML
 from setforge.migrations import (
     MigrationRoots,
     detect_current_schema,
-    find_migration_path,
     parse_schema_version,
 )
+from setforge.migrations.registry import find_migration_path
 
 
 def _roots(tmp_path: Path) -> MigrationRoots:

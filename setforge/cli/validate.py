@@ -20,9 +20,8 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from setforge import codex_resources as codex_resources_mod
-from setforge import reconcile_adapter
+from setforge import paths, reconcile_adapter
 from setforge import source as source_mod
-from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import FETCH_EXAMPLES, VALIDATE_EXAMPLES
 from setforge.cli._validate_errors import (
@@ -151,7 +150,9 @@ def _apply_tracked_file_overlay_check(
     except (ConfigError, ValidationError) as exc:
         failures.append(f"{ctx}: {exc}")
     except (OSError, UnicodeDecodeError) as exc:
-        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
+        failures.append(
+            format_yaml_parse_error(paths.local_config_path(), 1, 1, str(exc))
+        )
 
 
 def _apply_local_overlay_check(
@@ -221,7 +222,9 @@ def _apply_local_overlay_check(
         # Unreadable local.yaml: route through the
         # YAML PARSE category formatter so the report-all-then-refuse
         # contract holds.
-        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
+        failures.append(
+            format_yaml_parse_error(paths.local_config_path(), 1, 1, str(exc))
+        )
         return False
     return True
 
@@ -1212,13 +1215,13 @@ def validate(
     # Check 7: host-local local.yaml schema + parse errors
     # with mockup-D UX. Collect into the same failures list so the
     # report-all-then-refuse contract holds across all check categories.
-    _check_local_yaml(_LOCAL_CONFIG_PATH, failures)
+    _check_local_yaml(paths.local_config_path(), failures)
 
     # Check 8: orphan local.yaml overlay entries. Unknown ids → failures
     # (exit 1, did-you-mean); off-profile ids → non-fatal stderr notes
     # (exit stays 0). The apply site stays silent; validate is the surface.
     off_profile_notes = _check_orphan_overlays(
-        cfg, profiles_to_check, _LOCAL_CONFIG_PATH, repo_root, failures
+        cfg, profiles_to_check, paths.local_config_path(), repo_root, failures
     )
     for note in off_profile_notes:
         typer.secho(note, err=True, fg=typer.colors.YELLOW)

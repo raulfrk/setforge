@@ -29,7 +29,6 @@ import pytest
 from setforge.config import load_config
 from setforge.errors import ConfigError
 from setforge.migrations import (
-    MIGRATIONS,
     ManifestEntry,
     ManifestType,
     Migration,
@@ -38,10 +37,10 @@ from setforge.migrations import (
     VersionStampMigration,
     current_expected_schema_version,
     detect_current_schema,
-    find_migration_path,
 )
 from setforge.migrations._fs_ops import atomic_replace, backup_path
 from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
+from setforge.migrations.registry import MIGRATIONS, find_migration_path
 
 # ---------------------------------------------------------------------------
 # Registry shape
@@ -77,7 +76,7 @@ def test_find_migration_path_empty_registry_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The empty-registry path still returns () (registry forced empty)."""
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", ())
     assert find_migration_path(from_v="1.0", to_v="1.1") == ()
 
 
@@ -256,7 +255,7 @@ def test_registry_guard_rejects_missing_or_misswapped_reverse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A mis-swapped reverse fails loudly at the guard, not at downgrade time."""
-    from setforge.migrations import _validate_registry
+    from setforge.migrations.registry import _validate_registry
 
     @dataclass(frozen=True)
     class _BadReverse:
@@ -272,7 +271,7 @@ def test_registry_guard_rejects_missing_or_misswapped_reverse(
         def reverse(self) -> _BadReverse:
             return _BadReverse()
 
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_BadMigration(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_BadMigration(),))
     with pytest.raises(ConfigError, match="mis-swapped reverse"):
         _validate_registry()
 
@@ -329,7 +328,7 @@ def test_find_migration_path_semantic_boundary(
         def reverse(self) -> _Rev:
             return _Rev()
 
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_Step(),))
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_Step(),))
     fwd = find_migration_path(from_v="1.9", to_v="1.10")
     assert len(fwd) == 1
     assert fwd[0].to_version == "1.10"
@@ -339,7 +338,7 @@ def test_find_migration_path_semantic_boundary(
 
 
 def test_known_versions_covers_registry_and_expected() -> None:
-    from setforge.migrations import known_versions
+    from setforge.migrations.registry import known_versions
 
     kv = known_versions()
     assert "1.0" in kv
@@ -447,7 +446,7 @@ def test_find_migration_path_walks_chain_via_monkeypatch(
         _NoopMigration(from_version="1.0", to_version="1.1"),
         _NoopMigration(from_version="1.1", to_version="1.2"),
     )
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     found = find_migration_path(from_v="1.0", to_v="1.2")
     assert tuple(m.to_version for m in found) == ("1.1", "1.2")
 
@@ -457,7 +456,7 @@ def test_find_migration_path_no_chain_returns_empty(
 ) -> None:
     """When the registry cannot bridge from_v → to_v, return ()."""
     chain = (_NoopMigration(from_version="1.0", to_version="1.1"),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     assert find_migration_path(from_v="1.0", to_v="9.9") == ()
 
 
@@ -817,10 +816,10 @@ def test_find_migration_path_future_sibling_does_not_perturb(
     from_version is 1.2, not 1.1 — appending from 1.1 would collide with
     the registered 1.1 → 1.2 step and create an ambiguous branch).
     """
-    from setforge.migrations import MIGRATIONS as _real
+    from setforge.migrations.registry import MIGRATIONS as _real
 
     extended = (*_real, _NoopMigration(from_version="1.2", to_version="2.0"))
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", extended)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", extended)
     found = find_migration_path(from_v="1.0", to_v="1.1")
     assert len(found) == 1
     assert found[0].to_version == "1.1"
@@ -1159,7 +1158,7 @@ def _span_types_retire() -> Migration:
 def test_span_types_retire_is_registered() -> None:
     """The 4.0 → 5.0 span-types step is registered; the profile-fields step
     that follows it is now the chain-terminal migration."""
-    from setforge.migrations import ProfileFieldsRetireMigration
+    from setforge.migrations._profile_fields_retire import ProfileFieldsRetireMigration
     from setforge.migrations._span_types_retire import SpanTypesRetireMigration
 
     span_steps = [m for m in MIGRATIONS if isinstance(m, SpanTypesRetireMigration)]

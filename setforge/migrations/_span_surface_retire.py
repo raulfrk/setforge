@@ -41,8 +41,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from setforge import atomicio, base_store, locking, reconcile, transitions
+from setforge._redact import redact_argv
+from setforge.anchors import Anchor
+from setforge.body_canon import canonical_body, inject_body_at_anchor
+from setforge.compare import resolve_src
+from setforge.config import Config, resolve_profile
 from setforge.errors import ConfigError
-from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+from setforge.host_local_inject import _read_body
+from setforge.migrations import (
+    ManifestEntry,
+    ManifestType,
+    MigrationRoots,
+    _require_mapping_root,
+)
+from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.reconcile import file_id
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.source import load_local_host_local_sections
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -129,9 +147,6 @@ class SpanSurfaceRetireMigration:
         already retired by the disposition cutover; this migration only folds the
         residual host-local SECTION surface into the unified store.
         """
-        from setforge import base_store
-        from setforge.reconcile import store as reconcile_store
-
         seen: dict[Path, None] = {roots.cfg_path: None, _local_yaml_path(roots): None}
         folds = _build_section_folds(roots)
         for fold in folds:
@@ -179,8 +194,6 @@ class SpanSurfaceRetireMigration:
         snapshots.
         """
         import contextlib
-
-        from setforge import locking, transitions
 
         folds = _build_section_folds(roots)
         _validate_headings(folds)
@@ -244,8 +257,6 @@ class SpanSurfaceRetireMigration:
         ``pre_chain_snapshot`` so a single ``revert`` reaches the chain's ORIGIN,
         not the intermediate 3.0 state (INV-5).
         """
-        from setforge import transitions
-
         local_yaml = _local_yaml_path(roots)
         cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
         _stamp_schema_version(roots.cfg_path, self.to_version)
@@ -351,13 +362,6 @@ def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
     surface). No ``local.yaml`` (the frozen-fixture case) short-circuits to ``[]``
     before touching setforge.yaml, so the no-op stamp path never parses a config.
     """
-    from setforge.compare import resolve_src
-    from setforge.config import Config, resolve_profile
-    from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
-    from setforge.migrations._yaml_ops import yaml_rt
-    from setforge.reconcile import file_id
-    from setforge.source import load_local_host_local_sections
-
     local_yaml = _local_yaml_path(roots)
     if not local_yaml.exists():
         return []
@@ -405,10 +409,6 @@ def _validate_headings(folds: list[_SectionFold]) -> None:
     mutates nothing and no ``local.yaml`` is stripped half-folded. Deduped by
     ``(tracked_file, section_name)`` since a file shared across profiles repeats.
     """
-    from setforge import reconcile
-    from setforge.body_canon import canonical_body
-    from setforge.host_local_inject import _read_body
-
     bad: dict[tuple[str, str], None] = {}
     for fold in folds:
         for section_name, section in fold.sections.items():
@@ -450,12 +450,6 @@ def _fold_sections(fold: _SectionFold) -> None:
        minted, and records the merged base+local+hunks (drafts preserved). Shared
        with the install-time template seed so the two mint identically.
     """
-    from setforge import reconcile
-    from setforge.anchors import Anchor
-    from setforge.body_canon import canonical_body, inject_body_at_anchor
-    from setforge.host_local_inject import _read_body
-    from setforge.reconcile.host_local_view import host_local_sections_from_store
-
     profile, fid = fold.profile, fold.fid
     proj = host_local_sections_from_store(profile, fid)
     already_headings = set(proj.get(str(fid), {}))
@@ -506,9 +500,6 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
     the stamp. Raises
     :class:`ConfigError` on a non-mapping root.
     """
-    from setforge.migrations import _require_mapping_root
-    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-
     yaml = yaml_rt()
     with cfg_path.open("r", encoding="utf-8") as fh:
         data = yaml.load(fh)
@@ -537,8 +528,6 @@ def _stripped_local_yaml_text(local_yaml: Path) -> str | None:
     """
     import io
     from collections.abc import MutableMapping
-
-    from setforge.migrations._yaml_ops import yaml_rt
 
     if not local_yaml.exists():
         return None
@@ -574,8 +563,6 @@ def _write_stripped_local_yaml(local_yaml: Path, stripped_text: str | None) -> N
     so it is never churned). The destination permission bits are preserved.
     """
     import stat as stat_mod
-
-    from setforge import atomicio
 
     if stripped_text is None or not local_yaml.exists():
         return
@@ -621,8 +608,6 @@ def _capture_span_snapshots(
     deletes the seed; an already-present leg captures its bytes so revert restores
     them byte-exact (winning over the text patch for any overlapping path).
     """
-    from setforge import transitions
-
     entries: list[StateSnapshotEntry] = []
     for fold in folds:
         key = str(fold.fid)
@@ -657,9 +642,6 @@ def _write_span_retire_transition(
     the commit restores the pre-cutover state exactly. Returns the transition dir.
     """
     import sys
-
-    from setforge import transitions
-    from setforge._redact import redact_argv
 
     return transitions.write_transition(
         transitions.make_meta(

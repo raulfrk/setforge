@@ -19,6 +19,7 @@ from typer.testing import CliRunner, Result
 
 from setforge.cli import app
 from setforge.cli import status as status_mod
+from tests.conftest import redirect_local_config_path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -114,9 +115,7 @@ def test_status_explicit_config_owns_repository_report(
     monkeypatch.delenv("SETFORGE_SOURCE", raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local_config)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_config)
-    monkeypatch.setattr(status_mod, "LOCAL_CONFIG_PATH", local_config)
+    redirect_local_config_path(monkeypatch, local_config)
     monkeypatch.setattr(
         status_mod, "probe_environment", lambda **_kw: SimpleNamespace(capabilities=())
     )

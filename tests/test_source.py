@@ -13,7 +13,6 @@ from ruamel.yaml.scalarint import ScalarInt
 from setforge.errors import ConfigError, GitOpError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
     CONFIG_FILENAME,
-    DEFAULT_CLONE_ROOT,
     ENV_VAR,
     GitSource,
     PathSource,
@@ -147,7 +146,8 @@ class TestSchema:
 
     def test_git_source_resolved_clone_dest_defaults_to_xdg(self) -> None:
         src = GitSource(kind=SourceKind.GIT, url="git@github.com:r/foo.git")
-        assert src.resolved_clone_dest == DEFAULT_CLONE_ROOT / "foo"
+        expected = Path.home() / ".local" / "share" / "setforge" / "sources" / "foo"
+        assert src.resolved_clone_dest == expected
 
     def test_git_source_resolved_clone_dest_honors_override(
         self, tmp_path: Path

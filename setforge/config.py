@@ -31,6 +31,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
+from setforge import paths
 from setforge.errors import ConfigError, ProfileNotFound
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.migrations import (
@@ -1521,9 +1522,9 @@ def apply_host_local_codex_overlay(
         base = CodexProfile()
     else:
         base = resolved.codex.model_copy(deep=True)
-    from setforge.source import LOCAL_CONFIG_PATH, load_local_codex_overlay
+    from setforge.source import load_local_codex_overlay
 
-    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    path = local_config_path or paths.local_config_path()
     overlay = load_local_codex_overlay(path)
     fields = ("config", "instructions", "skills", "plugins", "mcp_servers")
     for field in fields:
@@ -2395,7 +2396,7 @@ def refuse_unmigrated_host_local_leak(
     declared_major = parse_schema_version(config.schema_version)[0]
     if declared_major >= expected_major:
         return
-    if not source_mod.load_local_host_local_sections(source_mod.LOCAL_CONFIG_PATH):
+    if not source_mod.load_local_host_local_sections(paths.local_config_path()):
         return
     raise ConfigError(
         f"{verb} refuses to run: setforge.yaml declares schema_version "
@@ -2476,9 +2477,9 @@ def apply_host_local_tracked_file_overrides(
     surface earlier in
     :func:`setforge.source.load_local_tracked_file_overlays`, not here.
     """
-    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
+    from setforge.source import load_local_tracked_file_overlays
 
-    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    path = local_config_path or paths.local_config_path()
     overlays = load_local_tracked_file_overlays(path)
     applied: dict[str, HostLocalTrackedFileOverride] = {}
     for tf_id, overlay in overlays.items():
@@ -2581,9 +2582,9 @@ def collect_orphan_overlays(
     :mod:`setforge.source` to dodge the config <-> source cycle, mirroring
     the apply site.
     """
-    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
+    from setforge.source import load_local_tracked_file_overlays
 
-    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    path = local_config_path or paths.local_config_path()
     overlays = load_local_tracked_file_overlays(path)
     profile_ids = set(resolved.tracked_files)
     orphans: list[OrphanOverlay] = []
@@ -2922,14 +2923,9 @@ def _load_overlay_blocks(
     load-phase failure means the cross-ref check did NOT run, and the
     standalone Check 6 must still execute as a fallback.
     """
-    from setforge.source import (
-        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
-    )
-    from setforge.source import (
-        _load_local_source_config,
-    )
+    from setforge.source import _load_local_source_config
 
-    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
+    path = local_config_path or paths.local_config_path()
     try:
         local = _load_local_source_config(path)
     except ConfigError as exc:

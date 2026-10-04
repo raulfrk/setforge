@@ -12,7 +12,8 @@ from rich.console import Console
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from setforge import binaries as binaries_mod
+from setforge import paths
+from setforge import source as source_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
 from setforge.errors import ConfigError, SetforgeError
@@ -36,6 +37,7 @@ from setforge.provision.protocol import (
     ProvisionItem,
 )
 from setforge.provision.receipt import ReceiptStore
+from setforge.source import _LocalSourceConfig
 
 
 class _TerminalInput(io.BytesIO):
@@ -233,8 +235,8 @@ def test_typed_ignore_is_not_a_synthetic_declared_identity(
         "version: 1\ntracked_files: {}\nprofiles:\n  p: {}\n",
         encoding="utf-8",
     )
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text(
         "provision_ignore: ['go:foo']\n", encoding="utf-8"
     )
     store = ReceiptStore(tmp_path / "receipts")
@@ -989,8 +991,8 @@ def test_cli_package_selection_refuses_ineligible_without_effects(
     store.record(identity, version="1", checksum=None, path=binary, provider="cargo")
     receipt = store.receipt_path(identity, provider="cargo")
     if case == "ignored":
-        binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        binaries_mod.LOCAL_CONFIG_PATH.write_text(
+        paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+        paths.local_config_path().write_text(
             "provision_ignore: [cargo:gone]\n", encoding="utf-8"
         )
     before = (binary.read_bytes(), receipt.read_bytes(), cfg.read_bytes())
@@ -1039,8 +1041,8 @@ def test_cli_ignored_ambient_selection_refuses_before_provider_probe(
             declaration_ref="packages.ripgrep",
             acquisition="adopted-external",
         )
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text(
         "provision_ignore: [cargo:RIPGREP]\n", encoding="utf-8"
     )
     probes: list[Identity] = []
@@ -1168,8 +1170,8 @@ def test_no_resolve_on_unlink_target_in_cleanup_delete_helpers() -> None:
 
 
 def test_load_ignored_provisioned_parses_a_valid_list() -> None:
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text(
         "provision_ignore: ['go:foo']\n", encoding="utf-8"
     )
 
@@ -1177,13 +1179,13 @@ def test_load_ignored_provisioned_parses_a_valid_list() -> None:
 
 
 def test_load_ignored_provisioned_is_empty_without_local_yaml() -> None:
-    assert not binaries_mod.LOCAL_CONFIG_PATH.exists()
+    assert not paths.local_config_path().exists()
     assert cleanup_mod.load_ignored_provisioned() == frozenset()
 
 
 def test_load_ignored_provisioned_fails_closed_on_corrupt_local_yaml() -> None:
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text(
         "provision_ignore: ['go:foo'\n", encoding="utf-8"
     )
 
@@ -1192,18 +1194,16 @@ def test_load_ignored_provisioned_fails_closed_on_corrupt_local_yaml() -> None:
 
 
 def test_load_ignored_provisioned_rejects_a_non_list_value() -> None:
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
-        "provision_ignore: go:foo\n", encoding="utf-8"
-    )
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text("provision_ignore: go:foo\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="must be a list"):
         cleanup_mod.load_ignored_provisioned()
 
 
 def test_load_ignored_provisioned_rejects_non_utf8_bytes() -> None:
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_bytes(b"provision_ignore: [\xff]\n")
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_bytes(b"provision_ignore: [\xff]\n")
 
     with pytest.raises(ConfigError, match="malformed YAML"):
         cleanup_mod.load_ignored_provisioned()
@@ -1222,8 +1222,8 @@ def test_cli_cleanup_refuses_when_local_yaml_is_not_utf8(
     store.record(_ident("gone"), version="1", checksum=None, path=binpath)
     monkeypatch.setattr(cleanup_mod, "_receipt_store", lambda: ReceiptStore(receipts))
     monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_bytes(b"provision_ignore: [\xff]\n")
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_bytes(b"provision_ignore: [\xff]\n")
     cfg = _write_cleanup_yaml(tmp_path)
 
     result = runner.invoke(app, ["cleanup", "--profile", "p", "--config", str(cfg)])
@@ -1246,14 +1246,14 @@ def test_cli_cleanup_refuses_when_local_yaml_is_corrupt(
     store.record(_ident("gone"), version="1", checksum=None, path=binpath)
     monkeypatch.setattr(cleanup_mod, "_receipt_store", lambda: ReceiptStore(receipts))
     monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
-    # Point the other readers of local.yaml at a clean file so this test
+    # Let the profile loader's own read of local.yaml pass so this test
     # exercises the ignore-list reader, not source.py's loader, which already
     # rejected malformed YAML before this change.
     monkeypatch.setattr(
-        "setforge.source.LOCAL_CONFIG_PATH", tmp_path / "clean-local.yaml"
+        source_mod, "_load_local_source_config", lambda path: _LocalSourceConfig()
     )
-    binaries_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    binaries_mod.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().write_text(
         "provision_ignore: ['go:foo'\n", encoding="utf-8"
     )
     cfg = _write_cleanup_yaml(tmp_path)
@@ -1271,7 +1271,7 @@ def test_local_yaml_shape_for_provision_ignore(
 ) -> None:
     cleanup_mod.mark_orphan(_ident("some_tool"), console=Console())
     payload = YAML(typ="safe").load(
-        binaries_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+        paths.local_config_path().read_text(encoding="utf-8")
     )
     assert payload == {"provision_ignore": ["some_tool"]}
     json.dumps(list(cleanup_mod.load_ignored_provisioned()))
@@ -1283,7 +1283,7 @@ def test_mark_orphan_output_validates_under_local_config(
     # A ruamel-only check missed an undeclared key that broke `validate --all`.
     cleanup_mod.mark_orphan(_ident("some_tool"), console=Console())
     payload = YAML(typ="safe").load(
-        binaries_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+        paths.local_config_path().read_text(encoding="utf-8")
     )
     model = LocalConfig.model_validate(payload)
     assert model.provision_ignore == ["some_tool"]

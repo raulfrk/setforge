@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+from setforge import paths
 from setforge.cli import app
 from setforge.errors import ConfigError
 
@@ -80,11 +81,10 @@ def _write_repo(tmp_path: Path, cfg_body: str) -> Path:
 
 def _write_local_yaml(body: str | None) -> None:
     """Write ``body`` to the (test-redirected) local.yaml, or leave it absent."""
-    from setforge import source as source_mod
 
     if body is None:
         return
-    path = source_mod.LOCAL_CONFIG_PATH
+    path = paths.local_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
 

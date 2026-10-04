@@ -9,7 +9,6 @@ from typing import cast
 
 import pytest
 
-from setforge import compare as compare_mod
 from setforge import operations, orphan_scan
 from setforge.config import (
     BundleComponent,
@@ -22,6 +21,7 @@ from setforge.config import (
     TreeSymlinkPolicy,
 )
 from setforge.errors import SetforgeError
+from tests.conftest import redirect_local_config_path
 
 
 def _repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -185,7 +185,6 @@ def test_scan_excludes_host_ignored_inactive_destination(
     unknown.write_text("candidate", encoding="utf-8")
     local_config = tmp_path / "local.yaml"
     local_config.write_text("orphan_ignore: [ignored]\n", encoding="utf-8")
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
     config = _config(repo, Path.home() / ".managed")
     config.tracked_files["ignored"] = TrackedFile(
         src=Path("ignored.txt"), dst=str(ignored)
@@ -221,7 +220,6 @@ def test_scan_host_local_override_does_not_mutate_caller_config(
         f"tracked_files:\n  kept:\n    dst: {tool / 'kept.txt'}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
 
     result = _scan(config, repo, config_path, state / "transitions")
 
@@ -258,7 +256,7 @@ def test_scan_excludes_host_local_and_source_control_trees(
     tool.mkdir(parents=True)
     local = tool / "local.yaml"
     local.write_text("host: local", encoding="utf-8")
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local)
+    redirect_local_config_path(monkeypatch, local)
     unknown = tool / "unknown"
     unknown.write_text("candidate", encoding="utf-8")
 
@@ -335,7 +333,6 @@ def test_scan_counts_cross_device_directory_as_mount_skip(
 def test_scan_attributes_host_override_and_bundle_destination_across_profiles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from setforge import source
 
     repo, config_path = _repo(tmp_path)
     (repo / "tracked" / "bundle.txt").write_text("bundle", encoding="utf-8")
@@ -355,8 +352,6 @@ def test_scan_attributes_host_override_and_bundle_destination_across_profiles(
         f"tracked_files:\n  kept:\n    dst: {override / 'kept.txt'}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(source, "LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local)
     config = Config(
         tracked_files={
             "kept": TrackedFile(src=Path("kept.txt"), dst=str(base / "kept.txt"))

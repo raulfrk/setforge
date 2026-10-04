@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from setforge import atomicio, transitions
 from setforge.errors import SetforgeError
+from setforge.paths import journals_root
 
 if TYPE_CHECKING:
     from setforge.locking import MutationLockGuards, MutationScopes
@@ -156,15 +157,6 @@ def _config_dirs_digest(config_dirs: tuple[Path, ...]) -> str:
     """Return an integrity witness for one exact config-lock envelope."""
     payload = json.dumps([str(path) for path in config_dirs], separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def journals_root() -> Path:
-    """Return the user-global active-operation namespace.
-
-    Recovery reservations protect user-global adapters and config repositories,
-    so an operator-selected transition state root must not hide them.
-    """
-    return Path("~/.cache/setforge/operations").expanduser()
 
 
 def journal_path(profile: str) -> Path:

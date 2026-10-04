@@ -10,7 +10,7 @@ minimal-but-valid config at that version:
 - `1.2/` — `schema_version: '1.2'`.
 
 `tests/test_schema_compat_matrix.py` reads these to prove the production
-migration chain (`setforge.migrations.MIGRATIONS`) is bidirectionally
+migration chain (`setforge.migrations.registry.MIGRATIONS`) is bidirectionally
 safe — forward-migrating every fixture to the current version,
 down-migrating the current fixture to the 1.0 baseline byte-identically,
 and refusing major-newer / warning on minor-newer configs.
@@ -21,7 +21,7 @@ and refusing major-newer / warning on minor-newer configs.
    `current_expected_schema_version`, generate a new `<version>/` fixture
    so the matrix exercises the new endpoint. The growth guard
    (`test_corpus_covers_exactly_known_versions`) fails until the dir set
-   equals `setforge.migrations.known_versions()`.
+   equals `setforge.migrations.registry.known_versions()`.
 
 2. **NEVER edit a frozen fixture's bytes.** The fixtures are the
    historical record the migration chain is tested against; editing one

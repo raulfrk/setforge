@@ -43,6 +43,7 @@ from setforge.errors import (
     ReconcileStoreError,
     UnsafeFileId,
 )
+from setforge.paths import state_root
 from setforge.reconcile import index_model
 from setforge.reconcile.index_model import FileEntry, Index
 from setforge.reconcile.types import (
@@ -55,7 +56,6 @@ from setforge.reconcile.types import (
     content_sha,
     file_id,
 )
-from setforge.transitions import state_root
 
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600

@@ -29,6 +29,7 @@ from setforge import (
     locking,
     operations,
     orphan_scan,
+    paths,
     snapshots,
     source,
     transitions,
@@ -43,6 +44,8 @@ from setforge.ownership import (
     resolve_owner_common_dir,
 )
 from setforge.reconcile.types import HunkClass
+
+from ..conftest import redirect_local_config_path
 
 type Action = Literal[
     "install", "observe", "publish", "snapshot", "prune", "switch", "retire", "change"
@@ -106,11 +109,7 @@ def _run_sequence(root: Path, actions: Sequence[Action], marker: str) -> None:
         for key, value in environment.items():
             patch.setenv(key, value)
         local = home / ".config/setforge/local.yaml"
-        for name, module in tuple(sys.modules.items()):
-            if name.startswith("setforge") and module is not None:
-                for attribute in ("LOCAL_CONFIG_PATH", "_LOCAL_CONFIG_PATH"):
-                    if attribute in vars(module):
-                        patch.setattr(module, attribute, local)
+        redirect_local_config_path(patch, local)
         patch.setattr(source, "_cli_source", None)
         patch.setattr(compare, "GENERIC_DST_ROOTS", compare.GENERIC_DST_ROOTS | {home})
         scanner = root / "gitleaks"
@@ -209,13 +208,7 @@ def _run_sequence(root: Path, actions: Sequence[Action], marker: str) -> None:
                     cfg, resolved, repo, profile=profile
                 )
             )
-        runtime_paths.extend(
-            getattr(module, attribute)
-            for name, module in tuple(sys.modules.items())
-            if name.startswith("setforge") and module is not None
-            for attribute in ("LOCAL_CONFIG_PATH", "_LOCAL_CONFIG_PATH")
-            if attribute in vars(module)
-        )
+        runtime_paths.append(paths.local_config_path())
         assert all(
             path.resolve().is_relative_to(root.resolve()) for path in runtime_paths
         )

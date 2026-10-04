@@ -23,7 +23,7 @@ CLI flag.
 
 The CLI layer is set once at process start; env and config layers are
 read lazily on each lookup so tests can monkey-patch the environment or
-``LOCAL_CONFIG_PATH`` between calls without touching module state.
+the home directory between calls without touching module state.
 """
 
 from __future__ import annotations
@@ -35,13 +35,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
-
+from setforge import paths
 from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
+from setforge.migrations._local_yaml import read_local_yaml
 
-LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "claude",
     "codex",
@@ -143,7 +141,7 @@ _cli_overrides: dict[str, str] = {}
 
 
 def load_host_local_config() -> HostLocalConfig:
-    """Parse ``LOCAL_CONFIG_PATH`` into a :class:`HostLocalConfig`.
+    """Parse ``local.yaml`` into a :class:`HostLocalConfig`.
 
     Returns :class:`HostLocalConfig()` defaults if the file is absent,
     empty, or has neither a ``binaries:`` nor a ``claude:`` block.
@@ -152,21 +150,7 @@ def load_host_local_config() -> HostLocalConfig:
     ``binaries:`` as a string, or ``claude.install_mode`` not one of
     the :class:`ClaudeInstallMode` members).
     """
-    if not LOCAL_CONFIG_PATH.exists():
-        return HostLocalConfig()
-    yaml = YAML(typ="safe")
-    try:
-        data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (YAMLError, UnicodeDecodeError) as exc:
-        raise ConfigError(f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}") from exc
-    except OSError as exc:
-        raise ConfigError(
-            f"cannot read {LOCAL_CONFIG_PATH}: {exc.strerror or exc}"
-        ) from exc
-    if data is None:
-        return HostLocalConfig()
-    if not isinstance(data, dict):
-        raise ConfigError(f"top-level of {LOCAL_CONFIG_PATH} must be a mapping")
+    data = read_local_yaml(paths.local_config_path())
     return HostLocalConfig(
         binaries=_parse_binaries_block(data.get("binaries")),
         claude=_parse_claude_block(data.get("claude")),
@@ -183,7 +167,9 @@ def _parse_binaries_block(raw: object) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ConfigError(f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping")
+        raise ConfigError(
+            f"'binaries:' in {paths.local_config_path()} must be a mapping"
+        )
     return {str(k): str(v) for k, v in raw.items()}
 
 
@@ -197,7 +183,7 @@ def _parse_claude_block(raw: object) -> ClaudeLocalConfig:
     if raw is None:
         return ClaudeLocalConfig()
     if not isinstance(raw, dict):
-        raise ConfigError(f"'claude:' in {LOCAL_CONFIG_PATH} must be a mapping")
+        raise ConfigError(f"'claude:' in {paths.local_config_path()} must be a mapping")
     install_mode_raw = raw.get("install_mode")
     if install_mode_raw is None:
         return ClaudeLocalConfig()
@@ -206,7 +192,7 @@ def _parse_claude_block(raw: object) -> ClaudeLocalConfig:
     except ValueError as exc:
         valid = ", ".join(repr(m.value) for m in ClaudeInstallMode)
         raise ConfigError(
-            f"'claude.install_mode' in {LOCAL_CONFIG_PATH} must be one of "
+            f"'claude.install_mode' in {paths.local_config_path()} must be one of "
             f"{valid}; got {install_mode_raw!r}"
         ) from exc
     return ClaudeLocalConfig(install_mode=install_mode)
@@ -328,7 +314,7 @@ def resolve_binary(name: str) -> Path | None:
 
 
 def ensure_local_config_stub() -> None:
-    """Create ``LOCAL_CONFIG_PATH`` with a commented stub if absent.
+    """Create ``local.yaml`` with a commented stub if absent.
 
     Idempotent: a pre-existing file (regardless of content) is never
     touched. Creates parent directories as needed. Called by local config
@@ -336,7 +322,7 @@ def ensure_local_config_stub() -> None:
     full bootstrap write directly. Read-only commands never call it.
 
     TOCTOU-safe under concurrent invocation. The previous shape used
-    ``if LOCAL_CONFIG_PATH.exists(): return`` followed by
+    ``if path.exists(): return`` followed by
     ``write_text(...)`` — two parallel processes that ran the
     ``exists()`` check between each other's writes would both proceed
     to the write, racing on the file content. Under
@@ -347,9 +333,9 @@ def ensure_local_config_stub() -> None:
     process wrote it).
 
     """
-    LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    paths.local_config_path().parent.mkdir(parents=True, exist_ok=True)
     try:
-        with LOCAL_CONFIG_PATH.open("x", encoding="utf-8") as fh:
+        with paths.local_config_path().open("x", encoding="utf-8") as fh:
             fh.write(_STUB_TEMPLATE)
     except FileExistsError:
         # Another process (or this test run's earlier invocation) created it.

@@ -34,7 +34,7 @@ import typer
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from setforge import codex_lifecycle, operations, transitions
+from setforge import codex_lifecycle, operations, paths, transitions
 from setforge import compare as compare_mod
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -53,7 +53,6 @@ from setforge.cli._output import render
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import InvalidTransitionRecord, SetforgeError
-from setforge.source import LOCAL_CONFIG_PATH
 
 _GIT_TIMEOUT_SECONDS: int = 30
 _OVERLAY_KEYS: tuple[str, ...] = (
@@ -479,7 +478,7 @@ def status(
     pending = _load_pending_operation(profile)
     now = datetime.now(UTC)
     drift = _compute_drift_counts(profile_ctx)
-    overlay_counts = _read_overlay_counts(LOCAL_CONFIG_PATH)
+    overlay_counts = _read_overlay_counts(paths.local_config_path())
     probe = probe_environment(prev_state=None)
 
     def _human() -> None:

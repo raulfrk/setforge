@@ -39,6 +39,7 @@ from setforge.config import (
     TreeSymlinkPolicy,
 )
 from setforge.errors import SetforgeError
+from tests.conftest import redirect_local_config_path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -47,17 +48,10 @@ from setforge.errors import SetforgeError
 
 @pytest.fixture
 def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point ``Path.home()`` AND ``LOCAL_CONFIG_PATH`` at a fresh tmp directory.
-
-    Snapshots resolve through ``Path.home()``. ``binaries.LOCAL_CONFIG_PATH``
-    is captured at import time as a module-level ``Final`` constant, so a
-    bare ``Path.home`` monkeypatch leaves it pointing at the real
-    ``~/.config/setforge/local.yaml`` — re-bind it explicitly so the
-    test surface stays sandboxed.
-    """
+    """Point ``Path.home()`` and ``local.yaml`` at a fresh tmp directory."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     fake_local = tmp_path / ".config" / "setforge" / "local.yaml"
-    monkeypatch.setattr(snap_mod, "LOCAL_CONFIG_PATH", fake_local)
+    redirect_local_config_path(monkeypatch, fake_local)
     return tmp_path
 
 

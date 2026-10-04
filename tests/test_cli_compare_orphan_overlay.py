@@ -46,8 +46,8 @@ def _write_minimal_config(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def local_yaml(tmp_path: Path) -> Path:
-    """Path the autouse conftest fixture already redirects
-    ``setforge.source.LOCAL_CONFIG_PATH`` to (``tmp_path/local.yaml``)."""
+    """Path the autouse conftest fixture already points ``local.yaml`` at
+    (``tmp_path/local.yaml``)."""
     return tmp_path / "local.yaml"
 
 

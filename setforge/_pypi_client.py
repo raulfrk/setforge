@@ -29,6 +29,7 @@ from typing import Any
 from packaging.version import InvalidVersion, Version
 
 from setforge.errors import PyPIFetchError
+from setforge.paths import cache_root
 
 _DEFAULT_PYPI_BASE: str = "https://pypi.org/pypi"
 # ``SETFORGE_PYPI_BASE`` overrides the base URL for the PyPI JSON API.
@@ -57,11 +58,6 @@ class PyPIVersionInfo:
     is_prerelease: bool
     yanked: bool
     yanked_reason: str | None
-
-
-def _default_cache_dir() -> Path:
-    """Return ``~/.cache/setforge``; not auto-created (writer ensures it)."""
-    return Path.home() / ".cache" / "setforge"
 
 
 def _etag_cache_path(*, cache_dir: Path, package: str) -> Path:
@@ -212,7 +208,7 @@ def fetch_latest_version(
     :class:`PyPIFetchError` when no surviving version exists or on any
     network / HTTP / decode failure.
     """
-    resolved_cache_dir = cache_dir if cache_dir is not None else _default_cache_dir()
+    resolved_cache_dir = cache_dir if cache_dir is not None else cache_root()
     cache_path = _etag_cache_path(cache_dir=resolved_cache_dir, package=package)
     cached = _read_etag_cache(cache_path)
     cached_etag, cached_body = cached if cached is not None else (None, None)

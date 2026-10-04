@@ -42,11 +42,10 @@ import sys
 from setforge.errors import ConfigError
 from setforge.migrations import (
     _DEFAULT_SCHEMA_VERSION,
-    _validate_registry,
     current_expected_schema_version,
-    find_migration_path,
     parse_schema_version,
 )
+from setforge.migrations.registry import _validate_registry, find_migration_path
 from setforge.schema_manifest import (
     FROZEN_FIELD_MANIFEST,
     additivity_violations,
@@ -62,7 +61,7 @@ def gate_migration_coverage(
     """Fail unless ``expected`` is reachable from ``baseline`` via the registry.
 
     Resolves the chain with :func:`find_migration_path`, which reads the
-    module-level :data:`setforge.migrations.MIGRATIONS`; a unit test that
+    module-level :data:`setforge.migrations.registry.MIGRATIONS`; a unit test that
     wants a synthetic registry monkeypatches that global (mirroring
     ``tests/test_migrations.py``), so the live invocation here always uses
     the real registry.

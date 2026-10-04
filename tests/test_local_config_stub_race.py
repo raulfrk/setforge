@@ -14,8 +14,8 @@ Four test surfaces here:
 3. :func:`test_isolate_home_fixture_redirects_path_home` — the
    ``_isolate_home`` autouse fixture monkeypatches ``Path.home``
    correctly, so ``Path.home()`` returns the per-test tmp dir.
-4. :func:`test_isolated_local_config_redirects_validate_binding` — the
-   local-config fixture redirects validate's import-time path binding.
+4. :func:`test_isolated_local_config_places_local_yaml_in_tmp_path` — the
+   local-config fixture points every reader at the per-test file.
 """
 
 from __future__ import annotations
@@ -26,8 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge import binaries
-from setforge.cli import validate as validate_cli
+from setforge import binaries, paths
 
 
 def test_ensure_local_config_stub_is_toctou_safe(
@@ -36,7 +35,6 @@ def test_ensure_local_config_stub_is_toctou_safe(
 ) -> None:
     """10 concurrent calls produce ONE write, no exceptions."""
     target = tmp_path / "local.yaml"
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
 
     errors: list[BaseException] = []
 
@@ -65,7 +63,6 @@ def test_ensure_local_config_stub_is_idempotent(
 ) -> None:
     """Existing file is preserved verbatim across repeated invocations."""
     target = tmp_path / "local.yaml"
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", target)
     target.write_text("user-edited content\n", encoding="utf-8")
 
     binaries.ensure_local_config_stub()
@@ -92,10 +89,9 @@ def test_isolate_home_fixture_redirects_path_home() -> None:
     assert "_autoisolated_home" in str(Path.home())
 
 
-def test_isolated_local_config_redirects_validate_binding(tmp_path: Path) -> None:
-    """Validation reads the per-test local.yaml, never the developer host file."""
-    assert tmp_path / "local.yaml" == validate_cli._LOCAL_CONFIG_PATH
+def test_isolated_local_config_places_local_yaml_in_tmp_path(tmp_path: Path) -> None:
+    """Every reader gets the per-test local.yaml, never the developer host file."""
+    assert tmp_path / "local.yaml" == paths.local_config_path()
     assert (
-        Path.home() / ".config" / "setforge" / "local.yaml"
-        != validate_cli._LOCAL_CONFIG_PATH
+        Path.home() / ".config" / "setforge" / "local.yaml" != paths.local_config_path()
     )

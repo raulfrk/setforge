@@ -25,10 +25,10 @@ import typer
 
 from setforge import (
     atomicio,
-    binaries,
     codex_lifecycle,
     deploy,
     operations,
+    paths,
     reconcile_adapter,
     reconcile_apply,
     transitions,
@@ -447,7 +447,7 @@ def _load_install_context(
     tuple[tuple[Path, bytes | None], ...],
 ]:
     """Load config/overlay/lock from one stable byte snapshot."""
-    input_paths = {config.resolve(), binaries.LOCAL_CONFIG_PATH, lock_path(config)}
+    input_paths = {config.resolve(), paths.local_config_path(), lock_path(config)}
     baseline = _snapshot_inputs(input_paths)
     cfg = load_config(config)
     refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
@@ -3159,9 +3159,7 @@ def _plan_secret_findings(
     allowlist_path: Path | None = None,
 ) -> SecretPlan | None:
     """Collect secret decisions without writing the allowlist."""
-    target = allowlist_path or (
-        Path.home() / ".config" / "setforge" / "secrets-allowlist"
-    )
+    target = allowlist_path or secrets_mod.default_allowlist_path()
     seen: set[str] = set()
     approved: list[str] = []
     for finding in scan_result.findings:

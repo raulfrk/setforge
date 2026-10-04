@@ -12,7 +12,7 @@ schema YAML. Backups, diff preview, and rollback all operate at
 multi-file granularity (see :mod:`setforge.migrations` for the
 Protocol definition).
 
-When :data:`setforge.migrations.MIGRATIONS` resolves no chain for the
+When :data:`setforge.migrations.registry.MIGRATIONS` resolves no chain for the
 current ``schema_version`` (e.g. a config already at the expected
 version), ``--check`` reports ``"no migrations available"`` and exits 0
 and ``--apply`` says ``"nothing to apply"`` and exits 0; ``--pin`` writes
@@ -50,7 +50,6 @@ from setforge.config import guard_minimum_version, load_config
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.locking import mutation_locks, profile_lock
 from setforge.migrations import (
-    MIGRATIONS,
     Migration,
     MigrationRoots,
     _fs_ops,
@@ -58,11 +57,15 @@ from setforge.migrations import (
     _yaml_ops,
     current_expected_schema_version,
     detect_current_schema,
-    find_migration_path,
-    known_versions,
     markerless_conversion_schema_version,
     parse_schema_version,
 )
+from setforge.migrations.registry import (
+    MIGRATIONS,
+    find_migration_path,
+    known_versions,
+)
+from setforge.paths import STATE_DIR_ENV
 
 # Strict anchored version-token: digits and dots only (e.g. ``1.0``,
 # ``2.10.3``). Rejects whitespace, newlines, YAML metacharacters, and
@@ -849,7 +852,7 @@ def _preview_state_root(shadow_state: Path) -> Iterator[None]:
     throwaway preview tree instead of the user's live state. Restores the prior
     value (or unsets it when there was none) on exit, even on error.
     """
-    key = transitions._STATE_ENV
+    key = STATE_DIR_ENV
     prior = os.environ.get(key)
     shadow_state.mkdir(parents=True, exist_ok=True)
     os.environ[key] = str(shadow_state)

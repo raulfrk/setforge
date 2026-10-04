@@ -39,13 +39,10 @@ class _FakeCtx:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect LOCAL_CONFIG_PATH inside the config module too."""
+def _isolate_local(tmp_path: Path) -> Path:
+    """Seed the per-test ``local.yaml`` with one binary override."""
     local = tmp_path / "local.yaml"
     local.write_text("binaries:\n  code: /usr/bin/code\n", encoding="utf-8")
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
     return local
 
 

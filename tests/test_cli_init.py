@@ -25,6 +25,7 @@ from setforge.cli._init_helpers import (
     is_initialized,
     probe_environment,
 )
+from tests.conftest import redirect_local_config_path
 
 # Typer's rich help renderer interleaves ANSI escapes between option-name
 # characters (`\x1b[36m-\x1b[0m\x1b[36m-force\x1b[0m`); strip ANSI before
@@ -47,22 +48,10 @@ _HELP_RUNNER = CliRunner(env={"COLUMNS": "200"})
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Re-point ``$HOME`` and the binaries module's LOCAL_CONFIG_PATH at a tmp dir."""
+    """Re-point ``$HOME`` and ``local.yaml`` at a tmp dir."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    # binaries.LOCAL_CONFIG_PATH was bound at import time against
-    # Path.home(); rebind to the tmp_path equivalent so the probe and
-    # the bootstrap write through the same target.
-    monkeypatch.setattr(
-        "setforge.binaries.LOCAL_CONFIG_PATH",
-        tmp_path / ".config" / "setforge" / "local.yaml",
-    )
-    monkeypatch.setattr(
-        "setforge.cli._init_helpers.LOCAL_CONFIG_PATH",
-        tmp_path / ".config" / "setforge" / "local.yaml",
-    )
-    monkeypatch.setattr(
-        "setforge.cli.init.LOCAL_CONFIG_PATH",
-        tmp_path / ".config" / "setforge" / "local.yaml",
+    redirect_local_config_path(
+        monkeypatch, tmp_path / ".config" / "setforge" / "local.yaml"
     )
     return tmp_path
 

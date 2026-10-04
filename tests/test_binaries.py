@@ -8,21 +8,21 @@ from pathlib import Path
 
 import pytest
 
-from setforge import binaries
+from setforge import binaries, paths
 from setforge.binaries import ClaudeLocalConfig, HostLocalConfig, load_host_local_config
 from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
+from tests.conftest import redirect_local_config_path
 
 
 @pytest.fixture(autouse=True)
-def _reset_state(monkeypatch, tmp_path):
-    """Redirect LOCAL_CONFIG_PATH into tmp_path and clear CLI/env state.
+def _reset_state(monkeypatch):
+    """Clear CLI/env state.
 
-    Every test gets an isolated home so production state is never
-    touched. Env vars for overrides are unset so a polluted shell can't
-    leak into tests.
+    The conftest fixtures give every test an isolated home and ``local.yaml``,
+    so production state is never touched. Env vars for overrides are unset so
+    a polluted shell can't leak into tests.
     """
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", tmp_path / "local.yaml")
     binaries._cli_overrides.clear()
     for name in binaries.SUPPORTED_BINARIES:
         monkeypatch.delenv(
@@ -36,17 +36,17 @@ def test_load_local_config_missing_returns_empty() -> None:
 
 
 def test_load_local_config_empty_file_returns_empty() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("")
+    paths.local_config_path().write_text("")
     assert binaries._load_local_config() == {}
 
 
 def test_load_local_config_no_binaries_key_returns_empty() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("other: true\n")
+    paths.local_config_path().write_text("other: true\n")
     assert binaries._load_local_config() == {}
 
 
 def test_load_local_config_returns_binaries_mapping() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         "binaries:\n  code: /custom/code\n  patch: /custom/patch\n"
     )
     assert binaries._load_local_config() == {
@@ -56,19 +56,19 @@ def test_load_local_config_returns_binaries_mapping() -> None:
 
 
 def test_load_local_config_malformed_yaml_raises() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("binaries:\n  code: [unterminated\n")
+    paths.local_config_path().write_text("binaries:\n  code: [unterminated\n")
     with pytest.raises(ConfigError, match="malformed YAML"):
         binaries._load_local_config()
 
 
 def test_load_local_config_binaries_not_a_mapping_raises() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("binaries: a-string\n")
+    paths.local_config_path().write_text("binaries: a-string\n")
     with pytest.raises(ConfigError, match="must be a mapping"):
         binaries._load_local_config()
 
 
 def test_load_local_config_top_level_not_a_mapping_raises() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("- list\n- only\n")
+    paths.local_config_path().write_text("- list\n- only\n")
     with pytest.raises(ConfigError, match="top-level"):
         binaries._load_local_config()
 
@@ -159,7 +159,7 @@ def test_relative_binary_path_survives_child_cwd_change(
     elif layer == "env":
         monkeypatch.setenv("SETFORGE_CODE_BIN", "./code")
     elif layer == "config":
-        binaries.LOCAL_CONFIG_PATH.write_text("binaries:\n  code: ./code\n")
+        paths.local_config_path().write_text("binaries:\n  code: ./code\n")
     else:
         monkeypatch.setattr(binaries.shutil, "which", lambda _name: "./code")
     resolved = binaries.resolve_binary("code")
@@ -187,14 +187,14 @@ def test_resolve_returns_none_when_unresolved(monkeypatch) -> None:
 
 def test_resolve_config_layer(tmp_path) -> None:
     bin_path = _make_executable(tmp_path / "code")
-    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {bin_path}\n")
+    paths.local_config_path().write_text(f"binaries:\n  code: {bin_path}\n")
     assert binaries.resolve_binary("code") == bin_path
 
 
 def test_resolve_env_overrides_config(monkeypatch, tmp_path) -> None:
     cfg_bin = _make_executable(tmp_path / "cfg-code")
     env_bin = _make_executable(tmp_path / "env-code")
-    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
+    paths.local_config_path().write_text(f"binaries:\n  code: {cfg_bin}\n")
     monkeypatch.setenv("SETFORGE_CODE_BIN", str(env_bin))
     assert binaries.resolve_binary("code") == env_bin
 
@@ -203,7 +203,7 @@ def test_resolve_cli_overrides_env_and_config(monkeypatch, tmp_path) -> None:
     cfg_bin = _make_executable(tmp_path / "cfg-code")
     env_bin = _make_executable(tmp_path / "env-code")
     cli_bin = _make_executable(tmp_path / "cli-code")
-    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
+    paths.local_config_path().write_text(f"binaries:\n  code: {cfg_bin}\n")
     monkeypatch.setenv("SETFORGE_CODE_BIN", str(env_bin))
     binaries.set_cli_overrides(code=str(cli_bin))
     assert binaries.resolve_binary("code") == cli_bin
@@ -224,7 +224,7 @@ def test_resolve_invalid_env_override_raises(monkeypatch, tmp_path) -> None:
 
 
 def test_resolve_invalid_config_override_raises(tmp_path) -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {tmp_path / 'nope'}\n")
+    paths.local_config_path().write_text(f"binaries:\n  code: {tmp_path / 'nope'}\n")
     with pytest.raises(BinaryOverrideInvalid) as excinfo:
         binaries.resolve_binary("code")
     assert excinfo.value.layer == "config"
@@ -237,7 +237,7 @@ def test_resolve_empty_config_override_raises(tmp_path) -> None:
     and the resolver's stated contract) rather than silently falling
     through to ``shutil.which``.
     """
-    binaries.LOCAL_CONFIG_PATH.write_text('binaries:\n  code: ""\n')
+    paths.local_config_path().write_text('binaries:\n  code: ""\n')
     with pytest.raises(BinaryOverrideInvalid) as excinfo:
         binaries.resolve_binary("code")
     assert excinfo.value.layer == "config"
@@ -272,37 +272,37 @@ def test_resolve_uv_env_override(monkeypatch, tmp_path) -> None:
 def test_resolve_uv_config_override(tmp_path) -> None:
     """local.yaml binaries.uv overrides uv resolution instead of being ignored."""
     cfg_bin = _make_executable(tmp_path / "cfg-uv")
-    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  uv: {cfg_bin}\n")
+    paths.local_config_path().write_text(f"binaries:\n  uv: {cfg_bin}\n")
     assert binaries.resolve_binary("uv") == cfg_bin
 
 
 def test_ensure_stub_creates_file_when_absent() -> None:
-    assert not binaries.LOCAL_CONFIG_PATH.exists()
+    assert not paths.local_config_path().exists()
     binaries.ensure_local_config_stub()
-    assert binaries.LOCAL_CONFIG_PATH.exists()
-    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert paths.local_config_path().exists()
+    text = paths.local_config_path().read_text(encoding="utf-8")
     assert "binaries:" in text
     assert text.startswith("# setforge host-local config")
 
 
 def test_ensure_stub_creates_parent_directories(monkeypatch, tmp_path) -> None:
     nested = tmp_path / "deep" / "nested" / "local.yaml"
-    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", nested)
+    redirect_local_config_path(monkeypatch, nested)
     binaries.ensure_local_config_stub()
     assert nested.exists()
 
 
 def test_ensure_stub_does_not_overwrite_existing() -> None:
-    binaries.LOCAL_CONFIG_PATH.write_text("user content\n")
+    paths.local_config_path().write_text("user content\n")
     binaries.ensure_local_config_stub()
-    assert binaries.LOCAL_CONFIG_PATH.read_text() == "user content\n"
+    assert paths.local_config_path().read_text() == "user content\n"
 
 
 def test_ensure_stub_is_idempotent() -> None:
     binaries.ensure_local_config_stub()
-    first_mtime = binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns
+    first_mtime = paths.local_config_path().stat().st_mtime_ns
     binaries.ensure_local_config_stub()
-    assert binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns == first_mtime
+    assert paths.local_config_path().stat().st_mtime_ns == first_mtime
 
 
 def test_stderr_of_returns_stripped_stderr_when_present() -> None:
@@ -343,7 +343,7 @@ def test_host_local_config_missing_returns_defaults() -> None:
 
 def test_host_local_config_empty_file_returns_defaults() -> None:
     """Empty YAML file is indistinguishable from a missing file."""
-    binaries.LOCAL_CONFIG_PATH.write_text("")
+    paths.local_config_path().write_text("")
     cfg = load_host_local_config()
     assert dict(cfg.binaries) == {}
     assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
@@ -351,7 +351,7 @@ def test_host_local_config_empty_file_returns_defaults() -> None:
 
 def test_host_local_config_binaries_only_keeps_claude_defaults() -> None:
     """Existing binaries-only files keep working — claude defaults fill in."""
-    binaries.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         "binaries:\n  code: /custom/code\n  patch: /custom/patch\n"
     )
     cfg = load_host_local_config()
@@ -361,7 +361,7 @@ def test_host_local_config_binaries_only_keeps_claude_defaults() -> None:
 
 def test_host_local_config_claude_block_only_keeps_binaries_default() -> None:
     """A claude-only block doesn't accidentally drop binaries' default."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: local-clone\n")
+    paths.local_config_path().write_text("claude:\n  install_mode: local-clone\n")
     cfg = load_host_local_config()
     assert dict(cfg.binaries) == {}
     assert cfg.claude.install_mode is ClaudeInstallMode.LOCAL_CLONE
@@ -369,35 +369,35 @@ def test_host_local_config_claude_block_only_keeps_binaries_default() -> None:
 
 def test_host_local_config_claude_install_mode_regular_explicit() -> None:
     """Explicit ``install_mode: regular`` round-trips to the enum member."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: regular\n")
+    paths.local_config_path().write_text("claude:\n  install_mode: regular\n")
     cfg = load_host_local_config()
     assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
 
 
 def test_host_local_config_claude_block_with_no_install_mode_defaults() -> None:
     """A claude block without install_mode keeps the REGULAR default."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude: {}\n")
+    paths.local_config_path().write_text("claude: {}\n")
     cfg = load_host_local_config()
     assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
 
 
 def test_host_local_config_claude_install_mode_bad_value_raises() -> None:
     """A garbage install_mode value names the file and the valid members."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: garbage\n")
+    paths.local_config_path().write_text("claude:\n  install_mode: garbage\n")
     with pytest.raises(ConfigError, match=r"claude\.install_mode"):
         load_host_local_config()
 
 
 def test_host_local_config_claude_block_not_mapping_raises() -> None:
     """A scalar ``claude:`` block fails fast with a typed ConfigError."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude: not-a-mapping\n")
+    paths.local_config_path().write_text("claude: not-a-mapping\n")
     with pytest.raises(ConfigError, match=r"'claude:'"):
         load_host_local_config()
 
 
 def test_host_local_config_both_blocks_parsed_together() -> None:
     """Binaries + claude blocks coexist in one parse pass."""
-    binaries.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         "binaries:\n  code: /x/code\nclaude:\n  install_mode: local-clone\n"
     )
     cfg = load_host_local_config()
@@ -407,14 +407,14 @@ def test_host_local_config_both_blocks_parsed_together() -> None:
 
 def test_host_local_config_malformed_yaml_raises() -> None:
     """YAML parse failure surfaces as ConfigError, not a raw YAMLError."""
-    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: [unterminated\n")
+    paths.local_config_path().write_text("claude:\n  install_mode: [unterminated\n")
     with pytest.raises(ConfigError, match="malformed YAML"):
         load_host_local_config()
 
 
 def test_host_local_config_top_level_not_mapping_raises() -> None:
     """List-typed YAML root is rejected before block parsing runs."""
-    binaries.LOCAL_CONFIG_PATH.write_text("- a\n- b\n")
+    paths.local_config_path().write_text("- a\n- b\n")
     with pytest.raises(ConfigError, match="top-level"):
         load_host_local_config()
 
@@ -434,9 +434,9 @@ def test_host_local_config_frozen_dataclass_rejects_mutation() -> None:
 
 def test_stub_template_documents_claude_install_mode() -> None:
     """Stub template surfaces the install_mode knob so users can discover it."""
-    assert not binaries.LOCAL_CONFIG_PATH.exists()
+    assert not paths.local_config_path().exists()
     binaries.ensure_local_config_stub()
-    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    text = paths.local_config_path().read_text(encoding="utf-8")
     assert "claude:" in text
     assert "install_mode" in text
     assert "local-clone" in text
@@ -445,7 +445,7 @@ def test_stub_template_documents_claude_install_mode() -> None:
 def test_stub_template_omits_unimplemented_knobs() -> None:
     """Stub must not advertise knobs no code reads (invites cargo-culting)."""
     binaries.ensure_local_config_stub()
-    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    text = paths.local_config_path().read_text(encoding="utf-8")
     assert "claude_log_level" not in text
     assert "cache_max_age_days" not in text
 
@@ -467,7 +467,7 @@ def test_host_local_config_both_blocks_malformed_binaries_error_wins() -> None:
     never fires. Swapping that call order would flip which message wins — this
     pins the current precedence so such a refactor fails loudly.
     """
-    binaries.LOCAL_CONFIG_PATH.write_text(
+    paths.local_config_path().write_text(
         "binaries: a-string\nclaude:\n  install_mode: garbage\n"
     )
     with pytest.raises(ConfigError, match=r"'binaries:'") as excinfo:
@@ -506,7 +506,7 @@ def test_every_uncommented_stub_example_validates(block: str) -> None:
     from setforge.cli.validate import _LocalConfig
     from setforge.source import _load_local_source_config
 
-    path = binaries.LOCAL_CONFIG_PATH
+    path = paths.local_config_path()
     path.write_text(block, encoding="utf-8")
 
     _LocalConfig.model_validate(YAML(typ="safe").load(block))
@@ -525,5 +525,5 @@ def test_tilde_in_binary_override_is_expanded(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("SETFORGE_CODE_BIN", "~/bin/code")
     assert binaries.resolve_binary("code") == exe
     monkeypatch.delenv("SETFORGE_CODE_BIN")
-    binaries.LOCAL_CONFIG_PATH.write_text("binaries:\n  code: ~/bin/code\n")
+    paths.local_config_path().write_text("binaries:\n  code: ~/bin/code\n")
     assert binaries.resolve_binary("code") == exe

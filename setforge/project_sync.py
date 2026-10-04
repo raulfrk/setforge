@@ -38,6 +38,7 @@ from setforge.ownership import (
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
+from setforge.paths import state_root
 from setforge.project_injection import (
     _MANIFEST_SCHEMA,
     _PRIOR_MANIFEST_SCHEMA,
@@ -86,7 +87,6 @@ from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.types import ABSENT
 from setforge.reconcile.types import file_id as reconcile_file_id
 from setforge.reconcile_apply import _key_merge
-from setforge.transitions import state_root
 from setforge.ui.primitives import CANCEL
 
 

@@ -22,8 +22,8 @@ from typing import Any
 
 from setforge.atomicio import atomic_write_text, fsync_dir
 from setforge.errors import CorruptReceiptError
+from setforge.paths import state_root
 from setforge.provision.protocol import Identity
-from setforge.transitions import state_root
 
 _RECEIPT_SUFFIX = ".json"
 

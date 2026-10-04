@@ -21,8 +21,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from setforge import base_store, locking, reconcile, scalar_base_store, transitions
+from setforge._redact import redact_argv
+from setforge.base_store_format import SIDECAR_NAME
+from setforge.compare import resolve_dst, resolve_src
+from setforge.config import Config, resolve_profile
 from setforge.errors import ConfigError
-from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+from setforge.migrations import (
+    ManifestEntry,
+    ManifestType,
+    MigrationRoots,
+    _require_mapping_root,
+)
+from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.reconcile import file_id, structured_units
+from setforge.reconcile import hunks as line_hunks
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import ABSENT, HunkClass
+from setforge.transitions import _spans_manifest_path
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -128,10 +145,6 @@ class DispositionRetireMigration:
         NOT filtered here (a missing path snapshots as absent and restores by
         deletion); the union is deduped preserving order.
         """
-        from setforge import base_store, scalar_base_store
-        from setforge.reconcile import store as reconcile_store
-        from setforge.transitions import _spans_manifest_path
-
         seen: dict[Path, None] = {roots.cfg_path: None}
         records = _build_legacy_records(roots)
         for rec in records:
@@ -161,8 +174,6 @@ class DispositionRetireMigration:
         Idempotent: a re-run skips already-unified fids and no-ops the deletes.
         """
         import contextlib
-
-        from setforge import locking, reconcile
 
         records = _build_legacy_records(roots)  # pass 1: enumerate (read-only)
         _validate_bases(records)  # D4 pre-flight abort — raises before any write
@@ -383,10 +394,6 @@ def _classified_hunks(rec: _FidLegacy) -> list[dict[str, object]] | None:
     """
     from dataclasses import replace
 
-    from setforge.reconcile import hunks as line_hunks
-    from setforge.reconcile import structured_units
-    from setforge.reconcile.types import HunkClass
-
     if not rec.dst_exists:
         return None  # local is ABSENT — no divergence to classify
 
@@ -426,8 +433,6 @@ def _validate_bases(records: list[_FidLegacy]) -> None:
     apply pass additionally re-validates an already-seeded fid's existing reconcile
     base under the profile lock.
     """
-    from setforge.reconcile import structured_units
-
     bad: list[str] = []
     for rec in records:
         if not rec.is_structured:
@@ -467,9 +472,6 @@ def _write_cutover_transition(
     """
     import sys
 
-    from setforge import transitions
-    from setforge._redact import redact_argv
-
     return transitions.write_transition(
         transitions.make_meta(
             transitions.TransitionCommand.MIGRATE,
@@ -490,8 +492,6 @@ def _classify_fid(rec: _FidLegacy) -> _SeedPlan:
     Base is the verbatim tracked bytes (DL1 — never live, never a merge result);
     local is the live bytes, or ``ABSENT`` when the file is undeployed.
     """
-    from setforge.reconcile.types import ABSENT
-
     return _SeedPlan(
         profile=rec.profile,
         fid=rec.fid,
@@ -514,9 +514,6 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
     revert. Raises :class:`ConfigError` on a non-mapping root.
     """
     from collections.abc import MutableMapping as _MutMap
-
-    from setforge.migrations import _require_mapping_root
-    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
     yaml = yaml_rt()
     with cfg_path.open("r", encoding="utf-8") as fh:
@@ -544,8 +541,6 @@ def _capture_cutover_snapshots(
     The per-profile INDEX is captured ONCE, outside the fid loop, so a 2nd+ fid
     never records post-mutation index state.
     """
-    from setforge import transitions
-
     entries: list[StateSnapshotEntry] = []
     for rec in records:
         key = str(rec.fid)
@@ -582,10 +577,6 @@ def _delete_legacy_stores(records: list[_FidLegacy], profiles: list[str]) -> Non
     touched — it is now the unified store's base. Every unlink is ``missing_ok``
     so a re-run (or a resumed post-crash run) is a clean no-op.
     """
-    from setforge import scalar_base_store
-    from setforge.base_store_format import SIDECAR_NAME
-    from setforge.transitions import _spans_manifest_path
-
     for rec in records:
         key = str(rec.fid)
         _spans_manifest_path(rec.profile, key).unlink(missing_ok=True)
@@ -667,12 +658,6 @@ def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
     limitation for the rare not-yet-seeded case.
     """
     import copy
-
-    from setforge.compare import resolve_dst, resolve_src
-    from setforge.config import Config, resolve_profile
-    from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
-    from setforge.migrations._yaml_ops import yaml_rt
-    from setforge.reconcile import file_id
 
     yaml = yaml_rt()
     with roots.cfg_path.open("r", encoding="utf-8") as fh:

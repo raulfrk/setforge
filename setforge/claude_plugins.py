@@ -197,7 +197,7 @@ def plan_reconcile(
         _marketplaces_to_add(
             cfg,
             install_mode,
-            _mp_cache.MARKETPLACE_CACHE_ROOT,
+            _mp_cache.marketplace_cache_root(),
             installed=pre_marketplaces,
         )
     )
@@ -207,7 +207,7 @@ def plan_reconcile(
             _mp_cache.plan_marketplace_source(
                 cfg.marketplaces[name],
                 install_mode,
-                cache_root=_mp_cache.MARKETPLACE_CACHE_ROOT,
+                cache_root=_mp_cache.marketplace_cache_root(),
                 mp_name=name,
                 auto=auto,
             ),
@@ -226,7 +226,7 @@ def plan_reconcile(
         declared_plugin_ids,
         pins or {},
         install_mode,
-        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        _mp_cache.marketplace_cache_root(),
         effective_sources=effective_sources,
     )
     reconcile_plan = driver.plan_reconcile(
@@ -260,7 +260,7 @@ def apply_plan(plan: PluginPlan) -> ReconcileReport:
         plan.cfg,
         list(plan.marketplaces_added),
         plan.install_mode,
-        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        _mp_cache.marketplace_cache_root(),
         failed,
         auto=plan.auto,
         source_plans=dict(plan.marketplace_sources),
@@ -510,7 +510,7 @@ def _source_identity(
             root = (
                 cache_root
                 if cache_root is not None
-                else _mp_cache.MARKETPLACE_CACHE_ROOT
+                else _mp_cache.marketplace_cache_root()
             )
             alias = _mp_cache.read_cache_aliases(root).get(src.repo)
             subdir = alias if alias is not None else src.repo.rsplit("/", 1)[-1]
@@ -817,7 +817,7 @@ def reconcile(
     # identity (not YAML key) so a marketplace claude registered under a
     # manifest-derived name is not re-added every run (idempotency).
     mps_to_add = _marketplaces_to_add(
-        cfg, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
+        cfg, install_mode, _mp_cache.marketplace_cache_root()
     )
 
     report_only = dry_run or policy is ReconcilePolicy.REPORT
@@ -842,13 +842,13 @@ def reconcile(
         cfg,
         mps_to_add,
         install_mode,
-        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        _mp_cache.marketplace_cache_root(),
         failed,
         auto=auto,
     )
 
     checkouts = _plugin_checkout_targets(
-        cfg, declared, pins or {}, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
+        cfg, declared, pins or {}, install_mode, _mp_cache.marketplace_cache_root()
     )
 
     reconcile_plan = driver.plan_reconcile(

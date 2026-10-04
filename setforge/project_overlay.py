@@ -16,9 +16,9 @@ from typing import BinaryIO
 from setforge import atomicio
 from setforge.errors import SetforgeError
 from setforge.git_info import run_git
+from setforge.paths import state_root
 from setforge.reconcile.hunks import extract_hunks
 from setforge.reconcile.merge import split_lines
-from setforge.transitions import state_root
 
 _SCHEMA = 1
 _MAX_STATE = 16 * 1024 * 1024

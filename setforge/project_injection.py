@@ -59,6 +59,7 @@ from setforge.ownership import (
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
+from setforge.paths import state_root
 from setforge.project_overlay import (
     ProjectOverlay,
     build_overlay,
@@ -75,7 +76,6 @@ from setforge.project_record import (
     _record_files,
     _sha256,
 )
-from setforge.transitions import state_root
 
 if TYPE_CHECKING:
     from setforge.project_sync import AutoResolution

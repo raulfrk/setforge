@@ -4,7 +4,8 @@ import pytest
 
 from setforge.config import GitHubReleasePackage, load_config
 from setforge.errors import ConfigError
-from setforge.migrations import MIGRATIONS, Migration, MigrationRoots
+from setforge.migrations import Migration, MigrationRoots
+from setforge.migrations.registry import MIGRATIONS
 
 
 def _step(from_version: str) -> Migration:

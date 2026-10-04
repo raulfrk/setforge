@@ -59,8 +59,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from setforge import transitions
+from setforge._redact import redact_argv
 from setforge.errors import ConfigError
-from setforge.migrations import ManifestEntry, ManifestType
+from setforge.migrations import ManifestEntry, ManifestType, _require_mapping_root
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
 if TYPE_CHECKING:
     from setforge.migrations import MigrationRoots
@@ -77,9 +80,6 @@ def _stamp_schema_version(roots: MigrationRoots, to_version: str) -> None:
     comment, and its position is preserved (overwrite-in-place, never
     ``del``-then-reinsert), so the file is byte-identical apart from the stamp.
     """
-    from setforge.migrations import _require_mapping_root
-    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-
     yaml = yaml_rt()
     with roots.cfg_path.open("r", encoding="utf-8") as fh:
         data = yaml.load(fh)
@@ -137,9 +137,6 @@ def _write_stamp_transition(roots: MigrationRoots, cfg_pre: str) -> None:
     to its absent-at-origin state rather than an intermediate seeded one.
     """
     import sys
-
-    from setforge import transitions
-    from setforge._redact import redact_argv
 
     pre = roots.pre_chain_snapshot
     file_pre: dict[Path, str | None]

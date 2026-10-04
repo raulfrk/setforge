@@ -34,6 +34,7 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, ValidationErrorWithContext
 from setforge.overlay_provenance import LocalOverlayError, OverlayOrigin
+from tests.conftest import redirect_local_config_path
 
 
 def _make_cfg(
@@ -655,14 +656,12 @@ def _apply_local_overlay_check_with_path(
     """Run ``_apply_local_overlay_check`` against an explicit ``local.yaml`` path.
 
     ``_apply_local_overlay_check`` itself delegates to ``apply_local_overlay``,
-    which reads :data:`setforge.source.LOCAL_CONFIG_PATH` by default. Patch
-    the module-level constant via :class:`pytest.MonkeyPatch` so cleanup
-    is automatic and the helper matches the companion CLI-integration
-    test's monkeypatch convention.
+    which reads :func:`setforge.paths.local_config_path` by default, so the
+    path is redirected for the duration of the test.
     """
     from setforge.cli.validate import _apply_local_overlay_check
 
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_path)
+    redirect_local_config_path(monkeypatch, local_path)
     return _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
 
 
@@ -718,8 +717,6 @@ def test_resolver_error_via_cli_surfaces_check_6_fallback(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("setforge.cli.validate._LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
 
     result = CliRunner().invoke(
         app, ["validate", "--profile=p", f"--config={cfg_path}"]

@@ -803,7 +803,7 @@ def _retry_pin_marketplace(
         {failed_id},
         pins,
         install_mode,
-        claude_marketplace_cache.MARKETPLACE_CACHE_ROOT,
+        claude_marketplace_cache.marketplace_cache_root(),
     )
     target = targets.get(failed_id)
     if target is not None:

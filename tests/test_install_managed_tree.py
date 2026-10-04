@@ -4,7 +4,6 @@ import copy
 import json
 import stat
 import subprocess
-import sys
 import uuid
 from importlib import import_module
 from pathlib import Path
@@ -39,6 +38,7 @@ from setforge.ownership import OwnershipStore, resolve_owner_common_dir
 from setforge.provision.receipt import default_receipt_root
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import FileId, file_id
+from tests.conftest import redirect_local_config_path
 
 
 def _mixed_config(
@@ -54,11 +54,7 @@ def _mixed_config(
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     local = tmp_path / "local.yaml"
-    for name, module in tuple(sys.modules.items()):
-        if name.startswith("setforge") and module is not None:
-            for attribute in ("LOCAL_CONFIG_PATH", "_LOCAL_CONFIG_PATH"):
-                if attribute in vars(module):
-                    monkeypatch.setattr(module, attribute, local)
+    redirect_local_config_path(monkeypatch, local)
     scanner = tmp_path / "gitleaks"
     scanner.write_text("#!/bin/sh\nexit 0\n")
     scanner.chmod(0o755)

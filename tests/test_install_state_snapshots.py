@@ -18,13 +18,14 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import base_store, source, transitions
+from setforge import base_store, paths, transitions
 from setforge.cli import app
 from setforge.cli import install as install_mod
 from setforge.codex_resources import mcp_target_marker
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
 from setforge.transitions import SnapshotStore
+from tests.conftest import redirect_local_config_path
 
 _PROFILE = "test-snapshots"
 _FILE_ID = "doc"
@@ -366,7 +367,7 @@ def test_install_refuses_project_resource_after_trust_revocation(
     local = Path.home() / ".config/setforge/local.yaml"
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text(f"codex:\n  project_paths:\n    app: {project}\n")
-    monkeypatch.setattr(install_mod.source_mod, "LOCAL_CONFIG_PATH", local)
+    redirect_local_config_path(monkeypatch, local)
     tracked = repo / "tracked/codex"
     tracked.mkdir(parents=True)
     (tracked / "AGENTS.md").write_text("project instructions\n")
@@ -496,7 +497,7 @@ def test_codex_mcp_install_compare_and_revert_journey(repo: Path) -> None:
     live = codex_home / "config.toml"
     original = b'# host\n[mcp_servers.personal]\ncommand = "mine"\n'
     live.write_bytes(original)
-    local = source.LOCAL_CONFIG_PATH
+    local = paths.local_config_path()
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text("codex:\n  environment_vars:\n    api_token: SETFORGE_API_TOKEN\n")
     config = repo / "setforge.yaml"

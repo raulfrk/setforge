@@ -11,7 +11,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from setforge import binaries, local_config, operations, transitions
+from setforge import local_config, operations, paths, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -94,7 +94,7 @@ def _confinement_root() -> Path:
 def load_ignored_provisioned() -> frozenset[str]:
     # Strict read: a corrupt local.yaml must not silently empty the list of
     # packages the user marked never-touch.
-    data = local_config.load_local_yaml(binaries.LOCAL_CONFIG_PATH)
+    data = local_config.load_local_yaml(paths.local_config_path())
     raw = data.get(_PROVISION_IGNORE_KEY)
     if raw is None:
         return frozenset()
@@ -102,7 +102,7 @@ def load_ignored_provisioned() -> frozenset[str]:
         # A present-but-wrong shape is the same hazard as an unparseable file:
         # silently ignoring it re-arms packages the user marked never-touch.
         raise ConfigError(
-            f"{binaries.LOCAL_CONFIG_PATH}: {_PROVISION_IGNORE_KEY} must be a list"
+            f"{paths.local_config_path()}: {_PROVISION_IGNORE_KEY} must be a list"
         )
     return frozenset(str(entry) for entry in raw)
 
@@ -356,7 +356,7 @@ def delete_provisioned(
 def mark_orphan(
     identity: Identity, *, provider: str | None = None, console: Console
 ) -> None:
-    path = binaries.LOCAL_CONFIG_PATH
+    path = paths.local_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = yaml_rt().load(path.read_text(encoding="utf-8")) if path.exists() else None
     if not isinstance(data, dict):

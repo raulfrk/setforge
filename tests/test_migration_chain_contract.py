@@ -9,7 +9,8 @@ from typer.testing import CliRunner
 from setforge import reconcile, transitions
 from setforge.cli import app
 from setforge.config import load_config, resolve_profile
-from setforge.migrations import MIGRATIONS, detect_current_schema, find_migration_path
+from setforge.migrations import detect_current_schema
+from setforge.migrations.registry import MIGRATIONS, find_migration_path
 from setforge.reconcile.types import file_id
 
 _VERSIONS = (

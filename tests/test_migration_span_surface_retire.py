@@ -28,13 +28,13 @@ from setforge.migrations import (
     MigrationRoots,
     current_expected_schema_version,
     detect_current_schema,
-    find_migration_path,
     parse_schema_version,
 )
 from setforge.migrations._span_surface_retire import (
     SpanSurfaceRetireMigration,
     _SpanSurfaceRetireReverse,
 )
+from setforge.migrations.registry import find_migration_path
 from setforge.reconcile import file_id
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.hunks import extract_hunks, serialize

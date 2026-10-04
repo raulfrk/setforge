@@ -21,7 +21,8 @@ from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import compare as compare_mod
-from setforge import transitions
+from setforge import paths, transitions
+from setforge import source as source_mod
 from setforge.cli import app
 from setforge.cli import orphans as orphans_mod
 from setforge.compare import (
@@ -36,6 +37,8 @@ from setforge.errors import (
     OrphanCleanupRequiresInteractive,
     SetforgeError,
 )
+from setforge.source import _LocalSourceConfig
+from tests.conftest import redirect_local_config_path
 
 _ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -416,7 +419,7 @@ def test_detect_orphans_skips_unmanaged_path(
 def test_detect_orphans_excludes_host_local_config(
     tmp_path: Path, managed_boundary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A setforge-written host-local file (LOCAL_CONFIG_PATH) is NEVER an
+    """A setforge-written host-local file (``local.yaml``) is NEVER an
     orphan, even when it sits under a managed dst root and was recorded in a
     transition. Regression for the over-reach where cleanup-orphans wanted to
     delete ~/.config/setforge/local.yaml (data loss)."""
@@ -430,11 +433,7 @@ def test_detect_orphans_excludes_host_local_config(
     local_yaml = managed / "local.yaml"
     local_yaml.parent.mkdir(parents=True, exist_ok=True)
     local_yaml.write_text("tracked_files: {}\n", encoding="utf-8")
-    # HOST_LOCAL_FILES is computed from the real LOCAL_CONFIG_PATH at import;
-    # point it at this fixture (same pattern as managed_boundary/GENERIC_DST_ROOTS).
-    monkeypatch.setattr(
-        compare_mod, "HOST_LOCAL_FILES", frozenset({compare_mod._norm(local_yaml)})
-    )
+    redirect_local_config_path(monkeypatch, local_yaml)
     _write_meta_record(
         transitions_dir, "20260518T120000000000Z-install-p", [str(local_yaml)]
     )
@@ -617,7 +616,7 @@ def test_load_ignored_orphans_missing_returns_empty() -> None:
 
 def test_load_ignored_orphans_parses_list(tmp_path: Path) -> None:
     """A `orphan_ignore:` block round-trips into a frozenset."""
-    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path = paths.local_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("orphan_ignore:\n  - foo\n  - bar\n", encoding="utf-8")
     assert load_ignored_orphans() == frozenset({"foo", "bar"})
@@ -627,7 +626,7 @@ def test_load_ignored_orphans_corrupt_yaml_warns_and_returns_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Advisory posture: malformed YAML warns, and must NOT crash compare."""
-    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path = paths.local_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("not: [valid: yaml\n", encoding="utf-8")
 
@@ -654,15 +653,14 @@ def test_apply_refuses_to_delete_when_local_yaml_is_corrupt(
         "20260518T120000000000Z-install-p",
         [str(live_orphan)],
     )
-    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path = paths.local_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("orphan_ignore: ['x'\n", encoding="utf-8")
-    # Point the other local.yaml readers at a clean file so this test exercises
-    # the ignore-list guard rather than the profile loader that reads first.
-    clean = tmp_path / "clean-local.yaml"
-    clean.write_text("orphan_ignore: []\n", encoding="utf-8")
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", clean)
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", clean)
+    # Let the profile loader's own read of local.yaml pass so this test
+    # exercises the ignore-list guard rather than the loader that reads first.
+    monkeypatch.setattr(
+        source_mod, "_load_local_source_config", lambda path: _LocalSourceConfig()
+    )
 
     result = runner.invoke(
         app,
@@ -699,13 +697,9 @@ def test_apply_refuses_when_orphan_ignore_is_not_a_list(
         "20260518T120000000000Z-install-p",
         [str(live_orphan)],
     )
-    cfg_path = compare_mod.LOCAL_CONFIG_PATH
+    cfg_path = paths.local_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("orphan_ignore: not-a-list\n", encoding="utf-8")
-    clean = tmp_path / "clean-local.yaml"
-    clean.write_text("orphan_ignore: []\n", encoding="utf-8")
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", clean)
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", clean)
 
     result = runner.invoke(
         app,
@@ -843,7 +837,6 @@ def _write_retargeted_active_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path]:
     """Create an active destination that exists only through local.yaml."""
-    from setforge import source as source_mod
 
     cfg = _write_minimal_yaml(tmp_path)
     tracked = tmp_path / "tracked"
@@ -856,8 +849,7 @@ def _write_retargeted_active_path(
     local_config.write_text(
         f"tracked_files:\n  kept:\n    dst: {effective}\n", encoding="utf-8"
     )
-    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
+    redirect_local_config_path(monkeypatch, local_config)
     _write_meta_record(
         transitions_root,
         "20260518T120000000000Z-install-p",
@@ -1134,7 +1126,6 @@ def test_apply_redetects_after_prompt_inside_profile_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A path made active while cleanup waits is retained by locked re-scan."""
-    from setforge import source as source_mod
 
     cfg = _write_minimal_yaml(tmp_path)
     tracked = tmp_path / "tracked"
@@ -1149,8 +1140,6 @@ def test_apply_redetects_after_prompt_inside_profile_lock(
         [str(candidate)],
     )
     local_config = tmp_path / "local.yaml"
-    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
-    monkeypatch.setattr(compare_mod, "LOCAL_CONFIG_PATH", local_config)
     prompt_called = False
 
     def _activate_during_prompt(*, yes: bool) -> orphans_mod.ApplyChoice:
@@ -1310,7 +1299,7 @@ def test_ignore_retired_id_preserves_only_its_historical_destination(
     yaml.dump(document, config)
     if legacy_claim:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    local = compare_mod.LOCAL_CONFIG_PATH
+    local = paths.local_config_path()
     local.write_text("# retain this comment\nbinaries:\n  code: /bin/true\n")
     runner = CliRunner()
     installed = runner.invoke(
@@ -1366,7 +1355,7 @@ def test_ignore_retired_id_preserves_only_its_historical_destination(
 
 def test_ignore_unknown_id_refuses_without_changing_local_yaml(tmp_path: Path) -> None:
     config = _write_minimal_yaml(tmp_path)
-    local = compare_mod.LOCAL_CONFIG_PATH
+    local = paths.local_config_path()
     before = b"# retained\nbinaries:\n  code: /bin/true\n"
     local.write_bytes(before)
 
@@ -1415,7 +1404,7 @@ def test_ignore_legacy_tree_claim_requires_recorded_child_destinations(
     _write_meta_record(
         isolated_state_dir / "transitions", "legacy-install", [str(child)]
     )
-    local = compare_mod.LOCAL_CONFIG_PATH
+    local = paths.local_config_path()
     local.write_text("# retained\n")
     before = local.read_bytes()
 
@@ -1457,7 +1446,7 @@ def test_ignore_writes_local_yaml_not_tracked(
     # Host-local local.yaml (redirected by conftest's autouse fixture
     # to tmp_path/local.yaml) now contains the ignore entry.
     yaml = YAML(typ="safe")
-    payload = yaml.load(compare_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    payload = yaml.load(paths.local_config_path().read_text(encoding="utf-8"))
     assert payload == {"orphan_ignore": ["kept"]}
 
 
@@ -1479,7 +1468,7 @@ def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
         )
         assert result.exit_code == 0, result.output
     yaml = YAML(typ="safe")
-    payload = yaml.load(compare_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    payload = yaml.load(paths.local_config_path().read_text(encoding="utf-8"))
     # ruamel rt-loaded list is a CommentedSeq under the hood; compare contents.
     assert payload == {"orphan_ignore": ["kept"]}
 

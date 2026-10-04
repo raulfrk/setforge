@@ -37,12 +37,9 @@ from typing import Final
 
 import typer
 
-from setforge import binaries
+from setforge import binaries, paths
 from setforge.errors import SetforgeError
 
-_DEFAULT_ALLOWLIST_PATH: Final[Path] = (
-    Path.home() / ".config" / "setforge" / "secrets-allowlist"
-)
 _GITLEAKS_TIMEOUT_SECONDS: Final[int] = 60
 _MISSING_BINARY_MESSAGE: Final[str] = (
     "warning: skipping pre-deploy secrets scan — gitleaks not found on PATH; "
@@ -89,6 +86,11 @@ class SecretsScanResult:
 
     findings: tuple[SecretFinding, ...]
     files_scanned: int
+
+
+def default_allowlist_path() -> Path:
+    """Return ``~/.config/setforge/secrets-allowlist``."""
+    return paths.config_root() / "secrets-allowlist"
 
 
 def _sha256_hex(text: str) -> str:
@@ -216,7 +218,7 @@ def _filter_allowlist(
 def run_pre_deploy_scan(
     *,
     tracked_root: Path,
-    allowlist_path: Path = _DEFAULT_ALLOWLIST_PATH,
+    allowlist_path: Path | None = None,
     skip: bool = False,
 ) -> SecretsScanResult:
     """Run ``gitleaks detect`` on ``tracked_root``; return filtered findings.
@@ -279,7 +281,9 @@ def run_pre_deploy_scan(
         return SecretsScanResult(findings=(), files_scanned=file_count)
     if result.returncode == 1:
         findings = _parse_gitleaks_json(result.stdout)
-        filtered = _filter_allowlist(findings, allowlist_path)
+        filtered = _filter_allowlist(
+            findings, allowlist_path or default_allowlist_path()
+        )
         return SecretsScanResult(findings=filtered, files_scanned=file_count)
     _warn(
         f"warning: gitleaks scan failed (exit {result.returncode}): "

@@ -150,9 +150,6 @@ def test_config_add_then_remove_restores_original_bytes(
 ) -> None:
     local = tmp_path / "local.yaml"
     local.write_text(_LOCAL.format(i=indent), encoding="utf-8")
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
     before = local.read_bytes()
     runner = CliRunner()
 
@@ -201,9 +198,6 @@ def test_config_remove_keeps_comment_of_next_key(
 ) -> None:
     local = tmp_path / "local.yaml"
     local.write_text(text, encoding="utf-8")
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
 
     result = CliRunner().invoke(
         app, ["config", "remove", "--local", "binaries.claude", "--yes"]

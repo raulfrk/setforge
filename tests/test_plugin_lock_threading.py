@@ -334,7 +334,7 @@ def test_reconcile_threads_pins_into_checkout(monkeypatch, tmp_path: Path) -> No
     resolved = ResolvedProfile(packages=["revdiff"])
     lock = LockFile(version=1, packages=(_plugin_pin("revdiff@revdiff"),))
 
-    monkeypatch.setattr(mp_cache, "MARKETPLACE_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(mp_cache, "marketplace_cache_root", lambda: tmp_path / "cache")
 
     class _HL:
         class claude:
@@ -387,7 +387,9 @@ def test_retry_pinned_install_repins_cache(monkeypatch, tmp_path: Path) -> None:
         claude_plugins={"revdiff": ClaudePluginRef(marketplace="revdiff")},
     )
     monkeypatch.setattr(
-        ph.claude_marketplace_cache, "MARKETPLACE_CACHE_ROOT", tmp_path / "cache"
+        ph.claude_marketplace_cache,
+        "marketplace_cache_root",
+        lambda: tmp_path / "cache",
     )
 
     class _HL:

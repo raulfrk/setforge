@@ -7,7 +7,7 @@ The tests cover three call paths:
 
 - ``--check``: empty-registry message (today's MIGRATIONS=() state)
   AND a chain-populated state injected via ``monkeypatch.setattr(
-  "setforge.migrations.MIGRATIONS", ...)``.
+  "setforge.migrations.registry.MIGRATIONS", ...)``.
 - ``--apply``: short-circuit ``"nothing to apply"`` on empty registry,
   AND a full multi-file apply flow with the button bar returning each
   of the three :class:`MigrateChoice` outcomes, plus the ``CANCEL``
@@ -132,7 +132,7 @@ def test_check_reports_no_migrations_when_registry_empty(
     """
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", ())
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.0")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.0")
     runner = CliRunner()
@@ -148,7 +148,7 @@ def test_check_lists_chain_when_registry_populated(
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     runner = CliRunner()
@@ -170,7 +170,7 @@ def test_apply_empty_registry_says_nothing_to_apply(
     """The empty-registry ``--apply`` short-circuit (registry forced empty)."""
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", ())
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.0")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.0")
     runner = CliRunner()
@@ -190,7 +190,7 @@ def test_apply_with_yes_applies_with_backup(
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     # Stub the post-apply validate shell-out so the test never depends
@@ -239,7 +239,7 @@ def test_contract_preview_and_apply_resolve_sources_from_tracked_root(
         encoding="utf-8",
     )
     chain = (Contract20Migration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "2.0")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "2.0")
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
@@ -262,7 +262,7 @@ def test_apply_button_bar_abort_writes_nothing(
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     pre_bytes = cfg.read_bytes()
     chain = (_SetforgeYamlEditMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     from setforge.cli.migrate import MigrateChoice
@@ -303,7 +303,7 @@ def test_apply_button_bar_cancel_writes_nothing(
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     pre_bytes = cfg.read_bytes()
     chain = (_SetforgeYamlEditMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.button_bar", _fake_button_bar(CANCEL))
@@ -339,7 +339,7 @@ def test_apply_button_bar_no_backup_skips_backup_files(
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     from setforge.cli.migrate import MigrateChoice
@@ -413,7 +413,7 @@ def test_apply_backup_failure_aborts_before_apply(
                 real_apply_calls.append(f"{self.from_version}→{self.to_version}")
 
     chain = (_TrackingMigration(),)
-    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", chain)
     monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
     monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
 

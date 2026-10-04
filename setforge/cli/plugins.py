@@ -316,7 +316,7 @@ def _resolve_add_source(source: MarketplaceSource, mp_name: str) -> MarketplaceS
     return claude_mp_cache_mod.resolve_marketplace_source(
         source,
         host_local.claude.install_mode,
-        cache_root=claude_mp_cache_mod.MARKETPLACE_CACHE_ROOT,
+        cache_root=claude_mp_cache_mod.marketplace_cache_root(),
         mp_name=mp_name,
         auto=True,
     )

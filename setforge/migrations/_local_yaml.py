@@ -51,6 +51,7 @@ __all__ = [
     "guard_local_yaml_schema",
     "migrate_local_yaml",
     "migrate_local_yaml_overlay_spans",
+    "read_local_yaml",
     "strip_retired_keys",
 ]
 
@@ -63,6 +64,29 @@ no ``schema_version`` key. Deliberately a SEPARATE constant from
 :data:`setforge.schema_manifest.SCHEMA_MAJOR` (setforge.yaml's): the two
 documents version independently.
 """
+
+
+def read_local_yaml(path: Path) -> dict[str, object]:
+    """Return ``local.yaml``'s top-level mapping for the runtime loaders.
+
+    ``{}`` when the file is absent or empty. Raises :class:`ConfigError`
+    naming ``path`` on YAML parse failure, an unreadable file, or a
+    non-mapping top level.
+    """
+    if not path.exists():
+        return {}
+    yaml = YAML(typ="safe")
+    try:
+        data = yaml.load(path.read_text(encoding="utf-8"))
+    except (YAMLError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc.strerror or exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"top-level of {path} must be a mapping")
+    return data
 
 
 def detect_local_yaml_schema(path: Path) -> str:

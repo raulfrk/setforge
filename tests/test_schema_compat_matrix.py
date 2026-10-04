@@ -1,7 +1,7 @@
 """Per-PR schema-compat matrix: the migration chain vs a FROZEN corpus.
 
 This suite proves the production migration chain
-(:data:`setforge.migrations.MIGRATIONS`) is bidirectionally safe against a
+(:data:`setforge.migrations.registry.MIGRATIONS`) is bidirectionally safe against a
 frozen historical corpus of ``setforge.yaml`` configs — one directory per
 ``schema_version`` under ``tests/fixtures/schema_corpus/<version>/``.
 
@@ -27,7 +27,7 @@ all depend on this same-writer provenance — they reference it rather than
 restating it.
 
 Plus a standalone GROWTH GUARD asserting the discovered corpus dirs equal
-:func:`setforge.migrations.known_versions` (set-equality both ways) and
+:func:`setforge.migrations.registry.known_versions` (set-equality both ways) and
 that at least three fixtures were discovered (kills the empty-glob
 false-green).
 
@@ -53,10 +53,9 @@ from setforge.migrations import (
     MigrationRoots,
     current_expected_schema_version,
     detect_current_schema,
-    find_migration_path,
-    known_versions,
 )
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations.registry import find_migration_path, known_versions
 
 # Anchor on __file__, NEVER cwd — the glob must find the corpus regardless
 # of where pytest is invoked from.

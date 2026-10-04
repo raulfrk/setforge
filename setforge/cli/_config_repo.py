@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML, YAMLError
 
-from setforge.binaries import LOCAL_CONFIG_PATH
+from setforge import paths
 from setforge.errors import SetforgeError
 from setforge.migrations import current_expected_schema_version
 
@@ -75,7 +75,7 @@ def default_config_repo_dir(home: Path | None = None) -> Path:
     return base / "projects" / f"{name}-config"
 
 
-def local_yaml_has_source(local_yaml: Path = LOCAL_CONFIG_PATH) -> bool:
+def local_yaml_has_source(local_yaml: Path | None = None) -> bool:
     """Return whether ``local.yaml`` already carries a ``source:`` key.
 
     Parses the file with the safe YAML loader and checks for a top-level
@@ -87,6 +87,8 @@ def local_yaml_has_source(local_yaml: Path = LOCAL_CONFIG_PATH) -> bool:
     not valid YAML, so a hand-corrupted file surfaces a clean message rather
     than an unwrapped parser traceback.
     """
+    if local_yaml is None:
+        local_yaml = paths.local_config_path()
     if not local_yaml.exists():
         return False
     yaml = YAML(typ="safe")

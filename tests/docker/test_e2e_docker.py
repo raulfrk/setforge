@@ -1855,7 +1855,7 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 
 _FAKE_MIGRATION_HARNESS = textwrap.dedent(
     """\
-    \"\"\"Inject a fake Migration into setforge.migrations.MIGRATIONS, then
+    \"\"\"Inject a fake Migration into the registry's MIGRATIONS, then
     invoke the setforge CLI. Used by the docker e2e to prove the
     broadened-scope Migration Protocol (multi-file apply + backup +
     rollback) works end-to-end against a real subprocess.
@@ -1867,6 +1867,7 @@ _FAKE_MIGRATION_HARNESS = textwrap.dedent(
     from pathlib import Path
 
     import setforge.migrations as migrations_mod
+    import setforge.migrations.registry as registry_mod
     from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
     from setforge.migrations._fs_ops import atomic_replace
     from setforge.migrations._yaml_ops import (
@@ -1915,7 +1916,7 @@ _FAKE_MIGRATION_HARNESS = textwrap.dedent(
             atomic_replace(tmp, tracked)
 
 
-    migrations_mod.MIGRATIONS = (_FakeMultiFileMigration(),)
+    registry_mod.MIGRATIONS = (_FakeMultiFileMigration(),)
     migrations_mod.current_expected_schema_version = "1.1"
     import setforge.cli.migrate as migrate_mod
 

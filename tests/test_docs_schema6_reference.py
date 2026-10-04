@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import re
 from pathlib import Path
 
@@ -149,8 +148,6 @@ def test_named_onboarding_yaml_examples_are_exact_schema6_configs(
 
     assert examples.keys() == EXAMPLE_NAMES
     yaml = YAML(typ="safe")
-    validate_cli = importlib.import_module("setforge.cli.validate")
-    monkeypatch.setattr(validate_cli, "_LOCAL_CONFIG_PATH", tmp_path / "local.yaml")
     for name, body in examples.items():
         raw = yaml.load(body)
         repo = tmp_path / name

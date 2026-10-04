@@ -183,7 +183,6 @@ def test_profile_show_renders_host_local_tracked_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Tracked destination, mode, and symlink provenance are all visible."""
-    from setforge import source as source_mod
 
     cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
     local_config = tmp_path / "local.yaml"
@@ -198,7 +197,6 @@ tracked_files:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(source_mod, "LOCAL_CONFIG_PATH", local_config)
 
     result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
 

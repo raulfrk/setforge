@@ -25,9 +25,6 @@ def runner() -> CliRunner:
 def seed_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     local = tmp_path / "local.yaml"
     local.write_text("binaries:\n  code: /usr/bin/code\n", encoding="utf-8")
-    monkeypatch.setattr("setforge.binaries.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
-    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", local)
     return local
 
 

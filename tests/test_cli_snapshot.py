@@ -25,6 +25,7 @@ from setforge import operations
 from setforge import snapshots as snap_mod
 from setforge.cli import app
 from setforge.cli import snapshot as cli_snap
+from tests.conftest import redirect_local_config_path
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Sandbox ``Path.home()`` + the snapshot module's local.yaml constant."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     fake_local = tmp_path / ".config" / "setforge" / "local.yaml"
-    monkeypatch.setattr(snap_mod, "LOCAL_CONFIG_PATH", fake_local)
+    redirect_local_config_path(monkeypatch, fake_local)
     return tmp_path
 
 
