@@ -36,7 +36,7 @@ import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -60,15 +60,6 @@ from setforge.errors import (
     UpgradeError,
 )
 from setforge.locking import mutation_locks
-
-
-def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "button_bar":
-        from setforge.ui.widgets import button_bar
-
-        return button_bar
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 __all__ = [
     "SchemaChangeAssessment",
@@ -433,8 +424,7 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     console = make_console()
     _render_confirm_panel(plan, console=console)
 
-    from setforge.cli import upgrade as _self  # local alias for monkeypatch
-    from setforge.ui.widgets import CANCEL, Button
+    from setforge.ui.widgets import CANCEL, Button, button_bar
 
     buttons = [
         Button("Abort — no changes", UpgradeChoice.ABORT),
@@ -447,7 +437,7 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     initial = next(
         (i for i, button in enumerate(buttons) if button.value is default_choice), 0
     )
-    choice = _self.button_bar(
+    choice = button_bar(
         buttons,
         title="setforge upgrade",
         body="Proceed?",

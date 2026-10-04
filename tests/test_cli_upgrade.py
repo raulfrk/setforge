@@ -171,7 +171,7 @@ def _patch_button_bar(
     monkeypatch: pytest.MonkeyPatch, *, return_value: object
 ) -> _DialogRecorder:
     recorder = _DialogRecorder(return_value)
-    monkeypatch.setattr("setforge.cli.upgrade.button_bar", recorder)
+    monkeypatch.setattr("setforge.ui.widgets.button_bar", recorder)
     return recorder
 
 
