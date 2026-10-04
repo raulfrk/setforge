@@ -210,11 +210,11 @@ def test_stale_toml_anchor_has_identical_cli_diagnostics_without_mutation(
     (old_stage,) = collect_stages(cfg, resolved, repo, _PROFILE)
     assert old_stage.ownership is not None
     assert old_stage.ownership.action is FileAction.REVIEW
-    (old_unit,) = old_stage.hunks
+    (old_unit,) = old_stage.units
     _apply(
         _PROFILE,
         old_stage,
-        walk(old_stage.hunks, lambda _hunk, _i, _n: Decision(HunkClass.LOCAL)),
+        walk(old_stage.units, lambda _hunk, _i, _n: Decision(HunkClass.LOCAL)),
     )
     stored = store.read_index(_PROFILE).files["settings"].hunks
     assert stored == hunks_mod.serialize([replace(old_unit, cls=HunkClass.LOCAL)])
@@ -238,7 +238,7 @@ def test_stale_toml_anchor_has_identical_cli_diagnostics_without_mutation(
         )
 
     (fresh_stage,) = collect_stages(cfg, resolved, repo, _PROFILE)
-    (fresh_unit,) = fresh_stage.hunks
+    (fresh_unit,) = fresh_stage.units
     assert fresh_unit.unit_id != old_unit.unit_id
     assert fresh_unit.cls is HunkClass.PENDING
 
@@ -401,7 +401,7 @@ def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) 
     _apply(
         _PROFILE,
         stage,
-        walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
+        walk(stage.units, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
     )
 
     (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
@@ -449,7 +449,7 @@ def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) 
     _apply(
         _PROFILE,
         stage,
-        walk(stage.hunks, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
+        walk(stage.units, lambda _h, _i, _n: Decision(HunkClass.LOCAL)),
     )
     (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
     assert "reloc_anchor" not in row

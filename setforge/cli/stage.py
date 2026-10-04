@@ -1,9 +1,10 @@
-"""stage subcommand — per-hunk share/keep classification for plain files (A5).
+"""stage subcommand — per-unit share/keep classification of a tracked file (A5).
 
-``setforge stage <file>`` walks each base↔live diff hunk of a plain tracked
-file and lets the host classify it SHARED (promote into the shared config on the
-next ``sync``) or LOCAL (keep host-only). ``setforge stage --list`` is a
-read-only per-file count of SHARED / LOCAL / PENDING hunks — it writes nothing.
+``setforge stage <file>`` walks each base↔live difference of a tracked file —
+a line hunk of a plain file, a key of a YAML/JSON file — and lets the host
+classify it SHARED (promote into the shared config on the next ``sync``) or
+LOCAL (keep host-only). ``setforge stage --list`` is a read-only per-file count
+of SHARED / LOCAL / PENDING units — it writes nothing.
 
 The classifications are persisted into the reconcile index; the actual promotion
 into ``tracked/`` happens on ``sync`` (see :func:`setforge.capture.plan_capture`).
@@ -145,11 +146,6 @@ class FileStage[U: (Hunk, KeyUnit)]:
     engine: UnitEngine[U]
     participating: bool = False
     ownership: FileDecision | None = None
-
-    @property
-    def hunks(self) -> list[U]:
-        """``units`` under the name a line stage's callers use."""
-        return self.units
 
 
 def _file_ownership(repo_root: Path, dst: Path) -> FileDecision:
@@ -419,10 +415,6 @@ def walk[U: (Hunk, KeyUnit)](units: list[U], choose: Choice[U]) -> WalkResult[U]
     )
 
 
-#: ``walk`` under the name its key-unit callers outside this module import.
-walk_structured = walk
-
-
 def _interactive_choice[U: (Hunk, KeyUnit)](stage: FileStage[U]) -> Choice[U]:
     """A button-bar-backed choose callback for the interactive walk."""
     style = _themed_style()
@@ -632,10 +624,6 @@ def _apply(
                 or bool(result.decided_refs),
                 live_payload=final_live if final_live != locked_live else None,
             )
-
-
-#: ``_apply`` under the name its key-unit callers outside this module use.
-_apply_structured = _apply
 
 
 def _store_snapshots(
