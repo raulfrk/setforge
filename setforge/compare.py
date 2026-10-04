@@ -113,13 +113,7 @@ _STAGED_REASON = (
 
 @dataclass(frozen=True, slots=True)
 class FileCompare:
-    """Per-file drift result from :func:`compare_profile`.
-
-    The derived property ``drift_is_expected`` is ``True`` when drift is
-    classified as intentional host divergence (today: only via the reconcile
-    engine's per-unit staging). All other drift is *not* expected (needs
-    attention).
-    """
+    """Per-file drift result from :func:`compare_profile`."""
 
     name: str
     status: CompareStatus
@@ -142,11 +136,6 @@ class FileCompare:
     The mode the live file is reset to on deploy; paired with
     :attr:`live_mode` for the confirm-plan transition line.
     """
-    span_only_drift: bool = False
-    """Vestigial after the spans retirement — always ``False`` (no tracked-side
-    spans remain to confine drift to). Retained on the record so downstream
-    consumers keep a stable shape.
-    """
     drift_class: DriftClass | None = None
     """Why the file drifted, per :func:`_classify_drifted`. ``None`` unless
     ``status`` is ``DRIFTED``.
@@ -155,17 +144,6 @@ class FileCompare:
     """Human-readable note for the drift class (the summary table's ``Why``
     column). ``None`` when the class needs no elaboration.
     """
-
-    @property
-    def drift_is_expected(self) -> bool:
-        """True when the file's drift is classified as intentionally expected.
-
-        After the disposition/spans retirement this axis is no longer driven by
-        a file-level disposition; the reconcile engine classifies expected
-        (staged) drift directly in :func:`_classify_drifted`, so this property
-        stays ``False`` for every file.
-        """
-        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1311,16 +1289,6 @@ def _reconcile_staged_expected_structured(
         ValueError,
     ):
         return False
-
-
-def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
-    """Always ``False`` after the disposition/spans retirement.
-
-    Tracked-side spans were retired, so no drift can be confined to a span; the
-    reconcile engine now owns per-unit host-divergence classification. Retained
-    (returning ``False``) so callers keep a stable shape.
-    """
-    return False
 
 
 def _compare_symlinked(

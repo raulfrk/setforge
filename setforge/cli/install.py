@@ -2942,9 +2942,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         if deploy_outcome is not None:
             journal = _refresh_file_claims_checkpoint(plan, journal)
         else:
-            deploy_outcome = install_helpers_mod.DeployOutcome(
-                state_snapshots=(), prior_modes={}
-            )
+            deploy_outcome = install_helpers_mod.DeployOutcome(prior_modes={})
         journal = operations.begin_checkpoint(
             journal,
             name="mcp-servers",

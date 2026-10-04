@@ -41,7 +41,7 @@ def test_empty_file_creation_is_not_classified_as_no_transition(
     assert not _install_recorded_nothing(
         file_pre={target: None},
         file_post={target: ""},
-        deploy_outcome=DeployOutcome((), {}),
+        deploy_outcome=DeployOutcome({}),
         ext_delta=None,
         plugin_delta=None,
         mcp_delta=None,

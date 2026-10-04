@@ -4,9 +4,9 @@ Helpers extracted from ``install()`` body:
 
 - :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
   on no-resolve.
-- :func:`_deploy_all_tracked_files`: two-pass tracked-file deploy —
-  a read-only :func:`setforge.deploy.resolve_deploy` pass, then the
-  write pass (:func:`_execute_pending_deploys`).
+- :func:`_plan_tracked_files` / :func:`_apply_tracked_file_plan`: two-pass
+  tracked-file deploy — a read-only :func:`setforge.deploy.resolve_deploy`
+  pass, then the write pass (:func:`_execute_pending_deploys`).
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
@@ -197,71 +197,6 @@ def _want_interactive_reconcile(
     monkeypatching this function to return ``True`` so no real tty is needed.
     """
     return reconcile_user_sections and section_auto is None and sys.stdout.isatty()
-
-
-def _deploy_all_tracked_files(
-    ctx: ProfileContext,
-    *,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ],
-    section_auto: reconcile_apply.ReconcileAuto | None = None,
-    interactive: bool = False,
-) -> DeployOutcome:
-    """Deploy every tracked_file in two passes: resolve all, THEN write all.
-
-    Returns a :class:`DeployOutcome` carrying the pre-install store
-    snapshots captured at the pass-2 barrier (see
-    :func:`_capture_store_snapshots`) AND the per-path pre-install mode map,
-    so the caller records both on the install transition for store-state +
-    file-mode revert.
-
-    **Pass 1 (read-only).** For each regular-file sub-entry: plan the
-    disposition base (:func:`_plan_disposition_base` — any migration write is
-    DEFERRED), read the spans sidecar, and compute the full merge + span
-    overlay in memory via :func:`deploy.resolve_deploy`. Nothing is written;
-    the per-file outcomes accumulate as :class:`_PendingDeploy` records
-    (bounded by the config-tree size). Symlink-declared tracked_files are
-    deferred wholesale (``resolved=None``) — their deploy primitive is
-    self-contained and span-free.
-
-    **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
-    in order, per file: apply the deferred base migration → write the
-    resolved content (or deploy the symlink) → echo → advance the byte base →
-    advance the spans sidecar (lockstep per file, never
-    write-all-then-advance-all). The advance-only-AFTER-the-live-write
-    ordering is load-bearing: a base that lags live is the safe failure
-    direction (the next install re-merges against a stale-but-valid
-    ancestor); a base written before or around the live write could end up
-    ahead of live, which is corruption. A deferred conflict
-    (``merge_conflicts`` non-empty, ``new_base is None``) keeps live and
-    warns; its base stays put so the divergence re-surfaces next install.
-    After the loop, every base under the profile whose file_id is NOT in
-    this run's disposition keep-set is pruned — gated on pass-2 completion,
-    so a refused install prunes nothing.
-
-    ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
-    (``name`` for plain files, ``name/relpath`` for directory entries) —
-    the same stable per-profile identifier the prune keep-set and
-    transitions use. ``sub_name`` is always a relative path with no ``..``
-    component (``name`` is a config key; ``relpath`` is taken
-    ``relative_to`` the src dir), so it satisfies ``base_store``'s
-    traversal guard (:func:`setforge.base_store._resolve_target`).
-
-    ``interactive`` is True when reconcile conflicts should be resolved through
-    the reconcile engine's per-region wizard (see
-    :func:`_want_interactive_reconcile`); it is threaded to each reconcile call
-    as the ``interactive`` flag, so its prompts fire during pass 1, before any
-    write. False (non-interactive / non-tty / ``--auto``) leaves the bare
-    warn-and-defer behavior unchanged.
-    """
-    pending = _plan_tracked_files(
-        ctx,
-        host_local_sections_map=host_local_sections_map,
-        section_auto=section_auto,
-        interactive=interactive,
-    )
-    return _apply_tracked_file_plan(ctx.profile, pending)
 
 
 def _plan_tracked_files(
@@ -570,7 +505,7 @@ def _resolve_one_pending(
 ) -> _PendingDeploy:
     """Resolve one sub-entry's pass-1 record (read-only; no writes).
 
-    The per-``sub_name`` body of :func:`_deploy_all_tracked_files`'s pass-1
+    The per-``sub_name`` body of :func:`_plan_tracked_files`'s pass-1
     loop: defer a symlink-declared tracked_file wholesale, otherwise route the
     file through the unified per-unit reconcile engine (structured, then plain).
     A binary / non-utf8 / deletion-edge file the reconcile engine cannot
@@ -764,8 +699,7 @@ def _planned_reconcile_store_mutation(
 class DeployOutcome:
     """The pass-2 deploy outputs the caller threads into the transition.
 
-    ``state_snapshots`` is the pre-install store state captured at the
-    pass-2 barrier (:func:`_capture_store_snapshots`). ``prior_modes`` maps
+    ``prior_modes`` maps
     each live path whose MODE this install changed to the permission bits it
     held BEFORE the install chmod-ed it (from
     :attr:`deploy.DeployResult.prior_mode`) — the data ``revert`` needs to
@@ -779,7 +713,6 @@ class DeployOutcome:
     real conflicts unresolved.
     """
 
-    state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
     prior_modes: dict[Path, int]
     deferred_reconcile: tuple[Path, ...] = ()
     store_mutated: bool = False
@@ -793,10 +726,8 @@ def _execute_pending_deploys(
 ) -> DeployOutcome:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
-    Snapshots the pre-install store state FIRST (one barrier, before any
-    write — see :func:`_capture_store_snapshots`) and returns it together
-    with the per-path pre-install mode map so the caller threads both into
-    the install transition. Then, per
+    The caller has already snapshotted the pre-install store state (one
+    barrier, before any write — see :func:`_capture_store_snapshots`). Per
     record: apply the deferred base-migration writes (seed-first order +
     the one-time warning) → write the resolved content via
     :func:`deploy.write_resolved_deploy` (or run
@@ -811,9 +742,6 @@ def _execute_pending_deploys(
     executed disposition set — so a gate refusal (which never reaches this
     function) prunes nothing.
     """
-    state_snapshots = _capture_store_snapshots(
-        profile, pending, preserved_ids=preserved_ids
-    )
     prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
     store_mutated = False
@@ -869,7 +797,6 @@ def _execute_pending_deploys(
     if reconcile_store.prune(profile, keep_ids):
         store_mutated = True
     return DeployOutcome(
-        state_snapshots=state_snapshots,
         prior_modes=prior_modes,
         deferred_reconcile=tuple(deferred_reconcile),
         store_mutated=store_mutated,

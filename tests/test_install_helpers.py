@@ -32,9 +32,8 @@ _STRIPPED = "intro\nbody\noutro\n"
 
 
 def test_install_helpers_module_imports() -> None:
-    """The three public-to-install helpers are exported and callable."""
+    """The public-to-install helpers are exported and callable."""
     assert callable(_install_helpers._check_unexpected_drift)
-    assert callable(_install_helpers._deploy_all_tracked_files)
     assert callable(_install_helpers._write_install_transition)
 
 

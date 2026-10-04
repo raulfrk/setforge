@@ -153,8 +153,8 @@ def _compare_json_data(
     dict/list/string shapes so ``json.dumps`` can serialise without
     custom encoders. Per-entry fields: ``name``, ``status`` (StrEnum
     value), ``drift_class`` (string or null — null unless DRIFTED),
-    ``reason`` (string or null), ``span_only_drift`` (bool),
-    ``drift_is_expected`` (bool, derived). No
+    ``reason`` (string or null), and ``span_only_drift`` / ``drift_is_expected``
+    (always ``false`` since the spans retirement; kept for consumers). No
     diff bodies in JSON mode — they belong to the human view;
     ``compare --full-diff`` is a human-oriented surface.
 
@@ -172,8 +172,8 @@ def _compare_json_data(
             if entry.drift_class is not None
             else None,
             "reason": entry.reason,
-            "span_only_drift": entry.span_only_drift,
-            "drift_is_expected": entry.drift_is_expected,
+            "span_only_drift": False,
+            "drift_is_expected": False,
         }
         for entry in report.entries
     ]

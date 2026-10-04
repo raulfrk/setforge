@@ -14,15 +14,13 @@ import os
 import stat
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from setforge import atomicio
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_symlink_target
 from setforge.errors import MissingTrackedFile, SetforgeError
-from setforge.markdown_merge import LineConflict
-from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -38,9 +36,6 @@ class DeployAction(StrEnum):
 class DeployResult:
     """Outcome of a :func:`copy_atomic` call.
 
-    ``new_base`` / ``merge_conflicts`` are populated on the disposition
-    (byte-base 3-way) path, and inert defaults on a plain verbatim deploy.
-
     ``prior_mode`` records the live file's permission bits AS THEY WERE
     immediately before this deploy chmod-ed them, and ONLY when the deploy
     actually changed the mode of a pre-existing file (a content-NOOP
@@ -55,8 +50,6 @@ class DeployResult:
     dst: Path
     action: DeployAction
     backup_path: Path | None
-    new_base: str | None = None
-    merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
     prior_mode: int | None = None
 
 
@@ -68,9 +61,8 @@ class ResolvedDeploy:
     :func:`write_resolved_deploy` (the only writer). Carries everything the
     write step needs: the post-merge / post-overlay ``content``, the
     symlink-resolved ``real_dst`` plus its ``dst_existed`` probe, the
-    ``effective_mode`` to apply, and the state-advance payload
-    (``new_base`` / ``merge_conflicts``) that :class:`DeployResult` threads
-    back to the caller. Holding these records in memory lets an orchestrator
+    and the ``effective_mode`` to apply. Holding these records in memory lets
+    an orchestrator
     resolve EVERY file first and only then start writing (refuse-before-write).
     """
 
@@ -79,8 +71,6 @@ class ResolvedDeploy:
     dst_existed: bool
     effective_mode: int
     content: str
-    new_base: str | None
-    merge_conflicts: list[LineConflict | PathConflict]
 
 
 def copy_atomic(
@@ -146,8 +136,7 @@ def resolve_deploy(
     Sub-file reconciliation is owned by the per-unit reconcile engine
     (:mod:`setforge.reconcile`): the caller overrides
     :attr:`ResolvedDeploy.content` with the reconciled bytes before the write,
-    so this function deploys ``src`` verbatim and leaves ``new_base`` /
-    ``merge_conflicts`` inert.
+    so this function deploys ``src`` verbatim.
 
     Host-local content is owned by the reconcile engine (the marker-injection
     path was retired with the user-section markers), so this pass does not take
@@ -178,8 +167,6 @@ def resolve_deploy(
         dst_existed=dst_existed,
         effective_mode=(mode if mode is not None else stat.S_IMODE(src.stat().st_mode)),
         content=content,
-        new_base=None,
-        merge_conflicts=[],
     )
 
 
@@ -190,9 +177,7 @@ def write_resolved_deploy(
 
     Creates the destination's parent directories, then routes the resolved
     content through the shared NOOP/CREATED/UPDATED detection +
-    :func:`_atomic_write` (see :func:`_write_resolved_content`). The
-    resolution's state-advance payload rides through onto the returned
-    :class:`DeployResult` unchanged.
+    :func:`_atomic_write` (see :func:`_write_resolved_content`).
 
     **Inter-resolve/write staleness assumption.** ``resolved`` snapshots the
     live file at :func:`resolve_deploy` time; an external edit to the live
@@ -210,8 +195,6 @@ def write_resolved_deploy(
         resolved.dst_existed,
         backup,
         resolved.effective_mode,
-        new_base=resolved.new_base,
-        merge_conflicts=resolved.merge_conflicts,
     )
 
 
@@ -222,19 +205,11 @@ def _write_resolved_content(
     dst_existed: bool,
     backup: bool,
     mode: int | None,
-    *,
-    new_base: str | None,
-    merge_conflicts: list[LineConflict | PathConflict],
 ) -> DeployResult:
     """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
 
     Shared by both branches of :func:`copy_atomic` so the NOOP-detection,
     mode-only-drift fixup and :func:`_atomic_write` logic live in one place.
-    ``new_base`` / ``merge_conflicts`` (disposition path) are threaded onto
-    EVERY returned :class:`DeployResult` — including the NOOP and
-    mode-only-drift paths — so a clean disposition merge that equals live still
-    re-baselines even on a NOOP write whose post-splice content already equals
-    live.
     """
     if dst_existed:
         existing = read_text_exact(real_dst)
@@ -254,8 +229,6 @@ def _write_resolved_content(
                 dst=real_dst,
                 action=DeployAction.UPDATED,
                 backup_path=None,
-                new_base=new_base,
-                merge_conflicts=merge_conflicts,
                 # The content patch is empty for a mode-only fixup, so the
                 # pre-install mode is the ONLY reversible record of this
                 # change — hand it to the transition writer for revert.
@@ -265,8 +238,6 @@ def _write_resolved_content(
             dst=real_dst,
             action=action,
             backup_path=None,
-            new_base=new_base,
-            merge_conflicts=merge_conflicts,
         )
 
     # Capture the live mode BEFORE the atomic write swaps perms, but only
@@ -285,8 +256,6 @@ def _write_resolved_content(
         dst=real_dst,
         action=action,
         backup_path=backup_path,
-        new_base=new_base,
-        merge_conflicts=merge_conflicts,
         prior_mode=prior_mode,
     )
 

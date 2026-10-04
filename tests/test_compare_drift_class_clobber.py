@@ -75,7 +75,6 @@ def test_live_edit_no_base_is_unexpected(tmp_path: Path) -> None:
     entry = report.entries[0]
 
     assert entry.status is CompareStatus.DRIFTED
-    assert entry.span_only_drift is False
     assert entry.drift_class is DriftClass.UNEXPECTED
     assert entry.reason is None
     assert report.has_unexpected_drift is True
