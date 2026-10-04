@@ -2750,3 +2750,21 @@ def test_missing_tracked_overlay_file_names_project_remove_not_sync(
     assert runner.invoke(app, ["project", "list"]).output == (
         f"{target}  [demo]\n  tracked-overlay: AGENTS.md\n"
     )
+
+
+def test_remove_accepts_tracked_overlay_file_that_holds_only_the_committed_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_root))
+    target, arguments = _injected_tracked_overlay(tmp_path)
+    destination = target / "AGENTS.md"
+    destination.write_text("team instructions\n")
+
+    removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
+
+    assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert destination.read_text() == "team instructions\n"
+    assert not manifest_path(target, "demo").exists()
+    assert not list((state_root / "project-overlays").glob("*.json"))
+    assert not (target / ".git" / "info" / "attributes").exists()

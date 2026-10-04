@@ -1651,7 +1651,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                     f"tracked project overlay state is missing or mismatched: "
                     f"{destination}"
                 )
-            if live_payload is not None:
+            # Content Git checked out without the filter is already clean.
+            if live_payload is not None and live_payload != overlay.base:
                 clean_content(overlay, live_payload)
             live_matches_present = True
         if info is None and not live_matches_absent and not removable_missing:
@@ -1805,7 +1806,10 @@ def _overlay_removal_content(
     if item.overlay is None:
         raise SetforgeError("tracked project overlay state is missing")
     if item.destination.exists():
-        return clean_content(item.overlay, item.destination.read_bytes())
+        live = item.destination.read_bytes()
+        if live == item.overlay.base:
+            return live
+        return clean_content(item.overlay, live)
     return None if git_worktree else item.overlay.base
 
 
