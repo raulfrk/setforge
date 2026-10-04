@@ -14,7 +14,8 @@ import json
 import os
 import stat
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -206,6 +207,33 @@ class InstallPlan:
     codex_trusted_projects: tuple[Path, ...] = ()
     preserved_store_ids: frozenset[FileId] = frozenset()
     tree_held: TreeHoldResolution | None = None
+    symlink_conflicts: tuple[str, ...] = ()
+
+    def tree_paths(self) -> tuple[Path, ...]:
+        """Return every path the frozen tree plans may mutate."""
+        return tuple(
+            path
+            for tree in self.trees
+            for path in _tree_checkpoint_paths(tree, self.ctx.profile)
+        )
+
+    def package_claim_paths(self, *actions: PackageAction) -> tuple[Path, ...]:
+        """Return the claim files of package decisions taking one of ``actions``."""
+        store = OwnershipStore()
+        return tuple(
+            store.claim_path(decision.resource_id)
+            for decision in self.provisioning.ownership
+            if decision.action in actions
+        )
+
+    def file_claim_paths(self, *actions: FileAction) -> tuple[Path, ...]:
+        """Return the claim files of file decisions taking one of ``actions``."""
+        store = OwnershipStore()
+        return tuple(
+            store.claim_path(decision.observation.resource_id)
+            for decision in self.file_ownership
+            if decision.action in actions
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,20 +248,46 @@ class PlannedTree:
     decision: FileDecision
 
 
-@dataclass(frozen=True, slots=True)
-class _CapabilityApplyResult:
-    """Outputs of the four application capability target phases."""
+@dataclass(slots=True)
+class _InstallRun:
+    """The operation journal and the outputs of the applied install phases."""
 
     journal: operations.OperationJournal
-    provision_results: tuple[ReconcileResult, ...]
-    deploy_outcome: install_helpers_mod.DeployOutcome | None
-    seeded: tuple[str, ...]
-    ext_delta: transitions.ExtensionDelta | None
-    ext_outcomes: tuple[transitions.ReconcileOutcome, ...]
-    plugin_delta: transitions.PluginDelta | None
-    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...]
-    codex_plugin_delta: transitions.CodexPluginDelta | None
-    codex_plugin_failed: tuple[tuple[str, str], ...]
+    provision_results: tuple[ReconcileResult, ...] = ()
+    deploy_outcome: install_helpers_mod.DeployOutcome | None = None
+    seeded: tuple[str, ...] = ()
+    ext_delta: transitions.ExtensionDelta | None = None
+    ext_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
+    plugin_delta: transitions.PluginDelta | None = None
+    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
+    codex_plugin_delta: transitions.CodexPluginDelta | None = None
+    codex_plugin_failed: tuple[tuple[str, str], ...] = ()
+
+    @contextmanager
+    def checkpoint(
+        self,
+        name: str,
+        kind: operations.CheckpointKind,
+        *,
+        paths: tuple[Path, ...] = (),
+        restore_state: bool = False,
+        restore_transitions: bool = False,
+        adapters: tuple[operations.AdapterKind, ...] = (),
+        recovery: str | None = None,
+    ) -> Iterator[None]:
+        """Journal one effect; an exception leaves it uncertain for recovery."""
+        self.journal = operations.begin_checkpoint(
+            self.journal,
+            name=name,
+            kind=kind,
+            recovery=recovery,
+            paths=paths,
+            restore_state=restore_state,
+            restore_transitions=restore_transitions,
+            adapters=adapters,
+        )
+        yield
+        self.journal = operations.finish_checkpoint(self.journal)
 
 
 def _provisioning_plan_has_work(plan: ProvisioningPlan) -> bool:
@@ -491,18 +545,70 @@ def _preserved_file_store_ids(
     )
 
 
-def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
+def _plan(
+    config: Path,
+    profile: str,
+    repo_root: Path,
+    *,
+    locked: bool,
+    file_selection: frozenset[str] | None,
+    section_auto: reconcile_apply.ReconcileAuto | None,
+    interactive: bool,
+    transition: bool,
+    auto: bool,
+    package_owner_id: UUID | None,
+) -> tuple[InstallPlan, LockFile | None, LocalOverlayResolution]:
+    """Load one configuration snapshot and freeze every install decision.
+
+    Preview and apply both plan here; apply holds the mutation locks.
+    """
+    ctx, active_lock, local_overlay, input_baseline = _load_install_context(
+        config, profile, repo_root, locked=locked, file_selection=file_selection
+    )
+    plan = _plan_files(
+        ctx,
+        section_auto=section_auto,
+        interactive=interactive,
+        transition=transition,
+        input_baseline=input_baseline,
+        package_owner_id=package_owner_id,
+    )
+    if file_selection is None:
+        plan = _plan_adapters(plan, lock=active_lock, auto=auto)
+    planned_entries = tuple(
+        (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
+        for record in plan.deploys
+    )
+    expected_names = tuple(
+        sub_name for _, sub_name, _, _ in plan.tracked_entries
+    ) + tuple(tree.name for tree in plan.trees)
+    compared_names = tuple(entry.name for entry in plan.drift_report.entries)
+    if (
+        planned_entries != plan.tracked_entries
+        or tuple(_iter_all_tracked_files(ctx)) != plan.tracked_entries
+        or sorted(compared_names) != sorted(expected_names)
+    ):
+        raise SetforgeError("tracked file inventory changed during planning; retry")
+    if _snapshot_inputs({path for path, _ in plan.source_bytes}) != plan.source_bytes:
+        raise SetforgeError("install inputs changed during planning; retry")
+    _assert_live_paths_unchanged(plan.live_paths)
+    if transitions.snapshot_paths(plan.dst_paths) != dict(plan.file_pre):
+        raise SetforgeError("live install targets changed during planning; retry")
+    if transitions.snapshot_paths(plan.ownership_pre) != dict(plan.ownership_pre):
+        raise SetforgeError("file ownership changed during planning; retry")
+    return plan, active_lock, local_overlay
+
+
+def _plan_files(
     ctx: ProfileContext,
     *,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
-    lock: LockFile | None,
     transition: bool,
     input_baseline: tuple[tuple[Path, bytes | None], ...],
-    auto: bool,
-    package_owner_id: UUID | None = None,
+    package_owner_id: UUID | None,
 ) -> InstallPlan:
-    """Compute every tracked-file decision before the first install write."""
+    """Freeze the tracked-file, tree, native config and bootstrap decisions."""
     from setforge.cli.stage import (
         collect_stages,
         collect_structured_stages,
@@ -527,38 +633,31 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         ),
     )
     tree_entries = tuple(_iter_all_trees(ctx))
-    preserved_store_ids = _preserved_file_store_ids(
-        ctx,
-        frozenset(
-            [name for _, name, _, _ in tracked_entries]
-            + [name for _, name, _, _ in tree_entries]
-        ),
-    )
-    codex_configs = (
-        ()
-        if ctx.file_selection is not None
-        else codex_resources_mod.plan_config_resources(
+    codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...] = ()
+    codex_trusted_projects: tuple[Path, ...] = ()
+    bootstrap: tuple[Path, ...] = ()
+    if ctx.file_selection is None:
+        stored_ids = tuple(map(str, reconcile_store.stored_file_ids(ctx.profile)))
+        codex_configs = codex_resources_mod.plan_config_resources(
             ctx.cfg,
             ctx.resolved,
             ctx.repo_root,
             read_base=lambda resource_id: reconcile_store.read_base(
                 ctx.profile, file_id(resource_id)
             ),
-            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+            stored_ids=stored_ids,
             historical_paths=codex_lifecycle.historical_config_paths(),
         )
-    )
-    codex_trusted_projects = (
-        ()
-        if ctx.file_selection is not None
-        else codex_resources_mod.selected_trusted_projects(
+        codex_trusted_projects = codex_resources_mod.selected_trusted_projects(
             ctx.cfg,
             ctx.resolved,
             ctx.repo_root,
-            stored_ids=tuple(map(str, reconcile_store.stored_file_ids(ctx.profile))),
+            stored_ids=stored_ids,
             historical_paths=codex_lifecycle.historical_config_paths(),
         )
-    )
+        bootstrap = tuple(
+            Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
+        )
     source_paths = {path for path, _payload in input_baseline}
     source_paths.update(sub_src for _, _, sub_src, _ in tracked_entries)
     source_paths.update(source for _, _, source, _ in tree_entries)
@@ -575,37 +674,24 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     trees = _plan_trees(
         tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=tree_held
     )
-    _refuse_held_tree_entries(trees)
-    dst_paths = tuple(
-        [
-            deploy.resolve_symlink_target(sub_dst, tf.symlink)
-            if tf.symlink is not None
-            else sub_dst
-            for tf, _, _, sub_dst in tracked_entries
-        ]
-        + [
-            Path(str(path)).expanduser()
-            for path in ctx.resolved.bootstrap
-            if ctx.file_selection is None
-        ]
-        + [codex_plan.destination for codex_plan in codex_configs]
-    )
-    live_paths = {
-        path
+    content_paths = tuple(
+        deploy.resolve_symlink_target(sub_dst, tf.symlink)
+        if tf.symlink is not None
+        else sub_dst
         for tf, _, _, sub_dst in tracked_entries
-        for path in (
-            sub_dst,
-            deploy.resolve_symlink_target(sub_dst, tf.symlink)
-            if tf.symlink is not None
-            else sub_dst,
-        )
-    }
-    if ctx.file_selection is None:
-        live_paths.update(
-            Path(str(path)).expanduser() for path in ctx.resolved.bootstrap
-        )
-    live_paths.update(codex_plan.destination for codex_plan in codex_configs)
-    live_path_snapshot = _snapshot_live_paths(live_paths)
+    )
+    native_paths = (
+        *bootstrap,
+        *(codex_plan.destination for codex_plan in codex_configs),
+    )
+    dst_paths = (*content_paths, *native_paths)
+    live_path_snapshot = _snapshot_live_paths(
+        {
+            *(sub_dst for _, _, _, sub_dst in tracked_entries),
+            *content_paths,
+            *native_paths,
+        }
+    )
     file_pre = MappingProxyType(transitions.snapshot_paths(dst_paths))
     file_ownership = _plan_file_ownership(
         tracked_entries,
@@ -615,6 +701,16 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
             section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
         ),
     ) + tuple(tree.decision for tree in trees)
+    if ctx.file_selection is not None:
+        _require_managed_file_selection(file_ownership, package_owner_id)
+    _refuse_held_tree_entries(trees)
+    preserved_store_ids = _preserved_file_store_ids(
+        ctx,
+        frozenset(
+            [name for _, name, _, _ in tracked_entries]
+            + [name for _, name, _, _ in tree_entries]
+        ),
+    )
     ownership_pre = MappingProxyType(
         transitions.snapshot_paths(
             tuple(
@@ -639,17 +735,55 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
         },
         resolved=ctx.file_profile,
     )
-    deploys = install_helpers_mod._plan_tracked_files(
-        ctx,
-        section_auto=section_auto,
-        interactive=interactive,
+    deploys = _hold_generated_adoptions(
+        install_helpers_mod._plan_tracked_files(
+            ctx,
+            section_auto=section_auto,
+            interactive=interactive,
+        ),
+        file_ownership,
     )
-    deploys = _hold_generated_adoptions(deploys, file_ownership)
+    return InstallPlan(
+        ctx=ctx,
+        drift_report=drift_report,
+        staging=staging,
+        deploys=deploys,
+        reconcile_store_mutation=install_helpers_mod._planned_reconcile_store_mutation(
+            ctx.profile, deploys, preserved_ids=preserved_store_ids
+        ),
+        bootstrap=bootstrap,
+        dst_paths=dst_paths,
+        source_bytes=source_bytes,
+        tracked_entries=tracked_entries,
+        live_paths=live_path_snapshot,
+        file_pre=file_pre,
+        ownership_pre=ownership_pre,
+        file_ownership=file_ownership,
+        trees=trees,
+        provisioning=ProvisioningPlan(
+            cfg_json=ctx.cfg.model_dump_json(), bundles=(), bundle_graphs=(), batches=()
+        ),
+        package_owner_id=package_owner_id,
+        mcp=MCPInstallPlan(value=None),
+        extensions=None,
+        plugins=None,
+        codex_plugins=None,
+        codex_configs=codex_configs,
+        codex_trusted_projects=codex_trusted_projects,
+        preserved_store_ids=preserved_store_ids,
+        tree_held=tree_held,
+        symlink_conflicts=_symlink_dst_conflicts(tracked_entries),
+    )
+
+
+def _plan_adapters(
+    plan: InstallPlan, *, lock: LockFile | None, auto: bool
+) -> InstallPlan:
+    """Add the extension, plugin, package and MCP decisions of a whole profile."""
+    ctx = plan.ctx
     extensions: vscode_extensions_mod.ExtensionPlan | None = None
     extension_input = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
-    if ctx.file_selection is None and (
-        extension_input.include or extension_input.exclude
-    ):
+    if extension_input.include or extension_input.exclude:
         try:
             extensions = vscode_extensions_mod.plan_reconcile(
                 extension_input, pins=extension_pins(lock)
@@ -661,9 +795,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 fg=typer.colors.YELLOW,
             )
     plugins: claude_plugins_mod.PluginPlan | None = None
-    if ctx.file_selection is None and reconcile_adapter.plugin_bare_names(
-        ctx.cfg, ctx.resolved
-    ):
+    if reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved):
         try:
             plugins = claude_plugins_mod.plan_reconcile(
                 ctx.cfg,
@@ -682,8 +814,7 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
     codex_plugin_ids = reconcile_adapter.codex_plugin_ids(ctx.cfg, ctx.resolved)
     codex_plugin_policy = reconcile_adapter.codex_plugin_policy(ctx.resolved)
     if (
-        ctx.file_selection is None
-        and ctx.resolved.codex is not None
+        ctx.resolved.codex is not None
         and ctx.cfg.codex is not None
         and (codex_plugin_ids or codex_plugin_policy is ReconcilePolicy.PRUNE)
     ):
@@ -699,70 +830,15 @@ def _build_install_plan(  # noqa: C901 - freezes every install input in one pass
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-    provisioning = (
-        _plan_owned_provisioning(ctx, lock=lock, owner_id=package_owner_id)
-        if ctx.file_selection is None
-        else ProvisioningPlan(
-            cfg_json=ctx.cfg.model_dump_json(), bundles=(), bundle_graphs=(), batches=()
-        )
-    )
-    mcp = (
-        plan_mcp_servers(ctx.cfg, ctx.resolved)
-        if ctx.file_selection is None
-        else MCPInstallPlan(value=None)
-    )
-    planned_entries = tuple(
-        (record.tracked_file, record.sub_name, record.sub_src, record.sub_dst)
-        for record in deploys
-    )
-    expected_names = tuple(sub_name for _, sub_name, _, _ in tracked_entries) + tuple(
-        tree.name for tree in trees
-    )
-    compared_names = tuple(entry.name for entry in drift_report.entries)
-    if (
-        planned_entries != tracked_entries
-        or tuple(_iter_all_tracked_files(ctx)) != tracked_entries
-        or sorted(compared_names) != sorted(expected_names)
-    ):
-        raise SetforgeError("tracked file inventory changed during planning; retry")
-    if _snapshot_inputs(source_paths) != source_bytes:
-        raise SetforgeError("install inputs changed during planning; retry")
-    _assert_live_paths_unchanged(live_path_snapshot)
-    if transitions.snapshot_paths(dst_paths) != dict(file_pre):
-        raise SetforgeError("live install targets changed during planning; retry")
-    if transitions.snapshot_paths(ownership_pre) != dict(ownership_pre):
-        raise SetforgeError("file ownership changed during planning; retry")
-    return InstallPlan(
-        ctx=ctx,
-        drift_report=drift_report,
-        staging=staging,
-        deploys=deploys,
-        reconcile_store_mutation=install_helpers_mod._planned_reconcile_store_mutation(
-            ctx.profile, deploys, preserved_ids=preserved_store_ids
-        ),
-        bootstrap=tuple(
-            Path(str(path)).expanduser()
-            for path in ctx.resolved.bootstrap
-            if ctx.file_selection is None
-        ),
-        dst_paths=dst_paths,
-        source_bytes=source_bytes,
-        tracked_entries=tracked_entries,
-        live_paths=live_path_snapshot,
-        file_pre=file_pre,
-        ownership_pre=ownership_pre,
-        file_ownership=file_ownership,
-        trees=trees,
-        provisioning=provisioning,
-        package_owner_id=package_owner_id,
-        mcp=mcp,
+    return replace(
+        plan,
         extensions=extensions,
         plugins=plugins,
         codex_plugins=codex_plugins,
-        codex_configs=codex_configs,
-        codex_trusted_projects=codex_trusted_projects,
-        preserved_store_ids=preserved_store_ids,
-        tree_held=tree_held,
+        provisioning=_plan_owned_provisioning(
+            ctx, lock=lock, owner_id=plan.package_owner_id
+        ),
+        mcp=plan_mcp_servers(ctx.cfg, ctx.resolved),
     )
 
 
@@ -1172,7 +1248,7 @@ def _apply_codex_config_plans(
 
 def _apply_capability_targets(  # noqa: C901 - one closure per frozen target phase
     plan: InstallPlan,
-    journal: operations.OperationJournal,
+    run: _InstallRun,
     *,
     profile: str,
     active_lock: LockFile | None,
@@ -1181,57 +1257,41 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     retry_failed: bool,
     yes: bool,
     mutation_guards: MutationLockGuards,
-) -> _CapabilityApplyResult:
+) -> None:
     """Apply frozen target plans in the selected bundles' graph order."""
     cfg = plan.ctx.cfg
-    provision_results: tuple[ReconcileResult, ...] = ()
-    deploy_outcome: install_helpers_mod.DeployOutcome | None = None
-    seeded: tuple[str, ...] = ()
-    ext_delta: transitions.ExtensionDelta | None = None
-    ext_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
-    plugin_delta: transitions.PluginDelta | None = None
-    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...] = ()
-    codex_plugin_delta: transitions.CodexPluginDelta | None = None
-    codex_plugin_failed: tuple[tuple[str, str], ...] = ()
     retry_failed_ids = (
         _collect_retry_failed_ids(profile) if retry_failed else frozenset()
     )
 
     def apply_packages() -> CapabilityActivation:
-        nonlocal journal, provision_results
-        has_work = _provisioning_plan_has_work(plan.provisioning)
-        claim_paths = tuple(
-            OwnershipStore().claim_path(decision.resource_id)
-            for decision in plan.provisioning.ownership
-            if decision.action in {PackageAction.INSTALL, PackageAction.UPGRADE}
-        )
-        if has_work:
-            journal = operations.begin_checkpoint(
-                journal,
-                name="packages",
-                kind=operations.CheckpointKind.IRREVERSIBLE,
+        with (
+            run.checkpoint(
+                "packages",
+                operations.CheckpointKind.IRREVERSIBLE,
                 recovery=(
                     "inspect package-manager output and receipts; SetForge will not "
                     "guess an uninstall for potentially user-owned software"
                 ),
-                paths=claim_paths,
-                restore_state=False,
-                restore_transitions=False,
-                adapters=(),
+                paths=plan.package_claim_paths(
+                    PackageAction.INSTALL, PackageAction.UPGRADE
+                ),
             )
-        provision_results = tuple(reconcile_packages(plan.provisioning))
-        if any(
-            outcome.outcome is Outcome.OK
-            for result in provision_results
-            for outcome in result.outcomes
+            if _provisioning_plan_has_work(plan.provisioning)
+            else nullcontext()
         ):
-            owner_id = _package_owner_id(plan)
-            if owner_id is not None:
-                publish_installed_package_claims_locked(
-                    plan.provisioning, provision_results, owner_id=owner_id
-                )
-        if has_work:
-            journal = operations.finish_checkpoint(journal)
+            provision_results = tuple(reconcile_packages(plan.provisioning))
+            run.provision_results = provision_results
+            if any(
+                outcome.outcome is Outcome.OK
+                for result in provision_results
+                for outcome in result.outcomes
+            ):
+                owner_id = _package_owner_id(plan)
+                if owner_id is not None:
+                    publish_installed_package_claims_locked(
+                        plan.provisioning, provision_results, owner_id=owner_id
+                    )
         status = CapabilityStatus.ACTIVE
         detail = ""
         if plan.provisioning.bundle_graphs:
@@ -1252,102 +1312,94 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         )
 
     def apply_files() -> CapabilityActivation:
-        nonlocal journal, deploy_outcome, seeded
-        journal = operations.begin_checkpoint(
-            journal,
-            name="tracked-files-and-stores",
-            kind=operations.CheckpointKind.REVERSIBLE,
+        with run.checkpoint(
+            "tracked-files-and-stores",
+            operations.CheckpointKind.REVERSIBLE,
             paths=tracked_checkpoint_paths,
             restore_state=True,
-            restore_transitions=False,
-            adapters=(),
-        )
-        codex_resources_mod.assert_projects_trusted(plan.codex_trusted_projects)
-        mutation_guards.verify_targets()
-        deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
-            profile,
-            plan.deploys,
-            preserved_ids=plan.preserved_store_ids,
-        )
-        _apply_codex_config_plans(
-            plan.codex_configs,
-            profile=profile,
-            mutation_guards=mutation_guards,
-        )
-        for tree in plan.trees:
-            guard = max(
-                (
-                    item
-                    for item in mutation_guards.targets
-                    if tree.destination.absolute().is_relative_to(
-                        item.target.absolute()
+        ):
+            codex_resources_mod.assert_projects_trusted(plan.codex_trusted_projects)
+            mutation_guards.verify_targets()
+            run.deploy_outcome = install_helpers_mod._apply_tracked_file_plan(
+                profile,
+                plan.deploys,
+                preserved_ids=plan.preserved_store_ids,
+            )
+            _apply_codex_config_plans(
+                plan.codex_configs,
+                profile=profile,
+                mutation_guards=mutation_guards,
+            )
+            for tree in plan.trees:
+                guard = max(
+                    (
+                        item
+                        for item in mutation_guards.targets
+                        if tree.destination.absolute().is_relative_to(
+                            item.target.absolute()
+                        )
+                    ),
+                    key=lambda item: len(item.target.parts),
+                    default=None,
+                )
+                if guard is None:
+                    raise SetforgeError("managed tree target lock is missing")
+                guard.verify_expected()
+                anchor_fd = guard.target_fd
+                if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
+                    raise SetforgeError("managed tree target lock has no descriptor")
+                if tree.decision.action in {FileAction.ADOPT, FileAction.TRANSFER}:
+                    inventory = replace(
+                        tree.plan.live,
+                        owned_paths=tuple(
+                            entry.path for entry in tree.plan.live.entries
+                        ),
                     )
-                ),
-                key=lambda item: len(item.target.parts),
-                default=None,
-            )
-            if guard is None:
-                raise SetforgeError("managed tree target lock is missing")
-            guard.verify_expected()
-            anchor_fd = guard.target_fd
-            if anchor_fd is None:  # pragma: no cover - guard mkdir invariant
-                raise SetforgeError("managed tree target lock has no descriptor")
-            if tree.decision.action in {FileAction.ADOPT, FileAction.TRANSFER}:
-                inventory = replace(
-                    tree.plan.live,
-                    owned_paths=tuple(entry.path for entry in tree.plan.live.entries),
+                else:
+                    policy = tree.tracked_file.tree
+                    if policy is None:  # pragma: no cover - frozen plan invariant
+                        raise SetforgeError("managed tree lost its policy")
+                    inventory = apply_tree(
+                        tree.plan,
+                        tree.destination,
+                        policy,
+                        anchor_fd=anchor_fd,
+                        anchor_relative=tree.destination.absolute()
+                        .relative_to(guard.target.absolute())
+                        .parts,
+                    )
+                guard.verify_expected()
+                write_inventory(profile, tree.name, inventory)
+            run.seeded = tuple(
+                host_local_record.seed_section_slots_to_store(
+                    cfg, plan.ctx.file_profile, plan.ctx.repo_root, profile
                 )
-            else:
-                policy = tree.tracked_file.tree
-                if policy is None:  # pragma: no cover - frozen plan invariant
-                    raise SetforgeError("managed tree lost its policy")
-                inventory = apply_tree(
-                    tree.plan,
-                    tree.destination,
-                    policy,
-                    anchor_fd=anchor_fd,
-                    anchor_relative=tree.destination.absolute()
-                    .relative_to(guard.target.absolute())
-                    .parts,
+            )
+            if run.seeded:
+                typer.secho(
+                    "seeded host-local section template(s): "
+                    f"{', '.join(sorted(run.seeded))}",
+                    err=True,
+                    fg=typer.colors.GREEN,
                 )
-            guard.verify_expected()
-            write_inventory(profile, tree.name, inventory)
-        seeded = tuple(
-            host_local_record.seed_section_slots_to_store(
-                cfg, plan.ctx.file_profile, plan.ctx.repo_root, profile
-            )
-        )
-        if seeded:
-            typer.secho(
-                f"seeded host-local section template(s): {', '.join(sorted(seeded))}",
-                err=True,
-                fg=typer.colors.GREEN,
-            )
-        journal = operations.finish_checkpoint(journal)
         return CapabilityActivation(status=CapabilityStatus.ACTIVE, changed=True)
 
     def apply_extensions() -> CapabilityActivation:
-        nonlocal journal, ext_delta, ext_outcomes
-        journal = operations.begin_checkpoint(
-            journal,
-            name="extensions",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            paths=(),
-            restore_state=False,
-            restore_transitions=False,
+        with run.checkpoint(
+            "extensions",
+            operations.CheckpointKind.COMPENSATABLE,
             adapters=(operations.AdapterKind.EXTENSIONS,)
             if operations.AdapterKind.EXTENSIONS in adapter_kinds
             else (),
-        )
-        ext_delta, ext_outcomes = _apply_extension_plan(
-            plan,
-            retry_failed_ids=retry_failed_ids,
-            yes=yes,
-            lock=active_lock,
-        )
-        journal = operations.finish_checkpoint(journal)
+        ):
+            run.ext_delta, run.ext_outcomes = _apply_extension_plan(
+                plan,
+                retry_failed_ids=retry_failed_ids,
+                yes=yes,
+                lock=active_lock,
+            )
         failed = any(
-            outcome.status is ReconcileStatus.SKIPPED for outcome in ext_outcomes
+            outcome.status is ReconcileStatus.SKIPPED for outcome in run.ext_outcomes
         )
         return CapabilityActivation(
             status=(
@@ -1355,22 +1407,16 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 if failed and bool(plan.provisioning.bundle_graphs)
                 else CapabilityStatus.ACTIVE
             ),
-            changed=ext_delta is not None,
+            changed=run.ext_delta is not None,
             detail="extension reconciliation left a capability inactive"
             if failed
             else "",
         )
 
     def apply_plugins() -> CapabilityActivation:
-        nonlocal journal, plugin_delta, plugin_outcomes
-        nonlocal codex_plugin_delta, codex_plugin_failed
-        journal = operations.begin_checkpoint(
-            journal,
-            name="plugins-and-marketplaces",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            paths=(),
-            restore_state=False,
-            restore_transitions=False,
+        with run.checkpoint(
+            "plugins-and-marketplaces",
+            operations.CheckpointKind.COMPENSATABLE,
             adapters=tuple(
                 kind
                 for kind in (
@@ -1379,17 +1425,18 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 )
                 if kind in adapter_kinds
             ),
-        )
-        plugin_delta, plugin_outcomes = _apply_plugin_plan(
-            plan,
-            retry_failed_ids=retry_failed_ids,
-            yes=yes,
-            lock=active_lock,
-        )
-        codex_plugin_delta, codex_plugin_failed = _apply_codex_plugin_plan(plan)
-        journal = operations.finish_checkpoint(journal)
-        failed = bool(codex_plugin_failed) or any(
-            outcome.status is ReconcileStatus.SKIPPED for outcome in plugin_outcomes
+        ):
+            run.plugin_delta, run.plugin_outcomes = _apply_plugin_plan(
+                plan,
+                retry_failed_ids=retry_failed_ids,
+                yes=yes,
+                lock=active_lock,
+            )
+            run.codex_plugin_delta, run.codex_plugin_failed = _apply_codex_plugin_plan(
+                plan
+            )
+        failed = bool(run.codex_plugin_failed) or any(
+            outcome.status is ReconcileStatus.SKIPPED for outcome in run.plugin_outcomes
         )
         return CapabilityActivation(
             status=(
@@ -1397,7 +1444,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
                 if failed and bool(plan.provisioning.bundle_graphs)
                 else CapabilityStatus.ACTIVE
             ),
-            changed=plugin_delta is not None,
+            changed=run.plugin_delta is not None,
             detail="plugin reconciliation left a capability inactive" if failed else "",
         )
 
@@ -1434,7 +1481,7 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     ):
         initially_absent = {
             snapshot.path
-            for snapshot in journal.paths
+            for snapshot in run.journal.paths
             if snapshot.kind is operations.SnapshotKind.ABSENT
         }
         prepared = tuple(
@@ -1443,18 +1490,13 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             if guard.target.absolute() in initially_absent
         )
         if prepared:
-            journal = operations.begin_checkpoint(
-                journal,
-                name="unused-target-roots",
-                kind=operations.CheckpointKind.REVERSIBLE,
+            with run.checkpoint(
+                "unused-target-roots",
+                operations.CheckpointKind.REVERSIBLE,
                 paths=tuple(guard.target for guard in prepared),
-                restore_state=False,
-                restore_transitions=False,
-                adapters=(),
-            )
-            for guard in prepared:
-                guard.rmdir_if_empty()
-            journal = operations.finish_checkpoint(journal)
+            ):
+                for guard in prepared:
+                    guard.rmdir_if_empty()
     if plan.provisioning.bundle_graphs:
         typer.echo(
             "capabilities: "
@@ -1477,18 +1519,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
             f"{outcome.target_kind.value}={outcome.status.value}" for outcome in failed
         )
         raise SetforgeError(f"capability graph activation failed: {summary}")
-    return _CapabilityApplyResult(
-        journal=journal,
-        provision_results=tuple(provision_results),
-        deploy_outcome=deploy_outcome,
-        seeded=seeded,
-        ext_delta=ext_delta,
-        ext_outcomes=ext_outcomes,
-        plugin_delta=plugin_delta,
-        plugin_outcomes=plugin_outcomes,
-        codex_plugin_delta=codex_plugin_delta,
-        codex_plugin_failed=codex_plugin_failed,
-    )
 
 
 def _render_install_plan(
@@ -1496,6 +1526,7 @@ def _render_install_plan(
     scan_result: SecretsScanResult,
     *,
     transition: bool = True,
+    refusals: tuple[str, ...] = (),
 ) -> None:
     """Render the same immutable plan the real install path consumes."""
     _dry_run_pipeline(
@@ -1510,6 +1541,7 @@ def _render_install_plan(
         immutable_plan=True,
         secrets_scan=scan_result,
         record_transition=transition and not _install_plan_recorded_nothing(plan),
+        refusals=refusals,
     )
     changed_codex = [codex for codex in plan.codex_configs if codex.changed]
     if changed_codex:
@@ -1982,28 +2014,18 @@ def _publish_package_adoptions(
 
 
 def _publish_adoptions_checkpoint(
-    plan: InstallPlan, journal: operations.OperationJournal
-) -> tuple[operations.OperationJournal, tuple[transitions.OwnershipTransferDelta, ...]]:
+    plan: InstallPlan, run: _InstallRun
+) -> tuple[transitions.OwnershipTransferDelta, ...]:
     """Journal and publish metadata-only adoption claims."""
-    claim_paths = tuple(
-        OwnershipStore().claim_path(decision.resource_id)
-        for decision in plan.provisioning.ownership
-        if decision.action in {PackageAction.ADOPT, PackageAction.TRANSFER}
-    )
+    claim_paths = plan.package_claim_paths(PackageAction.ADOPT, PackageAction.TRANSFER)
     if not claim_paths:
-        return journal, ()
-    receipt_paths = _legacy_adoption_receipt_paths(plan)
-    applying = operations.begin_checkpoint(
-        journal,
-        name="package-adoption",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        paths=(*claim_paths, *receipt_paths),
-        restore_state=False,
-        restore_transitions=False,
-        adapters=(),
-    )
-    transfers = _publish_package_adoptions(plan)
-    return operations.finish_checkpoint(applying), transfers
+        return ()
+    with run.checkpoint(
+        "package-adoption",
+        operations.CheckpointKind.REVERSIBLE,
+        paths=(*claim_paths, *_legacy_adoption_receipt_paths(plan)),
+    ):
+        return _publish_package_adoptions(plan)
 
 
 def _publish_file_claims(
@@ -2126,81 +2148,73 @@ def _generated_file_provenance(
 
 
 def _publish_file_adoptions_checkpoint(
-    plan: InstallPlan, journal: operations.OperationJournal
-) -> tuple[operations.OperationJournal, tuple[transitions.OwnershipTransferDelta, ...]]:
-    claim_paths = tuple(
-        OwnershipStore().claim_path(decision.observation.resource_id)
-        for decision in plan.file_ownership
-        if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
-    )
+    plan: InstallPlan, run: _InstallRun
+) -> tuple[transitions.OwnershipTransferDelta, ...]:
+    claim_paths = plan.file_claim_paths(FileAction.ADOPT, FileAction.TRANSFER)
     if not claim_paths:
-        return journal, ()
-    applying = operations.begin_checkpoint(
-        journal,
-        name="file-adoption",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        paths=claim_paths,
-        restore_state=False,
-        restore_transitions=False,
-        adapters=(),
-    )
+        return ()
     transfers: list[transitions.OwnershipTransferDelta] = []
-    store = OwnershipStore()
-    declarations = {
-        str(path.absolute()): name
-        for tracked, name, _source, destination in plan.tracked_entries
-        for path in _ownership_destinations(tracked, destination)
-    }
-    declarations.update(
-        {str(tree.destination.absolute()): tree.name for tree in plan.trees}
-    )
-    trees_by_locator = {str(tree.destination.absolute()): tree for tree in plan.trees}
-    for decision in plan.file_ownership:
-        if decision.action is not FileAction.TRANSFER:
-            continue
-        before = decision.claim
-        if before is None or store.read(decision.observation.resource_id) != before:
-            raise SetforgeError(
-                "tracked file ownership changed after confirmation; retry"
-            )
-        tree = trees_by_locator.get(decision.observation.locator)
-        if tree is None:
-            observed = observe_file(
-                Path(decision.observation.locator),
-                allow_topology=decision.observation.topology,
-            )
-        else:
-            assert tree.tracked_file.tree is not None
-            live_inventory = scan_live_tree(tree.destination, tree.tracked_file.tree)
-            observed = observe_tree(tree.destination, live_inventory.fingerprint)
-        if observed != decision.observation:
-            raise SetforgeError(
-                "tracked file changed after transfer confirmation; retry"
-            )
-        owner_id = plan.package_owner_id
-        if owner_id is None:
-            raise SetforgeError("ownership transfer requires a Git-backed config")
-        after = store.transfer_locked(
-            before.resource_id,
-            expected_owner=before.owner_id,
-            new_owner=owner_id,
-            expected_generation=before.generation,
-            declaration_refs=(
-                f"tracked_files.{declarations[decision.observation.locator]}",
-            ),
+    with run.checkpoint(
+        "file-adoption", operations.CheckpointKind.REVERSIBLE, paths=claim_paths
+    ):
+        store = OwnershipStore()
+        declarations = {
+            str(path.absolute()): name
+            for tracked, name, _source, destination in plan.tracked_entries
+            for path in _ownership_destinations(tracked, destination)
+        }
+        declarations.update(
+            {str(tree.destination.absolute()): tree.name for tree in plan.trees}
         )
-        transfers.append(transitions.OwnershipTransferDelta(before, after))
-        typer.echo(
-            f"transferred tracked file ownership: {decision.observation.locator} "
-            "(no file bytes changed)"
-        )
-    _publish_file_claims(plan, actions=frozenset({FileAction.ADOPT}))
-    return operations.finish_checkpoint(applying), tuple(transfers)
+        trees_by_locator = {
+            str(tree.destination.absolute()): tree for tree in plan.trees
+        }
+        for decision in plan.file_ownership:
+            if decision.action is not FileAction.TRANSFER:
+                continue
+            before = decision.claim
+            if before is None or store.read(decision.observation.resource_id) != before:
+                raise SetforgeError(
+                    "tracked file ownership changed after confirmation; retry"
+                )
+            tree = trees_by_locator.get(decision.observation.locator)
+            if tree is None:
+                observed = observe_file(
+                    Path(decision.observation.locator),
+                    allow_topology=decision.observation.topology,
+                )
+            else:
+                assert tree.tracked_file.tree is not None
+                live_inventory = scan_live_tree(
+                    tree.destination, tree.tracked_file.tree
+                )
+                observed = observe_tree(tree.destination, live_inventory.fingerprint)
+            if observed != decision.observation:
+                raise SetforgeError(
+                    "tracked file changed after transfer confirmation; retry"
+                )
+            owner_id = plan.package_owner_id
+            if owner_id is None:
+                raise SetforgeError("ownership transfer requires a Git-backed config")
+            after = store.transfer_locked(
+                before.resource_id,
+                expected_owner=before.owner_id,
+                new_owner=owner_id,
+                expected_generation=before.generation,
+                declaration_refs=(
+                    f"tracked_files.{declarations[decision.observation.locator]}",
+                ),
+            )
+            transfers.append(transitions.OwnershipTransferDelta(before, after))
+            typer.echo(
+                f"transferred tracked file ownership: {decision.observation.locator} "
+                "(no file bytes changed)"
+            )
+        _publish_file_claims(plan, actions=frozenset({FileAction.ADOPT}))
+    return tuple(transfers)
 
 
-def _refresh_file_claims_checkpoint(
-    plan: InstallPlan, journal: operations.OperationJournal
-) -> operations.OperationJournal:
+def _refresh_file_claims_checkpoint(plan: InstallPlan, run: _InstallRun) -> None:
     """Refresh every successful file effect, including identity transitions."""
     decisions = tuple(
         decision
@@ -2214,7 +2228,7 @@ def _refresh_file_claims_checkpoint(
         }
     )
     if not decisions or plan.package_owner_id is None:
-        return journal
+        return
     store = OwnershipStore()
     paths = tuple(
         dict.fromkeys(
@@ -2231,29 +2245,22 @@ def _refresh_file_claims_checkpoint(
             )
         )
     )
-    journal = operations.extend_paths(journal, paths)
-    applying = operations.begin_checkpoint(
-        journal,
-        name="file-ownership-refresh",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        paths=paths,
-        restore_state=False,
-        restore_transitions=False,
-        adapters=(),
-    )
-    _publish_file_claims(
-        plan,
-        actions=frozenset(
-            {
-                FileAction.ADOPT,
-                FileAction.INSTALL,
-                FileAction.MANAGE,
-                FileAction.REVIEW,
-            }
-        ),
-        refresh=True,
-    )
-    return operations.finish_checkpoint(applying)
+    run.journal = operations.extend_paths(run.journal, paths)
+    with run.checkpoint(
+        "file-ownership-refresh", operations.CheckpointKind.REVERSIBLE, paths=paths
+    ):
+        _publish_file_claims(
+            plan,
+            actions=frozenset(
+                {
+                    FileAction.ADOPT,
+                    FileAction.INSTALL,
+                    FileAction.MANAGE,
+                    FileAction.REVIEW,
+                }
+            ),
+            refresh=True,
+        )
 
 
 def _legacy_adoption_receipt_paths(plan: InstallPlan) -> tuple[Path, ...]:
@@ -2465,37 +2472,32 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     if dry_run:
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=True)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
-        ctx, active_lock, _local_overlay, input_baseline = _load_install_context(
-            config, profile, repo_root, locked=locked, file_selection=file_selection
-        )
-        package_owner_id = _read_package_owner_id(repo_root)
-        if file_selection is not None:
-            _require_managed_file_selection(
-                _preview_file_ownership(
-                    config,
-                    profile,
-                    file_selection=file_selection,
-                    discard_protected_units=(
-                        section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
-                    ),
-                ),
-                package_owner_id,
-            )
-        plan = _build_install_plan(
-            ctx,
+        plan, _active_lock, _local_overlay = _plan(
+            config,
+            profile,
+            repo_root,
+            locked=locked,
+            file_selection=file_selection,
             section_auto=section_auto,
             interactive=False,
-            lock=active_lock,
             transition=not no_transition,
-            input_baseline=input_baseline,
             auto=True,
-            package_owner_id=package_owner_id,
+            package_owner_id=_read_package_owner_id(repo_root),
         )
         scan_result = secrets_mod.run_pre_deploy_scan(
             tracked_root=config.parent / "tracked",
             skip=no_secrets_scan,
         )
-        _render_install_plan(plan, scan_result, transition=not no_transition)
+        _render_install_plan(
+            plan,
+            scan_result,
+            transition=not no_transition,
+            refusals=_plan_refusals(
+                plan,
+                auto_accept_tracked=auto_accept_tracked,
+                auto_accept_live=auto_accept_live,
+            ),
+        )
         return
 
     with mutation_locks(resources=True):
@@ -2570,28 +2572,26 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         identity_guard = (
             mutation_guards.config_identity if mutation_guards is not None else None
         )
-        ctx, active_lock, local_overlay, input_baseline = _load_install_context(
-            config, profile, repo_root, locked=locked, file_selection=file_selection
-        )
-        cfg = ctx.cfg
-        resolved = ctx.resolved
         fresh = is_fresh_host()
         interactive = _want_interactive_reconcile(
             reconcile_user_sections=reconcile_user_sections,
             section_auto=section_auto,
         )
-        plan = _build_install_plan(
-            ctx,
+        plan, active_lock, local_overlay = _plan(
+            config,
+            profile,
+            repo_root,
+            locked=locked,
+            file_selection=file_selection,
             section_auto=section_auto,
             interactive=interactive,
-            lock=active_lock,
             transition=not no_transition,
-            input_baseline=input_baseline,
             auto=yes,
             package_owner_id=package_owner_id,
         )
-        if file_selection is not None:
-            _require_managed_file_selection(plan.file_ownership, package_owner_id)
+        ctx = plan.ctx
+        cfg = ctx.cfg
+        resolved = ctx.resolved
         planned_target_roots = {
             *(_tree_lock_target(tree.destination) for tree in plan.trees),
             *(codex.destination.parent for codex in plan.codex_configs),
@@ -2611,7 +2611,14 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 inventory=inventory,
                 yes=yes,
                 run_dry_run=lambda: _render_install_plan(
-                    plan, scan_result, transition=not no_transition
+                    plan,
+                    scan_result,
+                    transition=not no_transition,
+                    refusals=_plan_refusals(
+                        plan,
+                        auto_accept_tracked=auto_accept_tracked,
+                        auto_accept_live=auto_accept_live,
+                    ),
                 ),
             )
             if welcome_choice is not WelcomeChoice.PROCEED:
@@ -2649,15 +2656,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                     "file ownership inputs changed after confirmation; retry"
                 )
 
-        # Refuse-before-write: pre-flight the symlink-dst clobber refusal.
-        # deploy_symlinked_file() raises when a regular file or directory
-        # already sits at a symlink tracked_file's dst, but that check only
-        # fires at pass-2 WRITE time — a symlink ordered after regular files
-        # would let those earlier writes land, then abort with no transition
-        # recorded (un-revertable partial install). Surfacing the same
-        # condition HERE, before any mutation (seed commit, overlay migration,
-        # or deploy), keeps the install all-or-nothing.
-        _refuse_on_symlink_dst_conflicts(ctx)
+        # Refuse-before-write: deploy_symlinked_file() raises on an occupied
+        # symlink dst only at write time, after earlier files have landed.
+        if plan.symlink_conflicts:
+            raise SetforgeError("\n".join(plan.symlink_conflicts))
 
         secret_plan = _plan_secret_findings(scan_result, yes=yes)
         if secret_plan is None:
@@ -2707,44 +2709,31 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             *plan.bootstrap,
             *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
         )
-        ownership_paths = tuple(
-            OwnershipStore().claim_path(decision.resource_id)
-            for decision in plan.provisioning.ownership
-            if decision.action
-            in {
-                PackageAction.ADOPT,
-                PackageAction.TRANSFER,
-                PackageAction.INSTALL,
-                PackageAction.UPGRADE,
-            }
+        tree_paths = plan.tree_paths()
+        tracked_paths = (
+            *plan.dst_paths,
+            *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
+            *tree_paths,
         )
-        file_ownership_paths = tuple(
-            OwnershipStore().claim_path(decision.observation.resource_id)
-            for decision in plan.file_ownership
-            if decision.action
-            in {
-                FileAction.ADOPT,
-                FileAction.TRANSFER,
-                FileAction.INSTALL,
-                FileAction.MANAGE,
-                FileAction.REVIEW,
-            }
-        )
-        adoption_receipt_paths = _legacy_adoption_receipt_paths(plan)
         journal_paths = tuple(
             dict.fromkeys(
                 (
-                    *plan.dst_paths,
-                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
-                    *(
-                        path
-                        for tree in plan.trees
-                        for path in _tree_checkpoint_paths(tree, profile)
-                    ),
+                    *tracked_paths,
                     *secrets_checkpoint_paths,
-                    *ownership_paths,
-                    *file_ownership_paths,
-                    *adoption_receipt_paths,
+                    *plan.package_claim_paths(
+                        PackageAction.ADOPT,
+                        PackageAction.TRANSFER,
+                        PackageAction.INSTALL,
+                        PackageAction.UPGRADE,
+                    ),
+                    *plan.file_claim_paths(
+                        FileAction.ADOPT,
+                        FileAction.TRANSFER,
+                        FileAction.INSTALL,
+                        FileAction.MANAGE,
+                        FileAction.REVIEW,
+                    ),
+                    *_legacy_adoption_receipt_paths(plan),
                 )
             )
         )
@@ -2758,18 +2747,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         tracked_checkpoint_paths = tuple(
             dict.fromkeys(
                 (
-                    *plan.dst_paths,
-                    *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
-                    *(
-                        path
-                        for tree in plan.trees
-                        for path in _tree_checkpoint_paths(tree, profile)
-                    ),
-                    *(
-                        OwnershipStore().claim_path(decision.observation.resource_id)
-                        for decision in plan.file_ownership
-                        if decision.action
-                        in {FileAction.INSTALL, FileAction.MANAGE, FileAction.REVIEW}
+                    *tracked_paths,
+                    *plan.file_claim_paths(
+                        FileAction.INSTALL, FileAction.MANAGE, FileAction.REVIEW
                     ),
                 )
             )
@@ -2780,14 +2760,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             if tracked.symlink is not None
         )
         tree_filesystem_paths = tuple(
-            dict.fromkeys(
-                [
-                    path
-                    for tree in plan.trees
-                    for path in _tree_checkpoint_paths(tree, profile)
-                ]
-                + sorted(symlink_paths, key=str)
-            )
+            dict.fromkeys((*tree_paths, *sorted(symlink_paths, key=str)))
         )
         tree_pre_images = {
             path: transitions.snapshot_filesystem_image(path)
@@ -2807,18 +2780,20 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 raise SetforgeError(
                     "config owner identity changed after confirmation; retry"
                 )
-        journal = operations.prepare(
-            command="install",
-            profile=profile,
-            config_dir=config.parent,
-            resources_lock=True,
-            paths=journal_paths,
-            path_guards=install_parent_guards,
-            state_snapshots=state_pre,
-            adapters=adapter_snapshots,
+        run = _InstallRun(
+            operations.prepare(
+                command="install",
+                profile=profile,
+                config_dir=config.parent,
+                resources_lock=True,
+                paths=journal_paths,
+                path_guards=install_parent_guards,
+                state_snapshots=state_pre,
+                adapters=adapter_snapshots,
+            )
         )
-        journal = _apply_secrets_and_bootstrap(
-            journal,
+        _apply_secrets_and_bootstrap(
+            run,
             secret_plan=secret_plan,
             bootstrap=plan.bootstrap,
             checkpoint_paths=secrets_checkpoint_paths,
@@ -2827,9 +2802,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 item.destination.parent.absolute() for item in plan.codex_configs
             ),
         )
-        journal, package_transfers = _publish_adoptions_checkpoint(plan, journal)
-        journal, file_transfers = _publish_file_adoptions_checkpoint(plan, journal)
-        ownership_transfers = (*package_transfers, *file_transfers)
+        ownership_transfers = (
+            *_publish_adoptions_checkpoint(plan, run),
+            *_publish_file_adoptions_checkpoint(plan, run),
+        )
 
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
@@ -2856,9 +2832,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         # once as text and then attempt the ownership CAS a second time.
         file_pre = {**plan.file_pre, **transition_ownership_pre}
 
-        capability_result = _apply_capability_targets(
+        _apply_capability_targets(
             plan,
-            journal,
+            run,
             profile=profile,
             active_lock=active_lock,
             tracked_checkpoint_paths=tracked_checkpoint_paths,
@@ -2867,33 +2843,20 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             yes=yes,
             mutation_guards=mutation_guards,
         )
-        journal = capability_result.journal
-        provision_results = list(capability_result.provision_results)
-        deploy_outcome = capability_result.deploy_outcome
-        seeded = capability_result.seeded
-        ext_delta = capability_result.ext_delta
-        ext_outcomes = capability_result.ext_outcomes
-        plugin_delta = capability_result.plugin_delta
-        plugin_outcomes = capability_result.plugin_outcomes
-        codex_plugin_delta = capability_result.codex_plugin_delta
-        codex_plugin_failed = capability_result.codex_plugin_failed
-        if deploy_outcome is not None:
-            journal = _refresh_file_claims_checkpoint(plan, journal)
-        else:
-            deploy_outcome = install_helpers_mod.DeployOutcome(prior_modes={})
-        journal = operations.begin_checkpoint(
-            journal,
-            name="mcp-servers",
-            kind=operations.CheckpointKind.COMPENSATABLE,
-            paths=(),
-            restore_state=False,
-            restore_transitions=False,
+        files_applied = run.deploy_outcome is not None
+        if files_applied:
+            _refresh_file_claims_checkpoint(plan, run)
+        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome(
+            prior_modes={}
+        )
+        with run.checkpoint(
+            "mcp-servers",
+            operations.CheckpointKind.COMPENSATABLE,
             adapters=(operations.AdapterKind.MCP,)
             if operations.AdapterKind.MCP in adapter_kinds
             else (),
-        )
-        mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
-        journal = operations.finish_checkpoint(journal)
+        ):
+            mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
 
         file_post = transitions.snapshot_paths(dst_paths)
         tree_post_images = {
@@ -2910,18 +2873,18 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             if tree_pre_images[path] != tree_post_images[path] or path in symlink_paths
         )
 
-        _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
+        _emit_reconcile_summary(run.plugin_outcomes, run.ext_outcomes)
 
         if not no_transition and not _install_recorded_nothing(
             file_pre=file_pre,
             file_post=file_post,
             deploy_outcome=deploy_outcome,
-            ext_delta=ext_delta,
-            plugin_delta=plugin_delta,
-            codex_plugin_delta=codex_plugin_delta,
+            ext_delta=run.ext_delta,
+            plugin_delta=run.plugin_delta,
+            codex_plugin_delta=run.codex_plugin_delta,
             mcp_delta=mcp_delta,
-            reconcile_outcomes=plugin_outcomes + ext_outcomes,
-            seeded=bool(seeded),
+            reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
+            seeded=bool(run.seeded),
             codex_base_mutated=any(
                 entry.store is transitions.SnapshotStore.BASE
                 and entry.key.startswith(("codex/config/", "codex/mcp-target/"))
@@ -2934,62 +2897,57 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             filesystem_deltas=tree_filesystem_deltas,
             ownership_transfers=ownership_transfers,
         ):
-            journal = operations.begin_checkpoint(
-                journal,
-                name="transition-record",
-                kind=operations.CheckpointKind.REVERSIBLE,
-                paths=(),
-                restore_state=False,
+            with run.checkpoint(
+                "transition-record",
+                operations.CheckpointKind.REVERSIBLE,
                 restore_transitions=True,
-                adapters=(),
-            )
-            tracked_file_destinations = {}
-            if capability_result.deploy_outcome is not None:
-                tracked_file_destinations = {
-                    name: _ownership_destinations(tracked, destination)
-                    for tracked, name, _source, destination in plan.tracked_entries
-                }
-                tracked_file_destinations.update(
-                    {
-                        tree.name: (
-                            tree.destination,
-                            *(
-                                tree.destination / entry.path
-                                for entry in tree.plan.desired.inventory.entries
-                            ),
-                        )
-                        for tree in plan.trees
+            ):
+                tracked_file_destinations = {}
+                if files_applied:
+                    tracked_file_destinations = {
+                        name: _ownership_destinations(tracked, destination)
+                        for tracked, name, _source, destination in plan.tracked_entries
                     }
+                    tracked_file_destinations.update(
+                        {
+                            tree.name: (
+                                tree.destination,
+                                *(
+                                    tree.destination / entry.path
+                                    for entry in tree.plan.desired.inventory.entries
+                                ),
+                            )
+                            for tree in plan.trees
+                        }
+                    )
+                target = _write_install_transition(
+                    profile,
+                    file_pre,
+                    file_post,
+                    run.ext_delta,
+                    run.plugin_delta,
+                    codex_plugin_delta=run.codex_plugin_delta,
+                    source_dir=ctx.repo_root,
+                    reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
+                    state_snapshots=state_pre,
+                    mcp_delta=mcp_delta,
+                    file_modes=deploy_outcome.prior_modes,
+                    filesystem_deltas=tree_filesystem_deltas,
+                    ownership_transfers=ownership_transfers,
+                    tracked_file_destinations=tracked_file_destinations,
                 )
-            target = _write_install_transition(
-                profile,
-                file_pre,
-                file_post,
-                ext_delta,
-                plugin_delta,
-                codex_plugin_delta=codex_plugin_delta,
-                source_dir=ctx.repo_root,
-                reconcile_outcomes=plugin_outcomes + ext_outcomes,
-                state_snapshots=state_pre,
-                mcp_delta=mcp_delta,
-                file_modes=deploy_outcome.prior_modes,
-                filesystem_deltas=tree_filesystem_deltas,
-                ownership_transfers=ownership_transfers,
-                tracked_file_destinations=tracked_file_destinations,
-            )
-            typer.echo(f"transition: {target}")
-            typer.echo(f"↩  revert with: setforge revert --profile={profile}")
-            journal = operations.finish_checkpoint(journal)
+                typer.echo(f"transition: {target}")
+                typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
-        operations.complete(journal)
+        operations.complete(run.journal)
 
         _gate_on_mcp_failures(mcp_failed)
-        if codex_plugin_failed:
+        if run.codex_plugin_failed:
             details = "; ".join(
-                f"{item}: {error}" for item, error in codex_plugin_failed
+                f"{item}: {error}" for item, error in run.codex_plugin_failed
             )
             raise SetforgeError(f"Codex plugin reconciliation failed: {details}")
-        _gate_on_provisioning_failures(provision_results)
+        _gate_on_provisioning_failures(list(run.provision_results))
         _gate_on_deferred_reconcile(deploy_outcome.deferred_reconcile, interactive)
 
 
@@ -3088,33 +3046,42 @@ def _install_adapter_snapshots(
     return tuple(snapshots)
 
 
-def _refuse_on_symlink_dst_conflicts(ctx: ProfileContext) -> None:
-    """Refuse the install when a symlink tracked_file's dst is already occupied.
+def _symlink_dst_conflicts(
+    tracked_entries: tuple[tuple[TrackedFile, str, Path, Path], ...],
+) -> tuple[str, ...]:
+    """Name every symlink tracked_file whose dst is already occupied.
 
     Mirrors the refusal in :func:`deploy.deploy_symlinked_file` (a regular file
     or a directory — but NOT a pre-existing symlink — sitting at the link's
-    ``dst``), but runs as a pass-1 refuse-before-write gate so the abort fires
-    BEFORE any file is written or any store / local.yaml is mutated. Without
-    this pre-flight the same condition only surfaces at pass-2 write time, where
-    a symlink ordered after regular-file tracked_files would let those earlier
-    writes land and then raise with no transition recorded — an un-revertable
-    partial install. Every conflicting dst is collected so the user sees the
-    complete set in one aggregated error rather than one failure per attempt.
+    ``dst``). The planner records it so the preview reports the refusal and
+    apply raises it before any file is written or any store is mutated: at
+    write time a symlink ordered after regular-file tracked_files would let
+    those earlier writes land and then raise with no transition recorded. Every
+    conflicting dst is named so the user sees the complete set at once.
     """
-    failures: list[str] = []
-    for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if tracked_file.symlink is None:
-            continue
-        if sub_dst.is_symlink() or not sub_dst.exists():
-            continue
-        kind = "directory" if sub_dst.is_dir() else "regular file"
-        failures.append(
-            f"refusing to deploy symlink at {sub_dst}: a {kind} is already "
-            f"present. Move it aside or remove it before deploying "
-            f"tracked_file with symlink: {tracked_file.symlink!r}."
-        )
-    if failures:
-        raise SetforgeError("\n".join(failures))
+    return tuple(
+        f"refusing to deploy symlink at {sub_dst}: a "
+        f"{'directory' if sub_dst.is_dir() else 'regular file'} is already "
+        f"present. Move it aside or remove it before deploying "
+        f"tracked_file with symlink: {tracked_file.symlink!r}."
+        for tracked_file, _sub_name, _sub_src, sub_dst in tracked_entries
+        if tracked_file.symlink is not None
+        and not sub_dst.is_symlink()
+        and sub_dst.exists()
+    )
+
+
+def _plan_refusals(
+    plan: InstallPlan, *, auto_accept_tracked: bool, auto_accept_live: bool
+) -> tuple[str, ...]:
+    """Return what apply refuses for this plan, in the order apply checks it."""
+    drift = install_helpers_mod._unexpected_drift_refusal(
+        plan.drift_report,
+        plan.ctx,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+    )
+    return (*(() if drift is None else (drift,)), *plan.symlink_conflicts)
 
 
 def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
@@ -3184,14 +3151,14 @@ def _apply_secret_plan(plan: SecretPlan) -> None:
 
 
 def _apply_secrets_and_bootstrap(
-    journal: operations.OperationJournal,
+    run: _InstallRun,
     *,
     secret_plan: SecretPlan,
     bootstrap: tuple[Path, ...],
     checkpoint_paths: tuple[Path, ...],
     target_guards: tuple[TargetLockGuard, ...],
     codex_roots: frozenset[Path],
-) -> operations.OperationJournal:
+) -> None:
     """Prepare guarded roots and apply the first reversible phase."""
     missing_guards = tuple(guard for guard in target_guards if guard.target_fd is None)
     if {guard.target.absolute() for guard in missing_guards}.intersection(
@@ -3199,41 +3166,32 @@ def _apply_secrets_and_bootstrap(
     ):
         raise SetforgeError("bootstrap file conflicts with a managed directory root")
     if missing_guards:
-        preparing = operations.begin_checkpoint(
-            journal,
-            name="prepare-target-roots",
-            kind=operations.CheckpointKind.REVERSIBLE,
+        with run.checkpoint(
+            "prepare-target-roots",
+            operations.CheckpointKind.REVERSIBLE,
             paths=tuple(guard.target for guard in missing_guards),
-            restore_state=False,
-            restore_transitions=False,
-            adapters=(),
+        ):
+            roots: list[tuple[Path, int, int, int]] = []
+            for guard in missing_guards:
+                guard.verify_expected()
+                guard.mkdir(
+                    mode=0o700 if guard.target.absolute() in codex_roots else 0o777
+                )
+                assert guard.target_fd is not None
+                info = os.fstat(guard.target_fd)
+                roots.append((guard.target, info.st_dev, info.st_ino, info.st_mode))
+            run.journal = operations.bind_install_roots(run.journal, tuple(roots))
+    with (
+        run.checkpoint(
+            "secrets-and-bootstrap",
+            operations.CheckpointKind.REVERSIBLE,
+            paths=checkpoint_paths,
         )
-        roots: list[tuple[Path, int, int, int]] = []
-        for guard in missing_guards:
-            guard.verify_expected()
-            guard.mkdir(mode=0o700 if guard.target.absolute() in codex_roots else 0o777)
-            assert guard.target_fd is not None
-            info = os.fstat(guard.target_fd)
-            roots.append((guard.target, info.st_dev, info.st_ino, info.st_mode))
-        journal = operations.finish_checkpoint(
-            operations.bind_install_roots(preparing, tuple(roots))
-        )
-    if not checkpoint_paths:
+        if checkpoint_paths
+        else nullcontext()
+    ):
         _apply_secret_plan(secret_plan)
         deploy.bootstrap_local(bootstrap)
-        return journal
-    applying = operations.begin_checkpoint(
-        journal,
-        name="secrets-and-bootstrap",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        paths=checkpoint_paths,
-        restore_state=False,
-        restore_transitions=False,
-        adapters=(),
-    )
-    _apply_secret_plan(secret_plan)
-    deploy.bootstrap_local(bootstrap)
-    return operations.finish_checkpoint(applying)
 
 
 def _collect_retry_failed_ids(profile: str) -> frozenset[str]:

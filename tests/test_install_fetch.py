@@ -437,7 +437,7 @@ class TestFetchWiring:
         import setforge.cli.install as install_mod
 
         config = _write_config(repo)
-        real_build = install_mod._build_install_plan
+        real_build = install_mod._plan_files
 
         def mutate_then_build(*args: Any, **kwargs: Any):
             config.write_text(
@@ -448,7 +448,7 @@ class TestFetchWiring:
             )
             return real_build(*args, **kwargs)
 
-        monkeypatch.setattr(install_mod, "_build_install_plan", mutate_then_build)
+        monkeypatch.setattr(install_mod, "_plan_files", mutate_then_build)
         monkeypatch.setattr(
             install_mod,
             "_write_install_transition",
