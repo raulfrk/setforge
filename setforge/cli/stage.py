@@ -474,7 +474,6 @@ def _apply_structured(
         else None
     )
     with (
-        operations.recover_on_error(profile, "stage"),
         mutation_locks(
             resources=owner_id is not None,
             config_identity_dir=identity_dir,
@@ -482,6 +481,7 @@ def _apply_structured(
             target_roots=(stage.dst.parent,),
             profile=profile,
         ) as mutation_guards,
+        operations.recover_on_error(profile, "stage"),
     ):
         operations.refuse_active(profile)
         if owner_id is not None and config_dir is not None:
@@ -918,7 +918,6 @@ def _apply(
         else None
     )
     with (
-        operations.recover_on_error(profile, "stage"),
         mutation_locks(
             resources=owner_id is not None,
             config_identity_dir=identity_dir,
@@ -926,6 +925,7 @@ def _apply(
             target_roots=(stage.dst.parent,),
             profile=profile,
         ) as mutation_guards,
+        operations.recover_on_error(profile, "stage"),
     ):
         operations.refuse_active(profile)
         if owner_id is not None and config_dir is not None:
