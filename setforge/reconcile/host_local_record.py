@@ -166,7 +166,7 @@ def seed_section_slots_to_store(
 
     Writes NOTHING to ``local.yaml``; the host-local intent lives only
     in the reconcile store, where :func:`host_local_sections_from_store` projects
-    it back for the seed-once gate and every other consumer. Raises
+    it back for the seed-once gate. Raises
     :class:`~setforge.errors.ConfigError` on an unreadable or headingless
     template body (the store identity is heading-based, so a headingless body has
     no stable ``reloc_anchor`` to fold onto).

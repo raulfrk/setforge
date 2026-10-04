@@ -1,15 +1,13 @@
 """Project host-local markdown sections back OUT of the reconcile store.
 
-STAGE B retires the ``local.yaml`` ``host_local_sections`` / ``spans``
-declaration of host-local markdown sections. Afterwards host-local content lives
-ONLY in the reconcile per-unit store, as LOCAL line units carrying a stable
-``reloc_anchor`` heading identity (minted in
-:func:`setforge.reconcile.hunks.serialize`). This module is the REPLACEMENT
-projection for :func:`setforge.source.load_local_host_local_sections`: it reads
-those units back into the SAME
-``{tracked_file_id: {section_name: HostLocalSection}}`` shape, so the legacy
-consumers (compare drift-mask, validate anchor-legality, capture strip, install
-seed, dry-run display) repoint here without changing their downstream code.
+Host-local markdown sections live ONLY in the reconcile per-unit store, as
+LOCAL line units carrying a stable ``reloc_anchor`` heading identity (minted in
+:func:`setforge.reconcile.hunks.serialize`). This module reads those units back
+as ``{tracked_file_id: {section_name: HostLocalSection}}``. Its one caller in
+the engine is the seed-once gate of
+:func:`setforge.reconcile.host_local_record.seed_section_slots_to_store`, which
+reads only the section names; the bodies are what the tests of the seed and of
+the migration that folds old declarations into the store assert on.
 
 A store unit is a host-local section iff its persisted index row is
 ``cls == "local"`` AND carries a ``reloc_anchor``. The persisted rows hold no byte
@@ -38,8 +36,6 @@ def host_local_sections_from_store(
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Return the host-local sections represented in ``profile``'s reconcile store.
 
-    Shape-interchangeable with
-    :func:`setforge.source.load_local_host_local_sections`:
     ``{tracked_file_id: {section_name: HostLocalSection}}``, with the inner map
     keyed by the provenance-marked :data:`HostLocalSectionName` and any file that
     projects to no section dropped (so ``tf_id in result`` means "has at least one
