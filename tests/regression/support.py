@@ -109,6 +109,7 @@ class Host:
         profile: str = "p",
         extra_yaml: str = "",
         profile_yaml: str = "",
+        repo_parent: str = "",
     ) -> None:
         self.root = tmp_path
         self.profile = profile
@@ -120,7 +121,7 @@ class Host:
         )
         self.bin_dir = tmp_path / "bin"
         self.bin_dir.mkdir()
-        self.repo = tmp_path / "repo"
+        self.repo = tmp_path / repo_parent / "repo"
         self.config = self.repo / "setforge.yaml"
         self.tracked_root = self.repo / "tracked"
         self.tracked_root.mkdir(parents=True)
@@ -192,13 +193,7 @@ class Host:
         self.shims[name] = path
         return path
 
-    def proc(
-        self,
-        *argv: str,
-        config: bool = True,
-        profile: bool = True,
-        timeout: int = 60,
-    ) -> subprocess.CompletedProcess[str]:
+    def proc_env(self) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("COV_CORE")}
         for name in _DROPPED_ENV:
             env.pop(name, None)
@@ -211,15 +206,34 @@ class Host:
             env["SETFORGE_STATE_DIR"] = str(self.state)
         for name, path in self.shims.items():
             env[f"SETFORGE_{name.upper()}_BIN"] = str(path)
+        return env
+
+    def proc(
+        self,
+        *argv: str,
+        config: bool = True,
+        profile: bool = True,
+        timeout: int = 60,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-m", "setforge.cli", *self._argv(argv, config, profile)],
             cwd=REPO_ROOT,
-            env=env,
+            env=self.proc_env(),
             text=True,
             capture_output=True,
             timeout=timeout,
             check=False,
         )
+
+    def arm(self, when: str) -> None:
+        (self.bin_dir / "when").write_text(when, encoding="utf-8")
+
+    def release(self) -> None:
+        (self.bin_dir / "release").write_text("", encoding="utf-8")
+
+    def installed_extensions(self) -> list[str]:
+        path = self.bin_dir / "installed"
+        return path.read_text(encoding="utf-8").split() if path.exists() else []
 
     def proc_install(self, *extra: str) -> subprocess.CompletedProcess[str]:
         return self.proc("install", *INSTALL_FLAGS, *extra)
@@ -239,3 +253,45 @@ def claim_ids_for(listing: str, suffix: str) -> list[str]:
         elif line.strip().startswith("locator:") and line.strip().endswith(suffix):
             ids.append(current)
     return ids
+
+
+EXTENSION_YAML = "packages:\n  pe: {type: extension, extension: pub.name}\n"
+EXTENSION_PROFILE = "    packages: [pe]"
+
+_FAKE_CODE = """
+D="$(dirname "$0")"
+WHEN="$(cat "$D/when" 2>/dev/null)"
+case "$1" in
+  --list-extensions)
+    [ "$WHEN" = list ] && kill -9 $PPID
+    cat "$D/installed" 2>/dev/null; exit 0;;
+  --install-extension)
+    [ "$WHEN" = install ] && kill -9 $PPID
+    [ "$WHEN" = hold ] && while [ ! -e "$D/release" ]; do sleep 0.1; done
+    echo "$2" >> "$D/installed"; exit 0;;
+  --uninstall-extension)
+    [ "$WHEN" = uninstall ] && kill -9 $PPID
+    grep -vx "$2" "$D/installed" > "$D/installed.new"
+    mv "$D/installed.new" "$D/installed"; exit 0;;
+esac
+exit 0
+"""
+
+
+def extension_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kwargs: object
+) -> Host:
+    """A host whose profile installs one extension through a scriptable ``code``.
+
+    ``host.arm("install")`` makes the next ``--install-extension`` (or
+    ``list``/``uninstall``) kill its parent SetForge process with SIGKILL;
+    ``arm("hold")`` makes it wait until ``host.release()``."""
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        extra_yaml=EXTENSION_YAML,
+        profile_yaml=EXTENSION_PROFILE,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    host.shim("code", _FAKE_CODE)
+    return host
