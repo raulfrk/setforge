@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 from ruamel.yaml.scalarint import ScalarInt
 
+from setforge import paths
 from setforge.errors import ConfigError, GitOpError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
     CONFIG_FILENAME,
@@ -378,6 +379,16 @@ class TestResolveSourcePrecedence:
         assert "source:" in msg
         assert "4. CWD fallback" in msg
         assert "setforge init" in msg
+
+    def test_no_layer_message_names_the_default_local_yaml(
+        self, tmp_path: Path
+    ) -> None:
+        empty_cwd = tmp_path / "empty_cwd"
+        empty_cwd.mkdir()
+        with pytest.raises(NoSourceConfigured) as excinfo:
+            resolve_source(cli_path=None, env={}, cwd=empty_cwd)
+        expected = f"3. {paths.local_config_path()} `source:` block"
+        assert expected in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
