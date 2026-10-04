@@ -71,6 +71,7 @@ from setforge.ownership import (
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
+from setforge.snapshots import format_age
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -100,18 +101,9 @@ def _compact_age(timestamp: datetime, now: datetime) -> str:
     so the table aligns. Uses UTC arithmetic via the caller-supplied
     ``now``; both ``timestamp`` and ``now`` must be tz-aware.
     """
-    delta = now - timestamp
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
+    if (now - timestamp).total_seconds() < 60:
         return "<1m ago"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    days = hours // 24
-    return f"{days}d ago"
+    return format_age(now, timestamp)
 
 
 def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
