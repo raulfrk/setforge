@@ -127,6 +127,11 @@ class KeyUnit:
     def ref(self) -> UnitRef:
         return UnitRef.key(self.path)
 
+    @property
+    def content_hash(self) -> str:
+        """``value_hash`` under the name line and key units share."""
+        return self.value_hash
+
 
 def _load_model(data: bytes, fmt: StructuredFormat) -> object:
     """Parse ``data`` into a fresh comment-preserving model for ``fmt``.

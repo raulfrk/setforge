@@ -81,7 +81,6 @@ if TYPE_CHECKING:
         ResolvedMarketplace,
         ResolvedPlugin,
     )
-    from setforge.reconcile.structured_units import StructuredFormat
 
     # PEP 695 type alias for the three overlay resolution lists shape.
     # Defined under TYPE_CHECKING so the ``Resolved*`` forward refs
@@ -1133,34 +1132,28 @@ def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
 def _reconcile_staged_expected(
     profile: str, file_id_str: str, src: Path, dst: Path
 ) -> bool:
-    """True when a reconcile-staged plain file's tracked holds exactly the
-    promoted set — so its live↔tracked diff is the expected staging divergence.
+    """True when a reconcile-staged file's tracked holds exactly the promoted
+    set — so its live↔tracked diff is the expected staging divergence.
 
     Reconstructs the expected tracked content from ``base`` + the recorded
-    classifications + the drafts manifest and asserts INV-8 against the on-disk
-    tracked bytes. Returns ``False`` (→ the entry classifies as real/unexpected
-    drift) when the file is not reconcile-staged (no base, or no classified
-    hunks) OR when INV-8 fails (tracked carries something the promoted set does
-    not explain — e.g. a hand-edit of tracked). Crash-free, mirroring
-    :func:`_is_stale`: any store / filesystem / decode error degrades to
+    classifications + the drafts manifest, with the file's unit engine (line
+    hunks, or key units for a structured format), and asserts INV-8 against the
+    on-disk tracked bytes. Returns ``False`` (→ the entry classifies as
+    real/unexpected drift) when the file is not reconcile-staged (no base, or no
+    classified units) OR when INV-8 fails (tracked carries something the promoted
+    set does not explain — e.g. a hand-edit of tracked). Crash-free, mirroring
+    :func:`_is_stale`: any store / filesystem / decode / parse error degrades to
     ``False`` so the read-only compare never raises.
     """
     # Imported lazily (matching transitions._snapshot_target) to keep the module
     # graph acyclic — the reconcile package imports compare-adjacent helpers.
     from setforge.errors import InvariantViolation, ReconcileStoreError
-    from setforge.reconcile import hunks as reconcile_hunks
     from setforge.reconcile import index_model
     from setforge.reconcile import store as reconcile_store
-    from setforge.reconcile.structured_units import structured_format
-    from setforge.reconcile.types import UnitKind
     from setforge.reconcile.types import file_id as make_file_id
+    from setforge.reconcile.unit_engine import engine_for
 
-    fmt = structured_format(dst)  # None for .jsonc — stays on this plain path
-    if fmt is not None:
-        return _reconcile_staged_expected_structured(
-            profile, file_id_str, src, dst, fmt
-        )
-
+    engine = engine_for(dst)  # .jsonc is not a structured format: line hunks
     try:
         fid = make_file_id(file_id_str)
         base = reconcile_store.read_base(profile, fid)
@@ -1173,71 +1166,23 @@ def _reconcile_staged_expected(
         tracked = src.read_bytes()
         base.decode("utf-8")
         live.decode("utf-8")  # text-only staging
-        hunks = reconcile_hunks.classify(
-            reconcile_hunks.extract_hunks(base, live),
-            index_model.require_unit_kind(entry.hunks, UnitKind.LINE),
+        units = engine.classify(
+            engine.extract(base, live),
+            index_model.require_unit_kind(entry.hunks, engine.kind),
         )
         drafts = reconcile_store.read_drafts(profile, fid)
-        reconcile_hunks.assert_stage_fidelity(base, live, tracked, hunks, drafts)
+        engine.assert_stage_fidelity(base, live, tracked, units, drafts)
         return True
     except InvariantViolation:
         return False  # INV-8 failed → tracked is NOT the promoted set → real drift
     except (
         BaseStoreError,
-        ReconcileStoreError,
+        ReconcileStoreError,  # includes an unparseable structured file
         OSError,
         UnicodeDecodeError,
         ValueError,
     ):
         return False  # degrade like _is_stale — never raise in read-only compare
-
-
-def _reconcile_staged_expected_structured(
-    profile: str,
-    file_id_str: str,
-    src: Path,
-    dst: Path,
-    fmt: "StructuredFormat",
-) -> bool:
-    from setforge.errors import (
-        InvariantViolation,
-        ReconcileStoreError,
-        StructuredParseError,
-    )
-    from setforge.reconcile import index_model
-    from setforge.reconcile import store as reconcile_store
-    from setforge.reconcile import structured_units as su
-    from setforge.reconcile.types import UnitKind
-    from setforge.reconcile.types import file_id as make_file_id
-
-    try:
-        fid = make_file_id(file_id_str)
-        base = reconcile_store.read_base(profile, fid)
-        if base is None:
-            return False
-        entry = reconcile_store.read_index(profile).files.get(file_id_str)
-        if entry is None or not entry.staged:
-            return False
-        live = dst.read_bytes()  # raw bytes, not re-parsed — INV-8 needs on-disk form
-        tracked = src.read_bytes()
-        fresh = su.extract_structured_units(base, live, fmt)
-        units = su.classify_structured(
-            fresh, index_model.require_unit_kind(entry.hunks, UnitKind.KEY), fmt
-        )
-        drafts = reconcile_store.read_drafts(profile, fid)
-        su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)
-        return True
-    except InvariantViolation:
-        return False
-    except (
-        StructuredParseError,
-        BaseStoreError,
-        ReconcileStoreError,
-        OSError,
-        UnicodeDecodeError,
-        ValueError,
-    ):
-        return False
 
 
 def _compare_symlinked(

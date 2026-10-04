@@ -11,17 +11,18 @@ import pytest
 from setforge.cli import stage as stage_mod
 from setforge.cli.stage import (
     Decision,
-    StructuredFileStage,
-    _apply_structured,
+    FileStage,
+    _apply,
     collect_stages,
     collect_structured_stages,
-    walk_structured,
+    walk,
 )
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.reconcile import share_draft
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from setforge.reconcile.unit_engine import structured_engine
 from setforge.ui.widgets import CANCEL
 
 
@@ -64,7 +65,7 @@ def test_collect_structured_yields_key_units(
 
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
-    assert stage.fmt is StructuredFormat.YAML
+    assert stage.engine.fmt is StructuredFormat.YAML
     assert [u.path for u in stage.units] == ["fontSize"]
     assert all(u.cls is HunkClass.PENDING for u in stage.units)
 
@@ -121,8 +122,8 @@ def test_persist_structured_records_key_classification(
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
-    result = walk_structured(stage.units, lambda u, i, t: Decision(cls=HunkClass.LOCAL))
-    _apply_structured(profile, stage, result)
+    result = walk(stage.units, lambda u, i, t: Decision(cls=HunkClass.LOCAL))
+    _apply(profile, stage, result)
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert entry.staged is True
@@ -140,10 +141,8 @@ def test_walk_structured_shared_records_shared(
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
 
-    result = walk_structured(
-        stage.units, lambda u, i, t: Decision(cls=HunkClass.SHARED)
-    )
-    _apply_structured(profile, stage, result)
+    result = walk(stage.units, lambda u, i, t: Decision(cls=HunkClass.SHARED))
+    _apply(profile, stage, result)
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
@@ -174,7 +173,7 @@ def test_structured_stage_validates_parent_child_intent_before_persist(
     (stage,) = collect_structured_stages(
         cfg, resolve_profile(cfg, profile), repo, profile
     )
-    result = walk_structured(
+    result = walk(
         stage.units, lambda unit, i, t: Decision(parent if unit.path == "a" else child)
     )
     before = store.read_index(profile)
@@ -182,19 +181,19 @@ def test_structured_stage_validates_parent_child_intent_before_persist(
         with pytest.raises(
             StructuredParseError, match="incompatible parent/descendant"
         ):
-            _apply_structured(profile, stage, result)
+            _apply(profile, stage, result)
         assert store.read_index(profile) == before
         assert store.read_base(profile, stage.fid) == base
         assert store.read_local(profile, stage.fid) == live
         assert store.read_drafts(profile, stage.fid) == {}
     else:
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
         (saved,) = collect_structured_stages(
             cfg, resolve_profile(cfg, profile), repo, profile
         )
-        assert reconstruct_structured(base, live, saved.units, {}, saved.fmt) == (
-            live if parent is HunkClass.SHARED else base
-        )
+        assert reconstruct_structured(
+            base, live, saved.units, {}, StructuredFormat.YAML
+        ) == (live if parent is HunkClass.SHARED else base)
     assert dst.read_bytes() == live
 
 
@@ -209,10 +208,10 @@ def test_render_list_json_reports_structured_drafted_and_pending(
     cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (first,) = collect_structured_stages(cfg, resolved, repo, profile)
-    _apply_structured(
+    _apply(
         profile,
         first,
-        walk_structured(
+        walk(
             first.units,
             lambda u, i, t: Decision(HunkClass.SHARED_DRAFTED, draft=b"18"),
         ),
@@ -291,19 +290,19 @@ def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
     cfg, repo, profile = _setup_structured(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (first,) = collect_structured_stages(cfg, resolved, repo, profile)
-    _apply_structured(
+    _apply(
         profile,
         first,
-        walk_structured(first.units, lambda u, i, t: Decision(HunkClass.SHARED)),
+        walk(first.units, lambda u, i, t: Decision(HunkClass.SHARED)),
     )
     old_hash = store.read_index(profile).files["settings.yaml"].hunks[0]["value_hash"]
     first.dst.write_bytes(b"theme: dark\nfontSize: 18\n")
     (changed,) = collect_structured_stages(cfg, resolved, repo, profile)
     assert changed.units[0].changed is True
 
-    skipped = walk_structured(changed.units, lambda u, i, t: None)
+    skipped = walk(changed.units, lambda u, i, t: None)
     assert skipped.decided_refs == set()
-    _apply_structured(profile, changed, skipped)
+    _apply(profile, changed, skipped)
     (still_changed,) = collect_structured_stages(cfg, resolved, repo, profile)
     assert still_changed.units[0].changed is True
     assert (
@@ -311,11 +310,9 @@ def test_structured_skip_then_same_class_reconfirm_controls_fingerprint(
         == old_hash
     )
 
-    reconfirmed = walk_structured(
-        still_changed.units, lambda u, i, t: Decision(HunkClass.SHARED)
-    )
+    reconfirmed = walk(still_changed.units, lambda u, i, t: Decision(HunkClass.SHARED))
     assert reconfirmed.decided_refs == {UnitRef.key("fontSize")}
-    _apply_structured(profile, still_changed, reconfirmed)
+    _apply(profile, still_changed, reconfirmed)
     (after,) = collect_structured_stages(cfg, resolved, repo, profile)
     assert after.units[0].changed is False
     assert after.units[0].confirmed_hash == after.units[0].value_hash
@@ -330,11 +327,11 @@ def test_structured_prompt_to_lock_live_race_refuses_stale_decision(
     (stage,) = collect_structured_stages(
         cfg, resolve_profile(cfg, profile), repo, profile
     )
-    result = walk_structured(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
+    result = walk(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
     stage.dst.write_bytes(b"theme: dark\nfontSize: 18\n")
 
     with pytest.raises(InvariantViolation, match="changed after it was shown"):
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
 
     entry = store.read_index(profile).files["settings.yaml"]
     assert entry.staged is False
@@ -351,7 +348,7 @@ def test_structured_apply_refuses_stale_recorded_base_without_writes(
     (stage,) = collect_structured_stages(
         cfg, resolve_profile(cfg, profile), repo, profile
     )
-    result = walk_structured(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
+    result = walk(stage.units, lambda u, i, t: Decision(HunkClass.SHARED))
     newer_base = b"theme: light\nfontSize: 14\n"
     with locking.profile_lock(profile):
         store.record(
@@ -366,7 +363,7 @@ def test_structured_apply_refuses_stale_recorded_base_without_writes(
     assert not drafts_path.exists()
 
     with pytest.raises(InvariantViolation, match=r"recorded base.*changed"):
-        _apply_structured(profile, stage, result)
+        _apply(profile, stage, result)
 
     assert stage.dst.read_bytes() == before_live
     assert store.read_base(profile, file_id("settings.yaml")) == newer_base
@@ -384,13 +381,13 @@ def test_walk_structured_draft_uses_typed_key_reference(
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_structured_stages(cfg, resolved, repo, profile)
     draft = b"18"
-    result = walk_structured(
+    result = walk(
         stage.units,
         lambda u, i, t: Decision(cls=HunkClass.SHARED_DRAFTED, draft=draft),
     )
 
     assert result.drafts == {UnitRef.key("fontSize"): draft}
-    _apply_structured(profile, stage, result)
+    _apply(profile, stage, result)
     assert store.read_drafts(profile, file_id("settings.yaml")) == {
         UnitRef.key("fontSize"): draft
     }
@@ -399,19 +396,19 @@ def test_walk_structured_draft_uses_typed_key_reference(
 # --- structured Share sub-menu (Draft button → type-confined key draft) -------
 
 
-def _value_stage() -> tuple[StructuredFileStage, KeyUnit]:
+def _value_stage() -> tuple[FileStage[KeyUnit], KeyUnit]:
     """A one-key structured stage whose live ``workdir`` is a host-specific path."""
     live = b"workdir: /home/raul/projects\n"
     unit = KeyUnit(HunkClass.PENDING, "workdir", "workdir", "sha256:v")
-    stage = StructuredFileStage(
+    stage = FileStage(
         sub_name="settings.yaml",
         fid=file_id("settings.yaml"),
         src=Path("src"),
         dst=Path("dst"),
         base=live,
         live=live,
-        fmt=StructuredFormat.YAML,
         units=[unit],
+        engine=structured_engine(StructuredFormat.YAML),
     )
     return stage, unit
 
@@ -431,7 +428,7 @@ def test_structured_share_submenu_draft_returns_shared_drafted(
 
     monkeypatch.setattr(stage_mod.share_draft, "draft_key_unit", _fake_draft)
 
-    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+    decision = stage_mod._share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
 
     assert decision == Decision(
         HunkClass.SHARED_DRAFTED, draft=b"~/projects", adopt=False
@@ -448,7 +445,7 @@ def test_structured_share_submenu_verbatim_returns_shared(
     monkeypatch.setattr(
         stage_mod, "button_bar", lambda *a, **k: stage_mod._Menu.VERBATIM
     )
-    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+    decision = stage_mod._share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
     assert decision == Decision(HunkClass.SHARED)
 
 
@@ -459,7 +456,7 @@ def test_structured_share_submenu_draft_cancel_returns_none(
     stage, unit = _value_stage()
     monkeypatch.setattr(stage_mod, "button_bar", lambda *a, **k: stage_mod._Menu.DRAFT)
     monkeypatch.setattr(stage_mod.share_draft, "draft_key_unit", lambda *a, **k: CANCEL)
-    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+    decision = stage_mod._share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
     assert decision is None
 
 
@@ -544,7 +541,7 @@ def test_public_structured_promotion_preserves_shape_comments_and_inverse(
     before_control = (live_root / "two").read_bytes()
     seen: list[str] = []
 
-    def choices(_stage: StructuredFileStage):
+    def choices(_stage: FileStage[KeyUnit]):
         def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
             seen.append(unit.path)
             return Decision(
@@ -554,7 +551,7 @@ def test_public_structured_promotion_preserves_shape_comments_and_inverse(
         return choose
 
     monkeypatch.setattr(
-        import_module("setforge.cli.stage"), "_structured_interactive_choice", choices
+        import_module("setforge.cli.stage"), "_interactive_choice", choices
     )
     staged = runner.invoke(app, ["stage", name, *args], input=_TerminalInput())
     assert staged.exit_code == 0, (staged.output, staged.exception)
@@ -632,7 +629,7 @@ def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
     assert destination.read_bytes() == base
     destination.write_bytes(live)
 
-    def choices(_stage: StructuredFileStage):
+    def choices(_stage: FileStage[KeyUnit]):
         def choose(unit: KeyUnit, _index: int, _total: int) -> Decision:
             return Decision(
                 HunkClass.LOCAL if unit.path == "host" else HunkClass.SHARED
@@ -640,7 +637,7 @@ def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
 
         return choose
 
-    monkeypatch.setattr(stage_mod, "_structured_interactive_choice", choices)
+    monkeypatch.setattr(stage_mod, "_interactive_choice", choices)
     staged = runner.invoke(app, ["stage", name, *args], input=_TerminalInput())
     assert staged.exit_code == 0, (staged.output, staged.exception)
 

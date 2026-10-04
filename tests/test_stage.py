@@ -185,9 +185,9 @@ def test_walk_applies_choices_and_quits(
     scripted = iter(decisions)
     result = walk(stage.hunks, lambda h, i, n: next(scripted))
 
-    assert result.hunks[0].cls is HunkClass.SHARED
-    assert result.hunks[1].cls is HunkClass.PENDING  # untouched (quit before it)
-    assert result.decided_refs == {result.hunks[0].ref}
+    assert result.units[0].cls is HunkClass.SHARED
+    assert result.units[1].cls is HunkClass.PENDING  # untouched (quit before it)
+    assert result.decided_refs == {result.units[0].ref}
 
 
 def test_walk_skip_leaves_class_unchanged(
@@ -197,7 +197,7 @@ def test_walk_skip_leaves_class_unchanged(
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
     result = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
-    assert all(h.cls is HunkClass.PENDING for h in result.hunks)
+    assert all(h.cls is HunkClass.PENDING for h in result.units)
     assert result.decided_refs == set()
 
 
@@ -219,7 +219,7 @@ def test_render_list_human_reports_participation_and_actionable_counts(
     changed = replace(
         first,
         participating=True,
-        hunks=[
+        units=[
             replace(shell, cls=HunkClass.SHARED, changed=True),
             replace(host, cls=HunkClass.LOCAL, changed=True),
             replace(
@@ -259,7 +259,7 @@ def test_render_list_json_changed_local_needs_no_reconfirm(
 
     _render_list(
         OutputContext(OutputFormat.JSON),
-        [replace(stage, participating=True, hunks=[local])],
+        [replace(stage, participating=True, units=[local])],
     )
 
     payload = json.loads(capsys.readouterr().out)
@@ -283,7 +283,7 @@ def test_summarize_stages_is_the_stage_json_projection(
     shared = replace(stage.hunks[1], cls=HunkClass.SHARED, changed=True)
 
     (summary,) = summarize_stages(
-        [replace(stage, participating=True, hunks=[local, shared])]
+        [replace(stage, participating=True, units=[local, shared])]
     )
 
     assert summary.local == 1

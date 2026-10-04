@@ -82,6 +82,11 @@ class Hunk:
     def ref(self) -> UnitRef:
         return UnitRef.line(self.unit_id)
 
+    @property
+    def content_hash(self) -> str:
+        """``live_hash`` under the name line and key units share."""
+        return self.live_hash
+
 
 def _norm(lines: list[bytes]) -> bytes:
     """EOL/trailing-whitespace-normalised join of ``lines`` for the identity hash.
