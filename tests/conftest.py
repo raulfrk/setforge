@@ -354,9 +354,9 @@ def _make_resolved(
 class FakeClaude:
     """In-memory simulation of ``claude plugin`` commands.
 
-    Non-claude argv (e.g. ``patch``, ``git``) is forwarded to a captured
-    ``_real_run`` so the transitions layer's reverse-patch step works
-    even when ``fake_claude`` is the only fixture wired in. The
+    Non-claude argv (e.g. ``git``) is forwarded to a captured
+    ``_real_run`` so other subprocess calls keep working even when
+    ``fake_claude`` is the only fixture wired in. The
     ``fake_claude`` fixture captures ``subprocess.run`` BEFORE
     monkeypatching it, mirroring the delegation pattern used by
     :class:`tests.test_cli_e2e.FakeCode` for the co-resident fixture
@@ -380,7 +380,7 @@ class FakeClaude:
         self._real_run: Any = None
 
     def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
-        # Forward non-claude invocations (patch / git etc.) to the
+        # Forward non-claude invocations (git etc.) to the
         # captured real subprocess.run. Argv[0] is the binary path
         # (str already at this point).
         if args and Path(args[0]).name != "claude":
@@ -508,8 +508,8 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
     ``plugins`` snapshots and patches ``resolve_binary`` +
     ``subprocess.run`` on ``setforge.claude_plugins`` so every claude-CLI
     invocation hits the fake. The pre-monkeypatch ``subprocess.run`` is
-    captured into ``fake._real_run`` so non-claude argv (e.g. ``patch``,
-    ``git``) keeps reaching the real subprocess layer.
+    captured into ``fake._real_run`` so non-claude argv (e.g. ``git``)
+    keeps reaching the real subprocess layer.
     """
 
     def factory(
@@ -519,11 +519,9 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
     ) -> FakeClaude:
         fake = FakeClaude(marketplaces=marketplaces, plugins=plugins)
         # Snapshot the pre-monkeypatch ``subprocess.run`` so FakeClaude
-        # can forward non-claude argv (patch / git etc. used by the
-        # transitions revert path) to the real function. Capturing
-        # ``subprocess.run`` here — before the ``monkeypatch.setattr``
-        # below — preserves the delegate even when the e2e test path
-        # exercises ``apply_patch_reverse``.
+        # can forward non-claude argv (git etc.) to the real function.
+        # Capturing ``subprocess.run`` here — before the
+        # ``monkeypatch.setattr`` below — preserves the delegate.
         fake._real_run = subprocess.run
         monkeypatch.setattr(
             "setforge.claude_plugins.resolve_binary",

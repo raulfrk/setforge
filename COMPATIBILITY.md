@@ -104,7 +104,12 @@ revert the older records, naming the version that wrote them, before changing
 anything. Where the sections below promise that a transition stays revertible
 "while it is retained", that holds for records written by the same family of
 releases; an older record is reverted with the release that wrote it.
-`transitions list` and `transitions show` read records of either kind.
+`transitions list` and `transitions show` read records of either kind. The
+reverse direction is not guaranteed either: an older release may refuse a
+record written by a newer one (1.3.9 and the development builds before image
+records stop with an uncaught "path guards must be ancestors of journaled
+paths" error on a record whose files were written through a symlinked parent
+directory); nothing is changed in that case.
 
 ## Auto-on-install file migration — a separate class
 
@@ -250,7 +255,8 @@ naming the recovery path.
 
 Recovery is **transition-based, not schema-reverse-based.** The forward
 migration captures pre-state snapshots of every mutated reconcile leg plus the
-`local.yaml` text patch and commits ONE durable transition **before** any strip.
+pre/post images of `setforge.yaml` and `local.yaml` and commits ONE durable
+transition **before** any strip.
 While that transition is retained, `setforge revert --profile=migrate`
 byte-restores the pre-cutover state in lockstep — the recovery a stateless
 reverse migration cannot provide, and the **only** downgrade across this major

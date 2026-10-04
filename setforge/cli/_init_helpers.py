@@ -147,9 +147,9 @@ def _probe_binaries() -> tuple[BinaryProbe, ...]:
 def _resolve_uv() -> Path | None:
     """Resolve ``uv`` via ``shutil.which`` only.
 
-    ``uv`` is not in :data:`setforge.binaries.SUPPORTED_BINARIES`
-    (CLI/env/config overrides apply to ``code``/``claude``/``patch``
-    only). The init probe reports its presence on PATH; users who
+    ``uv`` resolves through ``PATH`` alone here (its env/config overrides
+    in :data:`setforge.binaries.SUPPORTED_BINARIES` are not consulted by
+    the init probe). The probe reports its presence on PATH; users who
     relocate ``uv`` already need a PATH fix.
     """
     which = shutil.which("uv")
