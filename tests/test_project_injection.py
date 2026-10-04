@@ -2709,6 +2709,8 @@ def test_remove_does_not_recreate_a_tracked_overlay_file_that_git_removed(
     removed = CliRunner().invoke(app, ["project", "remove", "demo", *arguments])
 
     assert removed.exit_code == 0, (removed.output, removed.exception)
+    assert "  leave absent: AGENTS.md\n" in removed.output
+    assert "restore" not in removed.output
     assert not destination.exists()
     assert not manifest_path(target, "demo").exists()
     assert not list((state_root / "project-overlays").glob("*.json"))
