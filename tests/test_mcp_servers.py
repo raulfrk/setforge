@@ -106,7 +106,9 @@ def fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
     def _install(**kwargs: Any) -> FakeMcpCli:
         cli = FakeMcpCli(**kwargs)
-        monkeypatch.setattr(mcp, "resolve_binary", lambda _name: Path("/fake/claude"))
+        monkeypatch.setattr(
+            "setforge.claude_plugins.resolve_binary", lambda _name: Path("/fake/claude")
+        )
         mcp._get_claude_bin.cache_clear()
         monkeypatch.setattr(mcp.subprocess, "run", cli.run)
         return cli
@@ -567,7 +569,7 @@ def test_undeclared_profile_name_raises(fake_mcp) -> None:
 
 
 def test_missing_claude_binary_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(mcp, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _name: None)
     mcp._get_claude_bin.cache_clear()
     with pytest.raises(PluginToolMissing):
         mcp.ensure_claude_available()
@@ -821,7 +823,9 @@ def test_missing_claude_skips_before_git_but_available_claude_requires_context(
 
     fake_mcp()
     if not claude_available:
-        monkeypatch.setattr(mcp, "resolve_binary", lambda _name: None)
+        monkeypatch.setattr(
+            "setforge.claude_plugins.resolve_binary", lambda _name: None
+        )
     probes: list[list[str]] = []
 
     def missing_git(argv, **kwargs: Any) -> subprocess.CompletedProcess:

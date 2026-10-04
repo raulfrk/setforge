@@ -122,7 +122,9 @@ class FakeMcpCli:
 @pytest.fixture
 def fake_cli(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeMcpCli]:
     cli = FakeMcpCli()
-    monkeypatch.setattr(mcp, "resolve_binary", lambda _name: Path("/fake/claude"))
+    monkeypatch.setattr(
+        "setforge.claude_plugins.resolve_binary", lambda _name: Path("/fake/claude")
+    )
     mcp._get_claude_bin.cache_clear()
     monkeypatch.setattr(mcp.subprocess, "run", cli.run)
     yield cli

@@ -30,7 +30,6 @@ the aggregated failures, never aborting the whole pass on one bad server.
 
 from __future__ import annotations
 
-import functools
 import json
 import logging
 import os
@@ -40,9 +39,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from setforge.binaries import resolve_binary, stderr_of
+from setforge.binaries import stderr_of
+from setforge.claude_plugins import _get_claude_bin, ensure_claude_available
 from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
-from setforge.errors import ConfigError, PluginToolMissing, SetforgeError
+from setforge.errors import ConfigError, SetforgeError
 from setforge.git_info import run_git
 
 __all__ = [
@@ -56,7 +56,6 @@ __all__ = [
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
-_CLAUDE_BIN_NAME = "claude"
 _TIMEOUT_S = 30
 """Per-call timeout for ``claude mcp`` subprocesses (seconds)."""
 
@@ -69,28 +68,6 @@ _ALREADY_EXISTS_MARKERS: tuple[str, ...] = (
     "already registered",
     "already configured",
 )
-
-
-@functools.lru_cache(maxsize=1)
-def _get_claude_bin() -> Path:
-    """Resolve the ``claude`` binary via :func:`resolve_binary` or raise.
-
-    Cached for the process lifetime; tests that change the resolved path
-    between cases must call ``_get_claude_bin.cache_clear()``. Raises
-    :class:`PluginToolMissing` when no layer resolves the binary.
-    """
-    path = resolve_binary(_CLAUDE_BIN_NAME)
-    if path is None:
-        raise PluginToolMissing(
-            "claude binary not found; install Claude CLI or set "
-            "--claude-bin / SETFORGE_CLAUDE_BIN / local.yaml"
-        )
-    return path
-
-
-def ensure_claude_available() -> None:
-    """Resolve the ``claude`` CLI or raise :class:`PluginToolMissing`."""
-    _get_claude_bin()
 
 
 @dataclass(frozen=True, slots=True)
