@@ -185,12 +185,8 @@ def _tree_host(
 
 
 def _install_settled(host: Host) -> None:
-    # A root that contains SetForge's own state changes while it is being
-    # planned, so the first run may ask to be retried.
-    for _ in range(3):
-        if host.install().exit_code == 0:
-            return
-    raise AssertionError("install did not settle")
+    result = host.install()
+    assert result.exit_code == 0, result.output
 
 
 def test_scan_never_offers_state_that_sits_under_a_managed_root(
@@ -226,6 +222,8 @@ def test_scan_never_offers_cache_journal_or_snapshot_directories(
         {"c": "~/.cache", "s": "~/.local/share", "t": "~/.local/state"},
         state_in_home=True,
     )
+    for root in (".cache", ".local/share", ".local/state"):
+        (host.real_home / root).mkdir(parents=True, exist_ok=True)
     _install_settled(host)
     assert host.cli("snapshot", "create", "s").exit_code == 0
     (host.real_home / ".cache" / "stray.txt").write_bytes(b"mine\n")

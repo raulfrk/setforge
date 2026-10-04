@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The first install of a managed tree that contains SetForge's own state
+  directory no longer stops with "inputs changed after confirmation; retry".
 - Home directories reached through a symlink, such as NFS or automounted homes,
   work across install, sync, revert, snapshots, orphan cleanup and project
   commands. Symlinks present when an operation is planned are followed; a
