@@ -1,7 +1,7 @@
 """Regression: sync's Ctrl-C handler must actually restore the snapshot.
 
 The sync/capture KeyboardInterrupt path used to print "cancelled (Ctrl-C);
-files restored from snapshot" while ``capture_profile`` performed NO
+files restored from snapshot" while ``apply_capture`` performed NO
 snapshot or restore — so an interrupt after capture had already written a
 tracked src (and advanced a stored base) left those writes in place and the
 message was false. Worse, sync recorded its transition only AFTER capture
@@ -13,7 +13,7 @@ already takes, then reports the truth; plain ``capture`` (which takes no
 snapshot) reports the partial-write truth instead.
 
 * ``test_sync_ctrl_c_restores_tracked_and_base`` — drives install →
-  live-edit → ``sync`` with ``capture_profile`` patched to mutate a tracked
+  live-edit → ``sync`` with ``apply_capture`` patched to mutate a tracked
   src + advance the base then raise ``KeyboardInterrupt``; asserts BOTH are
   restored byte-exact and the message is now true. Fails pre-fix (nothing
   restored).
@@ -118,7 +118,7 @@ def test_sync_ctrl_c_restores_tracked_and_base(
 ) -> None:
     """An interrupted sync restores the tracked src AND the byte base.
 
-    ``capture_profile`` is patched to commit a partial write (mutate the
+    ``apply_capture`` is patched to commit a partial write (mutate the
     tracked src + advance the base) then raise ``KeyboardInterrupt``,
     reproducing the real "wrote some files, then Ctrl-C" hazard. Before the
     fix the sync handler printed "files restored from snapshot" but did NOT
@@ -141,9 +141,9 @@ def test_sync_ctrl_c_restores_tracked_and_base(
         base_store.write_base(_PROFILE, _MD_ID, b"ADVANCED-BASE-BYTES\n")
         raise KeyboardInterrupt
 
-    # Patch the symbol as sync.py resolves it (capture_mod.capture_profile).
+    # Patch the symbol as sync.py resolves it (capture_mod.apply_capture).
     monkeypatch.setattr(
-        "setforge.cli.sync.capture_mod.capture_profile", _partial_then_interrupt
+        "setforge.cli.sync.capture_mod.apply_capture", _partial_then_interrupt
     )
 
     result = _sync(config)
@@ -182,7 +182,7 @@ def test_sync_oserror_restores_tracked_and_base(
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(
-        "setforge.cli.sync.capture_mod.capture_profile", _partial_then_oserror
+        "setforge.cli.sync.capture_mod.apply_capture", _partial_then_oserror
     )
 
     result = _sync(config)
@@ -211,7 +211,7 @@ def test_sync_recovery_failure_never_masks_capture_error(
     def fail_recovery(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("compensator failed")
 
-    monkeypatch.setattr("setforge.cli.sync.capture_mod.capture_profile", fail_capture)
+    monkeypatch.setattr("setforge.cli.sync.capture_mod.apply_capture", fail_capture)
     monkeypatch.setattr("setforge.operations.recover_files", fail_recovery)
 
     result = _sync(config)
@@ -236,7 +236,7 @@ def test_capture_ctrl_c_message_not_false_restore(
     def _interrupt(*_args: object, **_kwargs: object) -> list[object]:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("setforge.cli.sync.capture_mod.capture_profile", _interrupt)
+    monkeypatch.setattr("setforge.cli.sync.capture_mod.apply_capture", _interrupt)
 
     args = [
         "capture",

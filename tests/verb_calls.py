@@ -36,10 +36,10 @@ def preview_capture_profile(
     repo: Path,
     *,
     resolved: ResolvedProfile | None = None,
-) -> tuple[capture_mod.CapturePreview, ...]:
+) -> tuple[capture_mod.CaptureItem, ...]:
     """Preview a capture as ``sync`` does before asking for confirmation."""
     resolved, authorized = _capture_inputs(config, profile, repo, resolved)
-    return capture_mod.preview_capture_profile(
+    return capture_mod.plan_capture(
         config, profile, repo, resolved=resolved, ownership_authorized=authorized
     )
 
@@ -52,9 +52,8 @@ def capture_profile(
     resolved: ResolvedProfile | None = None,
 ) -> list[capture_mod.CaptureResult]:
     """Capture live into tracked as ``sync`` does after confirmation."""
-    resolved, authorized = _capture_inputs(config, profile, repo, resolved)
-    return capture_mod.capture_profile(
-        config, profile, repo, resolved=resolved, ownership_authorized=authorized
+    return capture_mod.apply_capture(
+        profile, preview_capture_profile(config, profile, repo, resolved=resolved)
     )
 
 

@@ -6,7 +6,7 @@ next ``sync``) or LOCAL (keep host-only). ``setforge stage --list`` is a
 read-only per-file count of SHARED / LOCAL / PENDING hunks — it writes nothing.
 
 The classifications are persisted into the reconcile index; the actual promotion
-into ``tracked/`` happens on ``sync`` (see :func:`setforge.capture.capture_profile`).
+into ``tracked/`` happens on ``sync`` (see :func:`setforge.capture.plan_capture`).
 """
 
 from __future__ import annotations

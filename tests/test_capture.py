@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.capture import CaptureAction, capture_tracked_file
+from setforge.capture import CaptureAction, CaptureResult
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation
 from tests.verb_calls import capture_profile, preview_capture_profile
@@ -15,28 +15,41 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _file_config(name: str, dst: Path) -> Config:
+    return Config(
+        tracked_files={name: TrackedFile(src=Path(name), dst=str(dst))},
+        profiles={"p": Profile(tracked_files=[name])},
+    )
+
+
+def _capture_file(src: Path, dst: Path) -> CaptureResult:
+    """Capture the one unstaged file whose source is ``<repo>/tracked/<name>``."""
+    (result,) = capture_profile(_file_config(src.name, dst), "p", src.parent.parent)
+    return result
+
+
 def test_capture_plain_copy(tmp_path: Path) -> None:
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
     _write(dst, "live content\n")
-    result = capture_tracked_file(src, dst)
+    result = _capture_file(src, dst)
     assert result.action is CaptureAction.UPDATED
     assert src.read_text() == "live content\n"
 
 
 def test_capture_noop_when_unchanged(tmp_path: Path) -> None:
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
     _write(src, "same\n")
     _write(dst, "same\n")
-    result = capture_tracked_file(src, dst)
+    result = _capture_file(src, dst)
     assert result.action is CaptureAction.NOOP
 
 
 def test_capture_skips_missing_dst(tmp_path: Path) -> None:
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "missing"
-    result = capture_tracked_file(src, dst)
+    result = _capture_file(src, dst)
     assert result.action is CaptureAction.SKIPPED
     assert not src.exists()
 
@@ -57,15 +70,7 @@ def test_capture_profile_iterates_tracked_files(tmp_path: Path) -> None:
         },
         profiles={"p": Profile(tracked_files=["x", "y"])},
     )
-    # Fresh capture: tracked doesn't exist yet; the walker yields no
-    # items, so setforge_yaml_path is required by signature only —
-    # not actually read. Pass a placeholder path that doesn't need to
-    # exist for this no-drift case.
-    results = capture_profile(
-        config,
-        "p",
-        repo,
-    )
+    results = capture_profile(config, "p", repo)
     assert {r.name for r in results} == {"x", "y"}
     assert all(r.action is CaptureAction.UPDATED for r in results)
     assert src1.read_text() == "x-live\n"
@@ -116,10 +121,7 @@ def _stage_index(profile: str, fid, base: bytes, live: bytes, classes: dict) -> 
 
 
 def _a5_config(dst: Path) -> Config:
-    return Config(
-        tracked_files={"CLAUDE.md": TrackedFile(src=Path("CLAUDE.md"), dst=str(dst))},
-        profiles={"p": Profile(tracked_files=["CLAUDE.md"])},
-    )
+    return _file_config("CLAUDE.md", dst)
 
 
 def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
@@ -127,7 +129,6 @@ def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
-    from setforge.capture import _capture_staged_plain
     from setforge.reconcile import store
     from setforge.reconcile.types import file_id
 
@@ -157,7 +158,7 @@ def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
         )
 
     with pytest.raises(InvariantViolation, match="current 'line' routing"):
-        _capture_staged_plain("p", "blob", src, dst)
+        capture_profile(_file_config("blob", dst), "p", tmp_path)
     assert src.read_bytes() == b"tracked\x00"
 
 
@@ -166,7 +167,6 @@ def test_participating_plain_binary_fails_closed_before_wholesale_capture(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
-    from setforge.capture import _capture_staged_plain
     from setforge.reconcile import store
     from setforge.reconcile.types import file_id
 
@@ -186,7 +186,7 @@ def test_participating_plain_binary_fails_closed_before_wholesale_capture(
         )
 
     with pytest.raises(InvariantViolation, match="not valid UTF-8"):
-        _capture_staged_plain("p", "blob", src, dst)
+        capture_profile(_file_config("blob", dst), "p", tmp_path)
     assert src.read_bytes() == b"tracked before\n"
 
 
@@ -196,7 +196,6 @@ def test_participating_plain_missing_live_fails_closed(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
-    from setforge.capture import _capture_staged_plain
     from setforge.reconcile import store
     from setforge.reconcile.types import file_id
 
@@ -224,7 +223,7 @@ def test_participating_plain_missing_live_fails_closed(
             config, "p", tmp_path, resolved=resolve_profile(config, "p")
         )
     with pytest.raises(InvariantViolation, match="has no live file"):
-        _capture_staged_plain("p", "missing", src, dst)
+        capture_profile(config, "p", tmp_path)
     assert src.read_bytes() == b"tracked before\n"
 
 
@@ -296,7 +295,7 @@ def test_staged_capture_keeps_host_local_section_out_of_tracked(
     legacy local.yaml ``host_local_sections`` strip.
 
     STAGE B retires the local.yaml host-local declaration; ``sync`` no longer
-    threads a ``host_local_sections_map`` into ``capture_profile``. A host-local
+    threads a ``host_local_sections_map`` into capture. A host-local
     section is instead a LOCAL unit in the reconcile store (a purely-additive
     ``## My Tweaks`` section carrying a minted ``reloc_anchor``). This pins that
     the reconcile-native staged capture keeps that LOCAL content host-only — it
@@ -587,6 +586,127 @@ def test_staged_capture_pending_hint(
     assert any("stage" in w for w in result.warnings)  # the "run setforge stage" hint
 
 
+def _staged_and_plain(tmp_path: Path) -> tuple[Config, Path, Path, Path, Path]:
+    """A staged ``CLAUDE.md`` (Shell shared) and an unstaged ``notes``."""
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    staged_src = repo / "tracked" / "CLAUDE.md"
+    staged_dst = tmp_path / "live" / "CLAUDE.md"
+    plain_dst = tmp_path / "live" / "notes"
+    _write(staged_src, _A5_BASE.decode())
+    _write(staged_dst, _A5_LIVE.decode())
+    _write(plain_dst, "planned\n")
+    _stage_index(
+        "p",
+        file_id("CLAUDE.md"),
+        _A5_BASE,
+        _A5_LIVE,
+        {"## Shell": HunkClass.SHARED},
+    )
+    config = Config(
+        tracked_files={
+            "CLAUDE.md": TrackedFile(src=Path("CLAUDE.md"), dst=str(staged_dst)),
+            "notes": TrackedFile(src=Path("notes"), dst=str(plain_dst)),
+        },
+        profiles={"p": Profile(tracked_files=["CLAUDE.md", "notes"])},
+    )
+    return config, repo, staged_src, staged_dst, plain_dst
+
+
+def test_apply_writes_the_planned_bytes_not_a_later_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live edit made after planning reaches neither tracked nor the store."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.capture import apply_capture
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    config, repo, staged_src, staged_dst, plain_dst = _staged_and_plain(tmp_path)
+    plan = preview_capture_profile(config, "p", repo)
+    planned = [item.proposed for item in plan]
+    assert planned[1] == b"planned\n"
+
+    staged_dst.write_bytes(_A5_LIVE + b"\n## Later\nunseen\n")
+    plain_dst.write_bytes(b"later\n")
+    apply_capture("p", plan)
+
+    assert [staged_src.read_bytes(), (repo / "tracked" / "notes").read_bytes()] == (
+        planned
+    )
+    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    store.verify("p")
+
+
+def test_apply_checks_the_bytes_read_back_before_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """INV-8: a tracked file that does not hold the planned bytes is not recorded."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import capture as capture_mod
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    config, repo, _staged_src, staged_dst, _plain_dst = _staged_and_plain(tmp_path)
+    staged_dst.write_bytes(_A5_LIVE + b"\n## Later\nhost only\n")
+    plan = preview_capture_profile(config, "p", repo)
+    assert plan[0].action is CaptureAction.UPDATED
+    assert plan[0].store_update is True
+
+    def torn_write(path: Path, data: bytes, **_kwargs: object) -> None:
+        path.write_bytes(data[:-1])
+
+    monkeypatch.setattr(capture_mod.atomicio, "atomic_write_bytes", torn_write)
+    with pytest.raises(InvariantViolation, match="INV-8"):
+        capture_mod.apply_capture("p", plan)
+
+    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    assert not (repo / "tracked" / "notes").exists()
+
+
+def test_staged_plan_refuses_a_reconstruction_that_is_not_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A draft that is not UTF-8 is refused while planning, before any write."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from dataclasses import replace
+
+    from setforge import locking
+    from setforge.reconcile import hunks, store
+    from setforge.reconcile.types import HunkClass, content_sha, file_id
+
+    base = b"keep\nold\n"
+    live = b"keep\nhost\n"
+    draft = b"caf\xe9\n"
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, base.decode())
+    _write(dst, live.decode())
+    (fresh,) = hunks.extract_hunks(base, live)
+    drafted = replace(
+        fresh, cls=HunkClass.SHARED_DRAFTED, draft_hash=content_sha(draft)
+    )
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            file_id("CLAUDE.md"),
+            base=base,
+            local=live,
+            staged=True,
+            hunks=hunks.serialize([drafted]),
+            drafts={drafted.ref: draft},
+        )
+
+    config = _a5_config(dst)
+    with pytest.raises(InvariantViolation, match="not valid UTF-8"):
+        preview_capture_profile(config, "p", repo)
+    with pytest.raises(InvariantViolation, match="not valid UTF-8"):
+        capture_profile(config, "p", repo)
+    assert src.read_bytes() == base
+
+
 # --------------------------------------------------------------------------- #
 # A5b staged STRUCTURED (YAML/JSON) capture — only SHARED keys promote (INV-8)
 # --------------------------------------------------------------------------- #
@@ -620,12 +740,7 @@ def _stage_structured_index(
 
 
 def _sy_config(dst: Path) -> Config:
-    return Config(
-        tracked_files={
-            "settings.yaml": TrackedFile(src=Path("settings.yaml"), dst=str(dst))
-        },
-        profiles={"p": Profile(tracked_files=["settings.yaml"])},
-    )
+    return _file_config("settings.yaml", dst)
 
 
 def test_participating_structured_parse_failure_never_wholesale_captures(
@@ -633,9 +748,7 @@ def test_participating_structured_parse_failure_never_wholesale_captures(
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
-    from setforge.capture import _capture_staged_structured
     from setforge.reconcile import store
-    from setforge.reconcile.structured_units import StructuredFormat
     from setforge.reconcile.types import file_id
 
     src = tmp_path / "tracked" / "settings.yaml"
@@ -653,9 +766,7 @@ def test_participating_structured_parse_failure_never_wholesale_captures(
         )
 
     with pytest.raises(InvariantViolation, match="cannot be parsed as yaml"):
-        _capture_staged_structured(
-            "p", "settings.yaml", src, dst, StructuredFormat.YAML
-        )
+        capture_profile(_sy_config(dst), "p", tmp_path)
     assert src.read_bytes() == b"theme: dark\n"
 
 
@@ -789,42 +900,103 @@ def test_changed_structured_local_has_no_reconfirm_hint(
     assert src.read_bytes() == _SY_BASE
 
 
+def test_structured_capture_plan_carries_the_legacy_draft_rebind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan reports, and apply writes, a draft rebound to its canonical key."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.reconcile import store
+    from setforge.reconcile import structured_units as su
+    from setforge.reconcile.types import HunkClass, UnitRef, content_sha, file_id
+
+    base = b'"name[]": old\n'
+    live = b'"name[]": host\n'
+    legacy = "name[]"
+    draft = b"shared\n"
+    (fresh,) = su.extract_structured_units(base, live, su.StructuredFormat.YAML)
+    assert fresh.path != legacy
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    _write(src, base.decode())
+    _write(dst, live.decode())
+    fid = file_id("settings.yaml")
+    with locking.profile_lock("p"):
+        store.record(
+            "p",
+            fid,
+            base=base,
+            local=live,
+            staged=True,
+            hunks=[
+                {
+                    "kind": "key",
+                    "cls": HunkClass.SHARED_DRAFTED.value,
+                    "label": legacy,
+                    "path": legacy,
+                    "value_hash": fresh.value_hash,
+                    "draft_hash": content_sha(draft),
+                }
+            ],
+            drafts={UnitRef.key(legacy): draft},
+        )
+
+    config = _sy_config(dst)
+    resolved = resolve_profile(config, "p")
+    (preview,) = preview_capture_profile(config, "p", repo, resolved=resolved)
+    assert preview.action is CaptureAction.UPDATED
+    assert preview.store_update is True
+
+    (result,) = capture_profile(config, "p", repo)
+
+    assert result.action is CaptureAction.UPDATED
+    assert src.read_bytes() == b'"name[]": shared\n'
+    assert store.read_drafts("p", fid) == {UnitRef.key(fresh.path): draft}
+    (settled,) = preview_capture_profile(config, "p", repo, resolved=resolved)
+    assert settled.action is CaptureAction.NOOP
+    assert settled.store_update is False
+    store.verify("p")
+
+
 def test_capture_keeps_crlf_bytes(tmp_path: Path) -> None:
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
+    src.parent.mkdir()
     src.write_bytes(b"a\r\nb\r\n")
     dst.write_bytes(b"a\r\nB\r\n")
-    result = capture_tracked_file(src, dst)
+    result = _capture_file(src, dst)
     assert result.action is CaptureAction.UPDATED
     assert src.read_bytes() == b"a\r\nB\r\n"
 
 
 def test_capture_line_ending_only_difference_is_an_update(tmp_path: Path) -> None:
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
+    src.parent.mkdir()
     src.write_bytes(b"a\nb\n")
     dst.write_bytes(b"a\r\nb\r\n")
-    assert capture_tracked_file(src, dst).action is CaptureAction.UPDATED
+    assert _capture_file(src, dst).action is CaptureAction.UPDATED
     assert src.read_bytes() == b"a\r\nb\r\n"
-    assert capture_tracked_file(src, dst).action is CaptureAction.NOOP
+    assert _capture_file(src, dst).action is CaptureAction.NOOP
 
 
 def test_capture_copies_undecodable_bytes_verbatim(tmp_path: Path) -> None:
     payload = b"\x89PNG\r\n\x1a\n\x00caf\xe9\xff\n"
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
     dst.write_bytes(payload)
-    assert capture_tracked_file(src, dst).action is CaptureAction.UPDATED
+    assert _capture_file(src, dst).action is CaptureAction.UPDATED
     assert src.read_bytes() == payload
-    assert capture_tracked_file(src, dst).action is CaptureAction.NOOP
+    assert _capture_file(src, dst).action is CaptureAction.NOOP
 
 
 def test_capture_undecodable_file_is_written_byte_exact(tmp_path: Path) -> None:
     payload = b"caf\xe9\n"
-    src = tmp_path / "src"
+    src = tmp_path / "tracked" / "src"
     dst = tmp_path / "dst"
     dst.write_bytes(payload)
-    result = capture_tracked_file(src, dst)
+    result = _capture_file(src, dst)
     assert result.action is CaptureAction.UPDATED
     assert src.read_bytes() == payload
 
