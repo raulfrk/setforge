@@ -8,7 +8,6 @@ import typer
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge.capture import capture_profile, preview_capture_profile
 from setforge.cli import app
 from setforge.cli.stage import _refuse_generated_stage_target
 from setforge.compare import CompareStatus, compare_profile
@@ -25,6 +24,7 @@ from setforge.errors import ConfigError, InvariantViolation
 from setforge.file_ownership import file_resource_id, observe_file
 from setforge.generated import resolve_generated
 from setforge.ownership import OwnershipStore, ProvenanceFactKind, read_owner_id
+from tests.verb_calls import capture_profile, preview_capture_profile
 
 
 def _generated() -> GeneratedContent:
@@ -218,7 +218,6 @@ def test_capture_preview_and_apply_refuse_generated_output_before_source_write(
             config,
             "p",
             repo,
-            setforge_yaml_path=repo / "setforge.yaml",
             resolved=resolved,
         )
     assert tracked.read_text(encoding="utf-8") == "portable={{ host.home }}\n"
@@ -256,7 +255,6 @@ def test_capture_profile_refuses_generated_file_before_earlier_regular_write(
             config,
             "p",
             repo,
-            setforge_yaml_path=repo / "setforge.yaml",
             resolved=resolve_profile(config, "p"),
         )
 

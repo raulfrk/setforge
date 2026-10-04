@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 import typer
 
-from setforge.capture import preview_capture_profile
 from setforge.cli.stage import _refuse_generated_stage_target
 from setforge.config import load_config, resolve_and_expand
 from setforge.errors import ConfigError, InvariantViolation
+from tests.verb_calls import preview_capture_profile
 
 
 def _write_config(repo: Path, body: str) -> Path:

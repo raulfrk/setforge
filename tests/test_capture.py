@@ -4,14 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from setforge.capture import (
-    CaptureAction,
-    capture_profile,
-    capture_tracked_file,
-    preview_capture_profile,
-)
+from setforge.capture import CaptureAction, capture_tracked_file
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation
+from tests.verb_calls import capture_profile, preview_capture_profile
 
 
 def _write(path: Path, content: str) -> None:
@@ -69,7 +65,6 @@ def test_capture_profile_iterates_tracked_files(tmp_path: Path) -> None:
         config,
         "p",
         repo,
-        setforge_yaml_path=tmp_path / "setforge.yaml",
     )
     assert {r.name for r in results} == {"x", "y"}
     assert all(r.action is CaptureAction.UPDATED for r in results)
@@ -162,7 +157,7 @@ def test_binary_plain_capture_rejects_persisted_key_route_before_fallback(
         )
 
     with pytest.raises(InvariantViolation, match="current 'line' routing"):
-        _capture_staged_plain("p", "blob", src, dst, auto=None)
+        _capture_staged_plain("p", "blob", src, dst)
     assert src.read_bytes() == b"tracked\x00"
 
 
@@ -191,7 +186,7 @@ def test_participating_plain_binary_fails_closed_before_wholesale_capture(
         )
 
     with pytest.raises(InvariantViolation, match="not valid UTF-8"):
-        _capture_staged_plain("p", "blob", src, dst, auto=None)
+        _capture_staged_plain("p", "blob", src, dst)
     assert src.read_bytes() == b"tracked before\n"
 
 
@@ -229,7 +224,7 @@ def test_participating_plain_missing_live_fails_closed(
             config, "p", tmp_path, resolved=resolve_profile(config, "p")
         )
     with pytest.raises(InvariantViolation, match="has no live file"):
-        _capture_staged_plain("p", "missing", src, dst, auto=None)
+        _capture_staged_plain("p", "missing", src, dst)
     assert src.read_bytes() == b"tracked before\n"
 
 
@@ -255,9 +250,7 @@ def test_staged_capture_promotes_only_shared_and_keeps_base(
         {"## Shell": HunkClass.SHARED, "## Host paths": HunkClass.LOCAL},
     )
 
-    capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_a5_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"## Shell" in out  # SHARED promoted
@@ -289,9 +282,7 @@ def test_staged_capture_demote_uncaptures(
     # the host re-stages Shell SHARED -> LOCAL (demote); base still lacks Shell.
     _stage_index("p", fid, _A5_BASE, _A5_LIVE, {"## Shell": HunkClass.LOCAL})
 
-    capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_a5_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"## Shell" not in out  # demote removed the shared bytes from tracked/
@@ -328,80 +319,13 @@ def test_staged_capture_keeps_host_local_section_out_of_tracked(
     fid = file_id("CLAUDE.md")
     _stage_index("p", fid, base, live, {"## My Tweaks": HunkClass.LOCAL})
 
-    capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_a5_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"## My Tweaks" not in out
     assert b"my host-only line" not in out
     assert out == base
     store.verify("p")
-
-
-def test_legacy_host_local_overlay_excludes_file_from_staged_capture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Injected marker content is stripped even if its unit was staged SHARED."""
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    from dataclasses import replace
-
-    from setforge import locking
-    from setforge.anchors import AnchorAtEndOfFile
-    from setforge.reconcile import hunks as H
-    from setforge.reconcile import store
-    from setforge.reconcile.types import HunkClass, file_id
-    from setforge.source import HostLocalSection, HostLocalSectionName
-
-    base = b"before\nafter\n"
-    end_marker = (
-        f"<!-- setforge:user-section end host-local NAME hash={'a' * 64} -->\n"
-    ).encode()
-    live = (
-        b"before\n"
-        b"<!-- setforge:user-section start host-local NAME -->\n"
-        b"HOST SECRET\n" + end_marker + b"after\n"
-    )
-    repo = tmp_path / "repo"
-    src = repo / "tracked" / "CLAUDE.md"
-    dst = tmp_path / "live" / "CLAUDE.md"
-    src.parent.mkdir(parents=True)
-    dst.parent.mkdir(parents=True)
-    src.write_bytes(base)
-    dst.write_bytes(live)
-    with locking.profile_lock("p"):
-        store.record(
-            "p",
-            file_id("CLAUDE.md"),
-            base=base,
-            local=live,
-            staged=True,
-            hunks=H.serialize(
-                [
-                    replace(hunk, cls=HunkClass.SHARED)
-                    for hunk in H.extract_hunks(base, live)
-                ]
-            ),
-        )
-    overlay = {
-        "CLAUDE.md": {
-            HostLocalSectionName("NAME"): HostLocalSection(
-                anchor=AnchorAtEndOfFile(), body="HOST SECRET\n"
-            )
-        }
-    }
-
-    capture_profile(
-        _a5_config(dst),
-        "p",
-        repo,
-        setforge_yaml_path=tmp_path / "setforge.yaml",
-        host_local_sections_map=overlay,
-    )
-
-    assert src.read_bytes() == base
-    assert b"HOST SECRET" not in src.read_bytes()
-    assert store.read_index("p").files["CLAUDE.md"].staged is True
 
 
 def test_unstaged_file_falls_back_to_legacy_absorb(
@@ -424,9 +348,7 @@ def test_unstaged_file_falls_back_to_legacy_absorb(
     fid = file_id("CLAUDE.md")
     _stage_index("p", fid, _A5_BASE, _A5_LIVE, {})  # base recorded, nothing staged
 
-    capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_a5_config(dst), "p", repo)
 
     assert src.read_bytes() == _A5_LIVE  # legacy absorb: full live → tracked
     # the legacy plain-capture path does not touch the reconcile store — base is
@@ -463,7 +385,6 @@ def test_git_backed_staged_capture_requires_container_claim(
             _a5_config(dst),
             "p",
             repo,
-            setforge_yaml_path=tmp_path / "setforge.yaml",
         )
 
     assert src.read_bytes() == _A5_BASE
@@ -506,7 +427,7 @@ def test_participating_file_with_invalidated_identity_never_wholesale_captures(
         profiles={"p": Profile(tracked_files=["x"])},
     )
 
-    capture_profile(config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml")
+    capture_profile(config, "p", repo)
 
     assert src.read_bytes() == base
     entry = store.read_index("p").files["x"]
@@ -550,9 +471,7 @@ def test_profile_preflight_prevents_earlier_write_when_later_participant_invalid
     )
 
     with pytest.raises(InvariantViolation, match="no recorded reconciliation base"):
-        capture_profile(
-            config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-        )
+        capture_profile(config, "p", repo)
 
     assert x_src.read_bytes() == b"tracked-before\n"
 
@@ -587,9 +506,7 @@ def test_staged_capture_changed_shared_held_local_with_hint(
     assert preview.store_update is True
     assert any("re-confirm" in warning for warning in preview.warnings)
 
-    results = capture_profile(
-        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    results = capture_profile(config, "p", repo)
 
     out = src.read_bytes()
     assert b"## Shell" not in out  # changed-SHARED held at base, not promoted
@@ -602,9 +519,7 @@ def test_staged_capture_changed_shared_held_local_with_hint(
         for row in store.read_index("p").files["CLAUDE.md"].hunks
         if row["label"] == "## Shell"
     )
-    capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_a5_config(dst), "p", repo)
     assert src.read_bytes() == _A5_BASE
     assert (
         next(
@@ -642,9 +557,7 @@ def test_staged_capture_changed_local_has_no_reconfirm_hint(
         config, "p", repo, resolved=resolve_profile(config, "p")
     )
     assert not any("re-confirm" in warning for warning in preview.warnings)
-    (result,) = capture_profile(
-        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    (result,) = capture_profile(config, "p", repo)
     assert not any("re-confirm" in warning for warning in result.warnings)
     assert src.read_bytes() == _A5_BASE
 
@@ -665,9 +578,7 @@ def test_staged_capture_pending_hint(
     # The file IS under staging (Shell SHARED) but workdir is left PENDING.
     _stage_index("p", fid, _A5_BASE, _A5_LIVE, {"## Shell": HunkClass.SHARED})
 
-    results = capture_profile(
-        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    results = capture_profile(_a5_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"## Shell" in out  # SHARED promoted
@@ -743,7 +654,7 @@ def test_participating_structured_parse_failure_never_wholesale_captures(
 
     with pytest.raises(InvariantViolation, match="cannot be parsed as yaml"):
         _capture_staged_structured(
-            "p", "settings.yaml", src, dst, StructuredFormat.YAML, auto=None
+            "p", "settings.yaml", src, dst, StructuredFormat.YAML
         )
     assert src.read_bytes() == b"theme: dark\n"
 
@@ -771,9 +682,7 @@ def test_staged_capture_structured_promotes_only_shared(
         {"theme": HunkClass.SHARED, "workdir": HunkClass.LOCAL},
     )
 
-    capture_profile(
-        _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_sy_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"theme: light" in out  # SHARED key promoted
@@ -802,9 +711,7 @@ def test_staged_capture_structured_demote_uncaptures(
     # host demotes theme SHARED -> LOCAL; base still carries the upstream value.
     _stage_structured_index("p", fid, _SY_BASE, _SY_LIVE, {"theme": HunkClass.LOCAL})
 
-    capture_profile(
-        _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    capture_profile(_sy_config(dst), "p", repo)
 
     out = src.read_bytes()
     assert b"theme: dark" in out  # demote restored the base value in tracked/
@@ -839,9 +746,7 @@ def test_changed_structured_shared_stays_held_across_two_captures(
         if row["path"] == "theme"
     )
     for _ in range(2):
-        capture_profile(
-            _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-        )
+        capture_profile(_sy_config(dst), "p", repo)
         assert src.read_bytes() == _SY_BASE
         assert (
             next(
@@ -879,9 +784,7 @@ def test_changed_structured_local_has_no_reconfirm_hint(
         config, "p", repo, resolved=resolve_profile(config, "p")
     )
     assert not any("re-confirm" in warning for warning in preview.warnings)
-    (result,) = capture_profile(
-        config, "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
-    )
+    (result,) = capture_profile(config, "p", repo)
     assert not any("re-confirm" in warning for warning in result.warnings)
     assert src.read_bytes() == _SY_BASE
 
@@ -916,14 +819,12 @@ def test_capture_copies_undecodable_bytes_verbatim(tmp_path: Path) -> None:
     assert capture_tracked_file(src, dst).action is CaptureAction.NOOP
 
 
-def test_capture_undecodable_file_skips_host_local_strip(tmp_path: Path) -> None:
+def test_capture_undecodable_file_is_written_byte_exact(tmp_path: Path) -> None:
     payload = b"caf\xe9\n"
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     dst.write_bytes(payload)
-    result = capture_tracked_file(
-        src, dst, host_local_section_names=frozenset({"private"})
-    )
+    result = capture_tracked_file(src, dst)
     assert result.action is CaptureAction.UPDATED
     assert src.read_bytes() == payload
 

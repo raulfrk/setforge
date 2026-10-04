@@ -53,7 +53,6 @@ _PROFILE_CONSUMERS: tuple[tuple[str, str], ...] = (
 
 _LEGACY_RESOLVER_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
     {
-        ("capture.py", "capture_profile", "resolve_profile"),
         ("compare.py", "compare_profile", "resolve_and_expand"),
         # Sibling native destination discovery must ignore selected overlays.
         ("compare.py", "compare_profile", "resolve_profile"),

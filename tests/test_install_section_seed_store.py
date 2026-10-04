@@ -137,9 +137,9 @@ def test_fresh_seed_participates_and_capture_keeps_body_host_local(
     repo: Path, tmp_path: Path
 ) -> None:
     """A fresh LOCAL seed opts into staged capture before any prior index exists."""
-    from setforge.capture import CaptureAuto, capture_profile
     from setforge.config import load_config
     from setforge.reconcile import store
+    from tests.verb_calls import capture_profile
 
     config_path = _write_config(repo)
     result = _invoke(config_path)
@@ -153,8 +153,6 @@ def test_fresh_seed_participates_and_capture_keeps_body_host_local(
         load_config(config_path),
         _PROFILE,
         repo,
-        setforge_yaml_path=config_path,
-        auto=CaptureAuto.USE_LIVE,
     )
 
     tracked = (repo / "tracked" / "doc.md").read_text(encoding="utf-8")

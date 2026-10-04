@@ -1,15 +1,14 @@
 """Capture: live → tracked.
 
 The inverse of ``deploy.write_resolved_deploy``. Reads each profile tracked_file's
-``dst`` (the live copy) and writes a host-state-stripped version back to
-``src`` (the tracked copy): legacy ``host_local_sections`` marker pairs that
-``install`` injected are name-scoped stripped (markers and body both removed).
+``dst`` (the live copy) and writes it back to ``src`` (the tracked copy). A
+staged file promotes only its SHARED units; host-only units stay out of
+``tracked/``.
 
-Capture is no longer a silent absorb. When a tracked_file carries drift
-between tracked and live, capture resolves it via
-``--auto={use-live, keep-tracked}`` (``use-live`` absorbs the drift into
-tracked, ``keep-tracked`` refuses it); the per-tracked_file writeback then
-applies the host-state strip above.
+Capture is no longer a silent absorb: the CLI previews the writeback and
+resolves drift via ``--auto={use-live, keep-tracked}`` before calling
+:func:`capture_profile`, so ``keep-tracked`` never reaches this module's
+writers.
 """
 
 import json
@@ -19,30 +18,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rich.console import Console
-
-from setforge import (
-    atomicio,
-)
-from setforge import (
-    user_section_markers as sections,
-)
-from setforge.compare import (
-    container_authorized,
-    expand_tracked_file,
-    resolve_dst,
-    resolve_src,
-)
-from setforge.config import Config, ResolvedProfile, resolve_profile
+from setforge import atomicio
+from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
+from setforge.config import Config, ResolvedProfile
 from setforge.errors import InvariantViolation, StructuredParseError
-from setforge.file_ownership import decide_file, observe_file
-from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import index_model
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.types import HunkClass, UnitKind, UnitRef, content_sha, file_id
-from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 class CaptureAction(StrEnum):
@@ -115,30 +99,6 @@ def _preflight_staged_file(
     units = su_mod.classify_structured(fresh, entry.hunks, fmt)
     su_mod.reconstruct_structured(base, live, units, drafts, fmt)
     return True
-
-
-def _require_capture_authority(
-    repo_root: Path, sub_name: str, destination: Path
-) -> None:
-    """Refuse unit publication when the container has no current owner claim."""
-    try:
-        owner_id = read_owner_id(repo_root)
-    except OwnershipError:
-        # Preserve the legacy non-Git API surface: without a durable config
-        # identity no claim can be compared or transferred. Git-backed
-        # configurations enforce the authority boundary below.
-        if not (repo_root / ".git").exists():
-            return
-        owner_id = None
-    observation = observe_file(destination)
-    claim = OwnershipStore().read(observation.resource_id)
-    if owner_id is None or not container_authorized(
-        decide_file(observation, claim, owner_id=owner_id)
-    ):
-        raise InvariantViolation(
-            f"staged file {sub_name!r} has no current container ownership claim; "
-            f"run `setforge stage {sub_name}` to adopt it"
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +197,7 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
     repo_root: Path,
     *,
     resolved: ResolvedProfile,
-    ownership_authorized: Mapping[str, bool] | None = None,
+    ownership_authorized: Mapping[str, bool],
     auto: "CaptureAuto | None" = None,
 ) -> tuple[CapturePreview, ...]:
     """Return the exact per-file capture projection without writing anything."""
@@ -274,9 +234,7 @@ def preview_capture_profile(  # noqa: C901 - exact per-route immutable projectio
             fid = file_id(sub_name)
             entry = reconcile_store.read_index(profile_name).files.get(str(fid))
             if entry is not None and entry.staged:
-                if ownership_authorized is None:
-                    _require_capture_authority(repo_root, sub_name, sub_dst)
-                elif not ownership_authorized[sub_name]:
+                if not ownership_authorized[sub_name]:
                     raise InvariantViolation(
                         f"staged file {sub_name!r} has no current container "
                         f"ownership claim; run `setforge stage {sub_name}` to adopt it"
@@ -398,20 +356,11 @@ def _refuse_unparseable_structured(sub_name: str, src: Path, dst: Path) -> None:
         ) from err
 
 
-def capture_tracked_file(
-    src: Path,
-    dst: Path,
-    *,
-    host_local_section_names: frozenset[str] = frozenset(),
-    auto: "CaptureAuto | None" = None,
-) -> CaptureResult:
-    """Write ``dst`` (live) back to ``src`` (tracked) for a disposition=None file.
+def capture_tracked_file(src: Path, dst: Path) -> CaptureResult:
+    """Write ``dst`` (live) back to ``src`` (tracked) for an unstaged file.
 
-    A ``disposition=None`` tracked_file deploys tracked verbatim, so capture is
-    a wholesale live → tracked writeback — EXCEPT host-local content, which must
-    never leak into the shared tracked source: legacy ``host_local_sections``
-    marker pairs injected by ``install`` are name-scoped stripped via
-    :func:`sections.strip_host_local_sections`.
+    An unstaged tracked_file deploys tracked verbatim, so capture is a
+    wholesale live → tracked writeback.
 
     Returns :class:`CaptureResult.NOOP` when the resulting tracked content is
     byte-identical to the existing tracked file, or SKIPPED when live is absent.
@@ -420,44 +369,7 @@ def capture_tracked_file(
         return CaptureResult(
             name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
         )
-
-    content = dst.read_bytes()
-    # Drop legacy host-local marker pairs + bodies injected by install (via
-    # local.yaml host_local_sections) before the writeback. Name-scoped to
-    # ``host_local_section_names`` so a host-local marker the user authored
-    # directly in tracked passes through unchanged.
-    if host_local_section_names:
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-        else:
-            content = sections.strip_host_local_sections(
-                text, names=host_local_section_names, allow_legacy=True
-            ).encode("utf-8")
-    if _keep_tracked_refuses(auto, src, content):
-        return CaptureResult(
-            name=src.name, action=CaptureAction.SKIPPED, reason="keep-tracked"
-        )
-    return _write_if_changed(src, content)
-
-
-def _keep_tracked_refuses(
-    auto: "CaptureAuto | None", src: Path, content: str | bytes
-) -> bool:
-    """Return whether ``--auto=keep-tracked`` should refuse this writeback.
-
-    ``keep-tracked`` is the drift-refusal resolution: when the would-be
-    capture content diverges from the existing tracked source, the tracked
-    bytes (and, for SHARED, the stored base) must be left untouched. A
-    no-drift writeback (tracked already equals ``content``) is a NOOP either
-    way, so only an actual divergence is refused.
-    """
-    if auto is not CaptureAuto.KEEP_TRACKED:
-        return False
-    if not src.exists():
-        return False
-    return src.read_bytes() != _content_bytes(content)
+    return _write_if_changed(src, dst.read_bytes())
 
 
 def _content_bytes(content: str | bytes) -> bytes:
@@ -489,8 +401,6 @@ def _capture_staged_plain(
     sub_name: str,
     src: Path,
     dst: Path,
-    *,
-    auto: "CaptureAuto | None",
 ) -> CaptureResult | None:
     """A5 staged capture for a plain reconcile file (RFC §9.3).
 
@@ -527,10 +437,6 @@ def _capture_staged_plain(
         hunks, reconcile_store.read_drafts(profile, fid)
     )
     new_text = reconcile_hunks.reconstruct(base, live, hunks, drafts).decode("utf-8")
-    if _keep_tracked_refuses(auto, src, new_text):
-        return CaptureResult(
-            name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
-        )
     result = _write_if_changed(src, new_text)
     # INV-8: the bytes now ON DISK in tracked/ must be exactly the shared/drafted
     # set (base + promoted SHARED live + spliced SHARED_DRAFTED drafts). Read back
@@ -576,8 +482,6 @@ def _capture_staged_structured(
     src: Path,
     dst: Path,
     fmt: su_mod.StructuredFormat,
-    *,
-    auto: "CaptureAuto | None",
 ) -> CaptureResult | None:
     """A5b staged capture for a structured (YAML/JSON/JSONC) reconcile file.
 
@@ -613,10 +517,6 @@ def _capture_staged_structured(
     new_text = su_mod.reconstruct_structured(base, live, units, drafts, fmt).decode(
         "utf-8"
     )
-    if _keep_tracked_refuses(auto, src, new_text):
-        return CaptureResult(
-            name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
-        )
     result = _write_if_changed(src, new_text)
     # INV-8: the bytes now ON DISK must be exactly the promoted set; read back the
     # post-write content so this verifies the actual write.
@@ -651,65 +551,19 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
     profile_name: str,
     repo_root: Path,
     *,
-    setforge_yaml_path: Path,
-    auto: CaptureAuto | None = None,
-    snapshot_base: Path | None = None,
-    console: Console | None = None,
-    resolved: ResolvedProfile | None = None,
-    ownership_authorized: Mapping[str, bool] | None = None,
-    host_local_sections_map: (
-        Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
-    ) = None,
+    resolved: ResolvedProfile,
+    ownership_authorized: Mapping[str, bool],
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
 
-    Orchestrates the capture-time wizard (fires when there is drift the
-    walker yields) and the per-tracked_file writeback that runs against
-    post-wizard tracked.
-
-    Parameters
-    ----------
-    config:
-        Loaded :class:`setforge.config.Config`.
-    profile_name:
-        Profile to capture.
-    repo_root:
-        Repo root used for ``resolve_src``.
-    setforge_yaml_path:
-        Path to ``setforge.yaml`` — needed by the wizard's ``[s]``
-        action.
-    auto:
-        Non-interactive resolution: ``"use-live"`` absorbs all drift
-        (reproduces today's silent-absorb behavior),
-        ``"keep-tracked"`` rejects all drift, ``None`` enables
-        interactive prompts.
-    snapshot_base:
-        Override for the wizard's snapshot directory; defaults to
-        ``~/.local/state/setforge/sync-snapshots``.
-    console:
-        Rich Console for the wizard (defaults to a fresh
-        ``Console()``).
-    resolved:
-        Pre-resolved effective profile supplied by the CLI. When omitted,
-        preserve the domain API's tracked-config-only behavior for callers that
-        intentionally resolve overlays themselves.
-
-    Raises
-    ------
-    KeyboardInterrupt
-        Propagated from the wizard when the user cancels mid-prompt;
-        the CLI layer renders the cancellation and exits 130.
+    ``resolved`` is the effective profile the CLI resolved and
+    ``ownership_authorized`` maps each tracked sub-file to whether this
+    checkout holds its container claim; a staged file without it is refused.
+    Every participating file is validated before the first write.
     """
-    # The disposition path runs its own per-conflict capture handling
-    # (_capture_disposition_file); disposition=None files capture live verbatim
-    # minus host-local overlays. Per-tracked_file writeback below.
-    overlay = host_local_sections_map or {}
     results: list[CaptureResult] = []
-    effective = (
-        resolved if resolved is not None else resolve_profile(config, profile_name)
-    )
-    work: list[tuple[str, Path, Path, frozenset[HostLocalSectionName], bool]] = []
-    for name in effective.tracked_files:
+    work: list[tuple[str, Path, Path, bool]] = []
+    for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         if tracked_file.tree is not None:
             raise InvariantViolation(
@@ -718,21 +572,9 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
             )
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        # capture-back filter: names of host-local sections
-        # injected by `install` (from local.yaml). The capture path
-        # removes only these names from live-side text before merging
-        # tracked sections; any host-local marker pair the user authored
-        # directly in tracked carries through unchanged.
-        host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             work.append(
-                (
-                    sub_name,
-                    sub_src,
-                    sub_dst,
-                    host_local_names,
-                    tracked_file.generated is not None,
-                )
+                (sub_name, sub_src, sub_dst, tracked_file.generated is not None)
             )
 
     # Validate every participating file before the first tracked/store write. A
@@ -745,46 +587,32 @@ def capture_profile(  # noqa: C901 - profile-wide preflight then route dispatch
             f"generated tracked file(s) {names} are one-way output and cannot be "
             "captured; edit their tracked templates or host-input declarations"
         )
-    for sub_name, _sub_src, sub_dst, host_local_names, _generated in work:
-        # Legacy local.yaml overlays are injected as marker pairs outside the
-        # unit model. Keep their historical name-scoped strip path authoritative;
-        # otherwise a staged SHARED unit could promote the injected host body.
-        if host_local_names:
-            continue
+    for sub_name, _sub_src, sub_dst, _generated in work:
         fmt = su_mod.structured_format(sub_dst)
         if _preflight_staged_file(profile_name, sub_name, sub_dst, fmt):
-            if ownership_authorized is None:
-                _require_capture_authority(repo_root, sub_name, sub_dst)
-            elif not ownership_authorized[sub_name]:
+            if not ownership_authorized[sub_name]:
                 raise InvariantViolation(
                     f"staged file {sub_name!r} has no current container ownership "
                     f"claim; run `setforge stage {sub_name}` to adopt it"
                 )
             participating.add(sub_name)
 
-    for sub_name, sub_src, sub_dst, _names, _generated in work:
-        if sub_name not in participating and auto is not CaptureAuto.KEEP_TRACKED:
+    for sub_name, sub_src, sub_dst, _generated in work:
+        if sub_name not in participating:
             _refuse_unparseable_structured(sub_name, sub_src, sub_dst)
 
-    for sub_name, sub_src, sub_dst, host_local_names, _generated in work:
+    for sub_name, sub_src, sub_dst, _generated in work:
         fmt = su_mod.structured_format(sub_dst)
-        if sub_name in participating and not host_local_names:
+        if sub_name in participating:
             if fmt is not None:
                 result = _capture_staged_structured(
-                    profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
+                    profile_name, sub_name, sub_src, sub_dst, fmt
                 )
             else:
-                result = _capture_staged_plain(
-                    profile_name, sub_name, sub_src, sub_dst, auto=auto
-                )
+                result = _capture_staged_plain(profile_name, sub_name, sub_src, sub_dst)
             assert result is not None
         else:
-            result = capture_tracked_file(
-                sub_src,
-                sub_dst,
-                host_local_section_names=host_local_names,
-                auto=auto,
-            )
+            result = capture_tracked_file(sub_src, sub_dst)
         results.append(
             CaptureResult(
                 name=sub_name,
