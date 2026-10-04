@@ -95,7 +95,6 @@ from setforge.config import (
     ReconcilePolicy,
     ResolvedProfile,
     TrackedFile,
-    TreeSymlinkPolicy,
     load_config,
     refuse_unmigrated_host_local_leak,
     resolve_effective_profile,
@@ -171,6 +170,7 @@ from setforge.tree_management import (
     inventory_path,
     plan_tree,
     read_inventory,
+    scan_live_tree,
     scan_tree,
     temporary_entry_name,
     write_inventory,
@@ -867,8 +867,7 @@ def _plan_trees(
         desired = scan_tree(source, policy, capture_payloads=True)
         if not desired.inventory.root_present:
             raise SetforgeError(f"managed tree source is missing: {source}")
-        live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
-        live = scan_tree(destination, live_policy).inventory
+        live = scan_live_tree(destination, policy)
         prior = read_inventory(profile, name)
         tree_plan = plan_tree(desired, live, prior, policy, held)
         observation = observe_tree(destination, live.fingerprint)
@@ -2075,10 +2074,7 @@ def _publish_file_claims(
             policy = tree.tracked_file.tree
             if policy is None:  # pragma: no cover - frozen plan invariant
                 raise SetforgeError("managed tree lost its policy")
-            live = scan_tree(
-                tree.destination,
-                policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE}),
-            ).inventory
+            live = scan_live_tree(tree.destination, policy)
             observed = observe_tree(tree.destination, live.fingerprint)
         if observed.resource_id != resource_id:
             if current is not None:
@@ -2190,10 +2186,7 @@ def _publish_file_adoptions_checkpoint(
             )
         else:
             assert tree.tracked_file.tree is not None
-            live_policy = tree.tracked_file.tree.model_copy(
-                update={"symlinks": TreeSymlinkPolicy.PRESERVE}
-            )
-            live_inventory = scan_tree(tree.destination, live_policy).inventory
+            live_inventory = scan_live_tree(tree.destination, tree.tracked_file.tree)
             observed = observe_tree(tree.destination, live_inventory.fingerprint)
         if observed != decision.observation:
             raise SetforgeError(

@@ -61,7 +61,12 @@ from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
 from setforge.source import load_local_codex_overlay
 from setforge.transitions import state_root
-from setforge.tree_management import plan_tree, read_inventory, scan_tree
+from setforge.tree_management import (
+    plan_tree,
+    read_inventory,
+    scan_live_tree,
+    scan_tree,
+)
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -733,10 +738,7 @@ def compare_profile(
 
         if tracked_file.tree is not None:
             desired = scan_tree(src, tracked_file.tree, capture_payloads=True)
-            live = scan_tree(
-                dst,
-                tracked_file.tree.model_copy(update={"symlinks": "preserve"}),
-            ).inventory
+            live = scan_live_tree(dst, tracked_file.tree)
             tree_plan = plan_tree(
                 desired,
                 live,
@@ -894,10 +896,7 @@ def file_authorization_map(
         tracked = config.tracked_files[name]
         if tracked.tree is not None:
             destination = resolve_dst(tracked)
-            live = scan_tree(
-                destination,
-                tracked.tree.model_copy(update={"symlinks": "preserve"}),
-            ).inventory
+            live = scan_live_tree(destination, tracked.tree)
             observation = observe_tree(destination, live.fingerprint)
             result[name] = container_authorized(
                 decide_file(

@@ -18,12 +18,51 @@ from setforge.tree_management import (
     TreeEntry,
     TreeEntryKind,
     TreeHoldResolution,
-    apply_tree,
+    TreeInventory,
+    TreePlan,
     dumps_inventory,
     loads_inventory,
     plan_tree,
     scan_tree,
 )
+
+
+def apply_tree(
+    plan: TreePlan,
+    destination: Path,
+    policy: TreePolicy,
+    *,
+    anchor_fd: int | None = None,
+    anchor_relative: tuple[str, ...] = (),
+) -> TreeInventory:
+    """Apply below a held directory descriptor, as install does.
+
+    Without an explicit anchor, hold the nearest existing ancestor of the root.
+    """
+    if anchor_fd is not None:
+        return tree_management.apply_tree(
+            plan,
+            destination,
+            policy,
+            anchor_fd=anchor_fd,
+            anchor_relative=anchor_relative,
+        )
+    anchor = destination.absolute()
+    parts: list[str] = []
+    while not parts or not anchor.is_dir():
+        parts.append(anchor.name)
+        anchor = anchor.parent
+    held_fd = os.open(anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return tree_management.apply_tree(
+            plan,
+            destination,
+            policy,
+            anchor_fd=held_fd,
+            anchor_relative=tuple(reversed(parts)),
+        )
+    finally:
+        os.close(held_fd)
 
 
 def test_scan_tree_is_deterministic_and_captures_modes(tmp_path: Path) -> None:
