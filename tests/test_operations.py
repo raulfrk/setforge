@@ -768,7 +768,7 @@ def test_prepare_round_trips_config_reservations_and_path_guards(
     loaded = operations.load("p")
 
     assert loaded == journal
-    assert operations.locked_config_dirs(loaded) == tuple(
+    assert loaded.reserved_config_dirs == tuple(
         sorted((tmp_path.resolve(), extra_config.resolve()), key=str)
     )
     assert loaded.path_guards == tuple(sorted(guards, key=lambda item: str(item.path)))
@@ -804,41 +804,21 @@ def test_snapshot_restore_allows_tracked_path_with_local_config_suffix(
     )
 
     assert operations.load("p") == journal
-    assert operations.locked_config_dirs(journal) == (tmp_path.resolve(),)
+    assert journal.reserved_config_dirs == (tmp_path.resolve(),)
 
 
-def test_schema_one_legacy_journal_fields_remain_recoverable(
-    tmp_path: Path, operation_state: Path
-) -> None:
-    path = tmp_path / "file"
-    path.write_text("before", encoding="utf-8")
-    journal = operations.begin_checkpoint(
-        _prepare(tmp_path, paths=(path,)),
-        name="files",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore files",
-    )
-    journal_path = operations.journal_path("p")
-    raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("path_guards")
-    raw.pop("reserved_config_dirs")
-    raw.pop("reserved_config_dirs_digest")
-    for row in raw["paths"]:
-        row.pop("mtime_ns")
-    journal_path.write_text(json.dumps(raw), encoding="utf-8")
-    path.write_text("after", encoding="utf-8")
-
-    loaded = operations.load("p")
-    operations.recover_files(loaded)
-
-    assert loaded.operation_id == journal.operation_id
-    assert loaded.path_guards == ()
-    assert operations.locked_config_dirs(loaded) == (tmp_path.resolve(),)
-    assert path.read_text(encoding="utf-8") == "before"
-
-
-def test_snapshot_restore_journal_cannot_drop_path_guards(
-    tmp_path: Path, operation_state: Path
+@pytest.mark.parametrize(
+    "key",
+    [
+        "path_guards",
+        "adapters",
+        "reserved_config_dirs",
+        "reserved_config_dirs_digest",
+        "transition_names_before",
+    ],
+)
+def test_journal_missing_a_required_key_is_invalid(
+    tmp_path: Path, operation_state: Path, key: str
 ) -> None:
     path = tmp_path / "live" / "file"
     path.parent.mkdir()
@@ -854,14 +834,14 @@ def test_snapshot_restore_journal_cannot_drop_path_guards(
     )
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("path_guards")
+    raw.pop(key)
     journal_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(SetforgeError, match="invalid operation journal"):
         operations.load("p")
 
 
-def test_snapshot_restore_journal_cannot_drop_config_reservations(
+def test_snapshot_restore_journal_cannot_narrow_path_guards(
     tmp_path: Path, operation_state: Path
 ) -> None:
     path = tmp_path / "live" / "file"
@@ -878,7 +858,7 @@ def test_snapshot_restore_journal_cannot_drop_config_reservations(
     )
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
-    raw.pop("reserved_config_dirs")
+    raw["path_guards"] = raw["path_guards"][1:]
     journal_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(SetforgeError, match="invalid operation journal"):
@@ -2073,7 +2053,7 @@ def test_cross_profile_state_snapshot_reserves_its_profile_namespace(
         state_snapshots=(state,),
     )
 
-    assert operations.locked_profiles(journal) == ("actual", "migrate")
+    assert journal.reserved_profiles == ("actual", "migrate")
     assert operations.conflicting_journals(
         resources=False,
         config_dir=None,
@@ -2097,7 +2077,6 @@ def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
     loaded = operations.load("migrate")
 
     assert loaded.reserved_profiles == ("migrate", "team/dev")
-    assert operations.locked_profiles(loaded) == ("migrate", "team/dev")
     assert operations.conflicting_journals(
         resources=False,
         config_dir=None,

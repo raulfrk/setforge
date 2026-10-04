@@ -578,7 +578,7 @@ def _migration_reserved_profiles(cfg_path: Path) -> tuple[str, ...]:
 def _recover_migration_journal(journal: operations.OperationJournal) -> None:
     """Restore a migration journal while holding every reserved profile lock."""
     with contextlib.ExitStack() as locks:
-        for profile in operations.locked_profiles(journal):
+        for profile in journal.reserved_profiles:
             locks.enter_context(profile_lock(profile))
         recovered = operations.recover_files(journal)
         operations.complete(recovered)

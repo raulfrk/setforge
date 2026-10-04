@@ -158,22 +158,6 @@ class OperationJournal:
     path_guards: tuple[PathGuard, ...] = ()
 
 
-def locked_profiles(journal: OperationJournal) -> tuple[str, ...]:
-    """Return every profile namespace reserved by ``journal`` in lock order."""
-    if journal.reserved_profiles:
-        return journal.reserved_profiles
-    return tuple(
-        sorted({journal.profile, *(item.profile for item in journal.state_snapshots)})
-    )
-
-
-def locked_config_dirs(journal: OperationJournal) -> tuple[Path, ...]:
-    """Return every canonical config namespace reserved by ``journal``."""
-    if journal.reserved_config_dirs:
-        return journal.reserved_config_dirs
-    return (journal.config_dir,) if journal.config_dir is not None else ()
-
-
 def _config_dirs_digest(config_dirs: tuple[Path, ...]) -> str:
     """Return an integrity witness for one exact config-lock envelope."""
     payload = json.dumps([str(path) for path in config_dirs], separators=(",", ":"))
@@ -675,9 +659,9 @@ def conflicting_journals(
         or (
             expected_config is not None
             and expected_config
-            in {path.resolve() for path in locked_config_dirs(journal)}
+            in {path.resolve() for path in journal.reserved_config_dirs}
         )
-        or bool(expected_profiles.intersection(locked_profiles(journal)))
+        or bool(expected_profiles.intersection(journal.reserved_profiles))
     )
 
 
@@ -685,7 +669,7 @@ def refuse_config_mutation(config_dir: Path) -> None:
     """Refuse a config write covered by any unfinished operation journal."""
     expected = config_dir.resolve()
     for journal in _load_all():
-        if expected in locked_config_dirs(journal):
+        if expected in journal.reserved_config_dirs:
             raise SetforgeError(
                 f"unfinished {journal.command} operation {journal.operation_id} "
                 "blocks this config mutation; run "
@@ -909,7 +893,7 @@ def _operation_lock_files(journal: OperationJournal) -> frozenset[Path]:
 
     return frozenset(
         _profile_lock_path(profile).expanduser().absolute()
-        for profile in locked_profiles(journal)
+        for profile in journal.reserved_profiles
     )
 
 
@@ -2127,10 +2111,12 @@ def _to_json(journal: OperationJournal) -> dict[str, object]:
         "command": journal.command,
         "profile": journal.profile,
         "config_dir": str(journal.config_dir) if journal.config_dir else None,
-        "reserved_config_dirs": [str(path) for path in locked_config_dirs(journal)],
-        "reserved_config_dirs_digest": _config_dirs_digest(locked_config_dirs(journal)),
+        "reserved_config_dirs": [str(path) for path in journal.reserved_config_dirs],
+        "reserved_config_dirs_digest": _config_dirs_digest(
+            journal.reserved_config_dirs
+        ),
         "state_dir": str(journal.state_dir),
-        "reserved_profiles": list(locked_profiles(journal)),
+        "reserved_profiles": list(journal.reserved_profiles),
         "resources_lock": journal.resources_lock,
         "phase": journal.phase.value,
         "created_at": journal.created_at,
@@ -2192,11 +2178,10 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     resources_lock = _require_bool(raw, "resources_lock")
     reserved_profiles = _require_str_tuple(raw, "reserved_profiles")
     path_rows = raw["paths"]
-    path_guard_rows = raw.get("path_guards", [])
-    has_reserved_config_dirs = "reserved_config_dirs" in raw
+    path_guard_rows = raw["path_guards"]
     state_rows = raw["state_snapshots"]
     checkpoint_rows = raw["checkpoints"]
-    adapter_rows = raw.get("adapters", [])
+    adapter_rows = raw["adapters"]
     if not isinstance(path_rows, list) or not isinstance(state_rows, list):
         raise TypeError("paths/state_snapshots must be lists")
     if not isinstance(path_guard_rows, list):
@@ -2242,8 +2227,6 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     ):
         raise ValueError("path guards must be ancestors of journaled paths")
     if command == "snapshot restore":
-        if not has_reserved_config_dirs:
-            raise ValueError("snapshot restore journal requires reserved_config_dirs")
         expected_guards = {
             parent
             for snapshot in paths
@@ -2295,15 +2278,9 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
     if config_raw is not None and not isinstance(config_raw, str):
         raise TypeError("config_dir must be an absolute path or null")
     config_dir = Path(config_raw) if config_raw is not None else None
-    config_dir_rows = raw.get(
-        "reserved_config_dirs", [str(config_dir)] if config_dir is not None else []
+    reserved_config_dirs = tuple(
+        Path(item) for item in _require_str_tuple(raw, "reserved_config_dirs")
     )
-    if not isinstance(config_dir_rows, list) or not all(
-        isinstance(item, str) for item in config_dir_rows
-    ):
-        raise TypeError("reserved_config_dirs must be a list of paths")
-    reserved_config_dirs = tuple(Path(item) for item in config_dir_rows)
-    config_dirs_digest = raw.get("reserved_config_dirs_digest")
     state_dir = Path(_require_str(raw, "state_dir"))
     if config_dir is not None and not config_dir.is_absolute():
         raise ValueError("config_dir must be absolute")
@@ -2320,15 +2297,10 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         )
     if any(".." in path.parts for path in (state_dir, *reserved_config_dirs)):
         raise ValueError("state_dir and reserved_config_dirs must not contain '..'")
-    if config_dirs_digest is not None and (
-        not isinstance(config_dirs_digest, str)
-        or config_dirs_digest != _config_dirs_digest(reserved_config_dirs)
+    if _require_str(raw, "reserved_config_dirs_digest") != _config_dirs_digest(
+        reserved_config_dirs
     ):
         raise ValueError("reserved_config_dirs integrity witness does not match")
-    if command == "snapshot restore" and config_dirs_digest is None:
-        raise ValueError(
-            "snapshot restore journal requires a config reservation witness"
-        )
     return OperationJournal(
         operation_id=_require_str(raw, "operation_id"),
         command=command,
@@ -2344,7 +2316,7 @@ def _from_json(raw: dict[str, object]) -> OperationJournal:  # noqa: C901
         reserved_profiles=reserved_profiles,
         adapters=adapters,
         checkpoints=checkpoints,
-        transition_names_before=_optional_str_tuple(raw, "transition_names_before"),
+        transition_names_before=_require_str_tuple(raw, "transition_names_before"),
         reserved_config_dirs=reserved_config_dirs,
         path_guards=path_guards,
     )
@@ -2903,13 +2875,6 @@ def _require_bool(raw: dict[str, object], key: str) -> bool:
 
 def _require_str_tuple(raw: dict[str, object], key: str) -> tuple[str, ...]:
     value = raw[key]
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise TypeError(f"{key} must be a list of strings")
-    return tuple(value)
-
-
-def _optional_str_tuple(raw: dict[str, object], key: str) -> tuple[str, ...]:
-    value = raw.get(key, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise TypeError(f"{key} must be a list of strings")
     return tuple(value)
