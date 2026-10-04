@@ -880,7 +880,6 @@ def test_dry_run_refuses_mismatched_regular_deploy_plan(tmp_path: Path) -> None:
             ctx=ctx,
             drift_report=report,
             deploys=(),
-            host_local_sections_map={},
         )
 
 

@@ -14,11 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from setforge.compare import CompareStatus, DriftClass, compare_profile
+from setforge.compare import CompareStatus, DriftClass
 from setforge.config import Config, Profile, TrackedFile
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from tests.verb_calls import compare_profile
 
 BASE = b"## Worktrees\nUse wt.\n\n## Paths\nworkdir: /home/generic\n"
 LIVE = b"## Worktrees\nUse wt.\n\n## Shell\nzsh\n\n## Paths\nworkdir: /home/raul\n"
@@ -242,3 +243,79 @@ def test_structured_unparseable_live_degrades_to_false(tmp_path: Path) -> None:
     dst = _structured_dst(tmp_path, "settings.json", b"{ not valid json")
 
     assert _reconcile_staged_expected("p", "settings.json", src, dst) is False
+
+
+def _claim_container(repo: Path, dst: Path, claimant: str, tmp_path: Path) -> None:
+    """Give ``dst`` a current container claim held by this or another checkout."""
+    import subprocess
+
+    from setforge.file_ownership import observe_file
+    from setforge.locking import mutation_locks
+    from setforge.ownership import OwnershipStore, load_or_create_owner_id
+
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    own = load_or_create_owner_id(repo)
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=other, check=True)
+    foreign = load_or_create_owner_id(other)
+    if claimant == "none":
+        return
+    observation = observe_file(dst)
+    with mutation_locks(resources=True):
+        OwnershipStore().claim_locked(
+            resource_id=observation.resource_id,
+            owner_id=own if claimant == "own" else foreign,
+            declaration_refs=("tracked_files.x",),
+            provenance=(),
+            locator=str(dst),
+            fingerprint=observation.fingerprint,
+            expected_generation=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("claimant", "action", "authorized"),
+    [
+        ("none", "adopt", False),
+        ("foreign", "transfer", False),
+        ("own", "manage", True),
+    ],
+)
+def test_compare_and_install_agree_on_container_authority(
+    tmp_path: Path, claimant: str, action: str, authorized: bool
+) -> None:
+    """A container this checkout must first adopt or take over is unauthorized.
+
+    Staged units cannot explain drift in a file another configuration owns, so
+    compare classifies it exactly as the install plan does.
+    """
+    import setforge.cli.install as install_mod
+    from setforge import compare as compare_mod
+    from setforge.compare import file_authorization_map
+    from setforge.config import resolve_profile
+    from setforge.ownership import read_owner_id
+
+    hunks = _stage({"## Shell": HunkClass.SHARED, "## Paths": HunkClass.LOCAL})
+    tracked = reconcile_hunks.reconstruct(BASE, LIVE, hunks, {})
+    config, repo = _config(tmp_path, tracked)
+    dst = Path(config.tracked_files["x"].dst)
+    _claim_container(repo, dst, claimant, tmp_path)
+    resolved = resolve_profile(config, "p")
+    entries = ((config.tracked_files["x"], "x", repo / "tracked" / "x", dst),)
+
+    decisions = install_mod._plan_file_ownership(
+        entries, profile="p", owner_id=read_owner_id(repo)
+    )
+    assert [decision.action.value for decision in decisions] == [action]
+    compare_map = file_authorization_map(config, resolved, repo)
+    assert compare_map == {"x": authorized}
+    assert install_mod._file_ownership_authorization(entries, decisions) == compare_map
+
+    report = compare_mod.compare_profile(
+        config, "p", repo, resolved=resolved, ownership_authorized=compare_map
+    )
+    assert report.entries[0].drift_class is (
+        DriftClass.EXPECTED if authorized else DriftClass.UNEXPECTED
+    )
+    assert report.has_unexpected_drift is not authorized

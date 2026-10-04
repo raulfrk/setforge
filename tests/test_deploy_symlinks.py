@@ -33,6 +33,7 @@ from setforge import deploy
 from setforge.cli._install_helpers import revert_symlink_deployment
 from setforge.config import TrackedFile
 from setforge.errors import SetforgeError
+from tests.verb_calls import deploy_symlinked_file
 
 
 def _make(src: Path, dst: Path, *, symlink: str) -> TrackedFile:
@@ -49,7 +50,7 @@ def test_deploy_symlink_creates_both(tmp_path: Path) -> None:
     dst = tmp_path / "link"
     tf = _make(src, dst, symlink=str(target))
 
-    result = deploy.deploy_symlinked_file(src, dst, tf)
+    result = deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == str(target)
@@ -69,10 +70,9 @@ def test_deploy_symlink_consumes_frozen_source_snapshot(tmp_path: Path) -> None:
     src.write_text("raced\n")
 
     deploy.deploy_symlinked_file(
-        src,
         dst,
         tf,
-        source_content="planned\n",
+        source_content=b"planned\n",
         source_mode=frozen_mode,
     )
 
@@ -95,7 +95,7 @@ def test_deploy_symlink_preserves_raw_string_in_readlink(tmp_path: Path) -> None
     raw_target = str(tmp_path / "preserved-as-passed")
     tf = _make(src, dst, symlink=raw_target)
 
-    deploy.deploy_symlinked_file(src, dst, tf)
+    deploy_symlinked_file(src, dst, tf)
 
     assert str(dst.readlink()) == raw_target
 
@@ -112,7 +112,7 @@ def test_deploy_relative_symlink_target_from_link_parent(
     unrelated_cwd.mkdir()
     monkeypatch.chdir(unrelated_cwd)
 
-    deploy.deploy_symlinked_file(src, dst, tf)
+    deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == raw_target
@@ -130,7 +130,7 @@ def test_deploy_symlink_refuses_regular_file_at_dst(tmp_path: Path) -> None:
     tf = _make(src, dst, symlink=str(target))
 
     with pytest.raises(SetforgeError) as exc_info:
-        deploy.deploy_symlinked_file(src, dst, tf)
+        deploy_symlinked_file(src, dst, tf)
     assert "regular file" in str(exc_info.value)
     # User content NOT clobbered.
     assert dst.read_text() == "user-content\n"
@@ -148,7 +148,7 @@ def test_deploy_symlink_replaces_pre_existing_link(tmp_path: Path) -> None:
     dst.symlink_to(str(old_target))
     tf = _make(src, dst, symlink=str(new_target))
 
-    deploy.deploy_symlinked_file(src, dst, tf)
+    deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == str(new_target)
@@ -171,11 +171,11 @@ def test_deploy_symlink_noop_on_equal_target(tmp_path: Path) -> None:
     raw_target = str(target)
     tf = _make(src, dst, symlink=raw_target)
 
-    first = deploy.deploy_symlinked_file(src, dst, tf)
+    first = deploy_symlinked_file(src, dst, tf)
     assert first.action is deploy.DeployAction.CREATED
 
     # Second deploy: link is already correct; expect NOOP.
-    second = deploy.deploy_symlinked_file(src, dst, tf)
+    second = deploy_symlinked_file(src, dst, tf)
     assert second.action is deploy.DeployAction.NOOP
     assert dst.is_symlink()
     assert str(dst.readlink()) == raw_target
@@ -194,7 +194,7 @@ def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
     dst = tmp_path / "link"
     tf = _make(src, dst, symlink=str(target))
 
-    deploy.deploy_symlinked_file(src, dst, tf)
+    deploy_symlinked_file(src, dst, tf)
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == str(target)
@@ -221,7 +221,7 @@ def test_deploy_symlink_survives_stale_tmp_collision(tmp_path: Path) -> None:
     stale = dst.parent / f".{dst.name}.setforge-symlink-tmp"
     stale.mkdir()
 
-    result = deploy.deploy_symlinked_file(src, dst, tf)
+    result = deploy_symlinked_file(src, dst, tf)
 
     assert result.action is deploy.DeployAction.CREATED
     assert dst.is_symlink()

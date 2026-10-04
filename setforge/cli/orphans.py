@@ -239,33 +239,13 @@ def _detect_orphans_live(
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_effective_profile(cfg, profile, repo_root).resolved
-    # Orphan detection consumes only the report's orphan projection; staged
-    # drift classification is irrelevant here and must not acquire the
-    # checkout-identity lock from inside cleanup's mutation lock scope.
-    ownership_authorized = {
-        sub_name: True
-        for name in resolved.tracked_files
-        for sub_name, _src, _dst in compare_mod.expand_tracked_file(
-            name,
-            compare_mod.resolve_src(cfg.tracked_files[name], repo_root),
-            compare_mod.resolve_dst(cfg.tracked_files[name]),
-        )
-    }
-    report = compare_mod.compare_profile(
+    detection = compare_mod.detect_profile_orphans(
         cfg,
+        resolved,
         profile,
         repo_root,
-        transitions_dir=transitions.transitions_root(),
-        ignored=load_ignored_orphans(),
-        ownership_authorized=ownership_authorized,
-        resolved=resolved,
-    )
-    detection = OrphanDetection(
-        orphans=report.orphans,
-        skipped_absent=report.orphan_skipped_absent,
-        skipped_source=report.orphan_skipped_source,
-        skipped_unmanaged=report.orphan_skipped_unmanaged,
-        skipped_host_local=report.orphan_skipped_host_local,
+        transitions.transitions_root(),
+        load_ignored_orphans(),
     )
     if refuse_claims:
         refuse_active_file_claims(

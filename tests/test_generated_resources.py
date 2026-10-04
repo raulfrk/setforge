@@ -8,10 +8,9 @@ import typer
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge.capture import capture_profile, preview_capture_profile
 from setforge.cli import app
 from setforge.cli.stage import _refuse_generated_stage_target
-from setforge.compare import CompareStatus, compare_profile
+from setforge.compare import CompareStatus
 from setforge.config import (
     Config,
     GeneratedContent,
@@ -23,8 +22,13 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, InvariantViolation
 from setforge.file_ownership import file_resource_id, observe_file
-from setforge.generated import resolve_generated
+from setforge.generated import (
+    rendered_source,
+    resolve_generated,
+    resolve_generated_file,
+)
 from setforge.ownership import OwnershipStore, ProvenanceFactKind, read_owner_id
+from tests.verb_calls import capture_profile, compare_profile, preview_capture_profile
 
 
 def _generated() -> GeneratedContent:
@@ -218,7 +222,6 @@ def test_capture_preview_and_apply_refuse_generated_output_before_source_write(
             config,
             "p",
             repo,
-            setforge_yaml_path=repo / "setforge.yaml",
             resolved=resolved,
         )
     assert tracked.read_text(encoding="utf-8") == "portable={{ host.home }}\n"
@@ -256,7 +259,6 @@ def test_capture_profile_refuses_generated_file_before_earlier_regular_write(
             config,
             "p",
             repo,
-            setforge_yaml_path=repo / "setforge.yaml",
             resolved=resolve_profile(config, "p"),
         )
 
@@ -439,3 +441,17 @@ def test_install_refuses_changed_host_input_before_write(
     assert "generated host inputs changed after planning" in str(result.exception)
     assert not live.exists()
     assert OwnershipStore().read(file_resource_id(live)) is None
+
+
+def test_template_file_is_read_one_way_by_every_verb(tmp_path: Path) -> None:
+    """Install, compare and inspect resolve the same text from a template file."""
+    template = tmp_path / "template"
+    template.write_bytes(b"home={{ host.home }}\r\nnext\n")
+
+    resolution = resolve_generated_file(template, _generated())
+
+    assert resolution == resolve_generated("home={{ host.home }}\nnext\n", _generated())
+    assert rendered_source(template, _generated()) == resolution.rendered
+    template.write_bytes(b"caf\xe9 {{ host.home }}\n")
+    with pytest.raises(ConfigError, match="not valid UTF-8"):
+        resolve_generated_file(template, _generated())

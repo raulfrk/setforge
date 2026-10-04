@@ -14,15 +14,13 @@ import os
 import stat
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from setforge import atomicio
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_symlink_target
 from setforge.errors import MissingTrackedFile, SetforgeError
-from setforge.markdown_merge import LineConflict
-from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -36,10 +34,7 @@ class DeployAction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DeployResult:
-    """Outcome of a :func:`copy_atomic` call.
-
-    ``new_base`` / ``merge_conflicts`` are populated on the disposition
-    (byte-base 3-way) path, and inert defaults on a plain verbatim deploy.
+    """Outcome of one deploy write.
 
     ``prior_mode`` records the live file's permission bits AS THEY WERE
     immediately before this deploy chmod-ed them, and ONLY when the deploy
@@ -55,8 +50,6 @@ class DeployResult:
     dst: Path
     action: DeployAction
     backup_path: Path | None
-    new_base: str | None = None
-    merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
     prior_mode: int | None = None
 
 
@@ -66,67 +59,25 @@ class ResolvedDeploy:
 
     Produced by :func:`resolve_deploy` (pure read) and consumed by
     :func:`write_resolved_deploy` (the only writer). Carries everything the
-    write step needs: the post-merge / post-overlay ``content``, the
-    symlink-resolved ``real_dst`` plus its ``dst_existed`` probe, the
-    ``effective_mode`` to apply, and the state-advance payload
-    (``new_base`` / ``merge_conflicts``) that :class:`DeployResult` threads
-    back to the caller. Holding these records in memory lets an orchestrator
-    resolve EVERY file first and only then start writing (refuse-before-write).
+    write step needs: the post-merge ``content`` bytes, the symlink-resolved
+    ``real_dst`` plus its ``dst_existed`` probe, and the ``effective_mode`` to
+    apply. Holding these records in memory lets an orchestrator resolve EVERY
+    file first and only then start writing (refuse-before-write).
     """
 
-    src: Path
     real_dst: Path
     dst_existed: bool
     effective_mode: int
-    content: str
-    new_base: str | None
-    merge_conflicts: list[LineConflict | PathConflict]
-
-
-def copy_atomic(
-    src: Path,
-    dst: Path,
-    *,
-    backup: bool = True,
-    mode: int | None = None,
-) -> DeployResult:
-    """Atomically deploy ``src`` to ``dst`` verbatim.
-
-    Composes :func:`resolve_deploy` (the pure read) with
-    :func:`write_resolved_deploy` (the only write step). The two-step seam
-    exists so an orchestrator can resolve every file before writing any.
-
-    When ``dst`` is a symlink the operation resolves to its target so the
-    symlink itself is preserved (matches the legacy Makefile's behavior
-    with ``link_tracked_file_default: nolink``).
-
-    When the resulting content is byte-identical to the existing ``dst``,
-    no write or backup is performed (action == :attr:`DeployAction.NOOP`).
-
-    Raises :class:`MissingTrackedFile` when ``src`` does not exist (propagated
-    from :func:`resolve_deploy`).
-    """
-    resolved = resolve_deploy(
-        src,
-        dst,
-        mode=mode,
-    )
-    return write_resolved_deploy(resolved, backup=backup)
+    content: bytes
 
 
 def read_text_exact(path: Path) -> str:
     """Read ``path`` as text without altering a single byte.
 
     Line endings are kept (no universal-newline translation) and bytes that are
-    not valid UTF-8 ride through as lone surrogates (``surrogateescape``), so
-    :func:`encode_text_exact` restores the file byte for byte.
+    not valid UTF-8 ride through as lone surrogates (``surrogateescape``).
     """
     return path.read_bytes().decode("utf-8", "surrogateescape")
-
-
-def encode_text_exact(text: str) -> bytes:
-    """Inverse of :func:`read_text_exact`."""
-    return text.encode("utf-8", "surrogateescape")
 
 
 def resolve_deploy(
@@ -137,7 +88,7 @@ def resolve_deploy(
 ) -> ResolvedDeploy:
     """Compute a verbatim deploy's content WITHOUT writing anything.
 
-    The read half of :func:`copy_atomic`: resolves ``dst`` through any
+    The read half of a deploy: resolves ``dst`` through any
     pre-existing symlink, probes existence and effective mode, and reads the
     tracked source verbatim into memory. No directory is created and no file
     is touched — the returned :class:`ResolvedDeploy` is handed to
@@ -146,8 +97,7 @@ def resolve_deploy(
     Sub-file reconciliation is owned by the per-unit reconcile engine
     (:mod:`setforge.reconcile`): the caller overrides
     :attr:`ResolvedDeploy.content` with the reconciled bytes before the write,
-    so this function deploys ``src`` verbatim and leaves ``new_base`` /
-    ``merge_conflicts`` inert.
+    so this function deploys ``src`` verbatim.
 
     Host-local content is owned by the reconcile engine (the marker-injection
     path was retired with the user-section markers), so this pass does not take
@@ -170,29 +120,39 @@ def resolve_deploy(
     real_dst = _resolve_for_copy(dst)
     dst_existed = real_dst.exists()
 
-    content = read_text_exact(src)
-
     return ResolvedDeploy(
-        src=src,
         real_dst=real_dst,
         dst_existed=dst_existed,
         effective_mode=(mode if mode is not None else stat.S_IMODE(src.stat().st_mode)),
-        content=content,
-        new_base=None,
-        merge_conflicts=[],
+        content=src.read_bytes(),
     )
+
+
+def classify_write(resolved: ResolvedDeploy) -> DeployAction:
+    """Classify what writing ``resolved`` does to the live file as it is now.
+
+    The one rule shared by the install preview and the write: an existing file
+    whose bytes or mode differ from the resolved ones is UPDATED.
+    """
+    if not resolved.dst_existed:
+        return DeployAction.CREATED
+    real_dst = resolved.real_dst
+    if (
+        real_dst.read_bytes() != resolved.content
+        or stat.S_IMODE(real_dst.stat().st_mode) != resolved.effective_mode
+    ):
+        return DeployAction.UPDATED
+    return DeployAction.NOOP
 
 
 def write_resolved_deploy(
     resolved: ResolvedDeploy, *, backup: bool = True
 ) -> DeployResult:
-    """Write a :class:`ResolvedDeploy` to disk: the write half of :func:`copy_atomic`.
+    """Write a :class:`ResolvedDeploy` to disk: the only deploy write step.
 
-    Creates the destination's parent directories, then routes the resolved
-    content through the shared NOOP/CREATED/UPDATED detection +
-    :func:`_atomic_write` (see :func:`_write_resolved_content`). The
-    resolution's state-advance payload rides through onto the returned
-    :class:`DeployResult` unchanged.
+    Creates the destination's parent directories, classifies the write with
+    :func:`classify_write`, then fixes a mode-only difference in place or
+    writes the content through :func:`_atomic_write`.
 
     **Inter-resolve/write staleness assumption.** ``resolved`` snapshots the
     live file at :func:`resolve_deploy` time; an external edit to the live
@@ -202,92 +162,33 @@ def write_resolved_deploy(
     re-checked here — the same single-setforge-process model documented for
     the symlink ordering window on :func:`deploy_symlinked_file`.
     """
-    resolved.real_dst.parent.mkdir(parents=True, exist_ok=True)
-    return _write_resolved_content(
-        resolved.content,
-        resolved.src,
-        resolved.real_dst,
-        resolved.dst_existed,
-        backup,
-        resolved.effective_mode,
-        new_base=resolved.new_base,
-        merge_conflicts=resolved.merge_conflicts,
-    )
-
-
-def _write_resolved_content(
-    content: str,
-    src: Path,
-    real_dst: Path,
-    dst_existed: bool,
-    backup: bool,
-    mode: int | None,
-    *,
-    new_base: str | None,
-    merge_conflicts: list[LineConflict | PathConflict],
-) -> DeployResult:
-    """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
-
-    Shared by both branches of :func:`copy_atomic` so the NOOP-detection,
-    mode-only-drift fixup and :func:`_atomic_write` logic live in one place.
-    ``new_base`` / ``merge_conflicts`` (disposition path) are threaded onto
-    EVERY returned :class:`DeployResult` — including the NOOP and
-    mode-only-drift paths — so a clean disposition merge that equals live still
-    re-baselines even on a NOOP write whose post-splice content already equals
-    live.
-    """
-    if dst_existed:
-        existing = read_text_exact(real_dst)
-        action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
-    else:
-        action = DeployAction.CREATED
-
+    real_dst, mode = resolved.real_dst, resolved.effective_mode
+    real_dst.parent.mkdir(parents=True, exist_ok=True)
+    action = classify_write(resolved)
     if action is DeployAction.NOOP:
-        # Content matches, but mode bits may have drifted. compare flags
-        # mode-only drift; apply it here (path-based chmod is safe — no
-        # content swap to race, real_dst already symlink-resolved) so
-        # install fixes perms instead of reporting "unchanged".
-        prior_mode: int | None = stat.S_IMODE(real_dst.stat().st_mode)
-        if mode is not None and prior_mode != mode:
+        return DeployResult(dst=real_dst, action=action, backup_path=None)
+
+    # ``prior_mode`` is the live mode this write replaces, recorded only when
+    # it differs from the mode being applied. ``revert`` restores the content
+    # via the patch reverse; ``prior_mode`` lets it restore perms in lockstep.
+    prior_mode = None
+    if resolved.dst_existed:
+        live_mode = stat.S_IMODE(real_dst.stat().st_mode)
+        if live_mode != mode:
+            prior_mode = live_mode
+        if real_dst.read_bytes() == resolved.content:
+            # Mode-only drift: a path-based chmod is safe (no content swap to
+            # race, real_dst already symlink-resolved). The content patch is
+            # empty, so ``prior_mode`` is the only reversible record.
             real_dst.chmod(mode)
             return DeployResult(
-                dst=real_dst,
-                action=DeployAction.UPDATED,
-                backup_path=None,
-                new_base=new_base,
-                merge_conflicts=merge_conflicts,
-                # The content patch is empty for a mode-only fixup, so the
-                # pre-install mode is the ONLY reversible record of this
-                # change — hand it to the transition writer for revert.
-                prior_mode=prior_mode,
+                dst=real_dst, action=action, backup_path=None, prior_mode=prior_mode
             )
-        return DeployResult(
-            dst=real_dst,
-            action=action,
-            backup_path=None,
-            new_base=new_base,
-            merge_conflicts=merge_conflicts,
-        )
-
-    # Capture the live mode BEFORE the atomic write swaps perms, but only
-    # when this UPDATE actually changes them (pre-existing dst whose mode
-    # differs from the mode the write will apply). ``revert`` restores the
-    # content via the patch reverse; ``prior_mode`` lets it restore perms in
-    # lockstep, since atomic_write_bytes fchmods to the tracked/source mode.
-    prior_mode = None
-    if dst_existed:
-        live_mode = stat.S_IMODE(real_dst.stat().st_mode)
-        write_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
-        if live_mode != write_mode:
-            prior_mode = live_mode
-    backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
+    backup_path = _atomic_write(
+        resolved.content, real_dst, resolved.dst_existed, backup, mode
+    )
     return DeployResult(
-        dst=real_dst,
-        action=action,
-        backup_path=backup_path,
-        new_base=new_base,
-        merge_conflicts=merge_conflicts,
-        prior_mode=prior_mode,
+        dst=real_dst, action=action, backup_path=backup_path, prior_mode=prior_mode
     )
 
 
@@ -317,44 +218,31 @@ def _resolve_for_copy(dst: Path) -> Path:
 
 
 def _atomic_write(
-    content: str,
-    src: Path,
-    dst: Path,
-    dst_existed: bool,
-    backup: bool,
-    mode: int | None,
+    content: bytes, dst: Path, dst_existed: bool, backup: bool, mode: int
 ) -> Path | None:
     """Atomically write ``content`` to ``dst`` with explicit mode bits.
 
     Thin wrapper over :func:`setforge.atomicio.atomic_write_bytes`,
     which owns the tempfile + fchmod-on-fd + ``.bak``-rotation +
     ``os.replace`` dance (and pins fchmod-before-replace so the TOCTOU
-    symlink-swap window stays closed). Deploy-specific semantics live
-    here: ``mode=None`` falls back to the SOURCE file's perm bits (via
-    :func:`stat.S_IMODE`) — today's behavior — and the backup is gated
-    on ``dst_existed`` so a fresh deploy never tries to snapshot an
-    absent destination. ``fsync=False`` is load-bearing: deploy has
-    never fsynced its writes (only flushed), and byte-identical
-    behavior means not adding durability silently.
+    symlink-swap window stays closed). The backup is gated on
+    ``dst_existed`` so a fresh deploy never tries to snapshot an absent
+    destination. ``fsync=False`` is load-bearing: deploy has never fsynced
+    its writes (only flushed), and byte-identical behavior means not adding
+    durability silently.
     """
-    effective_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
     return atomicio.atomic_write_bytes(
-        dst,
-        encode_text_exact(content),
-        fsync=False,
-        mode=effective_mode,
-        backup=backup and dst_existed,
+        dst, content, fsync=False, mode=mode, backup=backup and dst_existed
     )
 
 
 def deploy_symlinked_file(
-    src: Path,
     dst: Path,
     tracked_file: TrackedFile,
     *,
+    source_content: bytes,
+    source_mode: int,
     backup: bool = True,
-    source_content: str | None = None,
-    source_mode: int | None = None,
 ) -> DeployResult:
     """Deploy a tracked_file that declares ``symlink:``.
 
@@ -370,15 +258,13 @@ def deploy_symlinked_file(
        pattern :func:`_atomic_write` uses for regular files, closing
        the TOCTOU window between ``unlink`` and ``symlink``.
 
-    ``source_content`` and ``source_mode`` let a plan supply the immutable
-    source snapshot captured before the first write. Direct callers may omit
-    both to retain the legacy read-at-call behavior.
+    ``source_content`` and ``source_mode`` are the immutable source snapshot
+    the plan captured before the first write.
 
     Raises :class:`AssertionError` when ``tracked_file.symlink`` is None —
     a caller-contract violation (this function must only be called for a
     tracked_file that declares ``symlink:``), not a runtime/config
-    condition. Raises :class:`MissingTrackedFile` when ``src`` does not
-    exist.
+    condition.
 
     Refusal contract: if ``dst`` already exists as a *regular file* or a
     *directory* (anything that is not a symlink), this function raises
@@ -388,7 +274,7 @@ def deploy_symlinked_file(
     symlink at ``dst`` — regardless of where it points — is replaced
     atomically by :func:`os.replace`.
 
-    Returns a :class:`DeployResult` mirroring :func:`copy_atomic`'s
+    Returns a :class:`DeployResult` mirroring :func:`write_resolved_deploy`'s
     contract. ``backup_path`` is None for symlink deployments: the
     target-side write produces its own ``.bak`` for the byte content,
     and a link itself carries no rotateable state.
@@ -408,10 +294,6 @@ def deploy_symlinked_file(
         raise AssertionError(
             "deploy_symlinked_file called with tracked_file.symlink == None"
         )
-    if source_content is None and not src.exists():
-        raise MissingTrackedFile(f"tracked source not found: {src}")
-    if (source_content is None) != (source_mode is None):
-        raise AssertionError("source_content and source_mode must be supplied together")
 
     target = resolve_symlink_target(dst, tracked_file.symlink)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -435,38 +317,9 @@ def deploy_symlinked_file(
             f"deploying tracked_file with symlink: {tracked_file.symlink!r}."
         )
 
-    _deploy_target_content(
-        src,
-        target,
-        tracked_file,
-        backup=backup,
-        source_content=source_content,
-        source_mode=source_mode,
-    )
+    _atomic_write(source_content, target, target.exists(), backup, source_mode)
     action = _replace_symlink_atomic(dst, tracked_file.symlink)
     return DeployResult(dst=dst, action=action, backup_path=None)
-
-
-def _deploy_target_content(
-    src: Path,
-    target: Path,
-    tracked_file: TrackedFile,
-    *,
-    backup: bool,
-    source_content: str | None,
-    source_mode: int | None,
-) -> None:
-    """Write ``src`` content verbatim to ``target`` via :func:`_atomic_write`.
-
-    Symlink-deployed tracked_files carry no host-local overlay after the
-    marker-retire migration (host-local content is markerless overlay-only, and
-    symlink targets do not yet route through the overlay injector — a future
-    enhancement). ``mode`` rides through unchanged.
-    """
-    target_existed = target.exists()
-    content = source_content if source_content is not None else read_text_exact(src)
-    mode = source_mode if source_mode is not None else tracked_file.mode
-    _atomic_write(content, src, target, target_existed, backup, mode)
 
 
 def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:

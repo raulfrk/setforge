@@ -249,6 +249,34 @@ def test_preview_uses_planned_keep_live_action(
     assert f"WOULD update    {live}" not in result.output
 
 
+def test_drift_gate_preview_matches_the_real_gate_for_content_drift(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """Content drift is reconciled, not gated, so the preview reports no gate hit."""
+    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
+    live.parent.mkdir(parents=True)
+    live.write_text("host-owned first-install content\n", encoding="utf-8")
+    tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
+    shutil.copymode(tracked, live)
+    args = [
+        "install",
+        "--profile=test-minimal",
+        f"--config={fixture_repo}",
+        "--no-git-check",
+        "--no-secrets-scan",
+    ]
+
+    preview = CliRunner().invoke(app, [*args, "--dry-run"])
+    applied = CliRunner().invoke(app, args)
+
+    assert preview.exit_code == 0, preview.output
+    assert "unexpected drift in 0 file(s)" in preview.output
+    assert applied.exit_code == 0, applied.output
+    assert live.read_text(encoding="utf-8") == "host-owned first-install content\n"
+
+
 # ---------------------------------------------------------------------------
 # Tripwire tests — each asserts a specific mutating leaf is unreachable.
 # ---------------------------------------------------------------------------
@@ -718,28 +746,3 @@ def test_profile_summary_emits_renamed_provisioning_labels(
     assert "  cargo:          0" in result.output
     assert "claude_plugins:" not in result.output
     assert "cargo_binaries:" not in result.output
-
-
-def test_immutable_preview_does_not_reload_host_local_store(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rendering consumes the store projection captured while planning."""
-    calls = 0
-
-    def once(_profile: str) -> dict:
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            raise AssertionError("immutable preview re-read host-local state")
-        return {}
-
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers.host_local_sections_from_store", once
-    )
-
-    _invoke_dry_run(fixture_repo)
-
-    assert calls == 1

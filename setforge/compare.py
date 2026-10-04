@@ -43,22 +43,30 @@ from setforge.config import (
     Config,
     ResolvedProfile,
     TrackedFile,
-    resolve_and_expand,
     resolve_profile,
     resolve_symlink_target,
 )
 from setforge.errors import BaseStoreError, ConfigError
-from setforge.file_ownership import FileAction, decide_file, observe_file, observe_tree
+from setforge.file_ownership import (
+    FileAction,
+    FileDecision,
+    decide_file,
+    observe_file,
+    observe_tree,
+)
 from setforge.generated import rendered_source
 from setforge.home_confinement import is_outside_home, warn_outside_home_dst
+from setforge.operations import journals_root
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import template_context
-from setforge.source import (
-    HostLocalSection,
-    HostLocalSectionName,
-    load_local_codex_overlay,
+from setforge.source import load_local_codex_overlay
+from setforge.transitions import state_root
+from setforge.tree_management import (
+    plan_tree,
+    read_inventory,
+    scan_live_tree,
+    scan_tree,
 )
-from setforge.tree_management import plan_tree, read_inventory, scan_tree
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -105,13 +113,7 @@ _STAGED_REASON = (
 
 @dataclass(frozen=True, slots=True)
 class FileCompare:
-    """Per-file drift result from :func:`compare_profile`.
-
-    The derived property ``drift_is_expected`` is ``True`` when drift is
-    classified as intentional host divergence (today: only via the reconcile
-    engine's per-unit staging). All other drift is *not* expected (needs
-    attention).
-    """
+    """Per-file drift result from :func:`compare_profile`."""
 
     name: str
     status: CompareStatus
@@ -134,11 +136,6 @@ class FileCompare:
     The mode the live file is reset to on deploy; paired with
     :attr:`live_mode` for the confirm-plan transition line.
     """
-    span_only_drift: bool = False
-    """Vestigial after the spans retirement — always ``False`` (no tracked-side
-    spans remain to confine drift to). Retained on the record so downstream
-    consumers keep a stable shape.
-    """
     drift_class: DriftClass | None = None
     """Why the file drifted, per :func:`_classify_drifted`. ``None`` unless
     ``status`` is ``DRIFTED``.
@@ -147,17 +144,6 @@ class FileCompare:
     """Human-readable note for the drift class (the summary table's ``Why``
     column). ``None`` when the class needs no elaboration.
     """
-
-    @property
-    def drift_is_expected(self) -> bool:
-        """True when the file's drift is classified as intentionally expected.
-
-        After the disposition/spans retirement this axis is no longer driven by
-        a file-level disposition; the reconcile engine classifies expected
-        (staged) drift directly in :func:`_classify_drifted`, so this property
-        stays ``False`` for every file.
-        """
-        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,10 +166,6 @@ class CompareReport:
     entries: list[FileCompare]
     has_unexpected_drift: bool
     orphans: list[OrphanEntry] = field(default_factory=list)
-    orphan_skipped_absent: int = 0
-    orphan_skipped_source: int = 0
-    orphan_skipped_unmanaged: int = 0
-    orphan_skipped_host_local: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +263,29 @@ def _host_local_files(config: Config) -> frozenset[Path]:
     for profile in config.profiles.values():
         paths.update(_norm(p) for p in profile.bootstrap)
     return frozenset(paths)
+
+
+def _own_state_roots() -> frozenset[Path]:
+    """Trees that hold setforge's own records, never a tracked deployment.
+
+    Transition records, ownership claims, the reconcile store and receipts
+    (state root), operation journals, locks and caches, and snapshots. Install
+    records the claim files it writes in the transition ledger, and the state
+    root can sit under a managed dst root (a relocated ``SETFORGE_STATE_DIR``,
+    or a tracked dst below ``~/.local/state/setforge``), so these are excluded
+    at tree granularity: reaping one deletes live ownership or recovery state.
+    """
+    from setforge.snapshots import snapshots_root  # imports this module
+
+    return frozenset(
+        _norm(root)
+        for root in (
+            state_root(),
+            journals_root(),
+            Path("~/.cache/setforge"),
+            snapshots_root(),
+        )
+    )
 
 
 def _managed_dst_roots(config: Config, repo_root: Path) -> set[Path]:
@@ -537,6 +542,7 @@ def detect_orphans(
     managed_roots = _managed_dst_roots(config, repo_root)
 
     host_local = _host_local_files(config)
+    own_state = _own_state_roots()
     kept: list[OrphanEntry] = []
     skipped_absent = 0
     skipped_source = 0
@@ -556,6 +562,11 @@ def detect_orphans(
             continue
         if not any(path.is_relative_to(root) for root in managed_roots):
             skipped_unmanaged += 1
+            continue
+        if any(path.is_relative_to(root) for root in own_state):
+            # setforge's own records under a managed root: same data-loss
+            # guard as the host-local files above; see _own_state_roots.
+            skipped_host_local += 1
             continue
         if not os.path.lexists(path):
             skipped_absent += 1
@@ -701,56 +712,36 @@ def compare_profile(
     profile_name: str,
     repo_root: Path,
     *,
+    resolved: ResolvedProfile,
+    ownership_authorized: Mapping[str, bool],
     transitions_dir: Path | None = None,
     ignored: frozenset[str] = frozenset(),
-    host_local_sections: (
-        Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
-    ) = None,
-    ownership_authorized: Mapping[str, bool] | None = None,
-    resolved: ResolvedProfile | None = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
+    ``resolved`` is the effective profile the CLI resolved (``config`` already
+    carries its host-local tracked-file paths) and ``ownership_authorized``
+    maps each tracked sub-file or tree to whether this checkout holds its
+    container (see :func:`file_authorization_map`).
+
     When ``transitions_dir`` is provided, also detects orphans (live
     files setforge previously deployed but no longer tracked) via
-    :func:`detect_orphans`. ``ignored`` is the set of tracked_file IDs
+    :func:`detect_profile_orphans`. ``ignored`` is the set of tracked_file IDs
     flagged "keep orphan" via ``cleanup-orphans --ignore`` (stored in
     ``~/.config/setforge/local.yaml``). When ``transitions_dir`` is
-    ``None`` the orphans list is empty — preserves the pre-orphan call
-    shape for callers that don't have a transitions dir handy.
-
-    ``host_local_sections`` is the validated local.yaml overlay shaped
-    ``{tracked_file_id: {section_name: HostLocalSection}}`` (SPEC 1). It is
-    threaded through to :func:`_compare_one` for caller symmetry but no longer
-    alters the diff: host-local content is now owned by the reconcile engine,
-    so :func:`diff_file` performs a plain verbatim comparison. The CLI surface
-    (:func:`setforge.cli.compare.compare`) loads + validates the map
-    via :func:`setforge.cli._install_helpers._load_validated_host_local_sections`
-    before passing it in; callers that don't carry an overlay (e.g.
-    the orphan-detection and status commands) pass ``None``.
-
-    The CLI resolves the effective profile first, mutating ``config`` with
-    host-local tracked-file paths. This helper re-expands the tracked-file list
-    idempotently and reads those already-effective definitions; plugin and
-    extension lists are irrelevant to its file-only comparison.
+    ``None`` the orphans list is empty.
     """
-    resolved = resolved or resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
-    overlay = host_local_sections or {}
 
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        host_local = overlay.get(name) or None
 
         if tracked_file.tree is not None:
             desired = scan_tree(src, tracked_file.tree, capture_payloads=True)
-            live = scan_tree(
-                dst,
-                tracked_file.tree.model_copy(update={"symlinks": "preserve"}),
-            ).inventory
+            live = scan_live_tree(dst, tracked_file.tree)
             tree_plan = plan_tree(
                 desired,
                 live,
@@ -771,25 +762,19 @@ def compare_profile(
                     f"{action.kind.value}: {action.path} ({action.detail})"
                     for action in changed
                 )
+                unexpected = ownership_authorized.get(name, False)
                 entry = FileCompare(
                     name,
                     CompareStatus.DRIFTED,
                     summary,
                     drift_class=(
-                        DriftClass.UNEXPECTED
-                        if ownership_authorized is None
-                        or ownership_authorized.get(name, False)
-                        else DriftClass.EXPECTED
+                        DriftClass.UNEXPECTED if unexpected else DriftClass.EXPECTED
                     ),
                     reason=(
                         "managed tree inventory differs"
-                        if ownership_authorized is None
-                        or ownership_authorized.get(name, False)
+                        if unexpected
                         else "tree awaits container adoption"
                     ),
-                )
-                unexpected = ownership_authorized is None or ownership_authorized.get(
-                    name, False
                 )
             entries.append(entry)
             has_unexpected = has_unexpected or unexpected
@@ -802,77 +787,86 @@ def compare_profile(
                 sub_dst,
                 tracked_file,
                 profile=profile_name,
-                host_local_sections=host_local,
-                ownership_authorized=(
-                    ownership_authorized.get(sub_name, False)
-                    if ownership_authorized is not None
-                    else _has_file_authority(repo_root, sub_dst)
-                ),
+                ownership_authorized=ownership_authorized.get(sub_name, False),
             )
             entries.append(entry)
             if sub_unexpected:
                 has_unexpected = True
 
-    orphans: list[OrphanEntry] = []
-    skipped_absent = 0
-    skipped_source = 0
-    skipped_unmanaged = 0
-    skipped_host_local = 0
-    if transitions_dir is not None:
-        # Resolve native containers at the lifecycle boundary, where the profile
-        # and its stored resource identities are available. The local import
-        # avoids a cycle with the native report projection's compare types.
-        from setforge import codex_lifecycle
-
-        protected_paths = set(
-            codex_lifecycle.config_destinations(
-                config, resolved, repo_root, profile=profile_name
-            )
-        )
-        project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
-        for other_profile in config.profiles:
-            if other_profile == profile_name:
-                continue
-            other_config = config.model_copy(deep=True)
-            other_config._codex_project_paths.update(
-                {
-                    name: path.expanduser().resolve(strict=False)
-                    for name, path in project_paths.items()
-                }
-            )
-            other_resolved = resolve_profile(other_config, other_profile)
-            protected_paths.update(
-                codex_lifecycle.config_destinations(
-                    other_config,
-                    other_resolved,
-                    repo_root,
-                    profile=other_profile,
-                    destination_only=True,
-                )
-            )
-        detection = detect_orphans(
-            resolved,
-            config,
-            transitions_dir,
-            repo_root,
-            ignored=ignored,
-            protected_paths=protected_paths,
-        )
-        orphans = detection.orphans
-        skipped_absent = detection.skipped_absent
-        skipped_source = detection.skipped_source
-        skipped_unmanaged = detection.skipped_unmanaged
-        skipped_host_local = detection.skipped_host_local
-
-    return CompareReport(
-        entries=entries,
-        has_unexpected_drift=has_unexpected,
-        orphans=orphans,
-        orphan_skipped_absent=skipped_absent,
-        orphan_skipped_source=skipped_source,
-        orphan_skipped_unmanaged=skipped_unmanaged,
-        orphan_skipped_host_local=skipped_host_local,
+    orphans = (
+        detect_profile_orphans(
+            config, resolved, profile_name, repo_root, transitions_dir, ignored
+        ).orphans
+        if transitions_dir is not None
+        else []
     )
+    return CompareReport(
+        entries=entries, has_unexpected_drift=has_unexpected, orphans=orphans
+    )
+
+
+def detect_profile_orphans(
+    config: Config,
+    resolved: ResolvedProfile,
+    profile_name: str,
+    repo_root: Path,
+    transitions_dir: Path,
+    ignored: frozenset[str],
+) -> OrphanDetection:
+    """Detect a profile's orphans, protecting every profile's native containers."""
+    # Resolve native containers at the lifecycle boundary, where the profile
+    # and its stored resource identities are available. The local import
+    # avoids a cycle with the native report projection's compare types.
+    from setforge import codex_lifecycle
+
+    protected_paths = set(
+        codex_lifecycle.config_destinations(
+            config, resolved, repo_root, profile=profile_name
+        )
+    )
+    project_paths = load_local_codex_overlay(LOCAL_CONFIG_PATH).project_paths
+    for other_profile in config.profiles:
+        if other_profile == profile_name:
+            continue
+        other_config = config.model_copy(deep=True)
+        other_config._codex_project_paths.update(
+            {
+                name: path.expanduser().resolve(strict=False)
+                for name, path in project_paths.items()
+            }
+        )
+        other_resolved = resolve_profile(other_config, other_profile)
+        protected_paths.update(
+            codex_lifecycle.config_destinations(
+                other_config,
+                other_resolved,
+                repo_root,
+                profile=other_profile,
+                destination_only=True,
+            )
+        )
+    return detect_orphans(
+        resolved,
+        config,
+        transitions_dir,
+        repo_root,
+        ignored=ignored,
+        protected_paths=protected_paths,
+    )
+
+
+def container_authorized(decision: FileDecision) -> bool:
+    """Whether this checkout already holds the container the decision is about.
+
+    Adoption of an unowned file, transfer of another configuration's claim and
+    a hold all leave the container outside this checkout's authority until the
+    user acts, so staged units neither explain its drift nor get published.
+    """
+    return decision.action not in {
+        FileAction.ADOPT,
+        FileAction.TRANSFER,
+        FileAction.HOLD,
+    }
 
 
 def file_authorization_map(
@@ -905,20 +899,15 @@ def file_authorization_map(
         tracked = config.tracked_files[name]
         if tracked.tree is not None:
             destination = resolve_dst(tracked)
-            live = scan_tree(
-                destination,
-                tracked.tree.model_copy(update={"symlinks": "preserve"}),
-            ).inventory
+            live = scan_live_tree(destination, tracked.tree)
             observation = observe_tree(destination, live.fingerprint)
-            decision = decide_file(
-                observation,
-                store.read(observation.resource_id),
-                owner_id=owner_id,
+            result[name] = container_authorized(
+                decide_file(
+                    observation,
+                    store.read(observation.resource_id),
+                    owner_id=owner_id,
+                )
             )
-            result[name] = decision.action not in {
-                FileAction.ADOPT,
-                FileAction.HOLD,
-            }
             continue
         for sub_name, _src, destination in expand_tracked_file(
             name, resolve_src(tracked, repo_root), resolve_dst(tracked)
@@ -927,15 +916,13 @@ def file_authorization_map(
                 result[sub_name] = True
                 continue
             observation = observe_file(destination)
-            decision = decide_file(
-                observation,
-                store.read(observation.resource_id),
-                owner_id=owner_id,
+            result[sub_name] = container_authorized(
+                decide_file(
+                    observation,
+                    store.read(observation.resource_id),
+                    owner_id=owner_id,
+                )
             )
-            result[sub_name] = decision.action not in {
-                FileAction.ADOPT,
-                FileAction.HOLD,
-            }
     return result
 
 
@@ -946,7 +933,6 @@ def _compare_one(
     tracked_file: TrackedFile,
     *,
     profile: str | None = None,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     ownership_authorized: bool = True,
 ) -> tuple[FileCompare, bool]:
 
@@ -962,7 +948,6 @@ def _compare_one(
             dst,
             tracked_file,
             profile=profile,
-            host_local_sections=host_local_sections,
         )
 
     if not dst.exists():
@@ -1119,21 +1104,6 @@ def _classify_drifted(
     return DriftClass.UNEXPECTED, None
 
 
-def _has_file_authority(repo_root: Path, destination: Path) -> bool:
-    """Return whether staged units can explain shared tracked/live drift."""
-    try:
-        owner_id = read_owner_id(repo_root)
-    except OwnershipError:
-        return not (repo_root / ".git").exists()
-    observation = observe_file(destination)
-    decision = decide_file(
-        observation,
-        OwnershipStore().read(observation.resource_id),
-        owner_id=owner_id,
-    )
-    return decision.action not in {FileAction.ADOPT, FileAction.HOLD}
-
-
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
     """True when live (``dst``) still equals the stored base while tracked
     (``src``) advanced — the stale-deploy shape where the next install
@@ -1268,16 +1238,6 @@ def _reconcile_staged_expected_structured(
         return False
 
 
-def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
-    """Always ``False`` after the disposition/spans retirement.
-
-    Tracked-side spans were retired, so no drift can be confined to a span; the
-    reconcile engine now owns per-unit host-divergence classification. Retained
-    (returning ``False``) so callers keep a stable shape.
-    """
-    return False
-
-
 def _compare_symlinked(
     name: str,
     src: Path,
@@ -1285,7 +1245,6 @@ def _compare_symlinked(
     tracked_file: TrackedFile,
     *,
     profile: str | None = None,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
 

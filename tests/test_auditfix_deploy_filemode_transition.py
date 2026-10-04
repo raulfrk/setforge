@@ -23,7 +23,7 @@ import stat
 from pathlib import Path
 
 import setforge.deploy as deploy_mod
-from setforge.deploy import copy_atomic
+from tests.verb_calls import copy_atomic
 
 
 def test_noop_mode_only_fixup_records_prior_mode(tmp_path: Path) -> None:

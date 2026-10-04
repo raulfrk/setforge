@@ -20,20 +20,15 @@ from setforge.cli._helpers import (
     ProfileContext,
     _refuse_duplicate_section_names,
 )
-from setforge.cli._install_helpers import _load_validated_host_local_sections
 from setforge.cli._output import make_console, render
-from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
+from setforge.compare import CompareStatus, load_ignored_orphans
 from setforge.config import (
-    Config,
     OrphanOverlay,
     collect_orphan_overlays,
     load_config,
     resolve_effective_profile,
 )
-from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.locking import profile_lock
-from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.user_section_markers import extract_sections
 
 
 @app.command(epilog=COMPARE_EXAMPLES)
@@ -78,21 +73,12 @@ def compare(
     ownership_authorized = compare_mod.file_authorization_map(cfg, resolved, repo_root)
 
     with profile_lock(profile):
-        # Load + validate the local.yaml host_local_sections overlay so
-        # ``compare_profile`` can classify a live file that already received
-        # its host-local sections instead of surfacing it as drift. Same
-        # validator install uses (anchors resolved at deploy time; this
-        # layer only sniffs file-type).
-        host_local_sections_map = _load_validated_host_local_sections(
-            cfg, resolved, repo_root, profile
-        )
         report = compare_mod.compare_profile(
             cfg,
             profile,
             repo_root,
             transitions_dir=transitions.transitions_root(),
             ignored=load_ignored_orphans(),
-            host_local_sections=host_local_sections_map,
             ownership_authorized=ownership_authorized,
             resolved=resolved,
         )
@@ -121,12 +107,6 @@ def compare(
         _render_compare_report(
             report, console, full_diff=full_diff, orphan_overlays=orphan_overlays
         )
-        # SPEC 1 mockup: surface every host-local section
-        # the install would inject, tagged with the canonical provenance
-        # marker (HOST_LOCAL_PROVENANCE_TAG). Lives BELOW the drift
-        # summary so the diff body and per-status counts stay grouped,
-        # mirroring the mockup's ordering ("✓ no drift ... + <tag> X").
-        _render_host_local_preview(host_local_sections_map, cfg, console)
 
     render(
         ctx.obj,
@@ -153,8 +133,8 @@ def _compare_json_data(
     dict/list/string shapes so ``json.dumps`` can serialise without
     custom encoders. Per-entry fields: ``name``, ``status`` (StrEnum
     value), ``drift_class`` (string or null — null unless DRIFTED),
-    ``reason`` (string or null), ``span_only_drift`` (bool),
-    ``drift_is_expected`` (bool, derived). No
+    ``reason`` (string or null), and ``span_only_drift`` / ``drift_is_expected``
+    (always ``false`` since the spans retirement; kept for consumers). No
     diff bodies in JSON mode — they belong to the human view;
     ``compare --full-diff`` is a human-oriented surface.
 
@@ -172,8 +152,8 @@ def _compare_json_data(
             if entry.drift_class is not None
             else None,
             "reason": entry.reason,
-            "span_only_drift": entry.span_only_drift,
-            "drift_is_expected": entry.drift_is_expected,
+            "span_only_drift": False,
+            "drift_is_expected": False,
         }
         for entry in report.entries
     ]
@@ -243,66 +223,3 @@ def _print_full_diffs(report: compare_mod.CompareReport, console: Console) -> No
             console.print(Syntax(entry.diff, "diff", word_wrap=True))
         else:
             console.print(entry.diff, markup=False, highlight=False)
-
-
-def _classify_section_state(section_name: str, live_names: set[str]) -> tuple[str, str]:
-    """Return ``(sigil, suffix)`` describing whether ``section_name`` is injected.
-
-    ``"="`` + ``"already injected"`` when the section already appears in
-    the live file's marker set (the previous install landed); ``"+"`` +
-    ``"would be injected"`` otherwise. The arms collapse the two
-    ``console.print`` branches in :func:`_render_host_local_preview` to
-    a single formatted line.
-    """
-    if section_name in live_names:
-        return "=", "already injected"
-    return "+", "would be injected"
-
-
-def _render_host_local_preview(
-    host_local_sections_map: dict[str, dict[HostLocalSectionName, HostLocalSection]],
-    cfg: Config,
-    console: Console,
-) -> None:
-    """Emit the SPEC 1 host-local would-be-injected preview block.
-
-    Per the mockup: ``+ <HOST_LOCAL_PROVENANCE_TAG> X ← would be injected``.
-    One indented block per tracked_file with at least one host-local
-    section declared in local.yaml. For each section, classifies
-    "would be injected" (section name not present in live file) vs
-    "already injected" (already on disk from a prior install) by
-    re-extracting marker names from the live file. The compare command
-    is read-only — this is the user's preview of what install would do
-    without running it, mirroring the dry-run install output.
-
-    No-op when ``host_local_sections_map`` is empty.
-    ``host_local_sections_map`` is the output of
-    :func:`_load_validated_host_local_sections`, which already filters
-    by the resolved profile's tracked_files — no further profile-membership
-    check is needed here.
-    """
-    if not host_local_sections_map:
-        return
-    rendered_any = False
-    for tf_id, sections_map in host_local_sections_map.items():
-        tracked_file = cfg.tracked_files[tf_id]
-        dst = resolve_dst(tracked_file)
-        # Existing live-section names — used to classify already-injected
-        # vs would-be-injected per section. allow_legacy=True so a pre-hash
-        # live file does not crash the preview.
-        try:
-            live_text = dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            live_names: set[str] = set()
-        else:
-            live_names = set(extract_sections(live_text, allow_legacy=True))
-        if not rendered_any:
-            console.print("")
-            rendered_any = True
-        console.print(f"{dst}  ({tf_id})", markup=False)
-        for section_name in sections_map:
-            sigil, suffix = _classify_section_state(section_name, live_names)
-            console.print(
-                f"  {sigil} {HOST_LOCAL_PROVENANCE_TAG} {section_name}     ← {suffix}",
-                markup=False,
-            )

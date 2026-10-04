@@ -22,13 +22,13 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge import base_store, locking, reconcile
-from setforge.capture import capture_profile, preview_capture_profile
 from setforge.cli import app
 from setforge.cli.stage import Decision, _apply, collect_stages, walk
 from setforge.config import load_config, resolve_profile
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass
 from setforge.transitions import transitions_root
+from tests.verb_calls import capture_profile, preview_capture_profile
 
 _PROFILE = "test-recon"
 
@@ -424,7 +424,7 @@ def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) 
         cfg, _PROFILE, repo, resolved=resolve_profile(cfg, _PROFILE)
     )
     assert preview.store_update is False
-    capture_profile(cfg, _PROFILE, repo, setforge_yaml_path=config)
+    capture_profile(cfg, _PROFILE, repo)
     (row,) = reconcile_store.read_index(_PROFILE).files["note"].hunks
     assert "reloc_anchor" not in row
     assert tracked.read_bytes() == base

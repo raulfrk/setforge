@@ -8,7 +8,8 @@ import hashlib
 import json
 import os
 import stat
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -338,6 +339,12 @@ def _walk_tree(
             ) from exc
 
 
+def scan_live_tree(destination: Path, policy: TreePolicy) -> TreeInventory:
+    """Inventory a live tree, recording symlinks instead of refusing them."""
+    live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
+    return scan_tree(destination, live_policy).inventory
+
+
 def scan_tree(
     root: Path,
     policy: TreePolicy,
@@ -611,9 +618,15 @@ def _chmod_directory_at(
         os.close(parent_fd)
 
 
-def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> None:
-    temporary = temporary_entry_name(name, "create")
-    descriptor: int | None = None
+@contextmanager
+def _staged_file_at(
+    parent_fd: int, temporary: str, payload: bytes, mode: int
+) -> Iterator[None]:
+    """Hold ``payload`` at a new ``temporary`` name while the caller publishes it.
+
+    The name is created exclusively, so a pre-existing entry is refused and
+    left alone; the staged name is removed on exit unless publication moved it.
+    """
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -621,23 +634,29 @@ def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> Non
         dir_fd=parent_fd,
     )
     try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        # NFS keeps an unlinked name that is still open as a `.nfs*` sibling,
-        # which the post-apply scan would see; close before publishing.
-        os.close(descriptor)
-        descriptor = None
-        _publish_noreplace_at(parent_fd, temporary, name)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                view = view[written:]
+            os.fchmod(descriptor, mode)
+            os.fsync(descriptor)
+        finally:
+            # NFS keeps an unlinked name that is still open as a `.nfs*`
+            # sibling, which the post-apply scan would see; close before
+            # publishing.
+            os.close(descriptor)
+        yield
         os.fsync(parent_fd)
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
         with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=parent_fd)
+
+
+def _atomic_file_at(parent_fd: int, name: str, payload: bytes, mode: int) -> None:
+    temporary = temporary_entry_name(name, "create")
+    with _staged_file_at(parent_fd, temporary, payload, mode):
+        _publish_noreplace_at(parent_fd, temporary, name)
 
 
 def _atomic_symlink_at(parent_fd: int, name: str, target: str) -> None:
@@ -744,36 +763,6 @@ def _rename_onto_claim_at(parent_fd: int, source: str, destination: str) -> None
         raise
 
 
-def _open_or_create_root(destination: Path, *, create: bool) -> int:
-    destination = destination.absolute()
-    missing: list[str] = []
-    ancestor = destination
-    while True:
-        try:
-            ancestor_fd = os.open(
-                ancestor,
-                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-            )
-            break
-        except FileNotFoundError:
-            missing.append(ancestor.name)
-            ancestor = ancestor.parent
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    current = ancestor_fd
-    try:
-        if create == (not missing):
-            raise SetforgeError("managed tree root changed before apply")
-        for part in reversed(missing):
-            os.mkdir(part, _DIR_MODE, dir_fd=current)
-            next_fd = os.open(part, flags, dir_fd=current)
-            os.close(current)
-            current = next_fd
-        return current
-    except BaseException:
-        os.close(current)
-        raise
-
-
 def _open_or_create_root_at(
     anchor_fd: int, relative_parts: tuple[str, ...], *, create: bool
 ) -> int:
@@ -797,10 +786,15 @@ def apply_tree(
     destination: Path,
     policy: TreePolicy,
     *,
-    anchor_fd: int | None = None,
+    anchor_fd: int,
     anchor_relative: tuple[str, ...] = (),
 ) -> TreeInventory:
-    """Apply one unblocked frozen plan and return its verified inventory."""
+    """Apply one unblocked frozen plan and return its verified inventory.
+
+    ``anchor_fd`` is a held directory descriptor and ``anchor_relative`` the
+    path from it to the tree root; every component is opened without following
+    symlinks.
+    """
     if plan.blocked:
         raise SetforgeError("managed tree has unresolved entry conflicts")
     destination = destination.absolute()
@@ -820,14 +814,10 @@ def apply_tree(
         for action in plan.actions
     )
     try:
-        root_fd = (
-            _open_or_create_root(destination, create=root_create)
-            if anchor_fd is None
-            else _open_or_create_root_at(
-                anchor_fd,
-                anchor_relative,
-                create=root_create and bool(anchor_relative),
-            )
+        root_fd = _open_or_create_root_at(
+            anchor_fd,
+            anchor_relative,
+            create=root_create and bool(anchor_relative),
         )
     except OSError as exc:
         raise SetforgeError(f"cannot open managed tree root: {destination}") from exc
@@ -845,10 +835,7 @@ def apply_tree(
         os.fsync(root_fd)
         live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
         result = _scan_tree_fd(root_fd, destination, live_policy).inventory
-        if anchor_fd is None:
-            _verify_path_binding(destination, root_fd)
-        else:
-            _verify_relative_binding(anchor_fd, anchor_relative, root_fd)
+        _verify_relative_binding(anchor_fd, anchor_relative, root_fd)
     except OSError as exc:
         raise SetforgeError(
             f"managed tree changed during apply: {destination}"
@@ -878,16 +865,6 @@ def _same_object(left_fd: int, right_fd: int) -> bool:
     left = os.fstat(left_fd)
     right = os.fstat(right_fd)
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
-
-
-def _verify_path_binding(destination: Path, expected_fd: int) -> None:
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    current_fd = os.open(destination, flags)
-    try:
-        if not _same_object(current_fd, expected_fd):
-            raise SetforgeError("managed tree root binding changed during apply")
-    finally:
-        os.close(current_fd)
 
 
 def _verify_relative_binding(
@@ -1064,29 +1041,8 @@ def _exchange_file_at(
     parent_fd: int, name: str, payload: bytes, mode: int, expected: TreeEntry
 ) -> None:
     temporary = temporary_entry_name(name, "update")
-    descriptor: int | None = None
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        mode,
-        dir_fd=parent_fd,
-    )
-    try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
+    with _staged_file_at(parent_fd, temporary, payload, mode):
         _exchange_verified_at(parent_fd, temporary, name, expected)
-        os.fsync(parent_fd)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent_fd)
 
 
 def _exchange_symlink_at(

@@ -563,7 +563,7 @@ def _prepare_structured_persist(
 ) -> _PersistPlan:
     """Build a structured publication after validating every persisted input.
 
-    The structured analog of :func:`_persist`: same lost-update RMW (re-read +
+    The structured analog of :func:`_prepare_persist`: same lost-update RMW (re-read +
     re-extract with the caller's lock held, overlay ONLY the paths the host
     explicitly decided), keyed by dotted ``path`` instead of line ``anchor``, using
     the structured extract/classify/serialize. base is UNCHANGED (sync/install own
@@ -1250,25 +1250,6 @@ def _refuse_generated_stage_target(
             f"{file!r} is one-way output and cannot be staged; edit its tracked "
             "template, source tree, or host-input declaration"
         )
-
-
-def _persist(
-    profile: str,
-    stage: FileStage,
-    result: WalkResult,
-    final_live: bytes,
-    *,
-    observed_live: bytes | None = None,
-) -> None:
-    """Prepare and record a line-unit walk while the caller holds the lock."""
-    plan = _prepare_persist(
-        profile,
-        stage,
-        result,
-        final_live,
-        observed_live=observed_live,
-    )
-    _commit_persist(profile, stage.fid, stage.base, plan)
 
 
 @app.command(epilog=STAGE_EXAMPLES)

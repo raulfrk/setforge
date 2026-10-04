@@ -53,6 +53,7 @@ from setforge.cli._helpers import (
     _parse_capture_auto,
     _refuse_duplicate_section_names,
 )
+from setforge.compare import container_authorized
 from setforge.config import (
     Config,
     ResolvedProfile,
@@ -61,7 +62,7 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import ExtensionToolMissing
-from setforge.file_ownership import FileAction, FileDecision, decide_file, observe_file
+from setforge.file_ownership import FileDecision, decide_file, observe_file
 from setforge.locking import mutation_locks
 from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.reconcile import store as reconcile_store
@@ -112,10 +113,8 @@ def _capture_ownership(
     by_locator = {decision.observation.locator: decision for decision in decisions}
     authorized = {
         name: (
-            True
-            if tracked.symlink is not None
-            else by_locator[str(destination.absolute())].action
-            not in {FileAction.ADOPT, FileAction.HOLD}
+            tracked.symlink is not None
+            or container_authorized(by_locator[str(destination.absolute())])
         )
         for tracked, name, _src, destination in _iter_all_tracked_files(ctx)
     }
@@ -419,8 +418,6 @@ def capture(
                 locked_ctx.cfg,
                 profile,
                 repo_root,
-                config,
-                auto_enum,
                 resolved=locked_ctx.resolved,
                 ownership_authorized=dict(locked_snapshot.ownership_authorized),
                 codex_plans=locked_snapshot.codex_plans,
@@ -547,8 +544,6 @@ def sync(
                 cfg,
                 profile,
                 repo_root,
-                config,
-                auto_enum,
                 resolved=resolved,
                 ownership_authorized=dict(locked_snapshot.ownership_authorized),
                 codex_plans=locked_snapshot.codex_plans,
@@ -794,8 +789,6 @@ def _run_capture(
     cfg: Config,
     profile: str,
     repo_root: Path,
-    config: Path,
-    auto_enum: capture_mod.CaptureAuto | None,
     *,
     resolved: ResolvedProfile,
     ownership_authorized: dict[str, bool],
@@ -819,8 +812,6 @@ def _run_capture(
         cfg,
         profile,
         repo_root,
-        setforge_yaml_path=config.resolve(),
-        auto=auto_enum,
         resolved=resolved,
         ownership_authorized=ownership_authorized,
     )

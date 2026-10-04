@@ -10,29 +10,21 @@ explicitly.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import typer
 
 from setforge.cli import _install_helpers
 from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
 from setforge.compare import CompareReport, CompareStatus, DriftClass, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
 
-_LIVE_WITH_MARKERS = (
-    "intro\n"
-    "<!-- setforge:user-section start shared R -->\n"
-    "body\n"
-    "<!-- setforge:user-section end shared R -->\n"
-    "outro\n"
-)
-_STRIPPED = "intro\nbody\noutro\n"
-
 
 def test_install_helpers_module_imports() -> None:
-    """The three public-to-install helpers are exported and callable."""
+    """The public-to-install helpers are exported and callable."""
     assert callable(_install_helpers._check_unexpected_drift)
-    assert callable(_install_helpers._deploy_all_tracked_files)
     assert callable(_install_helpers._write_install_transition)
 
 
@@ -91,17 +83,15 @@ def test_check_unexpected_drift_no_entries_is_noop(
     assert captured.err == ""
 
 
-def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(("mode_drift", "gated"), [(False, 0), (True, 1)])
+def test_dry_run_drift_gate_counts_what_the_install_gate_rejects(
+    capsys: pytest.CaptureFixture[str], mode_drift: bool, gated: int
 ) -> None:
-    """A diff-only ``UNEXPECTED`` entry counts toward the dry-run gate line.
+    """The dry-run gate line counts exactly the files a real install refuses.
 
-    The dry-run count keys off the compare-level classification
-    (``drift_class``), not ``mode_drift`` — so a DRIFTED entry with
-    ``mode_drift=False`` still renders ``unexpected drift in 1 file(s)``
-    even though the live install gate (:func:`_check_unexpected_drift`)
-    would not reject it. Pins the wider-than-the-live-gate semantics the
-    helper's docstring documents.
+    The install gate (:func:`_check_unexpected_drift`) trips only on
+    permission-mode drift, so content-only drift — which install reconciles
+    without a gate — must not be counted by the preview.
     """
     report = CompareReport(
         entries=[
@@ -109,15 +99,26 @@ def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
                 name="claude/CLAUDE.md",
                 status=CompareStatus.DRIFTED,
                 diff="--- a\n+++ b\n",
-                mode_drift=False,
+                mode_drift=mode_drift,
                 drift_class=DriftClass.UNEXPECTED,
             ),
         ],
         has_unexpected_drift=True,
     )
+    ctx = cast(ProfileContext, SimpleNamespace(profile="p"))
+
     _install_helpers._dry_run_emit_drift_gate(report)
-    out = capsys.readouterr().out
-    assert "unexpected drift in 1 file(s)" in out
+    assert f"unexpected drift in {gated} file(s)" in capsys.readouterr().out
+
+    if gated:
+        with pytest.raises(typer.Exit):
+            _install_helpers._check_unexpected_drift(
+                report, ctx, auto_accept_tracked=False, auto_accept_live=False
+            )
+    else:
+        _install_helpers._check_unexpected_drift(
+            report, ctx, auto_accept_tracked=False, auto_accept_live=False
+        )
 
 
 def test_resolve_drift_paths_directory_subfiles_do_not_collide(
@@ -175,52 +176,3 @@ def test_resolve_drift_paths_directory_subfiles_do_not_collide(
     # The earlier sub-file did NOT collapse onto the later one.
     assert by_name[name1][0] != by_name[name2][0]
     assert by_name[name1][1] != by_name[name2][1]
-
-
-def test_load_validated_host_local_sections_reads_the_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """STAGE B: the shared host-local loader reads from the reconcile store.
-
-    Post-retirement there is no local.yaml ``host_local_sections`` declaration;
-    the sections are LOCAL units in the reconcile store. This pins that
-    :func:`_install_helpers._load_validated_host_local_sections` projects them
-    from the store (not local.yaml) and filters to the resolved profile.
-    """
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    from dataclasses import replace as dc_replace
-
-    from setforge.reconcile import store
-    from setforge.reconcile.hunks import extract_hunks, serialize
-    from setforge.reconcile.types import HunkClass, file_id
-
-    repo_root = tmp_path / "repo"
-    (repo_root / "tracked").mkdir(parents=True)
-    (repo_root / "tracked" / "CLAUDE.md").write_text(
-        "## Alpha\naaa\n", encoding="utf-8"
-    )
-
-    base = b"## Alpha\naaa\n## Beta\nbbb\n"
-    live = b"## Alpha\naaa\n## My Tweaks\nhost line\n## Beta\nbbb\n"
-    fid = file_id("doc")
-    hunk = next(h for h in extract_hunks(base, live) if h.label == "## My Tweaks")
-    store.record(
-        "p",
-        fid,
-        base=base,
-        local=live,
-        staged=True,
-        hunks=serialize([dc_replace(hunk, cls=HunkClass.LOCAL)]),
-    )
-
-    cfg = Config(
-        tracked_files={"doc": TrackedFile(src=Path("CLAUDE.md"), dst="~/doc.md")},
-        profiles={"p": Profile(tracked_files=["doc"])},
-    )
-    resolved = ResolvedProfile(tracked_files=["doc"])
-
-    out = _install_helpers._load_validated_host_local_sections(
-        cfg, resolved, repo_root, "p"
-    )
-    assert set(out) == {"doc"}
-    assert set(out["doc"]) == {"## My Tweaks"}

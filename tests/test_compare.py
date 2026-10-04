@@ -9,11 +9,11 @@ from rich.console import Console
 from setforge.compare import (
     CompareStatus,
     _compare_one,
-    compare_profile,
     compare_summary_table,
     diff_file,
 )
 from setforge.config import Config, Profile, TrackedFile
+from tests.verb_calls import compare_profile
 
 
 def _write(path: Path, content: str) -> None:

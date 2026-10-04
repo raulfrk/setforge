@@ -24,11 +24,11 @@ from setforge.cli.compare import _compare_json_data
 from setforge.compare import (
     CompareStatus,
     DriftClass,
-    compare_profile,
     compare_summary_table,
 )
 from setforge.config import Config, Profile, TrackedFile
 from setforge.errors import BaseStoreError
+from tests.verb_calls import compare_profile
 
 
 @pytest.fixture(autouse=True)

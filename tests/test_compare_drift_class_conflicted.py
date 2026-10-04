@@ -22,9 +22,9 @@ from setforge import base_store
 from setforge.compare import (
     CompareStatus,
     DriftClass,
-    compare_profile,
 )
 from setforge.config import Config, Profile, TrackedFile
+from tests.verb_calls import compare_profile
 
 
 @pytest.fixture(autouse=True)

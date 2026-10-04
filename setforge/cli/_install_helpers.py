@@ -4,9 +4,9 @@ Helpers extracted from ``install()`` body:
 
 - :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
   on no-resolve.
-- :func:`_deploy_all_tracked_files`: two-pass tracked-file deploy —
-  a read-only :func:`setforge.deploy.resolve_deploy` pass, then the
-  write pass (:func:`_execute_pending_deploys`).
+- :func:`_plan_tracked_files` / :func:`_apply_tracked_file_plan`: two-pass
+  tracked-file deploy — a read-only :func:`setforge.deploy.resolve_deploy`
+  pass, then the write pass (:func:`_execute_pending_deploys`).
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
@@ -65,15 +65,12 @@ from setforge.cli._mcp_helpers import MCPInstallPlan
 from setforge.cli._provision_helpers import dry_run_packages
 from setforge.compare import (
     CompareStatus,
-    DriftClass,
     expand_tracked_file,
     resolve_dst,
     resolve_src,
     warn_if_dst_outside_home,
 )
 from setforge.config import (
-    Config,
-    ResolvedProfile,
     TrackedFile,
 )
 from setforge.errors import (
@@ -81,8 +78,7 @@ from setforge.errors import (
     PluginToolMissing,
     SetforgeError,
 )
-from setforge.generated import GeneratedResolution, resolve_generated
-from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
+from setforge.generated import GeneratedResolution, resolve_generated_file
 from setforge.provision.dispatch import ProvisioningPlan, plan_provisioning
 from setforge.reconcile import FileId
 from setforge.reconcile import store as reconcile_store
@@ -90,13 +86,8 @@ from setforge.reconcile.conflict_choices import (
     ClaudeMergeFn,
     claude_merge_unavailable,
 )
-from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
 from setforge.secrets import SecretsScanResult
-from setforge.source import (
-    HostLocalSection,
-    HostLocalSectionName,
-)
 from setforge.ui.diffview import to_fragments, two_way_lines
 
 if TYPE_CHECKING:
@@ -104,36 +95,13 @@ if TYPE_CHECKING:
 from setforge.ui.primitives import CANCEL, Button, Cancelled
 
 
-def _load_validated_host_local_sections(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, profile: str
-) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
-    """Project host-local sections from the reconcile store for ``profile``.
-
-    Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
-    every tracked_file in the resolved profile that carries at least one
-    host-local section. tracked_files NOT in the resolved profile are
-    dropped silently (no error — the user may target a different profile on
-    a different host). Ignore stale relocation markers on non-Markdown files:
-    older staging could mint one from a ``#`` comment in a TOML file.
-
-    STAGE B retires the local.yaml ``host_local_sections`` declaration: the
-    sections now live as LOCAL units in the reconcile store, read back by
-    :func:`setforge.reconcile.host_local_view.host_local_sections_from_store`.
-    Shared between :mod:`setforge.cli.install` and :mod:`setforge.cli.compare`
-    so both surfaces read the same store-backed projection.
-    """
-    overlay = host_local_sections_from_store(profile)
-    result: dict[str, dict[HostLocalSectionName, HostLocalSection]] = {}
-    profile_ids = set(resolved.tracked_files)
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        tracked_file = cfg.tracked_files[tf_id]
-        src = resolve_src(tracked_file, repo_root)
-        if src.suffix.lower() not in {".md", ".markdown"}:
-            continue
-        result[tf_id] = sections_map
-    return result
+def _gated_drift_count(drift_report: compare_mod.CompareReport) -> int:
+    """Count the files the install drift gate rejects: permission-mode drift."""
+    return sum(
+        1
+        for e in drift_report.entries
+        if e.status == CompareStatus.DRIFTED and e.mode_drift
+    )
 
 
 def _check_unexpected_drift(
@@ -152,17 +120,9 @@ def _check_unexpected_drift(
     confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
     run, so this is a no-op. No-op when nothing carries unexpected drift.
     """
-    has_real_unexpected = any(
-        e.status == CompareStatus.DRIFTED and e.mode_drift for e in drift_report.entries
-    )
-    if not has_real_unexpected:
+    unexpected_count = _gated_drift_count(drift_report)
+    if not unexpected_count:
         return
-
-    unexpected_count = sum(
-        1
-        for e in drift_report.entries
-        if e.status == CompareStatus.DRIFTED and e.mode_drift
-    )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
             f"permission-mode drift in {unexpected_count} file(s) "
@@ -199,77 +159,9 @@ def _want_interactive_reconcile(
     return reconcile_user_sections and section_auto is None and sys.stdout.isatty()
 
 
-def _deploy_all_tracked_files(
-    ctx: ProfileContext,
-    *,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ],
-    section_auto: reconcile_apply.ReconcileAuto | None = None,
-    interactive: bool = False,
-) -> DeployOutcome:
-    """Deploy every tracked_file in two passes: resolve all, THEN write all.
-
-    Returns a :class:`DeployOutcome` carrying the pre-install store
-    snapshots captured at the pass-2 barrier (see
-    :func:`_capture_store_snapshots`) AND the per-path pre-install mode map,
-    so the caller records both on the install transition for store-state +
-    file-mode revert.
-
-    **Pass 1 (read-only).** For each regular-file sub-entry: plan the
-    disposition base (:func:`_plan_disposition_base` — any migration write is
-    DEFERRED), read the spans sidecar, and compute the full merge + span
-    overlay in memory via :func:`deploy.resolve_deploy`. Nothing is written;
-    the per-file outcomes accumulate as :class:`_PendingDeploy` records
-    (bounded by the config-tree size). Symlink-declared tracked_files are
-    deferred wholesale (``resolved=None``) — their deploy primitive is
-    self-contained and span-free.
-
-    **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
-    in order, per file: apply the deferred base migration → write the
-    resolved content (or deploy the symlink) → echo → advance the byte base →
-    advance the spans sidecar (lockstep per file, never
-    write-all-then-advance-all). The advance-only-AFTER-the-live-write
-    ordering is load-bearing: a base that lags live is the safe failure
-    direction (the next install re-merges against a stale-but-valid
-    ancestor); a base written before or around the live write could end up
-    ahead of live, which is corruption. A deferred conflict
-    (``merge_conflicts`` non-empty, ``new_base is None``) keeps live and
-    warns; its base stays put so the divergence re-surfaces next install.
-    After the loop, every base under the profile whose file_id is NOT in
-    this run's disposition keep-set is pruned — gated on pass-2 completion,
-    so a refused install prunes nothing.
-
-    ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
-    (``name`` for plain files, ``name/relpath`` for directory entries) —
-    the same stable per-profile identifier the prune keep-set and
-    transitions use. ``sub_name`` is always a relative path with no ``..``
-    component (``name`` is a config key; ``relpath`` is taken
-    ``relative_to`` the src dir), so it satisfies ``base_store``'s
-    traversal guard (:func:`setforge.base_store._resolve_target`).
-
-    ``interactive`` is True when reconcile conflicts should be resolved through
-    the reconcile engine's per-region wizard (see
-    :func:`_want_interactive_reconcile`); it is threaded to each reconcile call
-    as the ``interactive`` flag, so its prompts fire during pass 1, before any
-    write. False (non-interactive / non-tty / ``--auto``) leaves the bare
-    warn-and-defer behavior unchanged.
-    """
-    pending = _plan_tracked_files(
-        ctx,
-        host_local_sections_map=host_local_sections_map,
-        section_auto=section_auto,
-        interactive=interactive,
-    )
-    return _apply_tracked_file_plan(ctx.profile, pending)
-
-
 def _plan_tracked_files(
     ctx: ProfileContext,
     *,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ],
     section_auto: reconcile_apply.ReconcileAuto | None = None,
     interactive: bool = False,
 ) -> tuple[_PendingDeploy, ...]:
@@ -279,7 +171,6 @@ def _plan_tracked_files(
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is not None:
             continue
-        host_local = host_local_sections_map.get(name) or None
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
@@ -290,7 +181,6 @@ def _plan_tracked_files(
                 sub_src,
                 sub_dst,
                 tracked_file,
-                host_local=host_local,
                 section_auto=section_auto,
                 interactive=interactive,
             )
@@ -310,22 +200,13 @@ def _planned_deploy_action(record: _PendingDeploy) -> deploy.DeployAction | None
         and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
     ):
         return deploy.DeployAction.REMOVED
-    if not record.resolved.dst_existed:
-        if (
-            record.reconcile is not None
-            and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
-        ):
-            return deploy.DeployAction.NOOP
-        return deploy.DeployAction.CREATED
-    if record.resolved.real_dst.read_bytes() != deploy.encode_text_exact(
-        record.resolved.content
+    if (
+        not record.resolved.dst_existed
+        and record.reconcile is not None
+        and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
     ):
-        return deploy.DeployAction.UPDATED
-    live_mode = stat.S_IMODE(record.resolved.real_dst.stat().st_mode)
-    expected_mode = record.resolved.effective_mode
-    if expected_mode is not None and live_mode != expected_mode:
-        return deploy.DeployAction.UPDATED
-    return deploy.DeployAction.NOOP
+        return deploy.DeployAction.NOOP
+    return deploy.classify_write(record.resolved)
 
 
 def _apply_tracked_file_plan(
@@ -350,13 +231,10 @@ def _is_utf8(data: bytes) -> bool:
 def _plain_reconcile_content(
     outcome: reconcile_apply.ReconcileOutcome,
     live_bytes: bytes | None,
-) -> str | None:
+) -> bytes | None:
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
-        if not isinstance(outcome.content, bytes):
-            return None
-        return outcome.content.decode("utf-8")
-    live = live_bytes if live_bytes is not None else b""
-    return live.decode("utf-8")
+        return outcome.content if isinstance(outcome.content, bytes) else None
+    return live_bytes if live_bytes is not None else b""
 
 
 class _SeedButton(Enum):
@@ -539,7 +417,6 @@ def _pending_from_reconcile(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=None,
             resolved=scaffold,
             reconcile=(fid, outcome),
         )
@@ -551,7 +428,6 @@ def _pending_from_reconcile(
         sub_src=sub_src,
         sub_dst=sub_dst,
         tracked_file=tracked_file,
-        host_local=None,
         resolved=replace(scaffold, content=new_content),
         reconcile=(fid, outcome),
     )
@@ -564,20 +440,19 @@ def _resolve_one_pending(
     sub_dst: Path,
     tracked_file: TrackedFile,
     *,
-    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
 ) -> _PendingDeploy:
     """Resolve one sub-entry's pass-1 record (read-only; no writes).
 
-    The per-``sub_name`` body of :func:`_deploy_all_tracked_files`'s pass-1
+    The per-``sub_name`` body of :func:`_plan_tracked_files`'s pass-1
     loop: defer a symlink-declared tracked_file wholesale, otherwise route the
     file through the unified per-unit reconcile engine (structured, then plain).
     A binary / non-utf8 / deletion-edge file the reconcile engine cannot
     classify falls back to a verbatim tracked deploy.
     """
     generated = (
-        resolve_generated(sub_src.read_text(encoding="utf-8"), tracked_file.generated)
+        resolve_generated_file(sub_src, tracked_file.generated)
         if tracked_file.generated is not None
         else None
     )
@@ -593,12 +468,11 @@ def _resolve_one_pending(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=host_local,
             resolved=None,
             symlink_content=(
-                generated.rendered
+                generated.rendered.encode("utf-8")
                 if generated is not None
-                else deploy.read_text_exact(sub_src)
+                else sub_src.read_bytes()
             ),
             symlink_mode=(
                 tracked_file.mode
@@ -618,8 +492,7 @@ def _resolve_one_pending(
             sub_src=sub_src,
             sub_dst=sub_dst,
             tracked_file=tracked_file,
-            host_local=None,
-            resolved=replace(resolved, content=generated.rendered),
+            resolved=replace(resolved, content=generated.rendered.encode("utf-8")),
             generated=generated,
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
@@ -661,7 +534,6 @@ def _resolve_one_pending(
         sub_src=sub_src,
         sub_dst=sub_dst,
         tracked_file=tracked_file,
-        host_local=host_local,
         resolved=resolved,
     )
 
@@ -679,11 +551,10 @@ class _PendingDeploy:
     sub_src: Path
     sub_dst: Path
     tracked_file: TrackedFile
-    host_local: Mapping[HostLocalSectionName, HostLocalSection] | None
     resolved: deploy.ResolvedDeploy | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
     preview_action: deploy.DeployAction | None = None
-    symlink_content: str | None = None
+    symlink_content: bytes | None = None
     symlink_mode: int | None = None
     generated: GeneratedResolution | None = None
 
@@ -764,8 +635,7 @@ def _planned_reconcile_store_mutation(
 class DeployOutcome:
     """The pass-2 deploy outputs the caller threads into the transition.
 
-    ``state_snapshots`` is the pre-install store state captured at the
-    pass-2 barrier (:func:`_capture_store_snapshots`). ``prior_modes`` maps
+    ``prior_modes`` maps
     each live path whose MODE this install changed to the permission bits it
     held BEFORE the install chmod-ed it (from
     :attr:`deploy.DeployResult.prior_mode`) — the data ``revert`` needs to
@@ -779,7 +649,6 @@ class DeployOutcome:
     real conflicts unresolved.
     """
 
-    state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
     prior_modes: dict[Path, int]
     deferred_reconcile: tuple[Path, ...] = ()
     store_mutated: bool = False
@@ -793,10 +662,8 @@ def _execute_pending_deploys(
 ) -> DeployOutcome:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
-    Snapshots the pre-install store state FIRST (one barrier, before any
-    write — see :func:`_capture_store_snapshots`) and returns it together
-    with the per-path pre-install mode map so the caller threads both into
-    the install transition. Then, per
+    The caller has already snapshotted the pre-install store state (one
+    barrier, before any write — see :func:`_capture_store_snapshots`). Per
     record: apply the deferred base-migration writes (seed-first order +
     the one-time warning) → write the resolved content via
     :func:`deploy.write_resolved_deploy` (or run
@@ -811,9 +678,6 @@ def _execute_pending_deploys(
     executed disposition set — so a gate refusal (which never reaches this
     function) prunes nothing.
     """
-    state_snapshots = _capture_store_snapshots(
-        profile, pending, preserved_ids=preserved_ids
-    )
     prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
     store_mutated = False
@@ -825,7 +689,6 @@ def _execute_pending_deploys(
             typer.echo(
                 f"{result.action.value:>8}  {record.sub_dst} -> {tracked_file.symlink}"
             )
-            _echo_host_local_sections_provenance(record.host_local)
             continue
         if record.resolved is None:
             raise AssertionError(
@@ -854,7 +717,6 @@ def _execute_pending_deploys(
             # so revert's chmod target lines up with its content restore.
             prior_modes[result.dst] = result.prior_mode
         typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
-        _echo_host_local_sections_provenance(record.host_local)
         # ADVANCE the reconcile store only AFTER the live write (the same
         # lockstep, same safe-failure-direction reasoning as the disposition
         # byte base below): a base that lags live re-merges safely next run.
@@ -869,7 +731,6 @@ def _execute_pending_deploys(
     if reconcile_store.prune(profile, keep_ids):
         store_mutated = True
     return DeployOutcome(
-        state_snapshots=state_snapshots,
         prior_modes=prior_modes,
         deferred_reconcile=tuple(deferred_reconcile),
         store_mutated=store_mutated,
@@ -881,7 +742,6 @@ def _deploy_pending_symlink(record: _PendingDeploy) -> deploy.DeployResult:
     if record.symlink_content is None or record.symlink_mode is None:
         raise AssertionError("symlink pending deploy lacks frozen source")
     return deploy.deploy_symlinked_file(
-        record.sub_src,
         record.sub_dst,
         record.tracked_file,
         source_content=record.symlink_content,
@@ -932,27 +792,6 @@ def _honor_reconcile_removal(record: _PendingDeploy) -> None:
         )
         return
     typer.echo(f"{deploy.DeployAction.REMOVED.value:>8}  {record.sub_dst}")
-
-
-def _echo_host_local_sections_provenance(
-    host_local_sections: Mapping[HostLocalSectionName, HostLocalSection] | None,
-) -> None:
-    """Print a per-section ``injected ... <HOST_LOCAL_PROVENANCE_TAG>`` line.
-
-    No-op when ``host_local_sections`` is ``None`` or empty. The
-    provenance tag (see ``HOST_LOCAL_PROVENANCE_TAG`` in
-    :mod:`setforge.host_local_inject`) matches the mockup in
-    SPEC 1 so users grepping install output can locate
-    every host-local injection at a glance.
-    """
-    if not host_local_sections:
-        return
-    names = ", ".join(sorted(host_local_sections))
-    plural = "s" if len(host_local_sections) != 1 else ""
-    typer.echo(
-        f"    injected {len(host_local_sections)} host-local section{plural} "
-        f"{HOST_LOCAL_PROVENANCE_TAG}: {names}"
-    )
 
 
 def _install_recorded_nothing(
@@ -1274,8 +1113,8 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 #   are all unreachable).
 # - No parallel diff or merge implementation: planned deploy records and the
 #   shared compare report are the preview inputs.
-# - WOULD only on mutating verbs (``deploy`` / ``inject`` / ``install`` /
-#   ``uninstall`` / ``enable`` / ``disable``); section headers and read
+# - WOULD only on mutating verbs (``deploy`` / ``install`` / ``uninstall`` /
+#   ``enable`` / ``disable``); section headers and read
 #   counts go unprefixed.
 # - No ``confirm_auto_operation`` call from the dry-run path: the call
 #   site in :func:`_confirm_legacy_drift_or_exit` is inside
@@ -1296,7 +1135,7 @@ updating the spec + every consumer."""
 def _dry_run_pipeline(
     *,
     ctx: ProfileContext,
-    drift_report: compare_mod.CompareReport | None = None,
+    drift_report: compare_mod.CompareReport,
     staging: tuple[StageSummary, ...] = (),
     deploys: tuple[_PendingDeploy, ...] | None = None,
     provisioning: ProvisioningPlan | None = None,
@@ -1306,10 +1145,6 @@ def _dry_run_pipeline(
     immutable_plan: bool = False,
     record_transition: bool = True,
     secrets_scan: SecretsScanResult | None = None,
-    host_local_sections_map: Mapping[
-        str, Mapping[HostLocalSectionName, HostLocalSection]
-    ]
-    | None = None,
 ) -> None:
     """Simulate every install phase without mutating filesystem or state.
 
@@ -1323,20 +1158,6 @@ def _dry_run_pipeline(
     _dry_run_emit_profile_summary(ctx)
     _dry_run_emit_staging(staging)
     # NOT profile_lock'd: acquiring it would create the lock file, a dry-run mutation.
-    if host_local_sections_map is None:
-        host_local_sections_map = _load_validated_host_local_sections(
-            ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
-        )
-    if drift_report is None:
-        drift_report = compare_mod.compare_profile(
-            ctx.cfg,
-            ctx.profile,
-            ctx.repo_root,
-            host_local_sections={
-                name: dict(sections)
-                for name, sections in host_local_sections_map.items()
-            },
-        )
     if deploys is not None and len(deploys) != len(tuple(_iter_all_tracked_files(ctx))):
         raise SetforgeError(
             "dry-run: immutable deploy plan does not match the drift report"
@@ -1351,7 +1172,6 @@ def _dry_run_pipeline(
             f"{len(secrets_scan.findings)} finding(s) require a decision"
         )
     _dry_run_emit_deploys(ctx, drift_report, deploys=deploys)
-    _dry_run_emit_host_local_inject(ctx, overlay=host_local_sections_map)
     _dry_run_emit_plugin_reconcile(ctx, plan=plugins, planned=immutable_plan)
     _dry_run_emit_extension_reconcile(ctx, plan=extensions, planned=immutable_plan)
     typer.echo("=== would-be MCP server reconcile ===")
@@ -1435,20 +1255,14 @@ def _dry_run_emit_drift_gate(
 
     The drift gate is a READ in the real pipeline too (it computes
     unexpected drift over the existing live tree) — counts stay
-    unprefixed. The count reports files whose drift is CLASSIFIED
-    unexpected or conflicted (the compare-level
-    :class:`~setforge.compare.DriftClass`); the live install gate
-    (:func:`_check_unexpected_drift`) trips only on permission-mode
-    drift (``mode_drift``), so this count can include diff-only drift
-    that a real install does not reject. The dry-run path never invokes
-    the auto-confirm wizard (short-circuiting before the confirm is a
-    hard requirement per spec).
+    unprefixed. The count is the number of files the real gate
+    (:func:`_check_unexpected_drift`) rejects, so content drift that
+    install reconciles without a gate is not counted. The dry-run path
+    never invokes the auto-confirm wizard (short-circuiting before the
+    confirm is a hard requirement per spec).
     """
     typer.echo("=== would-be drift gate ===")
-    unexpected = sum(
-        1 for e in drift_report.entries if e.drift_class is DriftClass.UNEXPECTED
-    )
-    typer.echo(f"unexpected drift in {unexpected} file(s)")
+    typer.echo(f"unexpected drift in {_gated_drift_count(drift_report)} file(s)")
 
 
 def _planned_line(record: _PendingDeploy, sub_dst: Path) -> str:
@@ -1535,40 +1349,6 @@ def _dry_run_emit_deploys(
         path = Path(str(raw)).expanduser()
         if not path.exists():
             typer.echo(f"  WOULD bootstrap {path}")
-
-
-def _dry_run_emit_host_local_inject(
-    ctx: ProfileContext,
-    *,
-    overlay: Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]]
-    | None = None,
-) -> None:
-    """Emit the ``=== would-be host-local section inject ===`` block.
-
-    Per SPEC 1's mockup, each ``WOULD inject`` line carries
-    a ``HOST_LOCAL_PROVENANCE_TAG`` so users can identify host-local
-    injections in the dry-run output. No-op when local.yaml is absent or
-    declares no host-local sections for tracked_files in this profile.
-    """
-    typer.echo("=== would-be host-local section inject ===")
-    if overlay is None:
-        overlay = host_local_sections_from_store(ctx.profile)
-    profile_ids = set(ctx.resolved.tracked_files)
-    matched: list[tuple[str, HostLocalSectionName, Path]] = []
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        dst = resolve_dst(ctx.cfg.tracked_files[tf_id])
-        for section_name in sections_map:
-            matched.append((tf_id, section_name, dst))
-    if not matched:
-        typer.echo("  no host-local sections to inject")
-        return
-    for tf_id, section_name, dst in matched:
-        typer.echo(
-            f"  WOULD inject  '{section_name}' into {dst} "
-            f"{HOST_LOCAL_PROVENANCE_TAG} (tracked_file {tf_id!r})"
-        )
 
 
 def _dry_run_emit_plugin_reconcile(

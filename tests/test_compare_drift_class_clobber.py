@@ -1,17 +1,8 @@
-"""Tests for markdown drift classification after the disposition/spans cutover.
+"""Tests for plain markdown drift with no stored base.
 
-The clobber slot (slot 2) classified span-only drift with an ABSENT byte
-base as UNEXPECTED with a run-sync-first reason: the base-absent
-deploy-tracked-verbatim path did not honor per-span overrides, so the live
-span edits were at clobber risk. Tracked-side spans are retired
-(``_span_only_drift`` always returns ``False`` and no clobber slot survives
-in ``_classify_drifted``), so there is no span region to confine drift to and
-no clobber concept — the whole slot-2 test surface is retired.
-
-What remains is the retained unified-model behavior for a plain markdown
-file whose live copy diverged from tracked with no stored base: it is plain
-UNEXPECTED drift (``span_only_drift`` stays ``False``, no clobber reason), and
-``compare --check`` fails on it.
+A plain markdown file whose live copy diverged from tracked, with no stored
+base, is UNEXPECTED drift with no reason note, and ``compare --check`` fails
+on it.
 """
 
 from pathlib import Path
@@ -20,8 +11,9 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.compare import CompareStatus, DriftClass, compare_profile
+from setforge.compare import CompareStatus, DriftClass
 from setforge.config import Config, Profile, TrackedFile
+from tests.verb_calls import compare_profile
 
 _DOC = """\
 # Title
@@ -67,15 +59,13 @@ def _doc_file(tmp_path: Path) -> tuple[Config, Path]:
 
 
 def test_live_edit_no_base_is_unexpected(tmp_path: Path) -> None:
-    """A live markdown edit with NO stored base is plain UNEXPECTED drift —
-    span_only_drift is retired (always False) and there is no clobber reason."""
+    """A live markdown edit with NO stored base is plain UNEXPECTED drift."""
     config, repo = _doc_file(tmp_path)
 
     report = compare_profile(config, "p", repo)
     entry = report.entries[0]
 
     assert entry.status is CompareStatus.DRIFTED
-    assert entry.span_only_drift is False
     assert entry.drift_class is DriftClass.UNEXPECTED
     assert entry.reason is None
     assert report.has_unexpected_drift is True

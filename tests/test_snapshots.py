@@ -275,7 +275,7 @@ def test_create_snapshot_preserves_symlinks_as_symlinks(
 def test_snapshot_restores_payload_only_for_declared_symlinks(
     fake_home: Path, declared: bool, relative: bool
 ) -> None:
-    from setforge.deploy import deploy_symlinked_file
+    from tests.verb_calls import deploy_symlinked_file
 
     ctx, src, dst = _build_ctx(fake_home)
     src.write_text("captured\n")
