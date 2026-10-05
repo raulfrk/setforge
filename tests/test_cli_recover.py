@@ -23,6 +23,7 @@ def recovery_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(transitions, "state_root", lambda: root)
     monkeypatch.setattr("setforge.locking.state_root", lambda: root)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
     return root
 
 
