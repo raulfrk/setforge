@@ -48,8 +48,24 @@ def test_ci_declares_runnerless_jobs_and_retains_hosted_secret_scan() -> None:
     assert workflow["on"]["push"]["branches"] == ["main"]
     assert workflow["on"]["pull_request"]["branches"] == ["main"]
     jobs = workflow["jobs"]
-    assert set(jobs) == {"workbox-unit", "workbox-integration", "secrets-scan"}
-    for name in ("workbox-unit", "workbox-integration"):
+    assert set(jobs) == {
+        "workbox-unit",
+        "workbox-integration",
+        "workbox-supersede-unit",
+        "workbox-supersede-integration",
+        "secrets-scan",
+    }
+    assert jobs["workbox-supersede-unit"]["name"] == "Workbox supersede / unit"
+    assert (
+        jobs["workbox-supersede-integration"]["name"]
+        == "Workbox supersede / integration"
+    )
+    for name in (
+        "workbox-unit",
+        "workbox-integration",
+        "workbox-supersede-unit",
+        "workbox-supersede-integration",
+    ):
         job = jobs[name]
         assert job["if"] == _RUNNERLESS_GUARD
         assert job["runs-on"] == "ubuntu-latest"

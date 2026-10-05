@@ -27,6 +27,25 @@ jobs:
     steps:
       - run: echo "The home CI coordinator verifies this pull request and dispatches its Docker and mutation checks."
 
+  workbox-supersede-unit:
+    name: Workbox supersede / unit
+    # Marker only: lets the home CI coordinator stop this commit's unit run once
+    # a newer commit exists on the same ref. Declare a suite only while every
+    # push and pull request update starts it.
+    if: github.event_name == 'workbox_poll_only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "Marker for the home CI coordinator; never executes."
+
+  workbox-supersede-integration:
+    name: Workbox supersede / integration
+    if: github.event_name == 'workbox_poll_only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "Marker for the home CI coordinator; never executes."
+
   secrets-scan:
     name: Secrets scan (gitleaks)
     runs-on: ubuntu-latest
