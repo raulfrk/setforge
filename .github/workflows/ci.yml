@@ -19,6 +19,15 @@ jobs:
     steps:
       - run: echo "The home CI coordinator verifies this run and dispatches the exact SetForge commit."
 
+  workbox-supersede-unit:
+    name: Workbox supersede / unit
+    # Marker only: a newer commit may cancel this commit's older unit run.
+    if: github.event_name == 'workbox_poll_only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "Marker for the home CI coordinator; never executes."
+
   workbox-integration:
     name: Workbox trigger / integration
     if: github.event_name == 'workbox_poll_only'
