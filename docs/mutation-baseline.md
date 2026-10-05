@@ -13,12 +13,14 @@ requirement.
 
 | metric | value |
 |---|---|
-| **Mutation score** | **80.48%** (1101 killed ÷ 1368 scored) |
-| Mutants generated | 1487 |
-| 🎉 killed | 1101 |
-| 🙁 survived | 267 |
-| 🫥 skipped (no covering test in scope) | 114 |
-| ⏰ timeout / 🤔 suspicious | 5 / 0 |
+| **Mutation score** | **91.32%** (full nightly gate on commit 2724c5d3, 2026-10-05) |
+| 🙁 survived | 325 (11 allowlisted) |
+| 🫥 skipped (no covering test in scope) | 10 |
+| ⏰ timeout | 2 |
+
+The figures are the complete baseline for the expanded scope below; the gate
+log did not report the killed and generated counts. The previous baseline
+(80.48%, 1101 killed ÷ 1368 scored, before the scope grew) is superseded.
 
 Score = killed ÷ (killed + survived); skipped/timeout/suspicious are excluded
 from the denominator (mutmut's standard reporting).
@@ -46,11 +48,11 @@ reconcile/merge`
 
 `project_record`, `reconcile_apply` and `reconcile/merge` joined the scope on
 2026-10-04, when the retired `markdown_merge` and `yaml_merge` modules were
-deleted. A partial local run on that scope (about 2,970 of 3,640 mutants
-decided) killed 2,676 and left 296 alive, roughly 90%; survivors were
-concentrated in `project_sync` (111), `reconcile_apply` (81),
-`structural_merge` (44) and `reconcile/merge` (33). The complete baseline
-and the allowlist renumbering come from the next full nightly run.
+deleted. The first complete run on that scope (nightly gate, 2026-10-05) scored 91.32%.
+Two allowlist entries (`project_sync.x_apply_sync__mutmut_433` and `_436`) are
+stale: the gate only warns about them. Renumbering the allowlist and killing the
+cheap survivors in `project_sync`, `reconcile_apply`, `structural_merge` and
+`reconcile/merge` need a per-mutant survivor list from a full run.
 
 The mutmut run executes a **sandbox-clean test selection** (see
 `pyproject.toml [tool.mutmut]`), because mutmut runs the suite from a copied
@@ -58,8 +60,7 @@ The mutmut run executes a **sandbox-clean test selection** (see
 (CHANGELOG/docs/migrations) fails there and aborts the run under mutmut's `-x`.
 
 G4 adds `project_sync` and `tests/test_project_sync.py` to the enforced mutation
-scope. The score and counts above remain the last complete historical baseline;
-the next full nightly run must establish the expanded-scope baseline. G4's
+scope. G4's
 pre-commit evidence is selective over its changed planner, compatibility,
 conflict-policy, and transaction functions.
 
