@@ -1887,9 +1887,6 @@ def _preview_tree_targets(
     ctx, _overlay = _resolve_install_profile(
         cfg, profile, config.parent, file_selection
     )
-    # The profile lock creates the state root after these roots are locked; a
-    # tree sharing its absent parent would otherwise see its lock root move.
-    transitions.state_root().mkdir(parents=True, exist_ok=True)
     roots = {
         *(
             _tree_lock_target(destination)
@@ -2503,6 +2500,9 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     with mutation_locks(resources=True):
         _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=False)
         run_git_check_or_raise(source=install_source, no_git_check=no_git_check)
+    # The run creates the state root after planning; a managed tree holding it
+    # or its absent parent would otherwise scan differently at confirmation.
+    transitions.state_root().mkdir(parents=True, exist_ok=True)
     ownership_config = config.read_bytes()
     ownership_preview = (
         _preview_package_ownership(config, profile, locked=locked)
