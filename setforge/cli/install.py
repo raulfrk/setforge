@@ -14,7 +14,7 @@ import json
 import os
 import stat
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -387,6 +387,18 @@ class SecretPlan:
 
     hashes: tuple[str, ...]
     allowlist_path: Path
+
+
+def _journalable_backups(dst_paths: Iterable[Path]) -> Iterator[Path]:
+    """Yield each ``.bak`` sibling the journal can snapshot, skipping any other."""
+    for path in dst_paths:
+        backup = path.with_name(path.name + ".bak")
+        try:
+            image = transitions.capture_filesystem_image(backup)
+        except OSError:
+            continue
+        if image is not None:
+            yield backup
 
 
 def _snapshot_inputs(paths: set[Path]) -> tuple[tuple[Path, bytes | None], ...]:
@@ -2712,7 +2724,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         tree_paths = plan.tree_paths()
         tracked_paths = (
             *plan.dst_paths,
-            *(path.with_name(path.name + ".bak") for path in plan.dst_paths),
+            *_journalable_backups(plan.dst_paths),
             *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
             *tree_paths,
         )

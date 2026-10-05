@@ -6,6 +6,7 @@ written. Everything is observed through the CLI and the resulting files."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -86,6 +87,32 @@ def test_recovery_restores_a_backup_that_existed_before_the_killed_install(
     assert recovered.returncode == 0, recovered.stderr
     assert _live_tree(host) == before
     assert host.live("note.txt.bak").read_bytes() == b"older\n"
+
+
+@pytest.mark.parametrize("update", [False, True], ids=["noop", "update"])
+@pytest.mark.parametrize("kind", ["unreadable", "fifo"])
+def test_install_ignores_a_backup_copy_it_cannot_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, update: bool
+) -> None:
+    if kind == "unreadable" and os.geteuid() == 0:
+        pytest.skip("root reads a mode 000 file")
+    host = extension_host(tmp_path, monkeypatch)
+    assert host.proc_install().returncode == 0
+    backup = host.live("note.txt.bak")
+    if kind == "fifo":
+        os.mkfifo(backup)
+    else:
+        backup.write_bytes(b"secret\n")
+        backup.chmod(0)
+    if update:
+        host.tracked("note.txt").write_bytes(b"two\n")
+        (host.bin_dir / "installed").unlink()
+    try:
+        result = host.proc_install()
+        assert result.returncode == 0, _said(result)
+        assert host.live("note.txt").read_bytes() == (b"two\n" if update else b"one\n")
+    finally:
+        backup.chmod(0o600)
 
 
 def test_unfinished_operation_blocks_mutating_commands_until_recovered(
