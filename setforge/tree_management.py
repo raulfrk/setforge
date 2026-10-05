@@ -743,7 +743,9 @@ def apply_tree(
         _apply_removals(plan, root_fd)
         os.fsync(root_fd)
         live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
-        result = _scan_tree_fd(root_fd, destination, live_policy).inventory
+        result = _scan_tree_fd(
+            root_fd, destination, live_policy, skip=_state_trees()
+        ).inventory
         _verify_relative_binding(anchor_fd, anchor_relative, root_fd)
     except OSError as exc:
         raise SetforgeError(
