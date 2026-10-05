@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-05
+
 ### Fixed
 
 - `setforge recover` after an interrupted install that was updating a file now
@@ -650,7 +652,8 @@ tag). See the migration section of the README for the upgrade recipe.
 <!-- 0.2.1 is documented for history but was never tagged (it folded
 into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
 resolve once the v0.2.2 tag lands on origin/main. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.3.9...HEAD
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/raulfrk/setforge/compare/v1.3.9...v1.4.0
 [1.3.9]: https://github.com/raulfrk/setforge/compare/v1.3.8...v1.3.9
 [1.3.8]: https://github.com/raulfrk/setforge/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/raulfrk/setforge/compare/v1.3.6...v1.3.7
