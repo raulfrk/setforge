@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from setforge import operations
+from setforge.tree_management import (
+    TreeEntry,
+    TreeEntryKind,
+    read_inventory,
+    write_inventory,
+)
 from tests.regression.support import _FAKE_CODE, Host, claim_ids_for
 from tests.regression.test_ownership import _NO_PROMPT, _command_from, _tree_host
 
@@ -75,9 +83,9 @@ def test_later_installs_of_a_root_holding_the_state_dir_keep_working(
     assert (root / "kept.txt").read_bytes() == b"kept3\n"
 
 
-def test_revert_of_a_cache_tree_ignores_setforge_operation_files(
+def _cache_tree_host_with_an_extension(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> Host:
     host = _tree_host(tmp_path, monkeypatch, {"c": "~/.cache"})
     host.config.write_text(
         host.config.read_text(encoding="utf-8")
@@ -89,6 +97,13 @@ def test_revert_of_a_cache_tree_ignores_setforge_operation_files(
         encoding="utf-8",
     )
     host.shim("code", _FAKE_CODE)
+    return host
+
+
+def test_revert_of_a_cache_tree_ignores_setforge_operation_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _cache_tree_host_with_an_extension(tmp_path, monkeypatch)
     root = host.real_home / ".cache"
     root.mkdir()
     (root / "other").mkdir()
@@ -173,3 +188,40 @@ def test_revert_of_the_first_install_keeps_setforge_state_and_removes_the_tree_f
     redone = host.cli("install", *_NO_PROMPT)
     assert redone.exit_code == 0, (redone.output, redone.exception)
     assert live.read_bytes() == b"kept\n"
+
+
+def test_recover_after_a_killed_install_ignores_setforge_files_in_an_old_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _cache_tree_host_with_an_extension(tmp_path, monkeypatch)
+    root = host.real_home / ".cache"
+    live = root / "kept.txt"
+    settled = host.proc_install()
+    assert settled.returncode == 0, _error_line(settled)
+    assert live.read_bytes() == b"kept\n"
+    written = read_inventory(host.profile, "c")
+    assert written is not None
+    journal = operations.journal_path(host.profile).relative_to(host.home / ".cache")
+    listed_by_an_older_version = (
+        TreeEntry("setforge", TreeEntryKind.DIRECTORY, 0o755),
+        TreeEntry("setforge/operations", TreeEntryKind.DIRECTORY, 0o755),
+        TreeEntry(journal.as_posix(), TreeEntryKind.FILE, 0o600, "0" * 64),
+    )
+    write_inventory(
+        host.profile,
+        "c",
+        replace(written, entries=(*written.entries, *listed_by_an_older_version)),
+    )
+    (host.tracked_root / "c" / "kept.txt").write_bytes(b"new\n")
+    (host.bin_dir / "installed").unlink()
+    host.arm("install")
+    assert host.proc_install().returncode == -9
+
+    recovered = host.proc("recover", "--apply", "--yes", config=False)
+
+    assert recovered.returncode == 0, _error_line(recovered)
+    assert live.read_bytes() == b"kept\n"
+    host.arm("")
+    again = host.proc_install()
+    assert again.returncode == 0, _error_line(again)
+    assert live.read_bytes() == b"new\n"

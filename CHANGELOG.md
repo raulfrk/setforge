@@ -14,6 +14,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ask to adopt the directory SetForge had just created and deploy nothing until
   a second install. A destination holding anything else is still adopted only
   with consent.
+- `setforge recover --apply` after an interrupted install no longer stops with
+  "no unfinished operation" when the managed tree's inventory, written by a
+  version before 1.4.0, still lists SetForge's own files.
 
 ## [1.4.0] - 2026-10-05
 

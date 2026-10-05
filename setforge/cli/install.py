@@ -172,6 +172,7 @@ from setforge.tree_management import (
     read_inventory,
     scan_live_tree,
     scan_tree,
+    state_trees_under,
     temporary_entry_name,
     write_inventory,
 )
@@ -1024,15 +1025,24 @@ def _tree_checkpoint_paths(tree: PlannedTree, profile: str) -> tuple[Path, ...]:
         for entry in tree.plan.live.entries
         if entry.kind is not TreeEntryKind.DIRECTORY
     )
+    # An inventory written before live scans skipped SetForge's own roots can
+    # list them; no plan touches those entries, and journaling them would have
+    # recovery restore over the journal itself.
+    own = state_trees_under(tree.destination)
+    root = tree.destination.absolute()
+    prior = tuple(
+        entry
+        for entry in (tree.plan.prior.entries if tree.plan.prior is not None else ())
+        if not any((root / entry.path).is_relative_to(path) for path in own)
+    )
     relative = {
         entry.path
-        for inventory in (
-            tree.plan.desired.inventory,
-            tree.plan.live,
-            tree.plan.prior,
+        for entries in (
+            tree.plan.desired.inventory.entries,
+            tree.plan.live.entries,
+            prior,
         )
-        if inventory is not None
-        for entry in inventory.entries
+        for entry in entries
         if not entry.path.startswith(beneath_live_leaf)
     }
     lock_target = _tree_lock_target(tree.destination)

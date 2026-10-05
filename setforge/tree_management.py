@@ -408,8 +408,12 @@ def holds_only_state_trees(root: Path) -> bool:
     every other entry is a bare directory leading to one, so nothing here is
     the user's.
     """
-    root = root.absolute()
-    return _leads_only_to(root, _spell_skip_under(root, _state_trees()))
+    return _leads_only_to(root.absolute(), state_trees_under(root))
+
+
+def state_trees_under(root: Path) -> frozenset[Path]:
+    """SetForge's own state roots, also under the spelling a walk of ``root`` meets."""
+    return _spell_skip_under(root.absolute(), _state_trees())
 
 
 def _leads_only_to(directory: Path, targets: frozenset[Path]) -> bool:
