@@ -101,8 +101,13 @@ class FakeMcpCli:
 
 
 @pytest.fixture
-def fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """Install a :class:`FakeMcpCli` and stub binary resolution."""
+def fake_mcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Any]:
+    """Install a :class:`FakeMcpCli` and stub binary resolution.
+
+    Runs from a non-git temp directory so the local-project key does not depend
+    on the git state of the directory pytest was started in.
+    """
+    monkeypatch.chdir(tmp_path)
 
     def _install(**kwargs: Any) -> FakeMcpCli:
         cli = FakeMcpCli(**kwargs)
@@ -703,7 +708,9 @@ def test_mcp_plan_refuses_changed_native_context(
     plan = mcp.plan_reconcile(
         _cfg({"named": McpServerRef(command=["new"])}), _resolved(["named"])
     )
-    monkeypatch.chdir(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
     with pytest.raises(SetforgeError, match="context changed"):
         mcp.apply_plan(plan)
     assert cli.registry == {"named": (["old"], "user")}

@@ -1684,8 +1684,9 @@ def test_adapter_recovery_restores_extension_inventory(
 
 
 def test_adapter_recovery_restores_mcp_registration(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     from setforge import mcp_servers
     from setforge.config import McpScope
 

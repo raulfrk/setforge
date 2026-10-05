@@ -120,7 +120,8 @@ class FakeMcpCli:
 
 
 @pytest.fixture
-def fake_cli(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeMcpCli]:
+def fake_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[FakeMcpCli]:
+    monkeypatch.chdir(tmp_path)
     cli = FakeMcpCli()
     monkeypatch.setattr(
         "setforge.claude_plugins.resolve_binary", lambda _name: Path("/fake/claude")
@@ -221,7 +222,10 @@ def test_removed_prior_only_delta_restores_exact_endpoint(fake_cli: FakeMcpCli) 
     assert reverse.updated == ()
 
 
-def test_context_metadata_roundtrips_and_legacy_metadata_decodes() -> None:
+def test_context_metadata_roundtrips_and_legacy_metadata_decodes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     delta = transitions.MCPDelta(
         added=(("named", ("exact",), "project"),),
         updated=(),
