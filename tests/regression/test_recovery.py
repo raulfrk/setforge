@@ -89,6 +89,36 @@ def test_recovery_restores_a_backup_that_existed_before_the_killed_install(
     assert host.live("note.txt.bak").read_bytes() == b"older\n"
 
 
+@pytest.mark.parametrize("old_backup", [False, True], ids=["no-backup", "old-backup"])
+def test_recovery_restores_a_file_written_through_a_user_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_backup: bool
+) -> None:
+    host = extension_host(tmp_path, monkeypatch)
+    target = host.real_home / "real" / "note.txt"
+    target.parent.mkdir()
+    target.write_bytes(b"one\n")
+    host.live_dir.mkdir()
+    host.live("note.txt").symlink_to(target)
+    assert host.proc_install().returncode == 0
+    host.tracked("note.txt").write_bytes(b"two\n")
+    (host.bin_dir / "installed").unlink()
+    backup = target.with_name("note.txt.bak")
+    if old_backup:
+        backup.write_bytes(b"older\n")
+    before = tree(host.real_home)
+    host.arm("install")
+
+    assert host.proc_install().returncode != 0
+    assert target.read_bytes() == b"two\n"
+
+    recovered = host.proc("recover", "--apply", "--yes", config=False)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert tree(host.real_home) == before
+    assert host.live("note.txt").readlink() == target
+    assert backup.exists() == old_backup
+
+
 @pytest.mark.parametrize("update", [False, True], ids=["noop", "update"])
 @pytest.mark.parametrize("kind", ["unreadable", "fifo"])
 def test_install_ignores_a_backup_copy_it_cannot_snapshot(
@@ -311,3 +341,24 @@ def test_a_refused_command_leaves_nothing_to_recover(
     assert "Traceback" not in result.stderr
     assert "no unfinished operation" in _said(host.proc("recover", config=False))
     assert "unfinished" not in host.proc("status").stdout
+
+
+def test_install_through_a_symlink_to_an_unreadable_target_fails_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode 000 file")
+    host = extension_host(tmp_path, monkeypatch)
+    target = host.real_home / "real" / "note.txt"
+    target.parent.mkdir()
+    host.live_dir.mkdir()
+    host.live("note.txt").symlink_to(target)
+    target.write_bytes(b"secret\n")
+    target.chmod(0)
+    try:
+        result = host.proc_install()
+        assert result.returncode != 0
+        assert "Permission denied" in _said(result)
+        assert "unfinished" not in host.proc("status").stdout
+    finally:
+        target.chmod(0o600)

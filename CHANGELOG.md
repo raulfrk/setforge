@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `setforge recover` after an interrupted install now also restores a file that
+  install was updating through a symlink at its destination, along with that
+  file's `.bak` copy; the symlink itself is left alone.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed
