@@ -170,8 +170,9 @@ def _tree_host(
     monkeypatch: pytest.MonkeyPatch,
     roots: dict[str, str],
     state_in_home: bool = False,
+    kind: str = "plain",
 ) -> Host:
-    host = Host(tmp_path, monkeypatch, state_in_home=state_in_home)
+    host = Host(tmp_path, monkeypatch, state_in_home=state_in_home, kind=kind)
     trees = ""
     for tree_id, dst in roots.items():
         source = host.tracked_root / tree_id
@@ -189,27 +190,82 @@ def _install_settled(host: Host) -> None:
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.parametrize("kind", ["plain", "symlink", "ancestor"])
 @pytest.mark.parametrize(
-    "layout", ["state-dir", "local-no-state", "local-absent", "nested-state-root"]
+    "layout",
+    ["state-dir", "local-absent", "cache-dir", "nested-state-root", "data-root-first"],
 )
 def test_first_install_succeeds_when_setforge_roots_are_created_inside_the_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str, kind: str
 ) -> None:
-    if layout == "state-dir":
-        host = _tree_host(
-            tmp_path, monkeypatch, {"t": "~/.local/state"}, state_in_home=True
-        )
-    elif layout == "nested-state-root":
-        host = _tree_host(tmp_path, monkeypatch, {"managed": "~/.managed"})
-        state = host.real_home / ".managed" / "sub" / ".sfstate"
-        (host.real_home / ".managed").mkdir()
+    if layout == "nested-state-root":
+        host = _tree_host(tmp_path, monkeypatch, {"t": "~/.managed"}, kind=kind)
+        root = host.real_home / ".managed"
+        state = root / "sub" / ".sfstate"
         monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
         host.state = state
     else:
-        host = _tree_host(tmp_path, monkeypatch, {"l": "~/.local"}, state_in_home=True)
-        if layout == "local-no-state":
-            (host.real_home / ".local" / "bin").mkdir(parents=True)
+        dst = {
+            "state-dir": ".local/state",
+            "local-absent": ".local",
+            "cache-dir": ".cache",
+            "data-root-first": ".local/share",
+        }[layout]
+        host = _tree_host(
+            tmp_path, monkeypatch, {"t": f"~/{dst}"}, state_in_home=True, kind=kind
+        )
+        root = host.real_home / dst
+        if layout == "data-root-first":
+            assert host.cli("snapshot", "create", "s").exit_code == 0
+            assert (root / "setforge").is_dir()
 
+    first = host.cli("install", *_NO_PROMPT)
+
+    assert first.exit_code == 0, (first.output, first.exception)
+    assert (root / "kept.txt").read_bytes() == b"kept\n"
+    assert host.cli("compare", "--check").exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        "user-directory",
+        "beside-the-state-root",
+        "user-symlink",
+        "excluded-user-file",
+        "empty-without-setforge",
+    ],
+)
+def test_a_root_that_holds_anything_of_the_users_is_adopted_only_with_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    if layout == "empty-without-setforge":
+        host = _tree_host(tmp_path, monkeypatch, {"t": "~/.managed"})
+        (host.real_home / ".managed").mkdir()
+    else:
+        host = _tree_host(tmp_path, monkeypatch, {"t": "~/.local"}, state_in_home=True)
+        local = host.real_home / ".local"
+        if layout == "user-directory":
+            (local / "bin").mkdir(parents=True)
+        elif layout == "beside-the-state-root":
+            (local / "state" / "other").mkdir(parents=True)
+        elif layout == "user-symlink":
+            local.mkdir()
+            (local / "link").symlink_to("elsewhere")
+        else:
+            local.mkdir()
+            (local / "mine.log").write_bytes(b"mine\n")
+            host.config.write_text(
+                host.config.read_text(encoding="utf-8").replace(
+                    "tree: {}", "tree: {exclude: [mine.log]}"
+                ),
+                encoding="utf-8",
+            )
+
+    refused = host.cli("install", *_NO_PROMPT)
+
+    assert refused.exit_code == 1
+    assert "file adoption requires confirmation" in str(refused.exception)
     _install_settled(host)
 
 

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The first install of a managed tree whose destination holds nothing but
+  SetForge's own state, cache or data directory (for example `~/.local/state`,
+  `~/.local` or `~/.cache` on a new machine) now deploys the tree. It used to
+  ask to adopt the directory SetForge had just created and deploy nothing until
+  a second install. A destination holding anything else is still adopted only
+  with consent.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed

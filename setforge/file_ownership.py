@@ -292,16 +292,22 @@ def decide_file(
     *,
     owner_id: uuid.UUID,
     protected_units: bool = False,
+    unoccupied: bool = False,
 ) -> FileDecision:
-    """Choose an effect without deriving authority from bytes or declarations."""
+    """Choose an effect without deriving authority from bytes or declarations.
+
+    ``unoccupied`` marks a present, unclaimed tree root that holds nothing of
+    the user's; there is nothing to adopt, so it installs like an absent one.
+    """
     if claim is not None and claim.resource_id != observation.resource_id:
         raise OwnershipError("file claim identity does not match observation")
     if claim is None:
-        if observation.present:
+        if observation.present and not unoccupied:
             return FileDecision(
                 observation, claim, FileAction.ADOPT, "present, external, unowned"
             )
-        return FileDecision(observation, claim, FileAction.INSTALL, "absent")
+        detail = "holds only SetForge state" if observation.present else "absent"
+        return FileDecision(observation, claim, FileAction.INSTALL, detail)
     if claim.owner_id != owner_id:
         if (
             claim.authority is Authority.MANAGE

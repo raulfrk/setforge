@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.regression.support import _FAKE_CODE, Host, claim_ids_for
-from tests.regression.test_ownership import _command_from, _tree_host
+from tests.regression.test_ownership import _NO_PROMPT, _command_from, _tree_host
 
 
 def test_first_install_of_a_root_holding_the_state_dir_needs_no_retry(
@@ -130,3 +130,46 @@ def test_first_install_with_the_state_dir_named_by_its_real_path(
     first = host.install()
 
     assert first.exit_code == 0, first.output
+
+
+@pytest.mark.parametrize("dst", [".local/state", ".local"])
+def test_installs_after_the_first_into_a_root_made_for_setforge_state_stay_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dst: str
+) -> None:
+    host = _tree_host(tmp_path, monkeypatch, {"t": f"~/{dst}"}, state_in_home=True)
+    live = host.real_home / dst / "kept.txt"
+    assert host.cli("install", *_NO_PROMPT).exit_code == 0
+    claims = host.cli("ownership", "list", config=False, profile=False).output
+
+    again = host.cli("install", *_NO_PROMPT)
+
+    assert again.exit_code == 0, (again.output, again.exception)
+    assert "claimed" in claims
+    assert host.cli("ownership", "list", config=False, profile=False).output == claims
+    (host.tracked_root / "t" / "kept.txt").write_bytes(b"kept2\n")
+    changed = host.cli("install", *_NO_PROMPT)
+    assert changed.exit_code == 0, (changed.output, changed.exception)
+    assert live.read_bytes() == b"kept2\n"
+    assert host.cli("compare", "--check").exit_code == 0
+
+
+@pytest.mark.parametrize("dst", [".local/state", ".local"])
+def test_revert_of_the_first_install_keeps_setforge_state_and_removes_the_tree_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dst: str
+) -> None:
+    host = _tree_host(tmp_path, monkeypatch, {"t": f"~/{dst}"}, state_in_home=True)
+    live = host.real_home / dst / "kept.txt"
+    assert host.cli("install", *_NO_PROMPT).exit_code == 0
+    assert live.read_bytes() == b"kept\n"
+
+    reverted = host.cli("revert", "--yes")
+
+    assert reverted.exit_code == 0, (reverted.output, reverted.exception)
+    assert not live.exists()
+    assert any((host.state / "transitions").iterdir())
+    assert host.cli("ownership", "list", config=False, profile=False).output == (
+        "(no ownership claims)\n"
+    )
+    redone = host.cli("install", *_NO_PROMPT)
+    assert redone.exit_code == 0, (redone.output, redone.exception)
+    assert live.read_bytes() == b"kept\n"

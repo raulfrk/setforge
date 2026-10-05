@@ -67,6 +67,7 @@ from setforge.paths import (
 from setforge.source import load_local_codex_overlay
 from setforge.transitions import committed_transition_dirs, load_meta_payload
 from setforge.tree_management import (
+    holds_only_state_trees,
     plan_tree,
     read_inventory,
     scan_live_tree,
@@ -907,6 +908,7 @@ def file_authorization_map(
                     observation,
                     store.read(observation.resource_id),
                     owner_id=owner_id,
+                    unoccupied=holds_only_state_trees(destination),
                 )
             )
             continue

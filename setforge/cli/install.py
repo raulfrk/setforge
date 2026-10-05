@@ -166,6 +166,7 @@ from setforge.tree_management import (
     TreeHoldResolution,
     TreePlan,
     apply_tree,
+    holds_only_state_trees,
     inventory_path,
     plan_tree,
     read_inventory,
@@ -962,6 +963,7 @@ def _plan_trees(
             observation,
             store.read(observation.resource_id),
             owner_id=planning_owner,
+            unoccupied=holds_only_state_trees(destination),
         )
         if (
             owner_id is None
