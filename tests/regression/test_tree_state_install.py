@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.regression.support import _FAKE_CODE, claim_ids_for
+from tests.regression.support import _FAKE_CODE, Host, claim_ids_for
 from tests.regression.test_ownership import _command_from, _tree_host
 
 
@@ -106,3 +106,27 @@ def test_revert_of_a_cache_tree_ignores_setforge_operation_files(
     assert reverted.returncode == 0, _error_line(reverted)
     assert (root / "other" / "u.txt").read_bytes() == b"u\n"
     assert (root / "setforge-notes.txt").read_bytes() == b"n\n"
+
+
+@pytest.mark.parametrize("kind", ["symlink", "ancestor"])
+def test_first_install_with_the_state_dir_named_by_its_real_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    host = Host(tmp_path, monkeypatch, kind=kind)
+    source = host.tracked_root / "managed"
+    source.mkdir()
+    (source / "kept.txt").write_bytes(b"kept\n")
+    host.config.write_text(
+        "schema_version: '6.2'\nminimum_version: '6.2'\ntracked_files:\n"
+        "  managed: {src: managed, dst: '~/.managed', tree: {}}\n"
+        "profiles:\n  p:\n    tracked_files: [managed]\n",
+        encoding="utf-8",
+    )
+    (host.real_home / ".managed").mkdir()
+    state = host.real_home / ".managed" / ".sfstate"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    host.state = state
+
+    first = host.install()
+
+    assert first.exit_code == 0, first.output
