@@ -50,7 +50,7 @@ from setforge.provision.identity import package_identity
 from setforge.provision.ownership import observation_fingerprint, package_resource_id
 from setforge.provision.protocol import ProvisionItem
 from setforge.provision.registry import build
-from setforge.tree_management import scan_tree
+from setforge.tree_management import scan_live_tree
 
 ownership_app: typer.Typer = typer.Typer(
     help="Inspect, release, reverse, and recover durable ownership authority.",
@@ -490,9 +490,7 @@ def _validate_file_authority(
 ) -> None:
     destination, policy = _resolve_file_authority(config_path, cfg, claim)
     if policy is not None:
-        inventory = scan_tree(
-            destination, policy.model_copy(update={"symlinks": "preserve"})
-        ).inventory
+        inventory = scan_live_tree(destination, policy)
         observed = observe_tree(destination, inventory.fingerprint)
     else:
         observed = observe_file(destination)

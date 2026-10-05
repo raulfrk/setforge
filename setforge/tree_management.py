@@ -388,6 +388,19 @@ def scan_tree(
         os.close(root_fd)
 
 
+def _spell_skip_under(root: Path, skip: frozenset[Path]) -> frozenset[Path]:
+    """Add each skip root under the spelling the scan walks, however it was named."""
+    if not skip:
+        return skip
+    resolved_root = root.resolve()
+    spelled = set(skip)
+    for path in skip:
+        resolved = path.resolve()
+        if resolved.is_relative_to(resolved_root):
+            spelled.add(root / resolved.relative_to(resolved_root))
+    return frozenset(spelled)
+
+
 def _scan_tree_fd(
     root_fd: int,
     display: Path,
@@ -404,7 +417,7 @@ def _scan_tree_fd(
         capture_payloads,
         [],
         [],
-        skip,
+        _spell_skip_under(display, skip),
     )
     _walk_tree(context, root_fd, display, PurePosixPath())
     root_after = os.fstat(root_fd)
@@ -743,7 +756,9 @@ def apply_tree(
         _apply_removals(plan, root_fd)
         os.fsync(root_fd)
         live_policy = policy.model_copy(update={"symlinks": TreeSymlinkPolicy.PRESERVE})
-        result = _scan_tree_fd(root_fd, destination, live_policy).inventory
+        result = _scan_tree_fd(
+            root_fd, destination, live_policy, skip=_state_trees()
+        ).inventory
         _verify_relative_binding(anchor_fd, anchor_relative, root_fd)
     except OSError as exc:
         raise SetforgeError(
