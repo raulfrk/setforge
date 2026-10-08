@@ -917,7 +917,18 @@ def _commit_persist(profile: str, fid: FileId, base: bytes, plan: _PersistPlan) 
 def _refuse_generated_stage_target(
     cfg: Config, resolved: ResolvedProfile, file: str
 ) -> None:
-    """Refuse staging when ``file`` names generated one-way output."""
+    """Refuse staging when ``file`` names generated one-way output.
+
+    A tracked file whose ID is ``file`` wins, so another file's live name equal to
+    it does not make the selector one-way output.
+    """
+    if any(
+        file == name
+        and cfg.tracked_files[name].generated is None
+        and cfg.tracked_files[name].tree is None
+        for name in resolved.tracked_files
+    ):
+        return
     matched = any(
         (
             cfg.tracked_files[name].generated is not None
