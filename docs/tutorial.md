@@ -887,9 +887,9 @@ $ setforge ownership revert <transition-id> --config=setforge.yaml --yes
 Release preserves resource bytes and records an owner-scoped tombstone. A
 normal clone cannot see another clone's release history, while linked
 worktrees can. Reverting a release restores authority only if the current
-declaration, resource identity, and live fingerprint still match. Inspect an
-interrupted publication with `setforge ownership recover --config=setforge.yaml`
-and complete unambiguous work by adding `--apply --yes`.
+declaration, resource identity, and live fingerprint still match. An
+interrupted release or revert is undone with the `setforge recover` command
+that the next mutating command names; repeat the release or revert afterwards.
 
 Foreign active claims are resolved from the receiving workflow: rerun
 `setforge install --profile=default` and confirm the offered transfer (or use

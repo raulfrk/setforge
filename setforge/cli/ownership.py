@@ -44,7 +44,11 @@ from setforge.ownership import (
     read_owner_id_locked,
     resolve_owner_common_dir,
 )
-from setforge.ownership_history import OwnershipHistoryStore, OwnershipTransition
+from setforge.ownership_history import (
+    OwnershipHistoryStore,
+    OwnershipTransition,
+    ownership_operation_profile,
+)
 from setforge.provision.bundle import resolve_bundle_items
 from setforge.provision.identity import package_identity
 from setforge.provision.ownership import observation_fingerprint, package_resource_id
@@ -127,6 +131,7 @@ def ownership_release(
     """Release authority for one claim without observing or changing the resource."""
     config_path = _resolved_config(config)
     owner_id = read_owner_id(config_path.parent)
+    OwnershipHistoryStore().refuse_legacy_crash_log(owner_id)
     ledger = OwnershipStore()
     preview = ledger.read_claim_id(claim_id)
     if preview is None:
@@ -209,6 +214,7 @@ def ownership_revert(
     config_path = _resolved_config(config)
     owner_id = read_owner_id(config_path.parent)
     history = OwnershipHistoryStore()
+    history.refuse_legacy_crash_log(owner_id)
     preview = history.read(owner_id, transition_id)
     validation_plans = _prepare_authority_plans(
         config_path,
@@ -260,19 +266,30 @@ def ownership_revert(
 def ownership_recover(
     config: Path = _CONFIG_OPTION,
     apply: bool = typer.Option(
-        False, "--apply", help="Complete unambiguous pending transitions."
+        False,
+        "--apply",
+        help="Complete a transition an older SetForge left unfinished.",
     ),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Confirm recovery non-interactively."
     ),
 ) -> None:
-    """Inspect or complete interrupted owner-scoped transition publication."""
+    """Complete a transition that SetForge 1.4.0 or earlier left unfinished.
+
+    An interrupted release or revert is now undone by ``setforge recover``.
+    """
     config_path = _resolved_config(config)
     owner_id = read_owner_id(config_path.parent)
     history = OwnershipHistoryStore()
+    # Legacy path: only releases up to 1.4.0 wrote these crash-log records.
     pending = history.pending(owner_id)
     if not pending:
         typer.echo("(no pending ownership transitions)")
+        typer.echo(
+            "an interrupted ownership release or revert is undone with: "
+            f"setforge recover --profile={ownership_operation_profile(owner_id)} "
+            "--apply"
+        )
         return
     for transition in pending:
         typer.echo(

@@ -13,17 +13,21 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from setforge import operations
 from setforge.cli import app
 from setforge.cli import ownership as ownership_cli
 from setforge.config import load_config
-from setforge.errors import OwnershipError
 from setforge.file_ownership import observe_file, observe_tree
 from setforge.locking import MutationLockGuards, mutation_locks
 from setforge.ownership import OwnershipStore, ResourceId, load_or_create_owner_id
-from setforge.ownership_history import OwnershipHistoryStore
+from setforge.ownership_history import (
+    OwnershipHistoryStore,
+    ownership_operation_profile,
+)
 from setforge.provision.ownership import observation_fingerprint
 from setforge.provision.protocol import Identity, ObservationOrigin, PackageObservation
 from setforge.tree_management import scan_tree
+from tests.shared_helpers import legacy_crash_log
 
 
 def _owned_file(
@@ -351,24 +355,26 @@ def test_revert_revalidates_live_file_immediately_before_authority_grant(
     current = OwnershipStore().read_claim_id(claim_id)
     assert current is not None
     assert current.lifecycle.value == "released"
-    pending = OwnershipHistoryStore().pending(owner_id)
-    assert len(pending) == 1
-    assert pending[0].after.lifecycle.value == "claimed"
+    history = OwnershipHistoryStore()
+    assert history.pending(owner_id) == ()
+    assert [str(item.transition_id) for item in history.list(owner_id)] == [
+        transition_id
+    ]
+    assert operations.active(ownership_operation_profile(owner_id)) is None
 
     live.write_text("managed\n", encoding="utf-8")
     monkeypatch.setattr(ownership_cli, "_validate_authority", original)
-    recovered = runner.invoke(
+    repeated = runner.invoke(
         app,
-        ["ownership", "recover", "--config", str(config), "--apply", "--yes"],
+        ["ownership", "revert", transition_id, "--config", str(config), "--yes"],
     )
-    assert recovered.exit_code == 0, recovered.output
-    assert OwnershipHistoryStore().pending(owner_id) == ()
+    assert repeated.exit_code == 0, repeated.output
     restored = OwnershipStore().read_claim_id(claim_id)
     assert restored is not None
     assert restored.lifecycle.value == "claimed"
 
 
-def test_revert_revalidates_config_after_pending_publication(
+def test_revert_revalidates_config_after_journal_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, _live, claim_id = _owned_file(tmp_path, monkeypatch)
@@ -437,7 +443,7 @@ def test_revert_rechecks_owner_inside_grant_lock_envelope(
     assert current.lifecycle.value == "released"
 
 
-def test_granting_recovery_rechecks_owner_inside_lock_envelope(
+def test_legacy_granting_recovery_rechecks_owner_inside_lock_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, _live, claim_id = _owned_file(tmp_path, monkeypatch)
@@ -449,25 +455,16 @@ def test_granting_recovery_rechecks_owner_inside_lock_envelope(
     )
     transition_id = released.stdout.strip().split()[-1]
     history = OwnershipHistoryStore()
-    calls = 0
-
-    def _interrupt_grant(_claim: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OwnershipError("injected grant interruption")
-
-    with (
-        mutation_locks(resources=True),
-        pytest.raises(OwnershipError, match="grant interruption"),
-    ):
-        history.revert_locked(
-            OwnershipStore(),
-            owner_id,
-            transition_id,
-            validate_authority=_interrupt_grant,
+    ledger = OwnershipStore()
+    claim = ledger.read_claim_id(claim_id)
+    assert claim is not None
+    claim_path = ledger.claim_path(claim.resource_id)
+    released_claim = (claim_path, claim_path.read_bytes())
+    with mutation_locks(resources=True):
+        grant = history.revert_locked(
+            ledger, owner_id, transition_id, validate_authority=lambda _claim: None
         )
-    assert history.pending(owner_id)
+    legacy_crash_log(history, grant, released_claim)
     owner_file = config.parent / ".git" / "setforge" / "owner-id"
     original_locks = ownership_cli.mutation_locks
 
@@ -545,38 +542,68 @@ def test_release_requires_yes_when_noninteractive_and_does_not_mint_owner(
     assert OwnershipHistoryStore().list(load_or_create_owner_id(config.parent)) == ()
 
 
-def test_ownership_recover_inspects_then_applies_pending_release(
+def test_legacy_crash_log_refuses_release_and_revert_until_recover_applies_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, _live, claim_id = _owned_file(tmp_path, monkeypatch)
     owner_id = load_or_create_owner_id(config.parent)
     history = OwnershipHistoryStore()
-    original = OwnershipHistoryStore._commit_transition
-    monkeypatch.setattr(
-        OwnershipHistoryStore,
-        "_commit_transition",
-        lambda _self, _transition: (_ for _ in ()).throw(RuntimeError("crash")),
+    runner = CliRunner()
+    released = runner.invoke(
+        app, ["ownership", "release", claim_id, "--config", str(config), "--yes"]
     )
-    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="crash"):
-        history.release_locked(OwnershipStore(), owner_id, claim_id)
-    monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", original)
-    transition_id = str(history.pending(owner_id)[0].transition_id)
+    transition_id = released.stdout.strip().split()[-1]
+    log_path = legacy_crash_log(history, history.read(owner_id, transition_id))
+    log_bytes = log_path.read_bytes()
 
-    inspected = CliRunner().invoke(
-        app, ["ownership", "recover", "--config", str(config)]
-    )
+    inspected = runner.invoke(app, ["ownership", "recover", "--config", str(config)])
     assert inspected.exit_code == 0, inspected.output
     assert transition_id in inspected.stdout
     assert "--apply" in inspected.stdout
-    assert history.pending(owner_id)
+    for refused in (
+        ["ownership", "release", claim_id, "--config", str(config), "--yes"],
+        ["ownership", "revert", transition_id, "--config", str(config), "--yes"],
+    ):
+        result = runner.invoke(app, refused)
+        assert result.exit_code == 1
+        assert "`setforge ownership recover --apply`" in str(result.exception)
+    for read_only in (
+        ["ownership", "list"],
+        ["status", "--profile=default", "--config", str(config)],
+    ):
+        result = runner.invoke(app, read_only)
+        assert result.exit_code == 0, result.output
+    assert log_path.read_bytes() == log_bytes
 
-    applied = CliRunner().invoke(
+    applied = runner.invoke(
         app,
         ["ownership", "recover", "--config", str(config), "--apply", "--yes"],
     )
     assert applied.exit_code == 0, applied.output
     assert "recovered 1 ownership transition" in applied.stdout
     assert history.pending(owner_id) == ()
+    assert [str(item.transition_id) for item in history.list(owner_id)] == [
+        transition_id
+    ]
+
+
+def test_ownership_recover_without_a_legacy_crash_log_points_at_recover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _live, claim_id = _owned_file(tmp_path, monkeypatch)
+    owner_id = load_or_create_owner_id(config.parent)
+    before = OwnershipStore().read_claim_id(claim_id)
+
+    for argv in ([], ["--apply", "--yes"]):
+        result = CliRunner().invoke(
+            app, ["ownership", "recover", "--config", str(config), *argv]
+        )
+        assert result.exit_code == 0, result.output
+        assert "no pending ownership transitions" in result.stdout
+        assert f"setforge recover --profile=ownership-{owner_id} --apply" in (
+            result.stdout
+        )
+    assert OwnershipStore().read_claim_id(claim_id) == before
 
 
 def test_history_isolated_between_clone_owners_and_shared_by_worktrees(
@@ -663,7 +690,7 @@ def test_package_revert_revalidates_provider_inventory(
     assert latest.lifecycle.value == "claimed"
 
 
-def test_package_revert_revalidates_inventory_after_pending_publication(
+def test_package_revert_revalidates_inventory_after_journal_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, claim_id, observation = _owned_package(tmp_path, monkeypatch)

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from .support import INSTALL_FLAGS, Host, claim_ids_for
+from setforge.ownership import read_owner_id
+from setforge.reconcile.types import check_profile_name
+
+from .support import INSTALL_FLAGS, REPO_ROOT, Host, claim_ids_for, tree
 
 pytestmark = pytest.mark.integration
 
@@ -313,3 +318,120 @@ def test_scan_never_offers_cache_journal_or_snapshot_directories(
     assert (host.real_home / ".cache" / "setforge" / "locks").is_dir()
     assert (host.real_home / ".local" / "share" / "setforge" / "snapshots").is_dir()
     assert (host.real_home / ".local" / "state" / "setforge" / "ownership").is_dir()
+
+
+# Each step is the last thing the command completes before it is killed, in
+# the order the command performs them.
+_KILL_AFTER = """
+import os
+from setforge import operations
+from setforge.cli import main
+from setforge.ownership import OwnershipStore
+from setforge.ownership_history import OwnershipHistoryStore
+
+holder, name = {
+    "journal-written": (operations, "prepare"),
+    "checkpoint-begun": (operations, "begin_checkpoint"),
+    "claim-written": (OwnershipStore, "_write_claim"),
+    "history-written": (OwnershipHistoryStore, "_commit_transition"),
+    "checkpoint-finished": (operations, "finish_checkpoint"),
+}[os.environ["SETFORGE_KILL_AFTER"]]
+real = getattr(holder, name)
+
+def killed(*args, **kwargs):
+    real(*args, **kwargs)
+    os._exit(79)
+
+setattr(holder, name, killed)
+main()
+"""
+
+
+def _ownership_state(host: Host) -> dict[str, bytes | str]:
+    """Every byte of SetForge state except lock files, plus the live file."""
+    state = {
+        rel: content
+        for rel, content in tree(host.state).items()
+        if not rel.startswith("locks")
+    }
+    return {**state, "live": host.live("note.txt").read_bytes()}
+
+
+@pytest.mark.parametrize("action", ["release", "revert"])
+@pytest.mark.parametrize(
+    "step",
+    [
+        "journal-written",
+        "checkpoint-begun",
+        "claim-written",
+        "history-written",
+        "checkpoint-finished",
+    ],
+)
+def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, step: str
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    assert host.install().exit_code == 0
+    (claim,) = claim_ids_for(
+        host.cli("ownership", "list", config=False, profile=False).output, "note.txt"
+    )
+    command = ["ownership", "release", claim, "--yes", f"--config={host.config}"]
+    if action == "revert":
+        assert host.cli(*command[:-1], profile=False).exit_code == 0
+        transition = host.cli("ownership", "history", profile=False).output.split()[0]
+        command[1:3] = ["revert", transition]
+    profile = f"ownership-{read_owner_id(host.repo)}"
+    check_profile_name(profile)
+    journals = host.home / ".cache" / "setforge" / "operations"
+    before = _ownership_state(host)
+
+    killed = subprocess.run(
+        [sys.executable, "-c", _KILL_AFTER, *command],
+        cwd=REPO_ROOT,
+        env={**host.proc_env(), "SETFORGE_KILL_AFTER": step},
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert killed.returncode == 79, (killed.stdout, killed.stderr)
+    assert len(tuple(journals.glob("*.json"))) == 1
+    changed = step in ("claim-written", "history-written", "checkpoint-finished")
+    assert (_ownership_state(host) != before) is changed
+    assert host.cli("ownership", "list", config=False, profile=False).exit_code == 0
+    assert host.cli("status").exit_code == 0
+    refusal = f"`setforge recover --profile={profile}`"
+    blocked = host.install()
+    assert blocked.exit_code == 1
+    assert refusal in str(blocked.exception)
+    again = host.cli(*command, profile=False)
+    assert again.exit_code == 1
+    # A release repeated after its claim was written stops earlier, at its
+    # preview of the already released claim.
+    assert ("already released" if action == "release" and changed else refusal) in str(
+        again.exception
+    )
+    assert len(tuple(journals.glob("*.json"))) == 1
+    legacy = host.cli("ownership", "recover", profile=False)
+    assert legacy.exit_code == 0
+    assert f"setforge recover --profile={profile} --apply" in legacy.output
+    assert len(tuple(journals.glob("*.json"))) == 1
+
+    recovered = host.proc(
+        "recover",
+        f"--profile={profile}",
+        "--apply",
+        "--yes",
+        config=False,
+        profile=False,
+    )
+
+    assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+    assert _ownership_state(host) == before
+    assert not tuple(journals.glob("*.json"))
+    assert _states(host) == ["released" if action == "revert" else "claimed"]
+    repeated = host.proc(*command, config=False, profile=False)
+    assert repeated.returncode == 0, (repeated.stdout, repeated.stderr)
+    assert _states(host) == ["claimed" if action == "revert" else "released"]

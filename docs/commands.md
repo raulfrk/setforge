@@ -181,8 +181,24 @@ resource, its tombstone, provenance, and immutable owner-scoped history. A
 normal clone has a different owner namespace; linked Git worktrees share one.
 Revert succeeds only while the recorded post-state is still current and, when
 it would restore authority, the current declaration, resource identity, and
-live fingerprint still match. Interrupted publication remains visible through
-`ownership recover`; `--apply` completes only unambiguous pending work.
+live fingerprint still match.
+
+An interrupted `ownership release` or `ownership revert` is undone, not
+completed: it blocks every other mutating command until you run the
+`setforge recover --profile=ownership-<owner-id> --apply` command that the
+refusal prints, which puts the claim and its history back exactly as they were
+before the interrupted command. Then repeat the release or revert. The
+`ownership-<owner-id>` name is not a profile in `setforge.yaml`; it only
+identifies the unfinished operation. `ownership list` and `status` keep
+working in the meantime.
+
+`ownership recover` remains for one case: a release or revert that SetForge
+1.4.0 or earlier left unfinished. Those versions completed an interrupted
+transition instead of undoing it, and `ownership recover --apply` still does
+exactly that for a record they left behind. While such a record exists,
+`ownership release` and `ownership revert` refuse and name
+`setforge ownership recover --apply`. With no such record the command changes
+nothing and prints the `setforge recover` command to use instead.
 Claims held by a project injection are refused here: `setforge project remove
 <profile> <path>` releases them together with the injection record.
 
@@ -273,7 +289,10 @@ the interval before a write-ahead journal can be published, including migrations
 that later lock multiple real profiles.
 An interrupted
 install/sync/revert/migration leaves a durable per-profile journal in the
-user-global recovery registry. Every other mutating command, including
+user-global recovery registry. An interrupted `project sync`,
+`ownership release` or `ownership revert` leaves one too, under a generated
+name such as `ownership-<owner-id>` that is not a profile in `setforge.yaml`;
+pass that name to `--profile` exactly as the refusal prints it. Every other mutating command, including
 `setforge config add` and `config remove`, then refuses across profiles and
 across `SETFORGE_STATE_DIR` overrides, naming the `setforge recover` command to
 run, until automatic recovery succeeds or

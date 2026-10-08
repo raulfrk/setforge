@@ -14,6 +14,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `config remove`: they refuse and name the `setforge recover` command to run
   first. Read-only commands such as `compare`, `status` and `validate` keep
   working.
+- An interrupted `setforge ownership release` or `ownership revert` is now
+  undone instead of completed. Run the `setforge recover
+  --profile=ownership-<owner-id> --apply` command that the next mutating
+  command prints: it restores the claim and its history exactly as they were,
+  and you then repeat the release or revert. Until then every mutating command
+  refuses, as for any other interrupted operation.
+- `setforge ownership recover` no longer handles new interruptions. It still
+  completes a release or revert that SetForge 1.4.0 or earlier left unfinished,
+  and `ownership release` and `ownership revert` refuse while such a record
+  exists, naming `setforge ownership recover --apply`. With nothing of that kind
+  to complete it exits 0, changes nothing and prints the `setforge recover`
+  command to use. Scripts that call `ownership recover --apply` after a crash
+  should call `setforge recover` instead.
 
 ### Fixed
 

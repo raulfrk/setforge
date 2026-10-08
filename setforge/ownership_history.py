@@ -1,4 +1,10 @@
-"""Owner-scoped, crash-recoverable ownership authority transitions."""
+"""Owner-scoped, crash-recoverable ownership authority transitions.
+
+A release or revert runs as one journaled operation over the claim file and
+its history record, so ``setforge recover`` undoes an interrupted one. The
+``pending`` records are the crash log of releases up to 1.4.0: nothing writes
+them any more, and the legacy path here only completes one left on disk.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+from setforge import operations
 from setforge.errors import CorruptOwnershipState, OwnershipError
 from setforge.locking import require_resources_lock
 from setforge.ownership import (
@@ -35,6 +42,7 @@ __all__ = [
     "OwnershipHistoryStore",
     "OwnershipTransition",
     "OwnershipTransitionAction",
+    "ownership_operation_profile",
 ]
 
 _SCHEMA = "1.0"
@@ -100,8 +108,13 @@ class OwnershipTransition:
 AuthorityValidator = Callable[[OwnershipClaim], None]
 
 
+def ownership_operation_profile(owner_id: uuid.UUID) -> str:
+    """Return the journal profile ``setforge recover`` takes for one owner."""
+    return f"ownership-{owner_id}"
+
+
 class OwnershipHistoryStore:
-    """Immutable owner histories plus durable pending publication records."""
+    """Immutable owner histories, published under the operation journal."""
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root if root is not None else state_root() / "ownership-history"
@@ -114,7 +127,7 @@ class OwnershipHistoryStore:
         )
 
     def pending(self, owner_id: uuid.UUID) -> tuple[OwnershipTransition, ...]:
-        """List durable transitions that still require recovery."""
+        """List legacy crash-log transitions that still require recovery."""
         records = self._read_all(owner_id, "pending")
         if len(records) > 1:
             raise CorruptOwnershipState(
@@ -143,7 +156,7 @@ class OwnershipHistoryStore:
     ) -> OwnershipTransition:
         """Release one exact claim and publish its owner-scoped history record."""
         require_resources_lock()
-        self._refuse_pending(owner_id)
+        self.refuse_legacy_crash_log(owner_id)
         current = ledger.read_claim_id(claim_id)
         if current is None:
             raise OwnershipError("ownership claim not found")
@@ -161,18 +174,17 @@ class OwnershipHistoryStore:
             current,
             _release_successor(current),
         )
-        self._write_pending(transition)
-        released = ledger.release_locked(
-            current.resource_id,
-            expected_owner=owner_id,
-            expected_generation=current.generation,
-        )
-        if released != transition.after:
-            raise CorruptOwnershipState(
-                "released ownership claim does not match its pending transition"
+        with self._journaled(ledger, transition):
+            released = ledger.release_locked(
+                current.resource_id,
+                expected_owner=owner_id,
+                expected_generation=current.generation,
             )
-        self._commit_transition(transition)
-        self._unlink_pending(transition)
+            if released != transition.after:
+                raise CorruptOwnershipState(
+                    "released ownership claim does not match its transition"
+                )
+            self._commit_transition(transition)
         return transition
 
     def revert_locked(
@@ -185,7 +197,7 @@ class OwnershipHistoryStore:
     ) -> OwnershipTransition:
         """Reverse one exact current transition and record the new reversible toggle."""
         require_resources_lock()
-        self._refuse_pending(owner_id)
+        self.refuse_legacy_crash_log(owner_id)
         source = self.read(owner_id, transition_id)
         current = ledger.read(source.after.resource_id)
         if current != source.after:
@@ -203,16 +215,15 @@ class OwnershipHistoryStore:
             _toggle_successor(current),
             source.transition_id,
         )
-        self._write_pending(transition)
-        if current.lifecycle is ClaimLifecycle.RELEASED:
-            validate_authority(current)
-        changed = self._apply_toggle(ledger, transition.before)
-        if changed != transition.after:
-            raise CorruptOwnershipState(
-                "reverted ownership claim does not match its pending transition"
-            )
-        self._commit_transition(transition)
-        self._unlink_pending(transition)
+        with self._journaled(ledger, transition):
+            if current.lifecycle is ClaimLifecycle.RELEASED:
+                validate_authority(current)
+            changed = self._apply_toggle(ledger, transition.before)
+            if changed != transition.after:
+                raise CorruptOwnershipState(
+                    "reverted ownership claim does not match its transition"
+                )
+            self._commit_transition(transition)
         return transition
 
     def recover_locked(
@@ -222,7 +233,7 @@ class OwnershipHistoryStore:
         *,
         validate_authority: AuthorityValidator,
     ) -> tuple[OwnershipTransition, ...]:
-        """Complete every unambiguous owner-scoped pending transition."""
+        """Legacy path: complete a crash log left by a release up to 1.4.0."""
         require_resources_lock()
         recovered: list[OwnershipTransition] = []
         for transition in self.pending(owner_id):
@@ -252,16 +263,53 @@ class OwnershipHistoryStore:
             expected_generation=before.generation,
         )
 
-    def _refuse_pending(self, owner_id: uuid.UUID) -> None:
+    def refuse_legacy_crash_log(self, owner_id: uuid.UUID) -> None:
+        """Legacy path: never start beside a crash log from an older release."""
         pending = self.pending(owner_id)
         if pending:
             raise OwnershipError(
-                f"unfinished ownership transition {pending[0].transition_id}; "
-                "run ownership recover before retrying"
+                f"unfinished ownership transition {pending[0].transition_id} was "
+                "left by an older SetForge; run `setforge ownership recover "
+                "--apply` before retrying"
             )
 
-    def _write_pending(self, transition: OwnershipTransition) -> None:
-        self._write_record(transition, "pending")
+    @contextmanager
+    def _journaled(
+        self, ledger: OwnershipStore, transition: OwnershipTransition
+    ) -> Iterator[None]:
+        """Journal the claim file and history record before either is written.
+
+        A failure inside the block rolls both back before the exception
+        continues; a killed process leaves the journal for ``setforge recover``.
+        """
+        profile = ownership_operation_profile(transition.owner_id)
+        command = f"ownership-{transition.action.value}"
+        paths = (
+            ledger.claim_path(transition.before.resource_id),
+            self.root
+            / str(transition.owner_id)
+            / "transitions"
+            / f"{transition.transition_id}.json",
+        )
+        journal = operations.prepare(
+            command=command,
+            profile=profile,
+            config_dir=None,
+            resources_lock=True,
+            paths=paths,
+        )
+        with operations.recover_on_error(profile, command):
+            journal = operations.begin_checkpoint(
+                journal,
+                name="change-ownership-claim",
+                kind=operations.CheckpointKind.REVERSIBLE,
+                paths=paths,
+                restore_state=False,
+                restore_transitions=False,
+            )
+            yield
+            journal = operations.finish_checkpoint(journal)
+            operations.complete(journal)
 
     def _commit_transition(self, transition: OwnershipTransition) -> None:
         self._write_record(transition, "transitions")
