@@ -21,7 +21,7 @@ import pytest
 import typer
 
 from setforge.cli import _install_helpers
-from setforge.cli._confirm import AutoDirection, confirm_auto_operation
+from setforge.cli._confirm import confirm_auto_operation
 from setforge.compare import (
     CompareReport,
     CompareStatus,
@@ -161,11 +161,10 @@ def test_install_gate_catches_mode_drift_only() -> None:
     ctx_stub = SimpleNamespace(profile="test-mode")
 
     with pytest.raises(typer.Exit) as excinfo:
-        _install_helpers._check_unexpected_drift(
-            report,
-            ctx_stub,  # type: ignore[arg-type]
-            auto_accept_tracked=False,
-            auto_accept_live=False,
+        _install_helpers._run_predeploy_gates(
+            drift_report=report,
+            ctx=ctx_stub,  # type: ignore[arg-type]
+            yes=False,
         )
 
     assert excinfo.value.exit_code == 1
@@ -238,7 +237,6 @@ def test_build_plan_surfaces_mode_drift_as_risk(
     plan = _install_helpers._build_unexpected_drift_plan(
         drift_report=report,
         ctx=ctx_stub,  # type: ignore[arg-type]
-        direction=AutoDirection.TRACKED_TO_LIVE,
     )
 
     # Mode-only drift carries no content keys, so no file-change rows...
@@ -268,13 +266,12 @@ def test_mode_drift_plan_gates_confirm_when_non_interactive(
     plan = _install_helpers._build_unexpected_drift_plan(
         drift_report=report,
         ctx=ctx_stub,  # type: ignore[arg-type]
-        direction=AutoDirection.TRACKED_TO_LIVE,
     )
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
     with pytest.raises(ConfirmRequiresInteractive):
         confirm_auto_operation(
-            command="install --auto-accept-tracked",
+            command="install",
             profile="test-mode",
             plan=plan,
             yes=False,
@@ -291,15 +288,14 @@ def test_bare_install_mode_drift_message_is_permission_mode(
     ctx_stub = SimpleNamespace(profile="test-mode")
 
     with pytest.raises(typer.Exit) as excinfo:
-        _install_helpers._check_unexpected_drift(
-            report,
-            ctx_stub,  # type: ignore[arg-type]
-            auto_accept_tracked=False,
-            auto_accept_live=False,
+        _install_helpers._run_predeploy_gates(
+            drift_report=report,
+            ctx=ctx_stub,  # type: ignore[arg-type]
+            yes=False,
         )
 
     assert excinfo.value.exit_code == 1
     message = capsys.readouterr().err
     assert "permission-mode drift" in message
     assert "merge" not in message
-    assert "--auto-accept-tracked" in message
+    assert "--yes" in message

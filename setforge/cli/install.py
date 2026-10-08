@@ -2372,8 +2372,6 @@ def _confirm_install(
     fresh: bool,
     auto: str | None,
     yes: bool,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
     no_secrets_scan: bool,
     no_transition: bool,
 ) -> SecretPlan | None:
@@ -2393,11 +2391,7 @@ def _confirm_install(
                 plan,
                 scan_result,
                 transition=not no_transition,
-                refusals=_plan_refusals(
-                    plan,
-                    auto_accept_tracked=auto_accept_tracked,
-                    auto_accept_live=auto_accept_live,
-                ),
+                refusals=_plan_refusals(plan, yes=yes),
             ),
         )
         if welcome_choice is not WelcomeChoice.PROCEED:
@@ -2407,8 +2401,6 @@ def _confirm_install(
     _run_predeploy_gates(
         drift_report=plan.drift_report,
         ctx=ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
         yes=yes,
     )
     install_helpers_mod._confirm_use_tracked_or_exit(
@@ -2462,22 +2454,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         "--no-transition",
         hidden=True,
         help="Skip writing a transition record (testing / debugging).",
-    ),
-    auto_accept_tracked: bool = typer.Option(
-        False,
-        "--auto-accept-tracked",
-        help=(
-            "Resolve permission-mode drift non-interactively by reapplying "
-            "the tracked mode."
-        ),
-    ),
-    auto_accept_live: bool = typer.Option(
-        False,
-        "--auto-accept-live",
-        help=(
-            "Proceed past permission-mode drift non-interactively; install "
-            "still reapplies the tracked mode (live permission bits are not kept)."
-        ),
     ),
     reconcile_user_sections: bool = typer.Option(
         False,
@@ -2567,16 +2543,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     # locking, config loading, and input snapshots across two repositories.
     config_is_explicit = config is not None
     config = _resolve_config_arg(config).resolve()
-    # Mutual-exclusivity guard for the legacy unexpected-drift flags.
-    if auto_accept_tracked and auto_accept_live:
-        typer.secho(
-            "error: --auto-accept-tracked and --auto-accept-live are"
-            " mutually exclusive",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2)
-
     # Mutual-exclusivity guard for the new section-reconcile flags.
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
@@ -2613,11 +2579,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             plan,
             scan_result,
             transition=not no_transition,
-            refusals=_plan_refusals(
-                plan,
-                auto_accept_tracked=auto_accept_tracked,
-                auto_accept_live=auto_accept_live,
-            ),
+            refusals=_plan_refusals(plan, yes=yes),
         )
         return
 
@@ -2731,8 +2693,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             fresh=fresh,
             auto=auto,
             yes=yes,
-            auto_accept_tracked=auto_accept_tracked,
-            auto_accept_live=auto_accept_live,
             no_secrets_scan=no_secrets_scan,
             no_transition=no_transition,
         )
@@ -3225,15 +3185,10 @@ def _symlink_dst_conflicts(
     )
 
 
-def _plan_refusals(
-    plan: InstallPlan, *, auto_accept_tracked: bool, auto_accept_live: bool
-) -> tuple[str, ...]:
+def _plan_refusals(plan: InstallPlan, *, yes: bool) -> tuple[str, ...]:
     """Return what apply refuses for this plan, in the order apply checks it."""
     drift = install_helpers_mod._unexpected_drift_refusal(
-        plan.drift_report,
-        plan.ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
+        plan.drift_report, plan.ctx, yes=yes
     )
     return (*(() if drift is None else (drift,)), *plan.symlink_conflicts)
 

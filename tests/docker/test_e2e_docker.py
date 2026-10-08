@@ -69,7 +69,7 @@ def _install(
 
     ``root_args`` are typer root-callback flags (e.g. ``-v``) that must
     precede the ``install`` subcommand. ``extra`` are subcommand-level
-    flags (e.g. ``--auto-accept-*``) that follow it.
+    flags (e.g. ``--auto=*``) that follow it.
     """
     cmd = ["uv", "run", "setforge"]
     if root_args:
@@ -358,7 +358,7 @@ def test_install_comprehensive_plugins_extensions(
     """
     c = docker_container()
     # First-time install: every dst is absent, so install bypasses the
-    # drift gate without needing --auto-accept-* flags.
+    # drift gate without needing --yes.
     proc = _install(c, "test-comprehensive")
     assert proc.returncode == 0, proc.stderr
     root = ".setforge_e2e/comprehensive"

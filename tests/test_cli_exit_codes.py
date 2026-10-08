@@ -190,7 +190,7 @@ def test_ext_reconcile_clean_state_exits_0(
 
 
 # ---------------------------------------------------------------------------
-# P4.3 — install gating + auto-accept flags
+# P4.3 — install gating
 # ---------------------------------------------------------------------------
 
 _INSTALL_FIXTURE_YAML = """\
@@ -280,18 +280,18 @@ def test_install_unexpected_drift_exits_1_with_message(
     assert result.exit_code == 1
     combined = (result.stdout or "") + (result.stderr or "")
     assert "permission-mode drift" in combined
-    assert "--auto-accept-tracked" in combined
+    assert "--yes" in combined
 
 
-def test_install_auto_accept_tracked_resolves_drift(
+def test_install_yes_resets_mode_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--auto-accept-tracked proceeds non-interactively; transition recorded; exit 0."""
+    """--yes consents to the mode reset; transition recorded; exit 0."""
     cfg = _setup_install_fixture(
         tmp_path, monkeypatch, src_text="same\n", dst_text="same\n"
     )
     # A ``mode:`` mismatch creates unexpected drift (the schema-2.0 axis);
-    # --auto-accept-tracked resolves it non-interactively.
+    # --yes consents to resetting it non-interactively.
     dst = tmp_path / "live" / "tracked_file.txt"
     dst.chmod(0o600)
     cfg.write_text(
@@ -315,61 +315,10 @@ def test_install_auto_accept_tracked_resolves_drift(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-tracked", "--yes"],
+        ["install", "--profile=p", f"--config={cfg}", "--yes"],
     )
     assert result.exit_code == 0
     assert transition_calls
-
-
-def test_install_auto_accept_live_resolves_drift(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """--auto-accept-live proceeds non-interactively; exit 0."""
-    dst = tmp_path / "live" / "tracked_file.txt"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text("same\n", encoding="utf-8")
-    dst.chmod(0o600)
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(
-        f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
-        f"    mode: 0o644\nprofiles:\n  p:\n    tracked_files: [d]\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "tracked_file.txt").write_text("same\n", encoding="utf-8")
-
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
-    monkeypatch.setattr(
-        "setforge.transitions.write_transition",
-        lambda *a, **kw: tmp_path / "fake",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-live", "--yes"],
-    )
-    assert result.exit_code == 0
-
-
-def test_install_both_flags_exits_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Passing both --auto-accept-tracked and --auto-accept-live exits 2."""
-    cfg = _setup_install_fixture(tmp_path, monkeypatch)
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "install",
-            "--profile=p",
-            f"--config={cfg}",
-            "--auto-accept-tracked",
-            "--auto-accept-live",
-        ],
-    )
-    assert result.exit_code == 2
 
 
 # ---------------------------------------------------------------------------

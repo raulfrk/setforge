@@ -8,13 +8,16 @@ informational: it exits 0 and writes nothing.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.cli._confirm import AutoPlan
 
 _REFUSAL_HEADER = "=== would-be refusal ==="
 _FINAL_LINE = "=== rerun without --dry-run to apply for real ==="
@@ -148,11 +151,11 @@ def test_dry_run_reports_the_mode_drift_apply_refuses(
 
     preview = _install(config, "--dry-run")
     after_preview = _tree_snapshot(tmp_path)
-    applied = _install(config, "--yes")
+    applied = _install(config)
 
     refusal = (
         "permission-mode drift in 1 file(s) (profile 'p'): "
-        "pass --auto-accept-tracked or --auto-accept-live to resolve"
+        "pass --yes to reset to the tracked mode"
     )
     assert applied.exit_code == 1
     assert refusal in applied.output
@@ -163,20 +166,63 @@ def test_dry_run_reports_the_mode_drift_apply_refuses(
     assert live.stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("flag", ["--auto-accept-tracked", "--auto-accept-live"])
-def test_dry_run_reports_no_mode_drift_refusal_when_a_flag_resolves_it(
-    repo: Path, flag: str
-) -> None:
+def test_yes_consents_to_the_mode_reset_and_names_it(repo: Path) -> None:
     config, live = _mode_drift_config(repo)
 
-    preview = _install(config, "--dry-run", flag)
-    applied = _install(config, "--yes", flag)
+    preview = _install(config, "--dry-run", "--yes")
+    applied = _install(config, "--yes")
 
     assert preview.exit_code == 0, preview.output
     assert "unexpected drift in 1 file(s)" in preview.output
     assert _REFUSAL_HEADER not in preview.output
     assert applied.exit_code == 0, applied.output
+    assert (
+        f"{live}: permission mode 0o600 → 0o644 (reset to tracked on deploy)"
+        in applied.output
+    )
     assert live.stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize("answer", [False, True])
+def test_interactive_install_asks_before_the_mode_reset(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, answer: bool
+) -> None:
+    config, live = _mode_drift_config(repo)
+    asked: list[tuple[str, tuple[str, ...]]] = []
+
+    def confirm(*, command: str, plan: AutoPlan, **_kwargs: object) -> bool:
+        asked.append((command, plan.risks))
+        return answer
+
+    monkeypatch.setattr("setforge.cli._install_helpers.confirm_auto_operation", confirm)
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.sys",
+        SimpleNamespace(
+            stdin=SimpleNamespace(isatty=lambda: True), stdout=sys.stdout, argv=[]
+        ),
+    )
+
+    result = _install(config)
+
+    assert result.exit_code == 0, result.output
+    assert asked == [
+        (
+            "install",
+            (f"{live}: permission mode 0o600 → 0o644 (reset to tracked on deploy)",),
+        )
+    ]
+    assert live.stat().st_mode & 0o777 == (0o644 if answer else 0o600)
+
+
+@pytest.mark.parametrize("flag", ["--auto-accept-tracked", "--auto-accept-live"])
+def test_removed_mode_drift_flags_are_rejected(repo: Path, flag: str) -> None:
+    config, live = _mode_drift_config(repo)
+
+    result = _install(config, "--yes", flag)
+
+    assert result.exit_code == 2
+    assert "No such option" in result.output
+    assert live.stat().st_mode & 0o777 == 0o600
 
 
 def test_dry_run_lists_every_refusal_in_the_order_apply_checks_them(
@@ -209,8 +255,8 @@ def test_dry_run_lists_every_refusal_in_the_order_apply_checks_them(
     )
 
     preview = _install(config, "--dry-run")
-    applied = _install(config, "--yes")
-    accepted = _install(config, "--yes", "--auto-accept-tracked")
+    applied = _install(config)
+    accepted = _install(config, "--yes")
 
     block = _refusal_block(preview.output)
     assert [line.split(":")[0] for line in block] == [

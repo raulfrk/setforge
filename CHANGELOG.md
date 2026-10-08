@@ -48,6 +48,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same capture and can be undone with `setforge revert`. Unlike `capture`,
   `sync` also brings the profile's extension list in `setforge.yaml` in line
   with the extensions installed on the host, and records a transition.
+- `setforge install` no longer accepts `--auto-accept-tracked` or
+  `--auto-accept-live`. Both did the same thing: let install reset a file's
+  permission bits to its declared `mode:`. Install now asks for that in its
+  confirmation prompt, listing each file and the mode change. In a script, pass
+  `--yes`: install prints each reset and applies it, where `install --yes`
+  alone used to stop with "permission-mode drift". Without `--yes` and without
+  a terminal, install still stops and changes nothing.
 
 ## [1.4.0] - 2026-10-05
 

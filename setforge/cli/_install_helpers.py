@@ -2,17 +2,14 @@
 
 Helpers extracted from ``install()`` body:
 
-- :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
-  on no-resolve.
+- :func:`_run_predeploy_gates`: permission-mode drift gate — confirm, or
+  :class:`typer.Exit` when a non-interactive run lacks ``--yes``.
 - :func:`_plan_tracked_files` / :func:`_apply_tracked_file_plan`: two-pass
   tracked-file deploy — a read-only :func:`setforge.deploy.resolve_deploy`
   pass, then the write pass (:func:`_execute_pending_deploys`).
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
-- :func:`_confirm_legacy_drift_or_exit`: auto-confirm confirm-or-exit
-  wrapper that pairs :func:`_build_unexpected_drift_plan` with
-  :func:`setforge.cli._confirm.confirm_auto_operation`.
 
 NO ``@app.command`` decorators; NO ``app`` import — this module is
 internal-only and stays out of typer's command surface.
@@ -106,47 +103,23 @@ def _unexpected_drift_refusal(
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
     *,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
+    yes: bool,
 ) -> str | None:
-    """Return the message a bare install rejects unexpected drift with, if any.
+    """Return the message install rejects unexpected drift with, if any.
 
-    The only unexpected-drift axis the gate rejects is ``mode_drift``
-    (permission bits), and only when neither ``--auto-accept-tracked`` nor
-    ``--auto-accept-live`` is set.
+    The only unexpected-drift axis the gate handles is ``mode_drift``
+    (permission bits). Install resets it to the tracked mode, so it needs
+    consent: ``--yes``, or the confirmation prompt on a TTY. A run with
+    neither is rejected.
     """
     unexpected_count = _gated_drift_count(drift_report)
-    if not unexpected_count or auto_accept_tracked or auto_accept_live:
+    if not unexpected_count or yes or sys.stdin.isatty():
         return None
     return (
         f"permission-mode drift in {unexpected_count} file(s) "
         f"(profile '{ctx.profile}'): "
-        f"pass --auto-accept-tracked or --auto-accept-live to resolve"
+        f"pass --yes to reset to the tracked mode"
     )
-
-
-def _check_unexpected_drift(
-    drift_report: compare_mod.CompareReport,
-    ctx: ProfileContext,
-    *,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
-) -> None:
-    """Reject unexpected drift on a bare install, or return when a flag resolves it.
-
-    Prints the actionable error and raises ``typer.Exit(1)``. With a flag set,
-    the confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
-    run, so this is a no-op. No-op when nothing carries unexpected drift.
-    """
-    message = _unexpected_drift_refusal(
-        drift_report,
-        ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
-    )
-    if message is not None:
-        typer.secho(message, err=True, fg=typer.colors.RED)
-        raise typer.Exit(1)
 
 
 def _want_interactive_reconcile(
@@ -835,9 +808,8 @@ def _build_unexpected_drift_plan(
     *,
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
-    direction: AutoDirection,
 ) -> AutoPlan:
-    """Build an AutoPlan from a drift report for the --auto-accept-* paths.
+    """Build the confirmation plan for the install permission-mode drift gate.
 
     Delegates name → (sub_src, sub_dst) resolution to the shared
     ``_resolve_drift_paths`` helper, then surfaces the one unexpected
@@ -855,54 +827,18 @@ def _build_unexpected_drift_plan(
             and entry.tracked_mode is not None
         ):
             # install always reapplies the tracked mode on deploy (it cannot
-            # write the live mode back into setforge.yaml), so the transition
-            # is live → tracked regardless of --auto-accept direction.
+            # write the live mode back into setforge.yaml).
             mode_risks.append(
                 f"{sub_dst}: permission mode "
                 f"{entry.live_mode:#o} → {entry.tracked_mode:#o} "
                 f"(reset to tracked on deploy)"
             )
     return AutoPlan(
-        direction=direction,
+        direction=AutoDirection.TRACKED_TO_LIVE,
         file_changes=(),
         risks=tuple(mode_risks),
         revert_command=f"setforge revert --profile={ctx.profile}",
     )
-
-
-def _confirm_legacy_drift_or_exit(
-    *,
-    drift_report: compare_mod.CompareReport,
-    ctx: ProfileContext,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
-    yes: bool,
-) -> None:
-    """Render the legacy unexpected-drift confirm wizard; ``typer.Exit(0)`` on decline.
-
-    Wraps the ``install --auto-accept-{tracked,live}`` confirm block.
-    No-op when neither flag is set.
-    """
-    if not (auto_accept_tracked or auto_accept_live):
-        return
-    direction = (
-        AutoDirection.TRACKED_TO_LIVE
-        if auto_accept_tracked
-        else AutoDirection.LIVE_TO_TRACKED
-    )
-    flag = "--auto-accept-tracked" if auto_accept_tracked else "--auto-accept-live"
-    plan = _build_unexpected_drift_plan(
-        drift_report=drift_report,
-        ctx=ctx,
-        direction=direction,
-    )
-    if not confirm_auto_operation(
-        command=f"install {flag}",
-        profile=ctx.profile,
-        plan=plan,
-        yes=yes,
-    ):
-        raise typer.Exit(0)
 
 
 def _confirm_use_tracked_or_exit(
@@ -942,32 +878,33 @@ def _run_predeploy_gates(
     *,
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
     yes: bool,
 ) -> None:
-    """Run the pre-deploy confirm/reject gates in their fixed order.
+    """Get consent before install resets drifted permission modes.
 
-    Bundles the unexpected-drift confirm (``--auto-accept-{tracked,live}``)
-    + the bare-install unexpected-drift reject into one orchestrator so
-    :func:`install` reads as a high-level pipeline rather than
-    nearly-identical confirm shells. Each gate is independent and
-    short-circuits when its triggering flag is unset; the order matches the
-    pre-extraction body verbatim so flag interactions stay unchanged.
+    No-op when nothing carries permission-mode drift. Otherwise a run that
+    is neither ``--yes`` nor on a TTY is rejected with ``typer.Exit(1)``;
+    ``--yes`` prints each reset and proceeds; a TTY run shows the risks panel
+    and prompts, ``typer.Exit(0)`` on decline.
     """
-    _confirm_legacy_drift_or_exit(
-        drift_report=drift_report,
-        ctx=ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
-        yes=yes,
-    )
-    _check_unexpected_drift(
-        drift_report,
-        ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
-    )
+    if not _gated_drift_count(drift_report):
+        return
+    message = _unexpected_drift_refusal(drift_report, ctx, yes=yes)
+    if message is not None:
+        typer.secho(message, err=True, fg=typer.colors.RED)
+        raise typer.Exit(1)
+    plan = _build_unexpected_drift_plan(drift_report=drift_report, ctx=ctx)
+    if yes:
+        for risk in plan.risks:
+            typer.echo(risk)
+        return
+    if not confirm_auto_operation(
+        command="install",
+        profile=ctx.profile,
+        plan=plan,
+        yes=False,
+    ):
+        raise typer.Exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -992,9 +929,8 @@ def _run_predeploy_gates(
 #   ``enable`` / ``disable``); section headers and read
 #   counts go unprefixed.
 # - No ``confirm_auto_operation`` call from the dry-run path: the call
-#   site in :func:`_confirm_legacy_drift_or_exit` is inside
-#   :func:`_run_predeploy_gates`, which the dry-run pipeline never
-#   invokes — even under ``--auto=*`` + ``--dry-run``.
+#   site is inside :func:`_run_predeploy_gates`, which the dry-run pipeline
+#   never invokes — even under ``--auto=*`` + ``--dry-run``.
 # ---------------------------------------------------------------------------
 
 _DRY_RUN_HEADER: Final[str] = "=== DRY-RUN MODE — NOTHING WILL BE MUTATED ==="
@@ -1135,7 +1071,7 @@ def _dry_run_emit_drift_gate(
     The drift gate is a READ in the real pipeline too (it computes
     unexpected drift over the existing live tree) — counts stay
     unprefixed. The count is the number of files the real gate
-    (:func:`_check_unexpected_drift`) rejects, so content drift that
+    (:func:`_run_predeploy_gates`) asks about, so content drift that
     install reconciles without a gate is not counted. The dry-run path
     never invokes the auto-confirm wizard (short-circuiting before the
     confirm is a hard requirement per spec).

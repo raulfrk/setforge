@@ -383,11 +383,17 @@ non-interactive contexts:
   `CaptureRequiresInteractive`.
 
 When `install` or `sync` runs with a **mutating** `--auto*` flag
-(`--auto=use-tracked`, `--auto=use-live`, `--auto-accept-tracked`,
-`--auto-accept-live`), setforge shows a risks panel describing what changes in
-which direction, plus the exact `setforge revert` command to undo, then prompts
-arrow-key yes/no (default **No**). For CI/scripts, pass `--yes` (`-y`) to bypass
-the prompt; without `--yes` in a non-TTY context the command exits 1.
+(`--auto=use-tracked`, `--auto=use-live`), setforge shows a risks panel
+describing what changes in which direction, plus the exact `setforge revert`
+command to undo, then prompts arrow-key yes/no (default **No**). For
+CI/scripts, pass `--yes` (`-y`) to bypass the prompt; without `--yes` in a
+non-TTY context the command exits 1.
+
+`install` asks the same way when a file with a declared `mode:` has different
+permission bits on the host: the panel lists each file and the reset to the
+declared mode (the live mode cannot be kept). With `--yes` the reset is printed
+and applied; without `--yes` in a non-TTY context `install` exits 1 and changes
+nothing.
 
 ## Revert
 

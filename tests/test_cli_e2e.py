@@ -420,8 +420,6 @@ class TestInstall:
     @pytest.mark.parametrize(
         "flag",
         [
-            "--auto-accept-tracked",
-            "--auto-accept-live",
             "--auto=use-tracked",
             "--auto=keep-live",
         ],

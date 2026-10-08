@@ -274,7 +274,7 @@ class ConfirmRequiresInteractive(SetforgeError):
 
     Raised by the
     :func:`setforge.cli._confirm.confirm_auto_operation` gate that
-    fronts ``install --auto-accept-*`` / ``install --auto=use-tracked``
+    fronts ``install --auto=use-tracked``
     / ``sync --auto=use-live``. The escape hatch is ``--yes`` /
     ``-y``, which short-circuits the prompt for scripted contexts."""
 

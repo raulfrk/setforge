@@ -22,7 +22,7 @@ INSTALL_EXAMPLES: str = """\
 Examples:
 
 \b
-  # Most common: deploy tracked → live with auto-accept-tracked
+  # Most common: deploy tracked → live without prompts
   setforge install --profile=<profile> --auto=use-tracked --yes
 
 \b
