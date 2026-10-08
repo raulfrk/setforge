@@ -15,9 +15,13 @@ import os
 import sys
 from pathlib import Path
 
-import platformdirs
-
 STATE_DIR_ENV = "SETFORGE_STATE_DIR"
+
+
+def _xdg_dir(variable: str, home_relative: Path) -> Path:
+    """Return the XDG base directory ``variable`` names, else ``~/<home_relative>``."""
+    override = os.environ.get(variable, "").strip()
+    return Path(override) if override else Path.home() / home_relative
 
 
 def config_root() -> Path:
@@ -75,7 +79,17 @@ def vscode_user_dir() -> Path:
     """
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Code"
-    return Path(platformdirs.user_config_path("Code"))
+    return _xdg_dir("XDG_CONFIG_HOME", Path(".config")) / "Code"
+
+
+def xdg_cache_home() -> Path:
+    """Return the per-user cache base directory.
+
+    ``$XDG_CACHE_HOME`` when set and non-blank, else ``~/Library/Caches`` on
+    macOS and ``~/.cache`` elsewhere.
+    """
+    default = Path("Library", "Caches") if sys.platform == "darwin" else Path(".cache")
+    return _xdg_dir("XDG_CACHE_HOME", default)
 
 
 def template_context() -> dict[str, str]:
