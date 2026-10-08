@@ -199,6 +199,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as its help says. It used to still register a new marketplace with Claude
   (and, with `claude.install_mode: local-clone`, clone it into the local cache).
   The marketplace, plugin and profile entries are still written to the config.
+- `setforge inspect` on a tracked file whose destination you deleted now shows the
+  live file as missing, in the header and as an empty live pane in the JSON
+  output. It used to show the copy recorded at the last install as if it were
+  still on disk, so it looked like the next `install` would restore the file.
+- `setforge inspect` no longer reports a conflict for a YAML or JSON file when
+  you changed one key and the tracked copy changed a different key. It now shows
+  the combined file that `install` writes, with comments kept, instead of
+  conflict markers for edits that `install` merges without asking. A real
+  conflict, where both sides changed the same key, is still shown.
 
 ### Removed
 

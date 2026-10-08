@@ -37,8 +37,9 @@ from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.index_model import FileEntry
 from setforge.reconcile.merge import merge
-from setforge.reconcile.merge_model import Conflict, MergeResult
+from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
 from setforge.reconcile.types import ABSENT, Absent, FileId, HunkClass, file_id
+from setforge.reconcile_apply import ReconcileKind, reconcile_file
 from setforge.ui import theme
 from setforge.ui.diffview import (
     RichLayout,
@@ -117,6 +118,56 @@ def _single_match(
         )
     _emit_error(ctx_obj, message)
     raise typer.Exit(code=2)
+
+
+def _is_utf8(data: bytes | Absent) -> bool:
+    if not isinstance(data, bytes):
+        return True
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _install_merge(
+    profile: str,
+    fid: FileId,
+    dst: Path,
+    base: bytes,
+    live: bytes | Absent,
+    upstream: bytes | Absent,
+    *,
+    generated: bool,
+) -> MergeResult:
+    """The merge ``install`` would settle for this file, read-only.
+
+    A text file goes through the same per-file decision ``install`` makes
+    (:func:`~setforge.reconcile_apply.reconcile_file`), so independent edits to a
+    JSON/YAML file's keys preview as the clean combined file install writes.
+    Only a real conflict falls back to the line merge, whose segments carry the
+    conflict markers. A generated, binary or missing tracked file is not
+    reconciled by ``install`` and keeps the line merge.
+    """
+    if (
+        not generated
+        and isinstance(upstream, bytes)
+        and _is_utf8(live)
+        and _is_utf8(upstream)
+    ):
+        outcome = reconcile_file(
+            profile,
+            fid,
+            live=live,
+            tracked=upstream,
+            fmt=su_mod.structured_format(dst),
+        )
+        if outcome.kind is not ReconcileKind.DEFERRED:
+            merged = live if outcome.content is None else outcome.content
+            if merged is ABSENT:
+                return MergeResult((), absent=True)
+            return MergeResult((Clean(merged),))
+    return merge(base, live, upstream)
 
 
 def _merge_status(
@@ -216,26 +267,33 @@ def inspect(
         collect_stages(cfg, resolved, repo_root, profile, only=str(dst)),
         collect_structured_stages(cfg, resolved, repo_root, profile, only=str(dst)),
     )
-    with profile_lock(profile):
-        base = reconcile_store.read_base(profile, fid)
-        recorded = reconcile_store.read_local(profile, fid)
-        entry = reconcile_store.read_index(profile).files.get(str(fid))
-    staging = staging_rows[0] if staging_rows else None
-
-    # Absent-live falls back to recorded-local; matched on ABSENT, not truthiness.
-    if dst.exists():
-        live: bytes | Absent = dst.read_bytes()
-    elif isinstance(recorded, bytes):
-        live = recorded
-    else:
-        live = ABSENT
+    # Live state is the disk, not the recorded copy: a deleted file is absent,
+    # matched on ABSENT (a zero-byte file is present and empty).
+    live: bytes | Absent = dst.read_bytes() if dst.exists() else ABSENT
     upstream: bytes | Absent = src.read_bytes() if src.exists() else ABSENT
     if upstream is not ABSENT and generated is not None:
         upstream = rendered_source(src, generated).encode("utf-8")
 
+    with profile_lock(profile):
+        base = reconcile_store.read_base(profile, fid)
+        entry = reconcile_store.read_index(profile).files.get(str(fid))
+        result = (
+            None
+            if base is None
+            else _install_merge(
+                profile,
+                fid,
+                dst,
+                base,
+                live,
+                upstream,
+                generated=generated is not None,
+            )
+        )
+    staging = staging_rows[0] if staging_rows else None
+
     base_present = base is not None
-    if base is not None:
-        result = merge(base, live, upstream)
+    if result is not None:
         merge_pane = _merge_pane_text(result)
         index = _index_summary(result, entry)
         model = three_way_segments(result)
@@ -247,7 +305,7 @@ def inspect(
         index = {"shared": [], "kept_local": [], "conflict": []}
 
     parse_problem = _unparseable_reason(live, upstream, dst)
-    result_clean = result.clean if base_present else None
+    result_clean = result.clean if result is not None else None
     data: dict[str, Any] = {
         "file": str(dst),
         "base_present": base_present,
@@ -269,6 +327,8 @@ def inspect(
             else RichLayout.STACKED
         )
         merge_status = _merge_status(parse_problem, base_present, result_clean)
+        if live is ABSENT:
+            merge_status = f"live file is missing; {merge_status}"
         header = theme.styled(
             f"inspect {dst}  ({merge_status})",
             theme.Role.HEADING,
