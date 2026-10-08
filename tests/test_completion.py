@@ -14,6 +14,7 @@ from setforge.cli import completion as completion_mod
 from setforge.cli.completion import (
     CompletionChoice,
     ShellKind,
+    _atomic_write_rc_file,
     _detect_wiring,
     _script_path,
     _wrap_sentinel,
@@ -23,9 +24,44 @@ from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
 _RUNNER = CliRunner()
 
-_FAKE_ZSH_SCRIPT = "#compdef setforge\n_setforge_completion() { :; }\n"
-_FAKE_BASH_SCRIPT = "#!/usr/bin/env bash\n_setforge_completion() { :; }\n"
-_FAKE_FISH_SCRIPT = "# fish completion for setforge\n"
+# The scripts earlier releases installed for each shell (they came from
+# ``setforge --show-completion=<shell>``). The in-process generator must
+# keep producing exactly these bytes; a Typer upgrade that changes them
+# shows up here and needs a deliberate look before the golden is updated.
+_ZSH_SCRIPT = (
+    "#compdef setforge\n"
+    "\n"
+    "_setforge_completion() {\n"
+    '  eval $(env _TYPER_COMPLETE_ARGS="${words[1,$CURRENT]}" '
+    "_SETFORGE_COMPLETE=complete_zsh setforge)\n"
+    "}\n"
+    "\n"
+    "compdef _setforge_completion setforge\n"
+)
+_BASH_SCRIPT = (
+    "_setforge_completion() {\n"
+    "    local IFS=$'\n'\n"
+    '    COMPREPLY=( $( env COMP_WORDS="${COMP_WORDS[*]}" \\\n'
+    "                   COMP_CWORD=$COMP_CWORD \\\n"
+    "                   _SETFORGE_COMPLETE=complete_bash $1 ) )\n"
+    "    return 0\n"
+    "}\n"
+    "\n"
+    "complete -o default -F _setforge_completion setforge\n"
+)
+_FISH_SCRIPT = (
+    "complete --command setforge --no-files --arguments "
+    '"(env _SETFORGE_COMPLETE=complete_fish _TYPER_COMPLETE_FISH_ACTION=get-args '
+    '_TYPER_COMPLETE_ARGS=(commandline -cp) setforge)" '
+    '--condition "env _SETFORGE_COMPLETE=complete_fish '
+    "_TYPER_COMPLETE_FISH_ACTION=is-args "
+    '_TYPER_COMPLETE_ARGS=(commandline -cp) setforge"\n'
+)
+_SCRIPT_BY_SHELL = {
+    ShellKind.ZSH: _ZSH_SCRIPT,
+    ShellKind.BASH: _BASH_SCRIPT,
+    ShellKind.FISH: _FISH_SCRIPT,
+}
 
 
 @pytest.fixture
@@ -33,47 +69,6 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Re-point ``$HOME`` so ``Path.home()`` lands inside ``tmp_path``."""
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path
-
-
-@pytest.fixture
-def fake_show_completion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> list[tuple[list[str], dict[str, str] | None]]:
-    """Replace ``subprocess.run`` so ``--show-completion`` returns a fixture body.
-
-    Returns a list that captures every (argv, env) pair passed to
-    ``subprocess.run`` via the completion module's attribute path;
-    tests can assert on it to verify the shell value reached the
-    subprocess AND that the typer env override (commit 9bbcb36's
-    ``_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1``) is set on the
-    child env.
-    """
-    captured: list[tuple[list[str], dict[str, str] | None]] = []
-
-    def fake_run(
-        argv: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = False,
-        text: bool = False,
-        timeout: float | None = None,
-        env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, capture_output, text, timeout  # unused in fake
-        captured.append((list(argv), dict(env) if env is not None else None))
-        # argv shape: [<setforge-binary>, "--show-completion=<shell>"].
-        last = argv[-1]
-        shell_value = last.partition("=")[2] if "=" in last else last
-        body_for = {
-            "zsh": _FAKE_ZSH_SCRIPT,
-            "bash": _FAKE_BASH_SCRIPT,
-            "fish": _FAKE_FISH_SCRIPT,
-        }
-        stdout = body_for.get(shell_value, "")
-        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
-
-    monkeypatch.setattr("setforge.cli.completion.subprocess.run", fake_run)
-    return captured
 
 
 def _stub_dialog(monkeypatch: pytest.MonkeyPatch, return_value: object) -> None:
@@ -178,7 +173,6 @@ def test_write_wiring_ensures_trailing_newline_before_block(tmp_path: Path) -> N
 def test_completion_install_zsh_virgin_writes_files_and_appends_rc(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# user content\nalias ls=ls\n")
@@ -188,28 +182,18 @@ def test_completion_install_zsh_virgin_writes_files_and_appends_rc(
 
     assert result.exit_code == 0, result.output
     assert (home / ".config/setforge/completions/_setforge").read_text() == (
-        _FAKE_ZSH_SCRIPT
+        _ZSH_SCRIPT
     )
     text = rc.read_text()
     assert "fpath=" in text
     assert "compinit" in text
     assert "# >>> setforge completion >>>" in text
     assert "# user content" in text
-    # subprocess.run was called with the correct shell value
-    assert any(any("zsh" in arg for arg in argv) for argv, _env in fake_show_completion)
-    # And the typer env override (commit 9bbcb36) reached the child env
-    # so --show-completion=<shell> is parsed as a value, not a bool flag.
-    assert all(
-        env is not None
-        and env.get("_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION") == "1"
-        for _argv, env in fake_show_completion
-    )
 
 
 def test_completion_install_zsh_yes_only_skips_rc_edit(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -225,7 +209,6 @@ def test_completion_install_zsh_yes_only_skips_rc_edit(
 def test_completion_install_zsh_abort_writes_nothing(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -241,7 +224,6 @@ def test_completion_install_zsh_abort_writes_nothing(
 def test_completion_install_zsh_dialog_escape_treated_as_abort(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     from setforge.ui.widgets import CANCEL
 
@@ -258,7 +240,6 @@ def test_completion_install_zsh_dialog_escape_treated_as_abort(
 def test_completion_install_zsh_already_wired_is_idempotent(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     # Pre-seed with a sentinel block; second install must replace its
@@ -278,7 +259,6 @@ def test_completion_install_zsh_already_wired_is_idempotent(
 def test_completion_install_zsh_non_tty_without_flag_raises_mutate_gate(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -295,7 +275,6 @@ def test_completion_install_zsh_non_tty_without_flag_raises_mutate_gate(
 
 def test_completion_install_zsh_non_interactive_writes_and_wires(
     home: Path,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# user content\n")
@@ -308,7 +287,6 @@ def test_completion_install_zsh_non_interactive_writes_and_wires(
 
 def test_completion_install_zsh_non_interactive_no_wire_skips_rc(
     home: Path,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -324,7 +302,6 @@ def test_completion_install_zsh_non_interactive_no_wire_skips_rc(
 def test_completion_install_zsh_refuses_when_rc_missing(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     # No ~/.zshrc on disk.
     _stub_dialog(monkeypatch, CompletionChoice.YES_AND_WIRE)
@@ -338,7 +315,6 @@ def test_completion_install_zsh_refuses_when_rc_missing(
 def test_completion_install_zsh_rc_file_override(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     custom_rc = home / "custom.zshrc"
     custom_rc.write_text("# custom rc\n")
@@ -364,7 +340,6 @@ def test_completion_install_zsh_rc_file_override(
 def test_completion_install_bash_idempotent_source_line(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".bashrc"
     rc.write_text("# user content\n")
@@ -384,7 +359,6 @@ def test_completion_install_bash_idempotent_source_line(
 
 def test_completion_install_bash_non_interactive_writes_files(
     home: Path,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".bashrc"
     rc.write_text("# user content\n")
@@ -402,7 +376,6 @@ def test_completion_install_bash_non_interactive_writes_files(
 
 def test_completion_install_fish_writes_to_fish_dir_no_rc_edit(
     home: Path,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     # No bashrc / zshrc and no dialog stub — fish must skip both paths.
     result = _RUNNER.invoke(app, ["completion", "install", "fish"])
@@ -410,12 +383,11 @@ def test_completion_install_fish_writes_to_fish_dir_no_rc_edit(
     assert result.exit_code == 0, result.output
     target = home / ".config/fish/completions/setforge.fish"
     assert target.exists()
-    assert target.read_text() == _FAKE_FISH_SCRIPT
+    assert target.read_text() == _FISH_SCRIPT
 
 
 def test_completion_install_fish_idempotent_no_op_second_run(
     home: Path,
-    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     target = home / ".config/fish/completions/setforge.fish"
     first = _RUNNER.invoke(app, ["completion", "install", "fish"])
@@ -427,6 +399,73 @@ def test_completion_install_fish_idempotent_no_op_second_run(
 
 
 # ---------------------------------------------------------------------------
+# generated script: one in-process generator for every shell
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("shell", list(ShellKind))
+def test_completion_install_writes_the_script_earlier_releases_installed(
+    home: Path, shell: ShellKind
+) -> None:
+    result = _RUNNER.invoke(
+        app, ["completion", "install", shell.value, "--non-interactive", "--no-wire"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _script_path(shell).read_text() == _SCRIPT_BY_SHELL[shell]
+
+
+@pytest.mark.parametrize("shell", list(ShellKind))
+def test_completion_install_writes_what_show_completion_prints(
+    home: Path, shell: ShellKind, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without this, Typer reads --show-completion as a bare flag for the
+    # shell running the tests instead of taking the shell name as a value.
+    monkeypatch.setenv("_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION", "1")
+    printed = _RUNNER.invoke(
+        app, [f"--show-completion={shell.value}"], prog_name="setforge"
+    )
+    assert printed.exit_code == 0, printed.output
+
+    result = _RUNNER.invoke(
+        app, ["completion", "install", shell.value, "--non-interactive", "--no-wire"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _script_path(shell).read_text() == printed.output
+
+
+@pytest.mark.parametrize("shell", list(ShellKind))
+def test_completion_install_starts_no_child_process(
+    home: Path, shell: ShellKind, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("completion install must not start a process")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+
+    result = _RUNNER.invoke(
+        app, ["completion", "install", shell.value, "--non-interactive", "--no-wire"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _script_path(shell).read_text() == _SCRIPT_BY_SHELL[shell]
+
+
+def test_installed_zsh_script_does_not_call_compinit(home: Path) -> None:
+    """The rc wiring block is the only place compinit is invoked (guarded)."""
+    result = _RUNNER.invoke(
+        app, ["completion", "install", "zsh", "--non-interactive", "--no-wire"]
+    )
+
+    assert result.exit_code == 0, result.output
+    for line in _script_path(ShellKind.ZSH).read_text().splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith("compinit"), line
+        assert "autoload" not in stripped or "compinit" not in stripped, line
+
+
+# ---------------------------------------------------------------------------
 # generic CLI surface
 # ---------------------------------------------------------------------------
 
@@ -434,11 +473,6 @@ def test_completion_install_fish_idempotent_no_op_second_run(
 def test_completion_install_unknown_shell_exits_2(home: Path) -> None:
     result = _RUNNER.invoke(app, ["completion", "install", "tcsh"])
     assert result.exit_code == 2, result.output
-
-
-# Note: subprocess returncode != 0 / empty stdout no longer raise SetforgeError —
-# they fall back to the vendored template. Coverage for the
-# fallback path lives in tests/test_completion_fallback.py.
 
 
 # ---------------------------------------------------------------------------
@@ -473,3 +507,71 @@ def test_completion_module_lazy_button_bar_attr_resolves() -> None:
 def test_completion_module_lazy_unknown_attr_raises() -> None:
     with pytest.raises(AttributeError):
         completion_mod.does_not_exist  # noqa: B018 — attribute access has side effect
+
+
+# ---------------------------------------------------------------------------
+# Atomic rc-file write: SIGINT mid-write leaves original untouched.
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_rc_file_preserves_mode(tmp_path: Path) -> None:
+    """``_atomic_write_rc_file`` mirrors original mode bits via copystat."""
+    rc = tmp_path / ".zshrc"
+    rc.write_text("# original\n")
+    rc.chmod(0o600)
+    _atomic_write_rc_file(rc, "# replaced\n")
+    assert rc.read_text() == "# replaced\n"
+    assert rc.stat().st_mode & 0o777 == 0o600
+
+
+def test_atomic_write_rc_file_no_tmp_residue(tmp_path: Path) -> None:
+    """After a successful atomic replace, no ``.setforge-tmp`` file remains."""
+    rc = tmp_path / ".bashrc"
+    rc.write_text("# original\n")
+    _atomic_write_rc_file(rc, "# new content\n")
+    assert not (tmp_path / ".bashrc.setforge-tmp").exists()
+    assert list(tmp_path.iterdir()) == [rc]
+
+
+def test_rc_file_write_is_atomic_under_sigint(tmp_path: Path) -> None:
+    """SIGINT mid-write must leave ``rc_path`` byte-identical to before.
+
+    Simulates SIGINT landing inside the tmp-file ``write_text`` call by
+    monkeypatching ``Path.write_text`` to raise ``KeyboardInterrupt`` when
+    the target's name ends with ``.setforge-tmp``. The invariants are:
+
+    1. ``KeyboardInterrupt`` propagates out of ``_atomic_write_rc_file``
+       (the caller's outer SIGINT handler is responsible for graceful
+       exit — we don't swallow it).
+    2. The original rc-file's content is byte-identical to before the
+       call (``os.replace`` never ran).
+    3. The original rc-file is non-empty (not zero-byte) — confirming we
+       did NOT truncate the original on the way to the failed replace.
+    """
+    rc = tmp_path / ".zshrc"
+    original = "# user content\nexport FOO=1\nalias ls='ls --color=auto'\n"
+    rc.write_text(original)
+
+    real_write_text = Path.write_text
+    write_text_calls: list[Path] = []
+
+    def faulty_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
+        write_text_calls.append(self)
+        if self.name.endswith(".setforge-tmp"):
+            # Emulate SIGINT landing during the tmp-file write.
+            raise KeyboardInterrupt("simulated SIGINT mid-write")
+        return real_write_text(self, *args, **kwargs)
+
+    try:
+        Path.write_text = faulty_write_text  # type: ignore[method-assign]
+        with pytest.raises(KeyboardInterrupt):
+            _atomic_write_rc_file(rc, "# CORRUPTED — must not land\n")
+    finally:
+        Path.write_text = real_write_text  # type: ignore[method-assign]
+
+    # The tmp file was the target of the raising write_text.
+    assert any(p.name.endswith(".setforge-tmp") for p in write_text_calls)
+    # The rc file content survived intact: os.replace never ran.
+    assert rc.read_text() == original
+    # And the rc file is non-empty (zero-byte regression guard).
+    assert rc.stat().st_size == len(original.encode("utf-8"))

@@ -8,12 +8,9 @@ between the markers rather than appending a second copy.
 
 from __future__ import annotations
 
-import importlib.resources
-import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from enum import StrEnum
@@ -22,19 +19,18 @@ from typing import Any, assert_never
 
 import typer
 from rich.console import Console
+from typer.completion import get_completion_script
 
 from setforge.cli import app
 from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
 from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
-LOGGER: logging.Logger = logging.getLogger(__name__)
-
-# Bound on the ``setforge --show-completion=<shell>`` child subprocess.
-# Anything past this is treated as a hard fault and falls back to the
-# vendored template — typer's completion generation is sub-second in
-# practice, so a 10s wait is generous slack for a healthy install.
-_SHOW_COMPLETION_TIMEOUT_SECONDS = 10.0
+# The program name and the environment variable the generated script sets
+# to ask setforge for completions; Typer derives the variable from the
+# program name (``_<NAME>_COMPLETE``), so the two must stay in step.
+_PROG_NAME = "setforge"
+_COMPLETE_VAR = "_SETFORGE_COMPLETE"
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -121,98 +117,17 @@ def _rc_path(shell: ShellKind) -> Path | None:
     assert_never(shell)
 
 
-def _vendored_template_name(shell: ShellKind) -> str:
-    """Return the package-data filename for ``shell``'s vendored template."""
-    if shell is ShellKind.ZSH:
-        return "_setforge"
-    if shell is ShellKind.BASH:
-        return "setforge.bash"
-    if shell is ShellKind.FISH:
-        return "setforge.fish"
-    assert_never(shell)
-
-
-def _load_vendored_template(shell: ShellKind) -> str:
-    """Load the vendored fallback completion script for ``shell``.
-
-    Reads the file shipped as package data under
-    :mod:`setforge.cli.completions`. Used only on the fallback arm of
-    :func:`_render_completion_script` — callers must already have logged
-    WHY they're falling back before invoking this.
-    """
-    name = _vendored_template_name(shell)
-    return (
-        importlib.resources.files("setforge.cli.completions")
-        .joinpath(name)
-        .read_text(encoding="utf-8")
-    )
-
-
 def _render_completion_script(shell: ShellKind) -> str:
-    """Return the completion script for ``shell``, preferring typer-generated.
+    """Return the completion script for ``shell``, generated in-process.
 
-    Tries ``setforge --show-completion=<shell>`` in a subprocess; on any
-    of the four documented failure modes (binary missing, subprocess
-    timeout, non-zero exit, empty stdout) logs a WARNING that names the
-    failure mode and falls back to the vendored template shipped under
-    :mod:`setforge.cli.completions`. The vendored copy is seeded from
-    typer-generated output at commit time, so the fallback content is
-    drop-in compatible with the wiring lines :func:`_write_wiring`
-    appends to the user's rc file.
+    Uses the generator behind ``setforge --show-completion=<shell>``, so
+    the installed file matches that output byte for byte (``click.echo``
+    ends the printed script with a newline, hence the ``+ "\\n"``).
     """
-    # Without _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1, typer
-    # treats --show-completion as a bool and falls back to the parent
-    # $SHELL — wrong when we're installing for a DIFFERENT shell.
-    child_env = {**os.environ, "_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION": "1"}
-    # ``shutil.which`` resolves ``setforge`` on PATH the same way the
-    # user's shell did when they invoked us; falling back to
-    # ``sys.argv[0]`` lets the command still work when called via an
-    # absolute path that isn't on PATH (e.g. ``uv run setforge ...``
-    # inside a venv whose bin dir wasn't activated).
-    bin_path = shutil.which("setforge") or sys.argv[0]
-    try:
-        result = subprocess.run(
-            [bin_path, f"--show-completion={shell.value}"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=_SHOW_COMPLETION_TIMEOUT_SECONDS,
-            env=child_env,
-        )
-    except FileNotFoundError:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: binary not found at %r "
-            "(FileNotFoundError); using vendored template",
-            shell.value,
-            bin_path,
-        )
-        return _load_vendored_template(shell)
-    except subprocess.TimeoutExpired:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: subprocess timeout after "
-            "%.1fs; using vendored template",
-            shell.value,
-            _SHOW_COMPLETION_TIMEOUT_SECONDS,
-        )
-        return _load_vendored_template(shell)
-    if result.returncode != 0:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: typer regression "
-            "(exit %d) stderr=%r; using vendored template",
-            shell.value,
-            result.returncode,
-            result.stderr.strip(),
-        )
-        return _load_vendored_template(shell)
-    if not result.stdout.strip():
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: empty stdout from "
-            "subprocess (exit %d); using vendored template",
-            shell.value,
-            result.returncode,
-        )
-        return _load_vendored_template(shell)
-    return result.stdout
+    script = get_completion_script(
+        prog_name=_PROG_NAME, complete_var=_COMPLETE_VAR, shell=shell.value
+    )
+    return f"{script}\n"
 
 
 def _zsh_wiring_body() -> str:
