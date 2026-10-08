@@ -8,8 +8,7 @@ Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
 - ``stale`` — live still equals the stored base while tracked advanced;
   the next install fast-forwards live. Not flagged by ``compare --check``.
 - ``unexpected`` — drift nothing above explains: what ``compare --check``
-  flags for CI and what the install drift gate (``--auto-accept-*``)
-  resolves.
+  flags for CI and what the install drift gate asks consent for.
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously

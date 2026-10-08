@@ -379,7 +379,7 @@ def test_generated_adoption_is_metadata_only(
     assert claim is not None
     assert claim.fingerprint == observe_file(live).fingerprint
 
-    managed = _install(config, "--auto-accept-tracked")
+    managed = _install(config)
 
     assert managed.exit_code == 0, managed.output
     assert live.read_text(encoding="utf-8") == (

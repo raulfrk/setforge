@@ -14,13 +14,12 @@ Three named scenarios per the user's per-CLI-flag-row coverage preference:
    at the canonical ``0o755`` literal.
 4. ``test_mode_e2e_install_reapplies_mode_after_manual_chmod`` —
    install at ``0o755``; ``chmod 0644`` (content unchanged); re-install
-   (``--auto-accept-tracked`` to clear the drift gate) restores ``0o755``
+   (``--yes`` to consent to the mode reset) restores ``0o755``
    instead of short-circuiting to a content-NOOP.
-5. ``test_mode_e2e_auto_accept_without_yes_gates_non_tty`` — a bare
-   re-install on mode drift refuses (exit 1, "permission-mode drift");
-   ``--auto-accept-tracked`` WITHOUT ``--yes`` on a non-TTY hits the
-   confirm gate (requires ``--yes``) rather than silently auto-proceeding
-   on an empty plan, so the live mode is NOT touched.
+5. ``test_mode_e2e_drift_without_yes_gates_non_tty`` — a bare
+   re-install on mode drift on a non-TTY refuses (exit 1,
+   "permission-mode drift", naming ``--yes``) rather than silently
+   resetting the mode, so the live mode is NOT touched.
 
 Setup pattern: each test writes its own minimal setforge.yaml +
 tracked source under /tmp inside the container, then runs setforge
@@ -223,7 +222,7 @@ def test_mode_e2e_install_reapplies_mode_after_manual_chmod(
     assert _stat_mode_octal(c, _DST) == "644"
 
     # Mode drift is gated as unexpected drift, so a bare re-install
-    # refuses; --auto-accept-tracked clears the gate and lets the deploy
+    # refuses; --yes consents to the reset and lets the deploy
     # run. The deploy must then APPLY the mode bits on a content-NOOP
     # rather than skipping them (the pre-fix behavior left perms at 0644).
     reinstall = _setforge(
@@ -232,7 +231,6 @@ def test_mode_e2e_install_reapplies_mode_after_manual_chmod(
             "install",
             "--profile=test-mode",
             f"--config={_CFG}",
-            "--auto-accept-tracked",
             "--yes",
         ],
         check=False,
@@ -243,12 +241,11 @@ def test_mode_e2e_install_reapplies_mode_after_manual_chmod(
     assert c.exec(["cat", _DST], check=True).stdout.strip().startswith("#!/bin/sh")
 
 
-def test_mode_e2e_auto_accept_without_yes_gates_non_tty(
+def test_mode_e2e_drift_without_yes_gates_non_tty(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Mode drift gates honestly: bare install refuses; --auto-accept-tracked
-    without --yes hits the confirm gate on a non-TTY instead of auto-proceeding
-    on an empty plan (the pre-fix bug silently re-chmodded the live file).
+    """Mode drift gates honestly: a bare install on a non-TTY refuses and
+    names --yes instead of silently re-chmodding the live file.
     """
     c = docker_container()
     cfg_text = (
@@ -283,17 +280,6 @@ def test_mode_e2e_auto_accept_without_yes_gates_non_tty(
     bare_out = bare.stdout + bare.stderr
     assert "permission-mode drift" in bare_out, bare_out
     assert "setforge merge" not in bare_out, bare_out
-    assert _stat_mode_octal(c, _DST) == "644"
-
-    # --auto-accept-tracked WITHOUT --yes on a non-TTY: the now-non-empty plan
-    # reaches the confirm gate (requires --yes) rather than auto-proceeding.
-    # Pre-fix the empty plan returned True and the deploy reset perms to 755.
-    no_yes = _setforge(
-        c,
-        ["install", "--profile=test-mode", f"--config={_CFG}", "--auto-accept-tracked"],
-        check=False,
-    )
-    assert no_yes.returncode != 0, no_yes.stdout + no_yes.stderr
-    assert "--yes" in (no_yes.stdout + no_yes.stderr), no_yes.stdout + no_yes.stderr
+    assert "--yes" in bare_out, bare_out
     # The gate fired before deploy, so the live mode is still the drifted 644.
     assert _stat_mode_octal(c, _DST) == "644"

@@ -72,9 +72,7 @@ def _parse_capture_auto(auto: str | None) -> CaptureAuto | None:
     """Validate and parse ``--auto=`` for the capture-side flow.
 
     Raises :class:`typer.Exit(2)` with a user-visible error if ``auto``
-    is neither ``"use-live"`` nor ``"keep-tracked"``. Shared by
-    ``capture`` and ``sync`` so the parse-and-validate pattern stays in
-    one place.
+    is neither ``"use-live"`` nor ``"keep-tracked"``.
     """
     if auto is None:
         return None

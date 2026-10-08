@@ -576,6 +576,43 @@ def test_snapshot_restore_non_interactive_no_tty_required(
     assert result.exit_code == 0
 
 
+def test_snapshot_restore_help_lists_yes_but_not_non_interactive() -> None:
+    """``--non-interactive`` stays accepted but is not advertised."""
+    result = _invoke(["snapshot", "restore", "--help"])
+
+    assert result.exit_code == 0
+    assert "--yes" in result.stdout
+    assert "--non-interactive" not in result.stdout
+
+
+def test_snapshot_restore_non_tty_refusal_names_only_yes(
+    fake_home: Path, config_repo: Path
+) -> None:
+    _seed_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "guarded",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "guarded",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert _effective_exit_code(result) == 1
+    assert "requires --yes" in _outerr(result)
+    assert "--non-interactive" not in _outerr(result)
+
+
 def test_snapshot_restore_missing_label_exits_1(
     fake_home: Path, config_repo: Path
 ) -> None:

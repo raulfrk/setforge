@@ -11,7 +11,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from setforge import local_config, operations, paths, transitions
+from setforge import local_config, operations, paths
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -477,7 +477,7 @@ def _apply_cleanup(
                     )
                 mark_orphan(item.identity, provider=item.provider, console=console)
             continue
-        # Serialize each delete (transition write + unlink) under
+        # Serialize each package removal under
         # profile_lock, like every other mutating verb, so a concurrent
         # install/sync writing the same profile's state cannot interleave.
         # Per-item (not whole-loop): _pick_action above is interactive and
@@ -545,15 +545,9 @@ def _apply_cleanup(
                 restore_transitions=False,
                 adapters=(),
             )
-            transitions.ensure_state_dir_writable()
-            meta = transitions.make_meta(
-                transitions.TransitionCommand.CLEANUP_ORPHANS, profile
-            )
-            # No file change is recorded: this transition is an AUDIT MARKER,
-            # not a restore point. A provisioned binary is re-obtainable via
-            # `install`, so `revert` deliberately does NOT resurrect a
-            # cleanup-deleted binary.
-            transitions.write_transition(meta, {}, {}, ext_delta=None)
+            # No transition is recorded: a provisioned binary is re-obtainable
+            # via `install`, so `revert` deliberately does NOT resurrect a
+            # cleanup-deleted binary, and there is nothing for it to undo.
             if item.path is not None:
                 delete_provisioned(
                     store, item, confine_root=confine_root, console=console

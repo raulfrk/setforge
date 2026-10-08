@@ -114,7 +114,6 @@ def _append_extension_success_outcomes(
 def _walk_extension_failures(
     *,
     report: "vscode_extensions.ReconcileReport",
-    retry_failed_ids: frozenset[str],
     yes: bool,
     outcomes: list[transitions.ReconcileOutcome],
     final_added: list[str],
@@ -125,14 +124,11 @@ def _walk_extension_failures(
 
     Mutates ``outcomes`` (append per-item :class:`ReconcileOutcome`) and
     ``final_added`` / ``final_removed`` (append on RETRY-success only).
-    Skips ids not in ``retry_failed_ids`` when that set is non-empty;
-    full-pass behavior is restored when it is empty. The is_install
+    The is_install
     branch picks the correct inverse for the RETRY path inside
     :func:`_retry_extension_op`.
     """
     for ext_id, err in report.failed:
-        if retry_failed_ids and ext_id not in retry_failed_ids:
-            continue
         # The originating op was either install (in to_install) or
         # uninstall (in to_uninstall). Pick the right inverse for RETRY.
         is_install = ext_id in report.to_install
@@ -163,7 +159,6 @@ def _reconcile_extensions(
     cfg: Config,
     resolved: ResolvedProfile,
     *,
-    retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
     plan: vscode_extensions.ExtensionPlan | None = None,
@@ -187,11 +182,8 @@ def _reconcile_extensions(
     (or ``None`` when the underlying ``code`` binary is missing —
     warn-and-skip) plus the per-item outcomes tuple.
 
-    ``retry_failed_ids`` filters the work list to only those ids: items
-    not in the set are silently skipped from the reconcile pass when
-    the set is non-empty. Today's full-pass behavior is restored when
-    the set is empty (the default). ``yes=True`` short-circuits the
-    prompt to its default :attr:`FailureAction.SKIP`.
+    ``yes=True`` short-circuits the prompt to its default
+    :attr:`FailureAction.SKIP`.
 
     ``pins`` (from a loaded ``setforge.lock``, keyed by casefolded
     ``publisher.name``) routes any pinned extension through the BYTE-STRONG
@@ -230,7 +222,6 @@ def _reconcile_extensions(
 
     _walk_extension_failures(
         report=report,
-        retry_failed_ids=retry_failed_ids,
         yes=yes,
         outcomes=outcomes,
         final_added=final_added,
@@ -422,7 +413,7 @@ def _emit_reconcile_summary(
 
     where ``N`` counts items that landed (``ok`` + ``retried_ok``), ``M``
     counts ``retried_ok`` only, and ``K`` counts ``skipped`` with the
-    comma-separated ids appended for ``--retry-failed`` discoverability.
+    comma-separated ids appended so the user sees what a re-run will retry.
     The parenthetical drops to ``""`` when both ``M`` and ``K`` are
     zero, keeping happy-path output compact. ``aborted`` outcomes are
     excluded from ``N``: they represent rollback bookkeeping for items
@@ -505,7 +496,6 @@ def _apply_planned_plugins(
     cfg: Config,
     plan: claude_plugins_mod.PluginPlan,
     *,
-    retry_failed_ids: frozenset[str],
     yes: bool,
     pins: dict[str, ResolvedPin] | None,
 ) -> tuple[transitions.PluginDelta, tuple[transitions.ReconcileOutcome, ...]]:
@@ -536,8 +526,6 @@ def _apply_planned_plugins(
     _append_plugin_success_outcomes(planned_outcomes, delta_first)
     retried = _PluginRetriedPieces()
     for failed_id, err in plugin_report.failed:
-        if retry_failed_ids and failed_id not in retry_failed_ids:
-            continue
         planned_outcomes.append(
             _handle_plugin_failure(
                 cfg=cfg,
@@ -557,7 +545,6 @@ def _reconcile_plugins(
     cfg: Config,
     resolved: ResolvedProfile,
     *,
-    retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
     plan: claude_plugins_mod.PluginPlan | None = None,
@@ -588,12 +575,7 @@ def _reconcile_plugins(
     reconcile already mutated disk), the delta is reconstructed from the
     reconcile report rather than returned as ``None``.
 
-    ``retry_failed_ids`` filters the work list to only those ids: today
-    we cannot pre-filter ``claude_plugins.reconcile`` (it's batch-only),
-    so the filter applies AFTER first reconcile: only failed-ids that
-    appear in the set surface the prompt; others are silently dropped
-    from the outcomes. When the set is empty (the default), all
-    failures surface. ``yes=True`` short-circuits to the default
+    ``yes=True`` short-circuits to the default
     :attr:`FailureAction.SKIP`.
     """
     # Marketplaces are registries, not install intent for every profile.
@@ -603,7 +585,6 @@ def _reconcile_plugins(
         return _apply_planned_plugins(
             cfg,
             plan,
-            retry_failed_ids=retry_failed_ids,
             yes=yes,
             pins=pins,
         )
@@ -650,8 +631,6 @@ def _reconcile_plugins(
 
     retried_delta_pieces = _PluginRetriedPieces()
     for failed_id, err in plugin_report.failed:
-        if retry_failed_ids and failed_id not in retry_failed_ids:
-            continue
         op_kind = _classify_plugin_failure(plugin_report, failed_id)
         outcome = _handle_plugin_failure(
             cfg=cfg,

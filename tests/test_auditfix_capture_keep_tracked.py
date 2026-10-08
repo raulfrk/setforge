@@ -1,6 +1,6 @@
 """Audit-fix regression: ``--auto=keep-tracked`` must REFUSE capture drift.
 
-The documented contract is that ``capture``/``sync --auto=keep-tracked``
+The documented contract is that ``sync --auto=keep-tracked``
 refuses to absorb any drift — the tracked source (and, for a SHARED
 disposition, the stored base) are left exactly as authored. Before the fix
 both writeback paths ignored ``auto`` for wholesale live→tracked content and
@@ -83,7 +83,6 @@ def _install(config: Path) -> Result:
             "install",
             f"--profile={_PROFILE}",
             f"--config={config}",
-            "--no-transition",
             "--no-secrets-scan",
             "--no-git-check",
             "--yes",
@@ -99,7 +98,6 @@ def _sync_keep_tracked(config: Path) -> Result:
             "sync",
             f"--profile={_PROFILE}",
             f"--config={config}",
-            "--no-transition",
             "--auto=keep-tracked",
             "--yes",
         ],

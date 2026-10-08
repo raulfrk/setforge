@@ -487,7 +487,7 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
         orphans._execute_scan_cleanup: "cleanup-orphans",
         revert._apply_confirmed_reverts: "revert",
     }
-    refusing = (lock.lock, sync.capture, migrate.migrate, snapshot.snapshot_create)
+    refusing = (lock.lock, migrate.migrate, snapshot.snapshot_create)
     lock_only = (
         config._run_add,
         config.config_remove,

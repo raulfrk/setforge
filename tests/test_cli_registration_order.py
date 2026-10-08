@@ -24,7 +24,6 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "compare",
     "cleanup-orphans",
     "cleanup",
-    "capture",
     "sync",
     "revert",
     "recover",

@@ -334,7 +334,7 @@ def _run_sequence(root: Path, actions: Sequence[Action], marker: str) -> None:
                 updated = expected_note + f"host {index}: {marker}\n".encode()
                 note.write_bytes(updated)
                 classify(HunkClass.LOCAL)
-                cli("capture", "--auto=use-live", "--yes", profile="publisher")
+                cli("sync", "--auto=use-live", "--yes", profile="publisher")
                 assert (tracked / "note.txt").read_bytes() == expected_note
                 assert note.read_bytes() == updated
                 classify(HunkClass.SHARED)

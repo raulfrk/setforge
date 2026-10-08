@@ -68,7 +68,6 @@ main()
             "--no-fetch",
             "--no-git-check",
             "--no-secrets-scan",
-            "--no-transition",
             "--yes",
         ],
         cwd=repo_root,
@@ -145,7 +144,6 @@ def test_retired_store_prune_recovers_after_uncatchable_process_exit(
         "--no-fetch",
         "--no-git-check",
         "--no-secrets-scan",
-        "--no-transition",
         "--yes",
     ]
     seeded = subprocess.run(
@@ -387,7 +385,6 @@ main()
             "--no-fetch",
             "--no-git-check",
             "--no-secrets-scan",
-            "--no-transition",
         ],
         cwd=tracked,
         env=env,

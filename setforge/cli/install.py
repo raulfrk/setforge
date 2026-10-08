@@ -155,15 +155,10 @@ from setforge.reconcile import host_local_record
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import FileId, file_id
 from setforge.secrets import SecretAction, SecretsScanResult
-from setforge.transitions import (
-    ReconcileStatus,
-    load_latest,
-    load_reconcile_outcomes,
-)
+from setforge.transitions import ReconcileStatus
 from setforge.tree_management import (
     TreeActionKind,
     TreeEntryKind,
-    TreeHoldResolution,
     TreePlan,
     apply_tree,
     holds_only_state_trees,
@@ -208,7 +203,7 @@ class InstallPlan:
     codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
     codex_trusted_projects: tuple[Path, ...] = ()
     preserved_store_ids: frozenset[FileId] = frozenset()
-    tree_held: TreeHoldResolution | None = None
+    tree_held: reconcile_apply.ReconcileAuto | None = None
     symlink_conflicts: tuple[str, ...] = ()
 
     def tree_paths(self) -> tuple[Path, ...]:
@@ -582,7 +577,6 @@ def _plan(
     file_selection: frozenset[str] | None,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
-    transition: bool,
     auto: bool,
     package_owner_id: UUID | None,
 ) -> tuple[InstallPlan, LockFile | None, LocalOverlayResolution]:
@@ -597,7 +591,6 @@ def _plan(
         ctx,
         section_auto=section_auto,
         interactive=interactive,
-        transition=transition,
         input_baseline=input_baseline,
         package_owner_id=package_owner_id,
     )
@@ -632,7 +625,6 @@ def _plan_files(
     *,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
-    transition: bool,
     input_baseline: tuple[tuple[Path, bytes | None], ...],
     package_owner_id: UUID | None,
 ) -> InstallPlan:
@@ -696,11 +688,8 @@ def _plan_files(
     source_map = dict(source_bytes)
     if any(source_map.get(path) != payload for path, payload in input_baseline):
         raise SetforgeError("install configuration changed before planning; retry")
-    tree_held = (
-        TreeHoldResolution(section_auto.value) if section_auto is not None else None
-    )
     trees = _plan_trees(
-        tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=tree_held
+        tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=section_auto
     )
     content_paths = tuple(
         deploy.resolve_symlink_target(sub_dst, tf.symlink)
@@ -748,8 +737,7 @@ def _plan_files(
         )
     )
     deploy.validate_srcs_exist(ctx.cfg, ctx.file_profile, ctx.repo_root)
-    if transition:
-        transitions.validate_state_dir_writable()
+    transitions.validate_state_dir_writable()
     drift_report = compare_mod.compare_profile(
         ctx.cfg,
         ctx.profile,
@@ -799,7 +787,7 @@ def _plan_files(
         codex_configs=codex_configs,
         codex_trusted_projects=codex_trusted_projects,
         preserved_store_ids=preserved_store_ids,
-        tree_held=tree_held,
+        tree_held=section_auto,
         symlink_conflicts=_symlink_dst_conflicts(tracked_entries),
     )
 
@@ -957,7 +945,7 @@ def _plan_trees(
     *,
     profile: str,
     owner_id: UUID | None,
-    held: TreeHoldResolution | None = None,
+    held: reconcile_apply.ReconcileAuto | None = None,
 ) -> tuple[PlannedTree, ...]:
     """Freeze desired/live/prior inventories and root authority decisions."""
     store = OwnershipStore()
@@ -1185,7 +1173,6 @@ def _validate_external_plan(plan: InstallPlan) -> None:
 def _apply_extension_plan(
     plan: InstallPlan,
     *,
-    retry_failed_ids: frozenset[str],
     yes: bool,
     lock: LockFile | None,
 ) -> tuple[
@@ -1197,7 +1184,6 @@ def _apply_extension_plan(
     return _reconcile_extensions(
         plan.ctx.cfg,
         plan.ctx.resolved,
-        retry_failed_ids=retry_failed_ids,
         yes=yes,
         pins=extension_pins(lock),
         plan=plan.extensions,
@@ -1207,7 +1193,6 @@ def _apply_extension_plan(
 def _apply_plugin_plan(
     plan: InstallPlan,
     *,
-    retry_failed_ids: frozenset[str],
     yes: bool,
     lock: LockFile | None,
 ) -> tuple[
@@ -1219,7 +1204,6 @@ def _apply_plugin_plan(
     return _reconcile_plugins(
         plan.ctx.cfg,
         plan.ctx.resolved,
-        retry_failed_ids=retry_failed_ids,
         yes=yes,
         pins=plugin_pins(lock),
         plan=plan.plugins,
@@ -1292,15 +1276,11 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     active_lock: LockFile | None,
     tracked_checkpoint_paths: tuple[Path, ...],
     adapter_kinds: set[operations.AdapterKind],
-    retry_failed: bool,
     yes: bool,
     mutation_guards: MutationLockGuards,
 ) -> None:
     """Apply frozen target plans in the selected bundles' graph order."""
     cfg = plan.ctx.cfg
-    retry_failed_ids = (
-        _collect_retry_failed_ids(profile) if retry_failed else frozenset()
-    )
 
     def apply_packages() -> CapabilityActivation:
         with (
@@ -1432,7 +1412,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         ):
             run.ext_delta, run.ext_outcomes = _apply_extension_plan(
                 plan,
-                retry_failed_ids=retry_failed_ids,
                 yes=yes,
                 lock=active_lock,
             )
@@ -1466,7 +1445,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         ):
             run.plugin_delta, run.plugin_outcomes = _apply_plugin_plan(
                 plan,
-                retry_failed_ids=retry_failed_ids,
                 yes=yes,
                 lock=active_lock,
             )
@@ -1563,7 +1541,6 @@ def _render_install_plan(
     plan: InstallPlan,
     scan_result: SecretsScanResult,
     *,
-    transition: bool = True,
     refusals: tuple[str, ...] = (),
 ) -> None:
     """Render the same immutable plan the real install path consumes."""
@@ -1578,7 +1555,7 @@ def _render_install_plan(
         plugins=plan.plugins,
         immutable_plan=True,
         secrets_scan=scan_result,
-        record_transition=transition and not _install_plan_recorded_nothing(plan),
+        record_transition=not _install_plan_recorded_nothing(plan),
         refusals=refusals,
     )
     changed_codex = [codex for codex in plan.codex_configs if codex.changed]
@@ -2372,10 +2349,7 @@ def _confirm_install(
     fresh: bool,
     auto: str | None,
     yes: bool,
-    auto_accept_tracked: bool,
-    auto_accept_live: bool,
     no_secrets_scan: bool,
-    no_transition: bool,
 ) -> SecretPlan | None:
     """Ask every under-lock question; ``None`` means the welcome was declined."""
     ctx = plan.ctx
@@ -2392,12 +2366,7 @@ def _confirm_install(
             run_dry_run=lambda: _render_install_plan(
                 plan,
                 scan_result,
-                transition=not no_transition,
-                refusals=_plan_refusals(
-                    plan,
-                    auto_accept_tracked=auto_accept_tracked,
-                    auto_accept_live=auto_accept_live,
-                ),
+                refusals=_plan_refusals(plan, yes=yes),
             ),
         )
         if welcome_choice is not WelcomeChoice.PROCEED:
@@ -2407,8 +2376,6 @@ def _confirm_install(
     _run_predeploy_gates(
         drift_report=plan.drift_report,
         ctx=ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
         yes=yes,
     )
     install_helpers_mod._confirm_use_tracked_or_exit(
@@ -2457,28 +2424,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         help="Update only this declared tracked-file ID in the profile. Repeat to "
         "select several already-managed files; other resources are retained.",
     ),
-    no_transition: bool = typer.Option(
-        False,
-        "--no-transition",
-        hidden=True,
-        help="Skip writing a transition record (testing / debugging).",
-    ),
-    auto_accept_tracked: bool = typer.Option(
-        False,
-        "--auto-accept-tracked",
-        help=(
-            "Resolve permission-mode drift non-interactively by reapplying "
-            "the tracked mode."
-        ),
-    ),
-    auto_accept_live: bool = typer.Option(
-        False,
-        "--auto-accept-live",
-        help=(
-            "Proceed past permission-mode drift non-interactively; install "
-            "still reapplies the tracked mode (live permission bits are not kept)."
-        ),
-    ),
     reconcile_user_sections: bool = typer.Option(
         False,
         "--reconcile-user-sections",
@@ -2504,21 +2449,16 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         False,
         "--yes",
         "-y",
-        help="Skip the --auto* confirmation prompt (for non-interactive use).",
+        help=(
+            "Skip the --auto* confirmation prompt and reset drifted file "
+            "permission modes to the tracked mode without asking "
+            "(for non-interactive use)."
+        ),
     ),
     no_secrets_scan: bool = typer.Option(
         False,
         "--no-secrets-scan",
         help="Skip pre-deploy secrets scan (gitleaks) for automation.",
-    ),
-    retry_failed: bool = typer.Option(
-        False,
-        "--retry-failed",
-        help=(
-            "Re-attempt only the items skipped during the previous install's "
-            "reconcile (per the prior transition's reconcile_outcomes). "
-            "Other reconcile work is suppressed for this run."
-        ),
     ),
     no_git_check: bool = typer.Option(
         False,
@@ -2561,22 +2501,10 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
 ) -> None:
     """Deploy tracked → live for the profile or selected managed files."""
     file_selection = None if file is None else frozenset(file)
-    if file_selection is not None and retry_failed:
-        raise SetforgeError("--file and --retry-failed cannot be combined")
     # Canonicalize once so a symlink retarget cannot split source discovery,
     # locking, config loading, and input snapshots across two repositories.
     config_is_explicit = config is not None
     config = _resolve_config_arg(config).resolve()
-    # Mutual-exclusivity guard for the legacy unexpected-drift flags.
-    if auto_accept_tracked and auto_accept_live:
-        typer.secho(
-            "error: --auto-accept-tracked and --auto-accept-live are"
-            " mutually exclusive",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2)
-
     # Mutual-exclusivity guard for the new section-reconcile flags.
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
@@ -2601,7 +2529,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             file_selection=file_selection,
             section_auto=section_auto,
             interactive=False,
-            transition=not no_transition,
             auto=True,
             package_owner_id=_read_package_owner_id(repo_root),
         )
@@ -2612,12 +2539,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _render_install_plan(
             plan,
             scan_result,
-            transition=not no_transition,
-            refusals=_plan_refusals(
-                plan,
-                auto_accept_tracked=auto_accept_tracked,
-                auto_accept_live=auto_accept_live,
-            ),
+            refusals=_plan_refusals(plan, yes=yes),
         )
         return
 
@@ -2672,10 +2594,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     )
     if has_transfer and package_owner_id is None:
         raise SetforgeError("ownership transfer requires a Git-backed config")
-    if has_transfer and no_transition:
-        raise SetforgeError(
-            "ownership transfer requires transition recording; remove --no-transition"
-        )
 
     with operations.transaction(
         resources=True,
@@ -2709,7 +2627,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             file_selection=file_selection,
             section_auto=section_auto,
             interactive=interactive,
-            transition=not no_transition,
             auto=yes,
             package_owner_id=package_owner_id,
         )
@@ -2731,10 +2648,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             fresh=fresh,
             auto=auto,
             yes=yes,
-            auto_accept_tracked=auto_accept_tracked,
-            auto_accept_live=auto_accept_live,
             no_secrets_scan=no_secrets_scan,
-            no_transition=no_transition,
         )
         if secret_plan is None:
             return
@@ -2743,8 +2657,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         # above has completed, and apply consumes the frozen plan below.
         _assert_plan_inputs_unchanged(plan)
         _validate_external_plan(plan)
-        if not no_transition:
-            transitions.ensure_state_dir_writable()
+        transitions.ensure_state_dir_writable()
 
         deploy_state_pre = install_helpers_mod._capture_store_snapshots(
             profile, plan.deploys, preserved_ids=plan.preserved_store_ids
@@ -2880,7 +2793,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             active_lock=active_lock,
             tracked_checkpoint_paths=tracked_checkpoint_paths,
             adapter_kinds=adapter_kinds,
-            retry_failed=retry_failed,
             yes=yes,
             mutation_guards=mutation_guards,
         )
@@ -2888,7 +2800,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             plan,
             run,
             profile=profile,
-            no_transition=no_transition,
             ownership_transfers=applied.ownership_transfers,
             file_pre=applied.file_pre,
             files_applied=applied.files_applied,
@@ -2935,7 +2846,6 @@ def _apply_install(
     active_lock: LockFile | None,
     tracked_checkpoint_paths: tuple[Path, ...],
     adapter_kinds: set[operations.AdapterKind],
-    retry_failed: bool,
     yes: bool,
     mutation_guards: MutationLockGuards,
 ) -> _AppliedInstall:
@@ -2982,7 +2892,6 @@ def _apply_install(
         active_lock=active_lock,
         tracked_checkpoint_paths=tracked_checkpoint_paths,
         adapter_kinds=adapter_kinds,
-        retry_failed=retry_failed,
         yes=yes,
         mutation_guards=mutation_guards,
     )
@@ -3013,7 +2922,6 @@ def _record_install(
     run: _InstallRun,
     *,
     profile: str,
-    no_transition: bool,
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...],
     file_pre: dict[Path, transitions.FilesystemImage],
     files_applied: bool,
@@ -3043,7 +2951,7 @@ def _record_install(
 
     _emit_reconcile_summary(run.plugin_outcomes, run.ext_outcomes)
 
-    if not no_transition and not _install_recorded_nothing(
+    if not _install_recorded_nothing(
         file_pre=file_pre,
         file_post=file_post,
         deploy_outcome=deploy_outcome,
@@ -3094,7 +3002,6 @@ def _record_install(
                 run.plugin_delta,
                 codex_plugin_delta=run.codex_plugin_delta,
                 source_dir=ctx.repo_root,
-                reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
                 state_snapshots=state_pre,
                 mcp_delta=mcp_delta,
                 filesystem_deltas=tree_filesystem_deltas,
@@ -3225,15 +3132,10 @@ def _symlink_dst_conflicts(
     )
 
 
-def _plan_refusals(
-    plan: InstallPlan, *, auto_accept_tracked: bool, auto_accept_live: bool
-) -> tuple[str, ...]:
+def _plan_refusals(plan: InstallPlan, *, yes: bool) -> tuple[str, ...]:
     """Return what apply refuses for this plan, in the order apply checks it."""
     drift = install_helpers_mod._unexpected_drift_refusal(
-        plan.drift_report,
-        plan.ctx,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
+        plan.drift_report, plan.ctx, yes=yes
     )
     return (*(() if drift is None else (drift,)), *plan.symlink_conflicts)
 
@@ -3346,20 +3248,3 @@ def _apply_secrets_and_bootstrap(
     ):
         _apply_secret_plan(secret_plan)
         deploy.bootstrap_local(bootstrap)
-
-
-def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
-    """Read the previous transition's ``reconcile_outcomes`` and return
-    the set of items whose status was ``"skipped"``.
-
-    Returns an empty :class:`frozenset` when there's no prior transition
-    or the previous transition has no ``reconcile_outcomes.json`` file
-    (backward-compat path for transitions written before the schema bump).
-    Used by ``setforge install --retry-failed`` to filter the reconcile
-    work list to only those previously-failed ids.
-    """
-    prev = load_latest(profile)
-    if prev is None:
-        return frozenset()
-    outcomes = load_reconcile_outcomes(prev)
-    return frozenset(o.item_id for o in outcomes if o.status is ReconcileStatus.SKIPPED)

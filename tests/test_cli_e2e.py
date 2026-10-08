@@ -420,8 +420,6 @@ class TestInstall:
     @pytest.mark.parametrize(
         "flag",
         [
-            "--auto-accept-tracked",
-            "--auto-accept-live",
             "--auto=use-tracked",
             "--auto=keep-live",
         ],
@@ -631,7 +629,7 @@ class TestSync:
             ["sync", "--profile=test-comprehensive", f"--config={fixture_repo}"]
         )
         assert refused.exit_code == 1
-        assert "--auto=use-live --yes" in refused.output
+        assert "--yes to capture it" in refused.output
         assert fixture_repo.read_bytes() == before
         synced = _invoke(
             [
@@ -859,6 +857,42 @@ class TestRevert:
         # revert inverts that into an uninstall call.
         assert fk.uninstall_args() == ["editorconfig.editorconfig"]
         assert fk.installed_set() == set()
+
+    def test_failed_extension_leaves_a_transition_and_a_rerun_repairs_it(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        fake_claude,
+        fake_code,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An install whose only event is a skipped extension still records
+        a transition, and a plain re-run installs the extension."""
+        fake_claude()
+        fk = fake_code(installed={"editorconfig.editorconfig"})
+        args = ["install", "--profile=test-comprehensive", f"--config={fixture_repo}"]
+        assert _invoke([*args, "--yes"]).exit_code == 0
+        fk._installed.clear()
+
+        def refuse_install(
+            argv: list[str], **kwargs: Any
+        ) -> subprocess.CompletedProcess[str]:
+            if argv[1:2] == ["--install-extension"]:
+                raise subprocess.CalledProcessError(1, argv, "", "refused")
+            return fk.run(argv, **kwargs)
+
+        before = _transition_dirs()
+        with monkeypatch.context() as patch:
+            patch.setattr("setforge.vscode_extensions.subprocess.run", refuse_install)
+            failed = _invoke([*args, "--yes"])
+        assert failed.exit_code == 0, failed.output
+        assert "1 skipped: editorconfig.editorconfig" in failed.output
+        (recorded,) = _transition_dirs() - before
+        assert not (transitions_root() / recorded / "reconcile_outcomes.json").exists()
+
+        repaired = _invoke([*args, "--yes"])
+        assert repaired.exit_code == 0, repaired.output
+        assert fk.installed_set() == {"editorconfig.editorconfig"}
 
     @pytest.mark.parametrize(
         ("profile", "deployed"),

@@ -3,7 +3,7 @@
 The heavy lifting is covered by ``tests/test_install.py`` plus the
 Docker e2e suite. These tests exist so a future structural rename of
 the helper surface fails fast (import-error class) and so the
-no-drift short-circuit on :func:`_check_unexpected_drift` is anchored
+no-drift short-circuit on :func:`_run_predeploy_gates` is anchored
 explicitly.
 """
 
@@ -24,7 +24,7 @@ from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
 
 def test_install_helpers_module_imports() -> None:
     """The public-to-install helpers are exported and callable."""
-    assert callable(_install_helpers._check_unexpected_drift)
+    assert callable(_install_helpers._run_predeploy_gates)
     assert callable(_install_helpers._write_install_transition)
 
 
@@ -46,7 +46,7 @@ def test_claude_merge_factory_loads_only_for_interactive_use(
     )
 
 
-def test_check_unexpected_drift_no_entries_is_noop(
+def test_run_predeploy_gates_no_entries_is_noop(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -66,16 +66,13 @@ def test_check_unexpected_drift_no_entries_is_noop(
     """
 
     def _fail_on_secho(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("_check_unexpected_drift wrote output on the no-drift path")
+        pytest.fail("_run_predeploy_gates wrote output on the no-drift path")
 
     monkeypatch.setattr(_install_helpers.typer, "secho", _fail_on_secho)
 
     empty = CompareReport(entries=[], has_unexpected_drift=False)
-    _install_helpers._check_unexpected_drift(
-        empty,
-        cast(ProfileContext, None),
-        auto_accept_tracked=False,
-        auto_accept_live=False,
+    _install_helpers._run_predeploy_gates(
+        drift_report=empty, ctx=cast(ProfileContext, None), yes=False
     )
 
     captured = capsys.readouterr()
@@ -89,7 +86,7 @@ def test_dry_run_drift_gate_counts_what_the_install_gate_rejects(
 ) -> None:
     """The dry-run gate line counts exactly the files a real install refuses.
 
-    The install gate (:func:`_check_unexpected_drift`) trips only on
+    The install gate (:func:`_run_predeploy_gates`) trips only on
     permission-mode drift, so content-only drift — which install reconciles
     without a gate — must not be counted by the preview.
     """
@@ -112,13 +109,11 @@ def test_dry_run_drift_gate_counts_what_the_install_gate_rejects(
 
     if gated:
         with pytest.raises(typer.Exit):
-            _install_helpers._check_unexpected_drift(
-                report, ctx, auto_accept_tracked=False, auto_accept_live=False
+            _install_helpers._run_predeploy_gates(
+                drift_report=report, ctx=ctx, yes=False
             )
     else:
-        _install_helpers._check_unexpected_drift(
-            report, ctx, auto_accept_tracked=False, auto_accept_live=False
-        )
+        _install_helpers._run_predeploy_gates(drift_report=report, ctx=ctx, yes=False)
 
 
 def test_resolve_drift_paths_directory_subfiles_do_not_collide(

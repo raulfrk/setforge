@@ -157,7 +157,6 @@ def test_unfinished_operation_blocks_mutating_commands_until_recovered(
     for argv in (
         ["install", *INSTALL_FLAGS],
         ["sync", "--auto=use-live", "--yes"],
-        ["capture", "--auto=use-live", "--yes"],
         ["snapshot", "create", "blocked"],
     ):
         result = host.proc(*argv)

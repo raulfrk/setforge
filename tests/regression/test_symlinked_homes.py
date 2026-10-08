@@ -58,11 +58,6 @@ def test_install_sync_capture_revert_match_a_plain_home(
     synced = host.cli("sync", "--auto=use-live", "--yes")
     assert synced.exit_code == 0, synced.output
     assert host.tracked("note.txt").read_bytes() == b"three\n"
-
-    live.write_bytes(b"four\n")
-    captured = host.cli("capture", "--auto=use-live", "--yes")
-    assert captured.exit_code == 0, captured.output
-    assert host.tracked("note.txt").read_bytes() == b"four\n"
     assert sorted(p.name for p in host.live_dir.iterdir()) == [
         "note.txt",
         "note.txt.bak",

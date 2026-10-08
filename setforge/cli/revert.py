@@ -12,8 +12,6 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 
 import difflib
 import json
-import os
-import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +22,6 @@ from rich.console import Console
 from rich.table import Table
 
 from setforge import operations, orphan_scan, transitions
-from setforge._editor import run_editor
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -268,48 +265,6 @@ def _build_revert_plan(
     )
 
 
-def _render_plan_to_editor(plan: RevertPlan) -> Path:
-    """Write a human-readable rendering of ``plan`` to a tmp file → Path.
-
-    Used by APPLY_WITH_EDITOR to let the user review the plan in their
-    ``$EDITOR`` before re-prompting. The file is read-only-ish: we never
-    parse the editor's output back; this is a review gesture, not a
-    plan-editor.
-    """
-    fd, name = tempfile.mkstemp(prefix="setforge-revert-plan-", suffix=".txt")
-    # Close the OS-level fd immediately; we'll use Path.write_text below.
-    # Closing here (rather than after write_text) keeps the fd from
-    # leaking on any exception that fires during line building.
-    os.close(fd)
-    target = Path(name)
-    lines = [
-        f"transition: {plan.transition_id}",
-        f"  type:    {plan.transition_type}",
-        f"  profile: {plan.profile}",
-        f"  age:     {plan.age_human}",
-        "",
-        f"files affected ({len(plan.file_mutations)}):",
-    ]
-    for fm in plan.file_mutations:
-        lines.append(f"  M  {fm.path}  (line-delta: {fm.diff_summary})")
-    if plan.plugin_reconciles:
-        lines.append("")
-        lines.append(f"plugins reconciled ({len(plan.plugin_reconciles)}):")
-        for pr in plan.plugin_reconciles:
-            marker = "+" if pr.operation is PluginOperation.ENABLED else "-"
-            lines.append(f"  {marker} {pr.plugin_id}  {pr.source}")
-    if plan.extension_reconciles:
-        lines.append("")
-        lines.append(f"extensions reconciled ({len(plan.extension_reconciles)}):")
-        for er in plan.extension_reconciles:
-            marker = "+" if er.operation is ExtensionOperation.INSTALLED else "-"
-            lines.append(f"  {marker} {er.extension_id}  {er.source}")
-    lines.append("")
-    lines.append(f"REDO: {plan.redo_command}")
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return target
-
-
 def _apply_revert(
     record: transitions.TransitionRecord,
     profile: str,
@@ -539,16 +494,6 @@ def revert(
     transitions.refuse_legacy_file_changes(record)
     plan = _build_revert_plan(record, profile)
     choice = confirm_revert_operation(plan=plan, yes=yes)
-    if choice is RevertChoice.ABORT:
-        return
-    while choice is RevertChoice.APPLY_WITH_EDITOR:
-        target = _render_plan_to_editor(plan)
-        try:
-            run_editor(target)
-        finally:
-            target.unlink(missing_ok=True)
-        # Re-prompt after editor closes so the user can still abort or re-edit.
-        choice = confirm_revert_operation(plan=plan, yes=yes)
     if choice is RevertChoice.ABORT:
         return
 

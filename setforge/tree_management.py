@@ -19,6 +19,7 @@ from setforge.config import TreeOrphanPolicy, TreePolicy, TreeSymlinkPolicy
 from setforge.errors import InvariantViolation, SetforgeError
 from setforge.paths import cache_root, data_root, state_root
 from setforge.reconcile.types import file_id
+from setforge.reconcile_apply import ReconcileAuto
 
 _SCHEMA = "1.0"
 _DIR_MODE = 0o700
@@ -114,13 +115,6 @@ class TreeActionKind(StrEnum):
     KEEP = "keep"
     RELEASE = "release"
     HOLD = "hold"
-
-
-class TreeHoldResolution(StrEnum):
-    """Operator choice for entries a plan would otherwise hold for review."""
-
-    KEEP_LIVE = "keep-live"
-    USE_TRACKED = "use-tracked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +483,7 @@ def plan_tree(
     live: TreeInventory,
     prior: TreeInventory | None,
     policy: TreePolicy,
-    held: TreeHoldResolution | None = None,
+    held: ReconcileAuto | None = None,
 ) -> TreePlan:
     """Plan desired/live/prior entry effects without granting authority.
 
@@ -524,7 +518,7 @@ def plan_tree(
 def _plan_desired_entries(
     desired_by: dict[str, TreeEntry],
     live_by: dict[str, TreeEntry],
-    held: TreeHoldResolution | None,
+    held: ReconcileAuto | None,
 ) -> list[TreeAction]:
     actions: list[TreeAction] = []
     released: list[str] = []
@@ -542,7 +536,7 @@ def _plan_desired_entries(
                     f"tracked {wanted.kind.value} conflicts with "
                     f"live {current.kind.value}"
                 )
-                if held is TreeHoldResolution.KEEP_LIVE:
+                if held is ReconcileAuto.KEEP_LIVE:
                     released.append(path)
                     actions.append(
                         TreeAction(
@@ -550,7 +544,7 @@ def _plan_desired_entries(
                         )
                     )
                 elif (
-                    held is TreeHoldResolution.USE_TRACKED
+                    held is ReconcileAuto.USE_TRACKED
                     and TreeEntryKind.DIRECTORY not in {wanted.kind, current.kind}
                 ):
                     actions.append(
@@ -574,7 +568,7 @@ def _plan_live_extras(
     live_by: dict[str, TreeEntry],
     prior_by: dict[str, TreeEntry],
     policy: TreePolicy,
-    held: TreeHoldResolution | None,
+    held: ReconcileAuto | None,
 ) -> list[TreeAction]:
     drifted = "removed from tracked but changed live since the last install"
     actions: list[TreeAction] = []
@@ -592,11 +586,11 @@ def _plan_live_extras(
             actions.append(
                 TreeAction(path, TreeActionKind.REMOVE, "unchanged owned orphan")
             )
-        elif held is TreeHoldResolution.KEEP_LIVE:
+        elif held is ReconcileAuto.KEEP_LIVE:
             actions.append(
                 TreeAction(path, TreeActionKind.RELEASE, f"{drifted}; live kept")
             )
-        elif held is TreeHoldResolution.USE_TRACKED:
+        elif held is ReconcileAuto.USE_TRACKED:
             actions.append(
                 TreeAction(path, TreeActionKind.REMOVE, f"{drifted}; tracked applied")
             )

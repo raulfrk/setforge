@@ -121,23 +121,6 @@ def test_install_transfers_foreign_file_and_revert_redo_preserve_bytes(
     config_b.write_bytes(config_a.read_bytes())
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_b, check=True)
 
-    unrecorded = CliRunner().invoke(
-        app,
-        [
-            "install",
-            "--profile=p",
-            f"--config={config_b}",
-            "--no-fetch",
-            "--no-git-check",
-            "--no-secrets-scan",
-            "--no-transition",
-            "--yes",
-        ],
-    )
-    assert unrecorded.exit_code != 0
-    assert "requires transition recording" in str(unrecorded.exception)
-    assert store.read(file_resource_id(live)) == before
-
     transferred = _install(config_b, yes=True)
 
     assert transferred.exit_code == 0, transferred.output

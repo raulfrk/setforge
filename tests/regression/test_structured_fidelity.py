@@ -219,7 +219,7 @@ def test_edits_made_on_both_sides_merge_without_losing_either(
     assert env.live(rel).read_bytes() == both
 
 
-@pytest.mark.parametrize("verb", ["sync", "capture"])
+@pytest.mark.parametrize("verb", ["sync"])
 @pytest.mark.parametrize("name", sorted({**_CASES, "dup": _DUPLICATE_KEYS}))
 def test_sharing_a_host_edit_changes_only_the_edited_bytes(
     name: str, verb: str, integration_env: Factory, integration_subprocess
@@ -278,7 +278,7 @@ _BROKEN = {
 }
 
 
-@pytest.mark.parametrize("verb", ["sync", "capture"])
+@pytest.mark.parametrize("verb", ["sync"])
 @pytest.mark.parametrize("kind", sorted(_BROKEN))
 def test_a_live_file_that_no_longer_parses_is_never_promoted(
     kind: str, verb: str, integration_env: Factory, integration_subprocess

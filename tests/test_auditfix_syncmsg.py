@@ -1,6 +1,6 @@
 """Regression: sync's Ctrl-C handler must actually restore the snapshot.
 
-The sync/capture KeyboardInterrupt path used to print "cancelled (Ctrl-C);
+The sync KeyboardInterrupt path used to print "cancelled (Ctrl-C);
 files restored from snapshot" while ``apply_capture`` performed NO
 snapshot or restore — so an interrupt after capture had already written a
 tracked src (and advanced a stored base) left those writes in place and the
@@ -9,16 +9,13 @@ returned, so an interrupted sync left partially-captured tracked files AND
 re-baselined stores with NO transition to revert.
 
 The fix restores the pre-capture file + store snapshots that ``sync``
-already takes, then reports the truth; plain ``capture`` (which takes no
-snapshot) reports the partial-write truth instead.
+already takes, then reports the truth.
 
 * ``test_sync_ctrl_c_restores_tracked_and_base`` — drives install →
   live-edit → ``sync`` with ``apply_capture`` patched to mutate a tracked
   src + advance the base then raise ``KeyboardInterrupt``; asserts BOTH are
   restored byte-exact and the message is now true. Fails pre-fix (nothing
   restored).
-* ``test_capture_ctrl_c_message_not_false_restore`` — asserts plain
-  ``capture``'s Ctrl-C message does NOT claim files were restored.
 * ``test_sync_oserror_restores_tracked_and_base`` — same partial-write hazard
   but the capture raises ``OSError`` (disk full) mid-run; asserts BOTH the
   tracked src and the base are restored and the ``OSError`` propagates.
@@ -193,34 +190,3 @@ def test_sync_recovery_failure_never_masks_capture_error(
 
     assert result.exception is primary
     assert any("compensator failed" in note for note in primary.__notes__)
-
-
-def test_capture_ctrl_c_message_not_false_restore(
-    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Plain ``capture``'s Ctrl-C message must not claim a restore.
-
-    ``capture`` takes no snapshot, so the old "files restored from
-    snapshot" wording was always false on this path.
-    """
-    config_repo.write_tracked("doc.md", _DOC)
-    config = _write_config(config_repo)
-    assert _install(config).exit_code == 0
-    _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
-
-    def _interrupt(*_args: object, **_kwargs: object) -> list[object]:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("setforge.cli.sync.capture_mod.apply_capture", _interrupt)
-
-    args = [
-        "capture",
-        f"--profile={_PROFILE}",
-        f"--config={config}",
-        "--auto=use-live",
-        "--yes",
-    ]
-    result = CliRunner().invoke(app, args)
-    assert result.exit_code == 130, result.output
-    assert "restored from snapshot" not in result.output
-    assert "partially written" in result.output

@@ -378,7 +378,7 @@ from setforge.cli import install as _install  # noqa: E402, F401
 from setforge.cli import compare as _compare  # noqa: E402, F401
 from setforge.cli import orphans as _orphans  # noqa: E402, F401 (cleanup-orphans)
 from setforge.cli import cleanup as _cleanup  # noqa: E402, F401
-from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
+from setforge.cli import sync as _sync  # noqa: E402, F401 (sync)
 from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
 from setforge.cli import recover as _recover  # noqa: E402, F401
 from setforge.cli import ownership as _ownership  # noqa: E402, F401

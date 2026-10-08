@@ -573,7 +573,6 @@ def _invoke_install(
         f"--profile={profile}",
         f"--config={fixture_repo}",
         "--no-git-check",
-        "--no-transition",
     ]
     if extra:
         args.extend(extra)

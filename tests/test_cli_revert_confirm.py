@@ -96,7 +96,6 @@ def _make_plan(
 def test_revert_choice_strenum_values() -> None:
     assert RevertChoice.ABORT.value == "abort"
     assert RevertChoice.APPLY.value == "apply"
-    assert RevertChoice.APPLY_WITH_EDITOR.value == "apply-with-editor"
     assert str(RevertChoice.APPLY) == "apply"
 
 
@@ -189,15 +188,6 @@ def test_tty_dialog_abort_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None
     assert "aborted" in console.export_text()
 
 
-def test_tty_dialog_apply_with_editor_returns_apply_with_editor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    _patch_dialog(monkeypatch, return_value=RevertChoice.APPLY_WITH_EDITOR)
-    choice = confirm_revert_operation(plan=_make_plan(), yes=False)
-    assert choice is RevertChoice.APPLY_WITH_EDITOR
-
-
 def test_tty_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -233,6 +223,19 @@ def test_default_dialog_value_is_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     assert recorder.last_kwargs.get("initial") == 0
     buttons = recorder.last_args[0]
     assert buttons[0].value is RevertChoice.ABORT
+
+
+def test_dialog_offers_only_abort_then_revert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    recorder = _patch_dialog(monkeypatch, return_value=RevertChoice.ABORT)
+    confirm_revert_operation(plan=_make_plan(), yes=False)
+    buttons = recorder.last_args[0]
+    assert [(b.label, b.value) for b in buttons] == [
+        ("no, abort (default — safe)", RevertChoice.ABORT),
+        ("yes, revert", RevertChoice.APPLY),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -479,13 +482,12 @@ def test_revert_abort_leaves_files_untouched(
     assert len(confirm_calls) == 1
 
 
-def test_revert_apply_with_editor_opens_editor_then_reprompts(
+def test_revert_interactive_apply_restores_after_one_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     runner: CliRunner,
 ) -> None:
-    """APPLY_WITH_EDITOR opens the editor, then re-prompts. Second prompt
-    returning APPLY must apply the revert."""
+    """Without --yes, an APPLY answer reverts after a single confirm."""
 
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
@@ -506,157 +508,19 @@ def test_revert_apply_with_editor_opens_editor_then_reprompts(
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
 
-    # First confirm() → APPLY_WITH_EDITOR; second confirm() → APPLY.
-    return_sequence = [RevertChoice.APPLY_WITH_EDITOR, RevertChoice.APPLY]
-    call_count = {"n": 0}
+    confirm_calls: list[Any] = []
 
     def fake_confirm(*, plan: Any, yes: bool, console: Any = None) -> RevertChoice:
-        idx = call_count["n"]
-        call_count["n"] += 1
-        return return_sequence[idx]
+        confirm_calls.append(plan)
+        return RevertChoice.APPLY
 
     monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
 
-    editor_calls: list[Path] = []
-
-    def fake_editor(target: Path) -> None:
-        editor_calls.append(target)
-
-    monkeypatch.setattr("setforge.cli.revert.run_editor", fake_editor)
-
     install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
-    assert install_res.exit_code == 0
+    assert install_res.exit_code == 0, install_res.output
     assert dst.exists()
 
     revert_res = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert revert_res.exit_code == 0, revert_res.output
     assert not dst.exists()
-    assert call_count["n"] == 2
-    assert len(editor_calls) == 1
-
-
-def test_revert_repeated_apply_with_editor_reopens_editor_each_pass(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    runner: CliRunner,
-) -> None:
-    """Two consecutive APPLY_WITH_EDITOR choices must each re-open the
-    editor before the terminating APPLY — proving the post-editor
-    re-prompt loops rather than falling through after a single pass."""
-
-    repo = tmp_path / "repo"
-    (repo / "tracked").mkdir(parents=True)
-    (repo / "tracked" / "greeting.md").write_text("hello\n", encoding="utf-8")
-    dst = tmp_path / "live" / "greeting.md"
-    cfg = repo / "setforge.yaml"
-    cfg.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  greeting:\n"
-        "    src: greeting.md\n"
-        f"    dst: {dst}\n"
-        "profiles:\n"
-        "  vmh:\n"
-        "    tracked_files: [greeting]\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-
-    # APPLY_WITH_EDITOR twice, then APPLY — a terminating sequence so the
-    # loop cannot spin (never always-APPLY_WITH_EDITOR).
-    return_sequence = [
-        RevertChoice.APPLY_WITH_EDITOR,
-        RevertChoice.APPLY_WITH_EDITOR,
-        RevertChoice.APPLY,
-    ]
-    call_count = {"n": 0}
-
-    def fake_confirm(*, plan: Any, yes: bool, console: Any = None) -> RevertChoice:
-        idx = call_count["n"]
-        call_count["n"] += 1
-        return return_sequence[idx]
-
-    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
-
-    editor_calls: list[Path] = []
-
-    def fake_editor(target: Path) -> None:
-        editor_calls.append(target)
-
-    monkeypatch.setattr("setforge.cli.revert.run_editor", fake_editor)
-
-    install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
-    assert install_res.exit_code == 0
-    assert dst.exists()
-
-    revert_res = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
-    assert revert_res.exit_code == 0, revert_res.output
-    assert not dst.exists()
-    # Three confirm calls (two editor passes + final APPLY); the editor
-    # re-opened once per APPLY_WITH_EDITOR choice.
-    assert call_count["n"] == 3
-    assert len(editor_calls) == 2
-
-
-def test_revert_yes_true_returns_apply_without_editor_loop() -> None:
-    """The real confirm_revert_operation with yes=True returns APPLY
-    immediately, so automation never enters the editor loop."""
-    editor_calls: list[Path] = []
-
-    def fake_editor(target: Path) -> None:  # pragma: no cover - must not run
-        editor_calls.append(target)
-
-    choice = confirm_revert_operation(plan=_make_plan(), yes=True)
-    assert choice is RevertChoice.APPLY
-    # yes=True short-circuits before the loop condition, so run_editor is
-    # never reachable: the while-loop would only run on APPLY_WITH_EDITOR.
-    assert choice is not RevertChoice.APPLY_WITH_EDITOR
-    assert editor_calls == []
-
-
-def test_revert_apply_with_editor_then_abort_leaves_files(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    runner: CliRunner,
-) -> None:
-    """APPLY_WITH_EDITOR → editor → ABORT on re-prompt must leave files."""
-
-    repo = tmp_path / "repo"
-    (repo / "tracked").mkdir(parents=True)
-    (repo / "tracked" / "greeting.md").write_text("hello\n", encoding="utf-8")
-    dst = tmp_path / "live" / "greeting.md"
-    cfg = repo / "setforge.yaml"
-    cfg.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  greeting:\n"
-        "    src: greeting.md\n"
-        f"    dst: {dst}\n"
-        "profiles:\n"
-        "  vmh:\n"
-        "    tracked_files: [greeting]\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-
-    return_sequence = [RevertChoice.APPLY_WITH_EDITOR, RevertChoice.ABORT]
-    call_count = {"n": 0}
-
-    def fake_confirm(*, plan: Any, yes: bool, console: Any = None) -> RevertChoice:
-        idx = call_count["n"]
-        call_count["n"] += 1
-        return return_sequence[idx]
-
-    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
-    monkeypatch.setattr("setforge.cli.revert.run_editor", lambda _: None)
-
-    install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
-    assert install_res.exit_code == 0
-    assert dst.exists()
-
-    revert_res = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
-    assert revert_res.exit_code == 0
-    assert dst.exists(), "ABORT after editor must leave files untouched"
-    assert call_count["n"] == 2
+    assert len(confirm_calls) == 1

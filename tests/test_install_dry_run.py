@@ -327,33 +327,6 @@ def test_mutating_preview_emits_transition_path_without_mutating(
     assert not transitions_root().exists()
 
 
-def test_no_transition_option_suppresses_mutating_preview_without_mutating(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-) -> None:
-    """An explicit no-transition dry run neither previews nor creates one."""
-    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "install",
-            "--profile=test-minimal",
-            f"--config={fixture_repo}",
-            "--dry-run",
-            "--no-transition",
-            "--no-git-check",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "no transition would be created" in result.output
-    assert "WOULD record" not in result.output
-    assert not live.exists()
-    assert not transitions_root().exists()
-
-
 def _empty_transition_plan() -> Any:
     return SimpleNamespace(
         drift_report=SimpleNamespace(entries=()),
@@ -638,41 +611,6 @@ def test_auto_use_tracked_no_confirm_under_dry_run(
         fixture_repo,
         profile="test-reconcile-sections",
         extra=["--auto=use-tracked", "--yes"],
-    )
-    assert calls == []
-
-
-def test_auto_use_live_no_confirm_under_dry_run(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``--auto-accept-live --dry-run`` short-circuits before the legacy confirm.
-
-    The legacy unexpected-drift confirm is the OTHER
-    ``confirm_auto_operation`` call site (``_confirm_legacy_drift_or_exit``).
-    Same tripwire shape as the section-reconcile variant; runs against
-    a profile whose live tree has no unexpected drift so the confirm
-    would short-circuit at the no-drift gate even without dry-run —
-    but the dry-run path skips ``_run_predeploy_gates`` entirely.
-    """
-    calls: list[tuple[object, ...]] = []
-
-    def tripwire(*args: object, **kwargs: object) -> bool:
-        calls.append(args)
-        raise AssertionError(
-            f"confirm_auto_operation called under --dry-run + "
-            f"--auto-accept-live: kwargs={kwargs!r}"
-        )
-
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers.confirm_auto_operation", tripwire
-    )
-    _invoke_dry_run(
-        fixture_repo,
-        profile="test-minimal",
-        extra=["--auto-accept-live", "--yes"],
     )
     assert calls == []
 

@@ -22,7 +22,7 @@ INSTALL_EXAMPLES: str = """\
 Examples:
 
 \b
-  # Most common: deploy tracked → live with auto-accept-tracked
+  # Most common: deploy tracked → live without prompts
   setforge install --profile=<profile> --auto=use-tracked --yes
 
 \b
@@ -66,22 +66,6 @@ Examples:
   setforge cleanup-orphans --profile=<profile> --apply --yes
 """
 
-CAPTURE_EXAMPLES: str = """\
-Examples:
-
-\b
-  # Most common: capture live edits back into tracked
-  setforge capture --profile=<profile>
-
-\b
-  # Non-interactive: absorb every drift
-  setforge capture --profile=<profile> --auto=use-live
-
-\b
-  # Non-interactive: reject every drift (no tracked mutations)
-  setforge capture --profile=<profile> --auto=keep-tracked
-"""
-
 SYNC_EXAMPLES: str = """\
 Examples:
 
@@ -90,8 +74,8 @@ Examples:
   setforge sync --profile=<profile>
 
 \b
-  # Non-interactive: absorb every drift (today's silent-absorb)
-  setforge sync --profile=<profile> --auto=use-live --yes
+  # Non-interactive: absorb every drift
+  setforge sync --profile=<profile> --yes
 
 \b
   # Non-interactive: reject every drift
@@ -436,8 +420,7 @@ Examples:
 
 \b
   # Non-interactive (CI / cron): skip the confirm and pre-restore snapshot
-  setforge snapshot restore before-experiment --profile=<profile> \\
-      --yes --non-interactive
+  setforge snapshot restore before-experiment --profile=<profile> --yes
 """
 
 COMPLETION_INSTALL_EXAMPLES: str = """\

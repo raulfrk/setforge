@@ -3,8 +3,8 @@
 Thin typer subgroup over :mod:`setforge.snapshots`: each command parses
 flags, builds a :class:`ProfileContext` when needed, calls the domain
 helper, and renders the result. Restore presents an arrow-key three-way
-choice (abort / restore / restore-with-pre-snapshot); ``--yes`` /
-``--non-interactive`` short-circuits to plain "restore". Restore plans
+choice (abort / restore / restore-with-pre-snapshot); ``--yes``
+short-circuits to plain "restore". Restore plans
 are profile-scoped and journaled before the first live write.
 """
 
@@ -208,10 +208,7 @@ def _prompt_restore_choice(
     :class:`SetforgeError` rather than silently proceed.
     """
     if not _stdin_is_tty():
-        raise SetforgeError(
-            "snapshot restore: requires --yes (or --non-interactive) when "
-            "stdin is not a TTY"
-        )
+        raise SetforgeError("snapshot restore: requires --yes when stdin is not a TTY")
     console.print(f"[bold]=== restoring snapshot {target.label!r} ===[/bold]")
     console.print(
         f"  WILL overwrite live files at: {_format_overwrite_groups(target.files)}"
@@ -263,10 +260,12 @@ def snapshot_restore(
         help="Skip the arrow-key confirm; restore without writing a "
         "pre-restore snapshot.",
     ),
+    # Hidden alias of --yes kept so existing scripts keep working.
     non_interactive: bool = typer.Option(
         False,
         "--non-interactive",
-        help="Synonym of --yes — for CI / cron contexts.",
+        hidden=True,
+        help="Synonym of --yes.",
     ),
 ) -> None:
     """Overlay a snapshot's captured files onto live (ADDITIVE per Q6).
@@ -276,10 +275,9 @@ def snapshot_restore(
     belong to the requested effective profile, and a partial failure is
     recovered from the durable pre-write journal. Interactive runs
     present a three-option arrow-key confirm (abort / restore /
-    restore+pre-restore-snapshot); non-interactive runs (``--yes`` /
-    ``--non-interactive``) bypass the wizard and do a plain restore
-    (no pre-restore snapshot — opt into that via the interactive
-    choice).
+    restore+pre-restore-snapshot); ``--yes`` bypasses the wizard and does
+    a plain restore (no pre-restore snapshot — opt into that via the
+    interactive choice).
     """
     target = snap_mod.resolve_snapshot(snapshot, profile=profile)
     skip_prompt = yes or non_interactive

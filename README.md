@@ -161,7 +161,7 @@ command surface, run `setforge --help` or see
 
 Beyond the daily commands above, setforge's full surface groups as:
 
-- **Lifecycle:** install · compare · capture · sync · revert · status · validate
+- **Lifecycle:** install · compare · sync · revert · status · validate
 - **Config and packages:** init · fetch · migrate · upgrade (prints the changelog
   link, offers "Upgrade + `migrate --check`") · lock
 - **Inspection and recovery:** stage · inspect · recover · transitions · ownership · profile

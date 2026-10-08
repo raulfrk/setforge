@@ -2,8 +2,8 @@
 
 Renders the full revert plan — transition metadata, per-file diff
 summaries, plugin / extension reconciles, RISKS panel, and REDO
-instructions — then prompts arrow-key abort / apply / apply+editor
-via prompt_toolkit. Short-circuits to APPLY when ``yes=True``; raises
+instructions — then prompts arrow-key abort / apply via
+prompt_toolkit. Short-circuits to APPLY when ``yes=True``; raises
 :class:`ConfirmRequiresInteractive` when stdin is not a TTY and the
 user did not pass ``--yes`` (mirrors :func:`confirm_auto_operation`).
 """
@@ -50,7 +50,6 @@ class RevertChoice(StrEnum):
 
     ABORT = "abort"
     APPLY = "apply"
-    APPLY_WITH_EDITOR = "apply-with-editor"
 
 
 class PluginOperation(StrEnum):
@@ -234,10 +233,6 @@ def _prompt_choice(plan: RevertPlan) -> RevertChoice:
         [
             Button("no, abort (default — safe)", RevertChoice.ABORT),
             Button("yes, revert", RevertChoice.APPLY),
-            Button(
-                "yes + open editor before applying",
-                RevertChoice.APPLY_WITH_EDITOR,
-            ),
         ],
         title=f"setforge revert ({plan.transition_type})",
         body="What should setforge do?",

@@ -141,7 +141,7 @@ def test_structured_walk_shares_one_key_then_demotes(
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host value
 
     c.write_text(_LIVE, _LIVE_RECONFIRM_BODY)
-    rc, _out, err = _prof(c, "capture", "--auto=use-live", "--yes")
+    rc, _out, err = _prof(c, "sync", "--auto=use-live", "--yes")
     assert rc == 0, err
     assert err.strip() == (
         "warning: settings.yaml: a previously-staged key changed and was kept "

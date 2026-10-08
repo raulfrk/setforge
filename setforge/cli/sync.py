@@ -1,10 +1,9 @@
-"""capture / sync subcommands — live → tracked capture flow.
+"""sync subcommand — live → tracked capture flow.
 
-- ``capture`` and ``sync`` plan with ``capture_mod.plan_capture`` and,
-  once confirmed, write that plan with ``capture_mod.apply_capture``;
-  ``--auto={use-live,keep-tracked}`` is the non-interactive escape.
-  ``capture`` is the pipeline alone; ``sync`` also records a transition
-  so ``revert`` can replay it.
+- ``sync`` plans with ``capture_mod.plan_capture`` and, once confirmed,
+  writes that plan with ``capture_mod.apply_capture``;
+  ``--auto={use-live,keep-tracked}`` is the non-interactive escape. It
+  records a transition so ``revert`` can replay it.
 """
 
 import stat
@@ -41,10 +40,7 @@ from setforge.cli._confirm import (
     FileChange,
     confirm_auto_operation,
 )
-from setforge.cli._help_examples import (
-    CAPTURE_EXAMPLES,
-    SYNC_EXAMPLES,
-)
+from setforge.cli._help_examples import SYNC_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
@@ -173,13 +169,12 @@ def _load_capture_preview(
     profile: str,
     repo_root: Path,
     *,
-    verb: str,
     owner_id: UUID | None,
     auto: capture_mod.CaptureAuto | None = None,
 ) -> tuple[ProfileContext, _CaptureSnapshot]:
     """Reload effective configuration and build an exact read-only capture plan."""
     cfg = load_config(config)
-    refuse_unmigrated_host_local_leak(cfg, verb=verb, profile=profile)
+    refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
     effective = resolve_effective_profile(cfg, profile, repo_root)
     resolved = effective.resolved
     ctx = ProfileContext(
@@ -244,25 +239,24 @@ def _load_capture_preview(
             )
     extension_content = None
     extension_warning = None
-    if verb == "sync":
-        try:
-            extension_content = vscode_extensions.preview_capture_extensions(
-                config,
-                profile,
-                overlay_extensions=list(effective.local_overlay.extensions),
+    try:
+        extension_content = vscode_extensions.preview_capture_extensions(
+            config,
+            profile,
+            overlay_extensions=list(effective.local_overlay.extensions),
+        )
+    except ExtensionToolMissing as exc:
+        extension_warning = str(exc)
+    if extension_content is not None:
+        preview.append(
+            capture_mod.CaptureItem(
+                name="extensions",
+                src=config,
+                dst=config,
+                action=capture_mod.CaptureAction.UPDATED,
+                proposed=extension_content.encode("utf-8"),
             )
-        except ExtensionToolMissing as exc:
-            extension_warning = str(exc)
-        if extension_content is not None:
-            preview.append(
-                capture_mod.CaptureItem(
-                    name="extensions",
-                    src=config,
-                    dst=config,
-                    action=capture_mod.CaptureAction.UPDATED,
-                    proposed=extension_content.encode("utf-8"),
-                )
-            )
+        )
     return (
         ctx,
         _CaptureSnapshot(
@@ -295,8 +289,7 @@ def _confirm_capture_plan(
         if auto_enum is None:
             raise ClickException(
                 f"setforge {command} found actionable live drift; use "
-                "--auto=use-live --yes to capture it or "
-                "--auto=keep-tracked to refuse it"
+                "--yes to capture it or --auto=keep-tracked to refuse it"
             )
         raise ClickException(
             f"setforge {command} --auto=use-live requires --yes when stdin is not a TTY"
@@ -343,124 +336,34 @@ def _require_same_preview(
         )
 
 
-@app.command(epilog=CAPTURE_EXAMPLES)
-def capture(
-    profile: str = _PROFILE_OPTION,
-    config: Path = _CONFIG_OPTION,
-    auto: str | None = typer.Option(
-        None,
-        "--auto",
-        help=(
-            "Non-interactive resolution for capture-time drift: "
-            "'use-live' absorbs all drift (today's silent-absorb "
-            "behavior), 'keep-tracked' rejects all drift."
-        ),
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Confirm --auto=use-live without an interactive prompt.",
-    ),
-) -> None:
-    """Capture live → tracked for every tracked_file in the profile.
-
-    When a tracked_file carries drift, capture resolves it: pass
-    ``--auto={use-live, keep-tracked}`` for non-interactive contexts, or
-    confirm interactively otherwise.
-    """
-    config = _resolve_config_arg(config)
-    auto_enum = _parse_capture_auto(auto)
-    if yes and auto_enum is None:
-        raise typer.BadParameter("--yes requires --auto")
-
-    repo_root = config.resolve().parent
-    owner_id = _read_capture_owner_id(repo_root)
-    with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
-        initial_ctx, initial_snapshot = _load_capture_preview(
-            config,
-            profile,
-            repo_root,
-            verb="capture",
-            owner_id=owner_id,
-            auto=auto_enum,
-        )
-    if auto_enum is capture_mod.CaptureAuto.KEEP_TRACKED:
-        _render_keep_tracked(initial_snapshot.preview)
-        return
-    _confirm_capture_plan(
-        command="capture",
-        ctx=initial_ctx,
-        snapshot=initial_snapshot,
-        auto_enum=auto_enum,
-        yes=yes,
-    )
-    with operations.transaction(resources=True, config_dir=repo_root, profile=profile):
-        _locked_ctx, locked_snapshot = _load_capture_preview(
-            config,
-            profile,
-            repo_root,
-            verb="capture",
-            owner_id=owner_id,
-            auto=auto_enum,
-        )
-        _require_same_preview(initial_snapshot, locked_snapshot)
-        try:
-            results = _run_capture(
-                profile,
-                locked_snapshot.plan,
-                codex_plans=locked_snapshot.codex_plans,
-            )
-        except KeyboardInterrupt:
-            # Plain ``capture`` takes no snapshot (only ``sync`` records a
-            # transition + restorable snapshots), and ``apply_capture`` has
-            # no internal rollback — so writes already committed survive.
-            # Report that truthfully instead of a false "restored" claim.
-            typer.secho(
-                "capture cancelled (Ctrl-C); some files may have been partially "
-                "written — run `setforge compare` to inspect",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-            raise typer.Exit(130) from None
-    _render_capture_results(results)
-
-
 @app.command(epilog=SYNC_EXAMPLES)
 def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
-    no_transition: bool = typer.Option(
-        False,
-        "--no-transition",
-        hidden=True,
-        help="Skip writing a transition record (testing / debugging).",
-    ),
     auto: str | None = typer.Option(
         None,
         "--auto",
         help=(
-            "Non-interactive capture-time drift resolution: 'use-live' "
-            "absorbs all drift; 'keep-tracked' rejects all drift."
+            "Non-interactive capture-time drift resolution: 'keep-tracked' "
+            "rejects all drift and writes nothing; 'use-live' absorbs all "
+            "drift, the same as passing --yes alone."
         ),
     ),
     yes: bool = typer.Option(
         False,
         "--yes",
         "-y",
-        help="Skip the --auto=use-live confirmation prompt (for non-interactive use).",
+        help="Capture all drift without the confirmation prompt (for scripts).",
     ),
 ) -> None:
     """Capture live → tracked for tracked_files and extensions.
 
     Symmetric with ``setforge install``'s drift gate: drift is resolved
-    interactively, or pass ``--auto=use-live`` (absorb every drift item)
-    or ``--auto=keep-tracked`` (refuse) for scripted runs.
+    interactively, or pass ``--yes`` (absorb every drift item; ``--auto=use-live``
+    is the same) or ``--auto=keep-tracked`` (refuse) for scripted runs.
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
-    if yes and auto_enum is None:
-        raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
     owner_id = _read_capture_owner_id(repo_root)
@@ -469,7 +372,6 @@ def sync(
             config,
             profile,
             repo_root,
-            verb="sync",
             owner_id=owner_id,
             auto=auto_enum,
         )
@@ -490,13 +392,11 @@ def sync(
             config,
             profile,
             repo_root,
-            verb="sync",
             owner_id=owner_id,
             auto=auto_enum,
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
-        if not no_transition:
-            transitions.ensure_state_dir_writable()
+        transitions.ensure_state_dir_writable()
 
         src_paths = _sync_snapshot_paths(ctx, config)
         file_pre = transitions.capture_files(src_paths)
@@ -566,13 +466,12 @@ def sync(
 
         journal = operations.finish_checkpoint(journal)
         file_post = transitions.capture_files(file_pre)
-        if not no_transition:
-            _write_sync_transition(
-                ctx,
-                file_pre=file_pre,
-                file_post=file_post,
-                state_snapshots=state_pre,
-            )
+        _write_sync_transition(
+            ctx,
+            file_pre=file_pre,
+            file_post=file_post,
+            state_snapshots=state_pre,
+        )
         operations.complete(journal)
 
 
@@ -749,7 +648,7 @@ def _capture_extensions(
 def _render_capture_results(results: list[capture_mod.CaptureResult]) -> None:
     """Render the per-file action lines (stdout) + capture warnings (stderr).
 
-    Shared between :func:`capture` and :func:`sync`. A warning marks content
+    A warning marks content
     the writeback deliberately did NOT capture (e.g. a host value at a span
     path absent in tracked), so it goes to stderr where scripted callers
     keep it apart from the action listing.
@@ -771,8 +670,7 @@ def _run_capture(
 
     ``KeyboardInterrupt`` is NOT swallowed here: ``apply_capture`` performs
     no internal snapshot/restore, so the caller owns the Ctrl-C contract —
-    ``sync`` restores from the pre-capture snapshot it took and ``capture``
-    reports the partial-write truth.
+    ``sync`` restores from the pre-capture snapshot it took.
     """
     results = capture_mod.apply_capture(profile, plan)
     for codex_plan in codex_plans:

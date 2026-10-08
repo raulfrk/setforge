@@ -63,7 +63,7 @@ def _write_tracked(repo: Path, body: str) -> None:
 
 
 def _install(config: Path) -> Result:
-    """Run a transition-RECORDING install (no --no-transition)."""
+    """Run a transition-recording install."""
     args = [
         "install",
         f"--profile={_PROFILE}",

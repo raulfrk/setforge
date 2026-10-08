@@ -45,11 +45,10 @@ setforge validate --profile=<profile>   # config-shape check (no live target pat
 `validate` requires exactly one of `--profile=<name>` or `--all` (both, or
 neither, exits 2). `install` and `status` require `--profile`.
 
-`sync` is `capture`'s transition-recording sibling: "I tweaked something live,
-now save it and record a transition I can revert later." Both write captured
-content into your config repo's `tracked/`; `git diff` + commit + push from
-inside the config repo to lock it in. `capture` is the lower-level piece
-`sync` composes (the capture pipeline without the transition record).
+`sync` means "I tweaked something live, now save it and record a transition I
+can revert later." It writes captured content into your config repo's
+`tracked/`; `git diff` + commit + push from inside the config repo to lock it
+in.
 
 ## Top-level command inventory
 
@@ -62,7 +61,6 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `compare` | Report tracked/live drift. |
 | `cleanup-orphans` | Review transition-attributed or explicitly scanned file orphans. |
 | `cleanup` | Review undeclared provisioned binaries recorded by receipts. |
-| `capture` | Capture live tracked-file content. |
 | `sync` | Capture files and reconcile extension declarations. |
 | `revert` | Undo or redo recorded transitions. |
 | `recover` | Inspect or recover an interrupted write-ahead operation. |
@@ -260,7 +258,8 @@ identity, such as `cargo:ripgrep`, rather than the manifest's package alias.
 Unknown, still-declared and ignored selections fail before removal. Apply keeps
 the interactive per-item wizard and requires matching current ownership and
 package evidence. It leaves other packages and lock pins untouched. Package
-removal is not reversed by a file transition; reinstall is a separate action.
+removal records no transition, so `revert` does not undo it and still targets
+your last install or sync; reinstall is a separate action.
 
 To update an already-managed instructions file belonging to another existing
 profile, edit its current tracked source and preview only that declared file:
@@ -275,7 +274,7 @@ uses its existing rendering and reconciliation context and retains unselected
 files and native integrations. It does not bootstrap directories, provision
 packages or reconcile plugins, extensions or MCP registrations. Every selected
 container must already be managed by the current checkout; this mode does not
-adopt or transfer resources. `--retry-failed` cannot be combined with `--file`.
+adopt or transfer resources.
 Package lock coverage is not checked in file-only mode and the lock is not
 refreshed.
 
@@ -395,21 +394,29 @@ skipped by `stage`.
 
 ## Mutating `--auto=*` confirmation
 
-When a tracked_file carries drift, `sync` resolves it; pass `--auto=` for
-non-interactive contexts:
+When a tracked_file carries drift, `sync` resolves it; for non-interactive
+contexts pass one of:
 
-- `--auto=use-live` — absorb every drift item into tracked (today's
-  silent-absorb behavior).
+- `--yes` — absorb every drift item into tracked. `--auto=use-live --yes` is
+  the same and stays accepted.
 - `--auto=keep-tracked` — reject every drift item; tracked stays as-is (safer).
-- Without a TTY and without `--auto`, `sync` exits 1 with
-  `CaptureRequiresInteractive`.
+- Without a TTY and without `--yes` or `--auto=keep-tracked`, `sync` exits 1
+  and writes nothing.
 
-When `install` or `sync` runs with a **mutating** `--auto*` flag
-(`--auto=use-tracked`, `--auto=use-live`, `--auto-accept-tracked`,
-`--auto-accept-live`), setforge shows a risks panel describing what changes in
-which direction, plus the exact `setforge revert` command to undo, then prompts
-arrow-key yes/no (default **No**). For CI/scripts, pass `--yes` (`-y`) to bypass
-the prompt; without `--yes` in a non-TTY context the command exits 1.
+When `install` runs with the **mutating** `--auto=use-tracked`, or `sync` has
+drift to capture, setforge shows a risks panel
+describing what changes in which direction, plus the exact `setforge revert`
+command to undo, then prompts arrow-key yes/no (default **No**). For
+CI/scripts, pass `--yes` (`-y`) to bypass the prompt; without `--yes` in a
+non-TTY context the command exits 1.
+
+`install` asks the same way when a file with a declared `mode:` has different
+permission bits on the host: the panel lists each file and the reset to the
+declared mode (the live mode cannot be kept). To keep a deliberately different
+mode, change the file's `mode:` in `setforge.yaml`, or, for this host only, set
+`tracked_files.<id>.mode` (for example `0o600`) in
+`~/.config/setforge/local.yaml`. With `--yes` the reset is printed and applied;
+without `--yes` in a non-TTY context `install` exits 1 and changes nothing.
 
 ## Upgrade
 

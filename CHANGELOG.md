@@ -88,6 +88,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge validate` suggests a "Did you mean" name in more cases, including
   shortened names such as `plugins` for `claude_plugins`.
 
+### Changed
+
+- `setforge sync --yes` now captures all live drift on its own; it used to stop
+  with "--yes requires --auto". `--auto=use-live --yes` still works and does
+  the same thing.
+- `setforge cleanup` no longer records a transition when it deletes a package.
+  That record held nothing to undo, yet it became the newest one, so the next
+  `setforge revert` reverted nothing and exited 0. `revert` now goes to your
+  last real install or sync. Records written by earlier versions stay listed
+  and behave as before; `revert --to-before=<id>` still goes past them.
+
+### Removed
+
+- The `setforge capture` command is gone; use `setforge sync`, which does the
+  same capture and can be undone with `setforge revert`. Unlike `capture`,
+  `sync` also brings the profile's extension list in `setforge.yaml` in line
+  with the extensions installed on the host, and records a transition.
+  Two things `capture` did not need, `sync` does: `code --list-extensions`
+  must not fail or time out (if it does, `sync` stops before writing anything;
+  a missing `code` command only skips the extension step with a warning), and
+  the SetForge state directory must be writable, to record the transition.
+- `setforge install --retry-failed` is gone. Run `setforge install` again
+  instead: it retries the plugins and extensions that failed last time and
+  leaves everything already in place alone. Install also stops writing
+  `reconcile_outcomes.json` into its undo records; files already there are
+  left untouched and ignored.
+- The "yes + open editor before applying" choice of the `setforge revert`
+  prompt is gone. It opened a text copy of the plan the prompt had already
+  shown and did not read it back. The other choices are unchanged.
+- `setforge snapshot restore --non-interactive` is no longer listed in `--help`
+  or the docs; it is still accepted and means the same as `--yes`.
+- The hidden `--no-transition` option of `setforge install` and `setforge sync`
+  is gone. Every install or sync that changes something records a transition,
+  so it can be undone with `setforge revert`.
+- `setforge install` no longer accepts `--auto-accept-tracked` or
+  `--auto-accept-live`. Both did the same thing: let install reset a file's
+  permission bits to its declared `mode:`. Install now asks for that in its
+  confirmation prompt, listing each file and the mode change. In a script, pass
+  `--yes`: install prints each reset and applies it, where `install --yes`
+  alone used to stop with "permission-mode drift". Without `--yes` and without
+  a terminal, install still stops and changes nothing.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed

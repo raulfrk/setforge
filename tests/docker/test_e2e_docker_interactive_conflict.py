@@ -77,9 +77,7 @@ def _prof(c: ContainerHandle, verb: str, *extra: str) -> tuple[int, str, str]:
 def _seed_conflict(c: ContainerHandle) -> None:
     """First-install to seed the base, then diverge both sides on line 2."""
     c.write_text(_TRACKED, _BASE)
-    rc, _out, err = _prof(
-        c, "install", "--no-secrets-scan", "--no-transition", "--no-git-check", "--yes"
-    )
+    rc, _out, err = _prof(c, "install", "--no-secrets-scan", "--no-git-check", "--yes")
     assert rc == 0, err
     assert c.read_text(_LIVE) == _BASE
     c.write_text(_LIVE, _LIVE_EDIT)  # host edit
@@ -109,7 +107,6 @@ def _seed_conflict_through_file_adoption(
             f"--profile={_PROFILE}",
             f"--config={CONFIG_FIXTURE}",
             "--no-secrets-scan",
-            "--no-transition",
             "--no-git-check",
         ],
         timeout=120.0,
@@ -139,7 +136,6 @@ def _conflict_session(
             f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
             "--no-secrets-scan",
-            "--no-transition",
             "--no-git-check",
         ],
         timeout=120.0,

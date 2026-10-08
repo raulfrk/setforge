@@ -73,9 +73,8 @@ def _install(config: Path) -> Result:
         f"--config={config}",
         "--no-secrets-scan",
         "--no-git-check",
-        # The content-NOOP + mode-only path is a permission-mode drift the
-        # bare-install gate rejects; --auto-accept-tracked resolves it.
-        "--auto-accept-tracked",
+        # The content-NOOP + mode-only path is a permission-mode drift that
+        # install resets only with consent; --yes gives it.
         "--yes",
     ]
     return CliRunner().invoke(app, args)

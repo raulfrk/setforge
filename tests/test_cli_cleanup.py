@@ -12,7 +12,7 @@ from rich.console import Console
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from setforge import paths
+from setforge import locking, paths, transitions
 from setforge import source as source_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
@@ -506,18 +506,10 @@ def test_delete_removes_binary_and_receipt_under_confinement(
     assert store.installed() == set()
 
 
-def test_apply_delete_holds_profile_lock(
+def _owned_delete_item(
     tmp_path: Path, confine_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`_apply_cleanup`'s DELETE branch must enter profile_lock BEFORE it
-    writes the transition / unlinks the binary — like every other mutating
-    verb. Fails against the old unlocked behavior: no "enter" precedes
-    "write_transition".
-    """
-    import contextlib
-
-    from setforge import locking
-
+) -> tuple[ReceiptStore, cleanup_mod.CleanupItem, Path]:
+    """An owned, deletable binary with the DELETE action picked for it."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(cleanup_mod, "_confinement_root", lambda: confine_root)
     monkeypatch.setattr(
@@ -567,6 +559,19 @@ def test_apply_delete_holds_profile_lock(
             return (observation,) if installed else ()
 
     monkeypatch.setattr(cleanup_mod, "build", lambda _item: _Provider())
+    return store, item, binpath
+
+
+def test_apply_delete_holds_profile_lock(
+    tmp_path: Path, confine_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_apply_cleanup`'s DELETE branch must enter profile_lock BEFORE it
+    unlinks the binary — like every other mutating verb. Fails against an
+    unlocked delete: no "enter" precedes "delete".
+    """
+    import contextlib
+
+    store, item, binpath = _owned_delete_item(tmp_path, confine_root, monkeypatch)
 
     events: list[str] = []
     real_locks = locking.mutation_locks
@@ -580,24 +585,45 @@ def test_apply_delete_holds_profile_lock(
             finally:
                 events.append("exit")
 
-    real_write = cleanup_mod.transitions.write_transition
+    real_delete = cleanup_mod.delete_provisioned
 
-    def _spy_write(*args: object, **kwargs: object) -> Path:
-        events.append("write_transition")
-        return real_write(*args, **kwargs)  # type: ignore[arg-type]
+    def _spy_delete(*args: object, **kwargs: object) -> None:
+        events.append("delete")
+        real_delete(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(locking, "mutation_locks", _recording_locks)
-    monkeypatch.setattr(cleanup_mod.transitions, "write_transition", _spy_write)
+    monkeypatch.setattr(cleanup_mod, "delete_provisioned", _spy_delete)
 
     cleanup_mod._apply_cleanup("p", [item], store, Console())
 
     assert "enter" in events, "cleanup delete never acquired the profile lock"
-    assert "write_transition" in events, "cleanup delete never wrote a transition"
-    assert events.index("enter") < events.index("write_transition"), (
+    assert "delete" in events, "cleanup delete never removed the binary"
+    assert events.index("enter") < events.index("delete"), (
         f"lock must be held before mutating; order: {events}"
     )
     assert events[-1] == "exit", f"lock must be released last; order: {events}"
     assert not binpath.exists()
+
+
+def test_apply_delete_records_no_transition(
+    tmp_path: Path, confine_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delete leaves `revert` pointing at the previous real transition."""
+    store, item, binpath = _owned_delete_item(tmp_path, confine_root, monkeypatch)
+    previous = transitions.write_transition(
+        transitions.make_meta(transitions.TransitionCommand.INSTALL, "p"),
+        {},
+        {},
+        ext_delta=None,
+    )
+
+    cleanup_mod._apply_cleanup("p", [item], store, Console())
+
+    assert not binpath.exists()
+    assert transitions.load_latest("p") == previous
+    assert list(
+        transitions.committed_transition_dirs(transitions.transitions_root())
+    ) == [previous]
 
 
 def test_delete_path_none_drops_only_receipt(
