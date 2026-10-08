@@ -318,6 +318,7 @@ def test_install_yes_resets_mode_drift(
     )
     assert result.exit_code == 0
     assert transition_calls
+    assert dst.stat().st_mode & 0o777 == 0o644
 
 
 # ---------------------------------------------------------------------------
