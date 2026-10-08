@@ -38,7 +38,12 @@ from setforge.config import (
     resolve_effective_profile,
     validate_registry_name,
 )
-from setforge.errors import MarketplaceCacheMiss, PluginToolMissing, SetforgeError
+from setforge.errors import (
+    MarketplaceCacheMiss,
+    PluginToolMissing,
+    ProfileNotFound,
+    SetforgeError,
+)
 from setforge.locking import mutation_locks
 
 # ---------------------------------------------------------------------------
@@ -172,8 +177,12 @@ def plugin_add(
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        load_config(config)
-        _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
+        claude_yaml_editor_mod.require_plugin_package_available(
+            _require_known_profile(config, profile), profile, plugin_name
+        )
+        _register_plugin_in_yaml(
+            config, profile, plugin_name, mp_name, source, no_install=no_install
+        )
         if not no_install:
             _execute_plugin_add(plugin_name, mp_name)
 
@@ -190,6 +199,7 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
+        _require_known_profile(config, profile)
         config_target = config.resolve()
         config_before = config_target.read_bytes()
         config_mode = config_target.stat().st_mode & 0o7777
@@ -256,6 +266,14 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
         typer.echo(f"declared Codex plugin: {plugin_name}@{marketplace}")
         if not no_install:
             typer.echo(f"installed Codex plugin: {plugin_name}@{marketplace}")
+
+
+def _require_known_profile(config: Path, profile: str) -> Config:
+    """Load ``config``, rejecting an unknown ``profile`` before any change."""
+    cfg = load_config(config)
+    if profile not in cfg.profiles:
+        raise ProfileNotFound(f"profile not found: {profile}")
+    return cfg
 
 
 def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:
@@ -327,11 +345,17 @@ def _register_plugin_in_yaml(
     plugin_name: str,
     mp_name: str,
     source: MarketplaceSource,
+    *,
+    no_install: bool,
 ) -> None:
-    """Register the marketplace, plugin, and profile binding in setforge.yaml."""
+    """Register the marketplace, plugin, and profile binding in setforge.yaml.
+
+    ``no_install`` keeps this YAML-only: the native marketplace is not added.
+    """
     mp_added = claude_yaml_editor_mod.yaml_add_marketplace(config, mp_name, source)
     if mp_added:
         typer.echo(f"registered marketplace: {mp_name}")
+    if mp_added and not no_install:
         try:
             claude_plugins_mod.marketplace_add(
                 mp_name, _resolve_add_source(source, mp_name)

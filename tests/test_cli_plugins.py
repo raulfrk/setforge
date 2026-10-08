@@ -7,7 +7,7 @@ resolution and clean error handling for failing ``claude`` subprocesses.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +16,11 @@ from typer.testing import CliRunner
 
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import codex_plugins as codex_plugins_mod
+from setforge import reconcile_adapter
 from setforge.cli import app
+from setforge.config import load_config, resolve_profile
+from setforge.errors import ConfigError, ProfileNotFound
+from tests.conftest import FakeClaude, FakeGit, _local_clone_yaml
 from tests.shared_helpers import write_setforge_yaml
 
 
@@ -545,7 +549,13 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
     monkeypatch.setattr(
         plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
     )
-    monkeypatch.setattr(plugins_mod, "load_config", lambda c: object())
+    monkeypatch.setattr(
+        plugins_mod,
+        "load_config",
+        lambda c: SimpleNamespace(
+            profiles={"x": SimpleNamespace(packages=[])}, packages={}
+        ),
+    )
     # New marketplace → the register path invokes `claude marketplace add`.
     monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod, "yaml_add_marketplace", lambda *a, **k: True
@@ -689,6 +699,257 @@ def test_plugin_add_rejects_option_shaped_name_before_mutation(
     assert "names must not begin" in result.output
     assert cfg.read_bytes() == before
     assert native_calls == []
+
+
+_PLUGIN_ADD_FIXTURE_YAML = """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files:
+  d:
+    src: x
+    dst: y
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+@pytest.mark.parametrize("no_install", [False, True])
+def test_claude_plugin_add_unknown_profile_changes_nothing(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    no_install: bool,
+) -> None:
+    cfg = write_setforge_yaml(tmp_path, _PLUGIN_ADD_FIXTURE_YAML)
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    claude = fake_claude()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=typo",
+            f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, ProfileNotFound)
+    assert "typo" in str(result.exception)
+    assert "registered marketplace" not in result.output
+    assert "declared plugin" not in result.output
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert claude.calls == []
+
+
+@pytest.mark.parametrize("no_install", [False, True])
+def test_codex_plugin_add_unknown_profile_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_install: bool
+) -> None:
+    cfg = write_setforge_yaml(tmp_path, _PLUGIN_ADD_FIXTURE_YAML)
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    native_calls: list[str] = []
+
+    def spy(name: str) -> Callable[..., dict[str, object]]:
+        def call(*_args: object) -> dict[str, object]:
+            native_calls.append(name)
+            return {}
+
+        return call
+
+    for name in (
+        "list_installed",
+        "list_marketplaces",
+        "marketplace_add",
+        "marketplace_remove",
+        "plugin_install",
+        "plugin_remove",
+    ):
+        monkeypatch.setattr(codex_plugins_mod, name, spy(name))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--product=codex",
+            "--from=github:o/newmp",
+            "--profile=typo",
+            f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert native_calls == []
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert isinstance(result.exception, ProfileNotFound)
+    assert "profile not found: typo" in str(result.exception)
+
+
+@pytest.mark.parametrize("no_install", [False, True])
+@pytest.mark.parametrize(
+    ("package_yaml", "conflict"),
+    [
+        ("review: {type: cargo, crate: ripgrep}", "type cargo"),
+        ("review: {type: plugin, plugin: other}", "declares plugin 'other'"),
+    ],
+    ids=["other-package-type", "other-plugin"],
+)
+def test_claude_plugin_add_package_key_conflict_changes_nothing(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    package_yaml: str,
+    conflict: str,
+    no_install: bool,
+) -> None:
+    cfg = write_setforge_yaml(
+        tmp_path,
+        _PLUGIN_ADD_FIXTURE_YAML.replace(
+            "profiles:\n", f"packages:\n  {package_yaml}\nprofiles:\n"
+        ),
+    )
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    claude = fake_claude()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert claude.calls == []
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert isinstance(result.exception, ConfigError)
+    assert f"package 'review' already exists ({conflict})" in str(result.exception)
+
+
+@pytest.mark.parametrize(
+    ("packages_yaml", "profile_packages", "bound_before"),
+    [
+        ("review: {type: plugin, plugin: review}", "[]", []),
+        (
+            "review: {type: cargo, crate: ripgrep}\n"
+            "  myrev: {type: plugin, plugin: review}",
+            "[myrev]",
+            ["review"],
+        ),
+    ],
+    ids=["shared-plugin-package", "bound-under-another-key"],
+)
+def test_claude_plugin_add_reuses_an_existing_plugin_package(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    packages_yaml: str,
+    profile_packages: str,
+    bound_before: list[str],
+) -> None:
+    cfg = write_setforge_yaml(
+        tmp_path,
+        _PLUGIN_ADD_FIXTURE_YAML.replace(
+            "profiles:\n  p:\n",
+            "marketplaces:\n  newmp: {source: github, repo: o/newmp}\n"
+            "claude_plugins:\n  review: {marketplace: newmp}\n"
+            f"packages:\n  {packages_yaml}\n"
+            f"profiles:\n  p:\n    packages: {profile_packages}\n",
+        ),
+    )
+    claude = fake_claude()
+    before = load_config(cfg)
+    assert (
+        reconcile_adapter.plugin_bare_names(before, resolve_profile(before, "p"))
+        == bound_before
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            "--no-install",
+            f"--config={cfg}",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    after = load_config(cfg)
+    assert after.packages == before.packages
+    assert reconcile_adapter.plugin_bare_names(after, resolve_profile(after, "p")) == [
+        "review"
+    ]
+    assert claude.calls == []
+
+
+@pytest.mark.parametrize("local_clone", [False, True])
+@pytest.mark.parametrize("marketplace_declared", [False, True])
+def test_claude_plugin_add_no_install_makes_no_native_or_cache_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude: Callable[..., FakeClaude],
+    fake_git: Callable[..., FakeGit],
+    local_clone: bool,
+    marketplace_declared: bool,
+) -> None:
+    body = _PLUGIN_ADD_FIXTURE_YAML
+    if marketplace_declared:
+        body = body.replace(
+            "profiles:\n",
+            "marketplaces:\n  newmp: {source: github, repo: o/newmp}\nprofiles:\n",
+        )
+    cfg = write_setforge_yaml(tmp_path, body)
+    if local_clone:
+        _local_clone_yaml(tmp_path, monkeypatch)
+    claude = fake_claude()
+    git = fake_git(known_repos={"o/newmp"})
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            "--no-install",
+            f"--config={cfg}",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert claude.calls == []
+    assert git.calls == []
+    assert not (tmp_path / "marketplaces").exists()
+    reloaded = load_config(cfg)
+    assert reloaded.marketplaces["newmp"].repo == "o/newmp"
+    assert reloaded.claude_plugins["review"].marketplace == "newmp"
+    resolved = resolve_profile(reloaded, "p")
+    assert reconcile_adapter.plugin_bare_names(reloaded, resolved) == ["review"]
 
 
 def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(

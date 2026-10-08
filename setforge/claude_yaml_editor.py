@@ -33,6 +33,7 @@ from setforge.errors import ConfigError, ProfileNotFound
 from setforge.migrations._yaml_ops import render_yaml, yaml_rt
 
 __all__ = [
+    "require_plugin_package_available",
     "yaml_add_codex_marketplace",
     "yaml_add_codex_plugin",
     "yaml_add_codex_plugin_to_profile",
@@ -290,6 +291,35 @@ def _profile_plugin_refs(cfg: Config, profile_name: str, plugin_ref: str) -> lis
         if isinstance(pkg, PluginPackage) and pkg.plugin == plugin_ref:
             out.append(ref)
     return out
+
+
+def require_plugin_package_available(
+    cfg: Config, profile_name: str, plugin_ref: str
+) -> None:
+    """Raise :class:`ConfigError` if adding ``plugin_ref`` would reuse a package key.
+
+    :func:`yaml_add_plugin_to_profile` binds the plugin through a top-level
+    ``packages`` entry keyed by the bare plugin name. A key already held by a
+    different package would be bound as if it were the plugin, silently
+    pointing the profile at the wrong package. A profile that already binds the
+    plugin, or a key holding a plugin package for this very plugin, is fine.
+    """
+    if _profile_plugin_refs(cfg, profile_name, plugin_ref):
+        return
+    existing = cfg.packages.get(plugin_ref)
+    if existing is None:
+        return
+    if isinstance(existing, PluginPackage):
+        if existing.plugin == plugin_ref:
+            return
+        detail = f"declares plugin {existing.plugin!r}"
+    else:
+        detail = f"type {existing.type.value}"
+    raise ConfigError(
+        f"package {plugin_ref!r} already exists ({detail}), so plugin "
+        f"{plugin_ref!r} cannot be added to profile {profile_name!r} under that "
+        "name; rename or remove that package first"
+    )
 
 
 def yaml_add_plugin_to_profile(
