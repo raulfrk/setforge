@@ -89,19 +89,6 @@ def _sync(c: ContainerHandle) -> tuple[int, str, str]:
     )
 
 
-def _capture(c: ContainerHandle) -> tuple[int, str, str]:
-    return _setforge(
-        c,
-        [
-            "capture",
-            f"--profile={_PROFILE}",
-            f"--config={CONFIG_FIXTURE}",
-            "--auto=use-live",
-            "--yes",
-        ],
-    )
-
-
 def _stage_list(c: ContainerHandle) -> tuple[int, dict[str, Any], str]:
     rc, out, err = _setforge(
         c,
@@ -178,7 +165,7 @@ def test_stage_walk_shares_one_hunk_then_demotes(
     # re-confirms that exact content.  This is the real installed CLI journey
     # behind the preview/result diagnostic and the additive schema-v1 fields.
     c.write_text(_LIVE, _LIVE_RECONFIRM_BODY)
-    rc, _out, err = _capture(c)
+    rc, _out, err = _sync(c)
     assert rc == 0, err
     assert err.strip() == (
         "warning: notes.md: a previously-staged hunk changed and was kept "

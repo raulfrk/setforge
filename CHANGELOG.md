@@ -42,6 +42,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory is not writable ("transition state dir not writable"), instead of
   migrating the config and then failing.
 
+### Removed
+
+- The `setforge capture` command is gone; use `setforge sync`, which does the
+  same capture and can be undone with `setforge revert`. Unlike `capture`,
+  `sync` also brings the profile's extension list in `setforge.yaml` in line
+  with the extensions installed on the host, and records a transition.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed

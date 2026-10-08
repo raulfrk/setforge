@@ -145,7 +145,7 @@ def test_effective_consumer_inventory_matches_cli_call_sites() -> None:
 
 
 def test_capture_preview_helper_has_exact_command_callers() -> None:
-    """Both capture commands directly use the reviewed effective-profile seam."""
+    """``sync`` directly uses the reviewed effective-profile seam."""
     module_path = Path(setforge.__file__).parent / "cli" / "sync.py"
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     discovered = {
@@ -154,7 +154,7 @@ def test_capture_preview_helper_has_exact_command_callers() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and "_load_capture_preview" in _direct_calls(node)
     }
-    assert discovered == {"capture", "sync"}
+    assert discovered == {"sync"}
 
 
 def test_legacy_profile_resolution_calls_are_explicitly_allowlisted() -> None:

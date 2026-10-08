@@ -422,7 +422,7 @@ tracked_files:
 Excludes use gitignore-style matching. `remove-owned` removes only entries
 recorded in the previous owned inventory and only while their content remains
 unchanged; unowned or drifted entries are preserved or held for review. Tree
-roots cannot overlap another tracked destination. `capture` and `stage` refuse
+roots cannot overlap another tracked destination. `sync` and `stage` refuse
 managed trees; edit the tracked source tree instead.
 
 An entry is held when it was removed from the tracked tree but its live copy

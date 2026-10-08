@@ -45,11 +45,10 @@ setforge validate --profile=<profile>   # config-shape check (no live target pat
 `validate` requires exactly one of `--profile=<name>` or `--all` (both, or
 neither, exits 2). `install` and `status` require `--profile`.
 
-`sync` is `capture`'s transition-recording sibling: "I tweaked something live,
-now save it and record a transition I can revert later." Both write captured
-content into your config repo's `tracked/`; `git diff` + commit + push from
-inside the config repo to lock it in. `capture` is the lower-level piece
-`sync` composes (the capture pipeline without the transition record).
+`sync` means "I tweaked something live, now save it and record a transition I
+can revert later." It writes captured content into your config repo's
+`tracked/`; `git diff` + commit + push from inside the config repo to lock it
+in.
 
 ## Top-level command inventory
 
@@ -62,7 +61,6 @@ This table is intentionally complete and is checked against `setforge --help`.
 | `compare` | Report tracked/live drift. |
 | `cleanup-orphans` | Review transition-attributed or explicitly scanned file orphans. |
 | `cleanup` | Review undeclared provisioned binaries recorded by receipts. |
-| `capture` | Capture live tracked-file content. |
 | `sync` | Capture files and reconcile extension declarations. |
 | `revert` | Undo or redo recorded transitions. |
 | `recover` | Inspect or recover an interrupted write-ahead operation. |

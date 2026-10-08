@@ -66,22 +66,6 @@ Examples:
   setforge cleanup-orphans --profile=<profile> --apply --yes
 """
 
-CAPTURE_EXAMPLES: str = """\
-Examples:
-
-\b
-  # Most common: capture live edits back into tracked
-  setforge capture --profile=<profile>
-
-\b
-  # Non-interactive: absorb every drift
-  setforge capture --profile=<profile> --auto=use-live
-
-\b
-  # Non-interactive: reject every drift (no tracked mutations)
-  setforge capture --profile=<profile> --auto=keep-tracked
-"""
-
 SYNC_EXAMPLES: str = """\
 Examples:
 

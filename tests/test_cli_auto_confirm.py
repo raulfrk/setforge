@@ -502,7 +502,7 @@ def test_sync_auto_keep_tracked_no_confirm(
     assert confirm.call_count == 0
 
 
-@pytest.mark.parametrize("command", ["capture", "sync"])
+@pytest.mark.parametrize("command", ["sync"])
 def test_capture_commands_bare_drift_non_tty_give_auto_guidance(
     command: str, runner: CliRunner, stubbed_install_env: Path
 ) -> None:
@@ -517,7 +517,7 @@ def test_capture_commands_bare_drift_non_tty_give_auto_guidance(
     assert (stubbed_install_env.parent / "tracked" / "x").read_text() == "data\n"
 
 
-@pytest.mark.parametrize("command", ["capture", "sync"])
+@pytest.mark.parametrize("command", ["sync"])
 def test_capture_commands_use_live_share_yes_contract(
     command: str, runner: CliRunner, stubbed_install_env: Path
 ) -> None:
@@ -541,7 +541,7 @@ def test_capture_commands_use_live_share_yes_contract(
 
 @pytest.mark.parametrize(
     ("command", "kind"),
-    [("capture", "codex"), ("sync", "codex"), ("sync", "extensions")],
+    [("sync", "codex"), ("sync", "extensions")],
 )
 @pytest.mark.parametrize("change_after_confirmation", [False, True])
 def test_capture_confirmation_includes_auxiliary_source_writes(
@@ -632,14 +632,14 @@ def test_capture_does_not_erase_retired_codex_merge_base(
         store.write_base("testp", file_id(resource), base)
         store.write_base("testp", file_id(mcp_target_marker(destination, None)), b"")
     result = runner.invoke(
-        app, ["capture", "--profile=testp", f"--config={stubbed_install_env}"]
+        app, ["sync", "--profile=testp", f"--config={stubbed_install_env}"]
     )
     assert result.exit_code == 0, result.output
     assert destination.read_bytes() == base
     assert store.read_base("testp", file_id(resource)) == base
 
 
-@pytest.mark.parametrize("command", ["capture", "sync"])
+@pytest.mark.parametrize("command", ["sync"])
 def test_yes_without_auto_is_rejected_consistently(
     command: str,
     runner: CliRunner,
@@ -651,7 +651,7 @@ def test_yes_without_auto_is_rejected_consistently(
     assert "--yes requires --auto" in result.output
 
 
-@pytest.mark.parametrize("command", ["capture", "sync"])
+@pytest.mark.parametrize("command", ["sync"])
 def test_keep_tracked_is_unlocked_non_mutating_and_does_not_prompt(
     command: str,
     runner: CliRunner,
@@ -712,7 +712,7 @@ def test_capture_prompt_runs_between_lock_acquisitions(
     )
     result = runner.invoke(
         app,
-        ["capture", "--profile=testp", f"--config={stubbed_install_env}"],
+        ["sync", "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code == 0, result.output
     assert events == [
@@ -745,7 +745,7 @@ def test_capture_refuses_same_count_live_substitution_after_confirmation(
     )
     result = runner.invoke(
         app,
-        ["capture", "--profile=testp", f"--config={stubbed_install_env}"],
+        ["sync", "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code == 1
     assert "plan changed after confirmation" in result.output
@@ -782,7 +782,7 @@ def test_sync_refuses_config_drift_before_journal(
     assert (stubbed_install_env.parent / "tracked" / "x").read_text() == "data\n"
 
 
-def test_capture_prompt_ctrl_c_has_no_partial_write_warning(
+def test_sync_prompt_ctrl_c_writes_nothing(
     runner: CliRunner,
     stubbed_install_env: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -799,10 +799,9 @@ def test_capture_prompt_ctrl_c_has_no_partial_write_warning(
     )
     result = runner.invoke(
         app,
-        ["capture", "--profile=testp", f"--config={stubbed_install_env}"],
+        ["sync", "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code != 0
-    assert "partially written" not in result.output
     assert (stubbed_install_env.parent / "tracked" / "x").read_text() == "data\n"
 
 
@@ -825,7 +824,7 @@ def test_capture_refuses_tracked_drift_after_confirmation(
     )
     result = runner.invoke(
         app,
-        ["capture", "--profile=testp", f"--config={stubbed_install_env}"],
+        ["sync", "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code == 1
     assert "plan changed after confirmation" in result.output
@@ -894,7 +893,7 @@ def test_capture_refuses_staged_store_drift_after_confirmation(
     )
     result = runner.invoke(
         app,
-        ["capture", "--profile=testp", f"--config={stubbed_install_env}"],
+        ["sync", "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code == 1
     assert "plan changed after confirmation" in result.output

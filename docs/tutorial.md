@@ -26,7 +26,7 @@ terminal mockups, and links to the complete inventory.
   - [6. `sync` — capture live → tracked](#6-sync--capture-live--tracked)
   - [7. `revert` — undo the last transition](#7-revert--undo-the-last-transition)
 - [Part B — Command reference](#part-b--command-reference)
-  - [Lifecycle: install, compare, sync, capture, revert, status, validate](#lifecycle-commands)
+  - [Lifecycle: install, compare, sync, revert, status, validate](#lifecycle-commands)
   - [Config repo and locks: init, fetch, lock, migrate, upgrade](#config-repo-commands)
   - [cleanup and cleanup-orphans](#cleanup-orphans)
   - [Host-local vs shared content + the reconcile wizard](#user-sections--the-reconcile-wizard)
@@ -56,8 +56,8 @@ terminal mockups, and links to the complete inventory.
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
 - **Live vs tracked.** *Tracked* is the content in your config repo. *Live* is
-  what's deployed on the host. `install` pushes tracked → live; `sync`/`capture`
-  pull live → tracked; `compare` reports the difference.
+  what's deployed on the host. `install` pushes tracked → live; `sync`
+  pulls live → tracked; `compare` reports the difference.
 - **User sections.** A region you mark in a tracked *source* file as
   **host-local** (per-machine, never shared) or **shared** (travels in the
   config repo). The markers are the source-side declaration only — they never
@@ -347,8 +347,7 @@ back into your tracked files (and reconciles extensions), the inverse of
 $ setforge sync --profile=default --auto=use-live --yes
 ```
 
-`sync` records its own transition, so it too is revertable. (`capture` is the
-narrower form — tracked files only, no extension reconcile.) Commit the updated
+`sync` records its own transition, so it too is revertable. Commit the updated
 `tracked/` in your config repo afterward.
 
 For a Git-backed configuration, SetForge also records which checkout owns each
@@ -357,7 +356,7 @@ tracked destination. A pre-existing file is adopted only after confirmation
 publication per hunk or structured key: SHARED units may flow back to tracked,
 while LOCAL and PENDING units remain host-only. The container claim and those
 unit choices are separate—a SHARED classification cannot claim a file, and
-adopting a mixed file does not make its LOCAL hunks portable. `capture` and
+adopting a mixed file does not make its LOCAL hunks portable. `sync` and
 `compare` fail closed when a staged Git-backed file has no current container
 claim.
 
@@ -430,7 +429,7 @@ get full mockups; routine CRUD subcommands get a compact example. Flags and the
 closed-world top-level inventory live in **[commands.md](commands.md)**.
 
 <a id="lifecycle-commands"></a>
-### Lifecycle: install · compare · sync · capture · revert · status · validate
+### Lifecycle: install · compare · sync · revert · status · validate
 
 These are covered in depth in [Part A](#part-a--guided-walkthrough); this is the
 quick index.
@@ -444,14 +443,6 @@ quick index.
   install/sync, or as a CI gate. → [walkthrough](#5-compare--see-drift)
 - **`sync --profile=P`** — capture live → tracked (files + extensions). `--auto`,
   `--yes`. *When:* push host-side changes back to the repo. → [walkthrough](#6-sync--capture-live--tracked)
-- **`capture --profile=P`** — narrower `sync`: tracked files only, no extension
-  reconcile. `--auto={use-live,keep-tracked}`. *When:* you want only file
-  content captured.
-
-  ```console
-  $ setforge capture --profile=default --auto=use-live
-  ```
-
 - **`revert --profile=P`** — undo the most recent transition (or, with
   `--to-before=<id>`, that transition and every newer one). `--yes`. *When:* a
   deploy/sync went wrong. → [walkthrough](#7-revert--undo-the-last-transition)
@@ -616,7 +607,7 @@ ones. `setforge validate` reports any tracked source that still contains them;
 **What replaced them is `setforge stage`.** Instead of marking regions in the
 source, you classify the differences between a live file and its recorded base:
 each text hunk, or each YAML key, is **SHARED** (may flow back into the config
-repo on `sync`/`capture`) or **LOCAL** (stays on this host and survives
+repo on `sync`) or **LOCAL** (stays on this host and survives
 re-installs). Unclassified units stay **PENDING** and are not published.
 JSON files are the exception: a `.json` file is staged as **one whole-document
 unit**, so Share / Keep-local applies to the entire document rather than per key.

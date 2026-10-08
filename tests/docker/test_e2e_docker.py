@@ -325,7 +325,7 @@ def test_install_template_dst_jinja2(
             "uv",
             "run",
             "setforge",
-            "capture",
+            "sync",
             "--profile=test-template",
             f"--config={CONFIG_FIXTURE}",
             "--auto=use-live",

@@ -464,7 +464,7 @@ def test_structured_share_submenu_draft_cancel_returns_none(
 
 
 @pytest.mark.parametrize("extension", ["yaml", "json", "jsonc"])
-@pytest.mark.parametrize("verb", ["sync", "capture"])
+@pytest.mark.parametrize("verb", ["sync"])
 def test_public_structured_promotion_preserves_shape_comments_and_inverse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str, verb: str
 ) -> None:

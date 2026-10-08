@@ -32,7 +32,6 @@ TOP_LEVEL_COMMANDS = frozenset(
         "compare",
         "cleanup-orphans",
         "cleanup",
-        "capture",
         "sync",
         "revert",
         "recover",
