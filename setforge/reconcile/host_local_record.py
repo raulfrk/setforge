@@ -165,7 +165,7 @@ def seed_section_slots_to_store(
     seed-once no-op / no slots / no markdown target).
 
     Writes NOTHING to ``local.yaml``; the host-local intent lives only
-    in the reconcile store, where :func:`host_local_sections_from_store` projects
+    in the reconcile store, where :func:`host_local_headings_from_store` reads
     it back for the seed-once gate. Raises
     :class:`~setforge.errors.ConfigError` on an unreadable or headingless
     template body (the store identity is heading-based, so a headingless body has
@@ -175,7 +175,7 @@ def seed_section_slots_to_store(
     from setforge.anchors import AnchorAtEndOfFile
     from setforge.body_canon import canonical_body, inject_body_at_anchor
     from setforge.compare import resolve_dst, resolve_src
-    from setforge.reconcile.host_local_view import host_local_sections_from_store
+    from setforge.reconcile.host_local_view import host_local_headings_from_store
     from setforge.reconcile.types import file_id
 
     if not resolved.section_slots:
@@ -186,8 +186,7 @@ def seed_section_slots_to_store(
     fid = file_id(target_id)
 
     # Seed-once: a heading already a LOCAL store unit is host-owned, skip it.
-    proj = host_local_sections_from_store(profile, fid)
-    already = set(proj.get(str(fid), {}))
+    already = host_local_headings_from_store(profile, fid)
 
     residual: list[tuple[str, str]] = []
     seeded: list[str] = []

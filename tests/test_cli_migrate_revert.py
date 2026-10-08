@@ -27,7 +27,7 @@ from setforge.migrations import (
     detect_current_schema,
 )
 from setforge.reconcile import file_id
-from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.host_local_view import host_local_headings_from_store
 from tests.shared_helpers import file_images
 
 runner = CliRunner()
@@ -405,9 +405,7 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
     assert result.exit_code == 0, result.output
     assert detect_current_schema(cfg) == "4.0"
 
-    proj = host_local_sections_from_store("default", file_id("notes"))
-    assert "notes" in proj
-    assert "## My Tweaks" in {str(k) for k in proj["notes"]}
+    assert "## My Tweaks" in host_local_headings_from_store("default", file_id("notes"))
     assert "host_local_sections" not in local_yaml.read_text(encoding="utf-8")
 
     migrate_transitions = transitions.list_transitions(["migrate"])
@@ -458,7 +456,7 @@ def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(
     assert local_yaml.read_bytes() == local_origin
 
     fid = file_id("notes")
-    assert host_local_sections_from_store("default", fid) == {}
+    assert host_local_headings_from_store("default", fid) == set()
     assert reconcile.read_index("default").files["notes"].hunks == []
     assert reconcile.read_local("default", fid) == _CHAIN_BASE
     assert reconcile.read_base("default", fid) == _CHAIN_BASE
@@ -575,7 +573,7 @@ def test_chained_2_1_to_5_0_single_revert_restores_config_and_store_to_origin(
     # True origin: every reconcile-store leg is gone, not merely reverted to an
     # intermediate seeded shape (contrast the 4.0-terminal residue test above).
     fid = file_id("notes")
-    assert host_local_sections_from_store("default", fid) == {}
+    assert host_local_headings_from_store("default", fid) == set()
     assert "notes" not in reconcile.read_index("default").files
     assert reconcile.read_local("default", fid) is None
     assert reconcile.read_base("default", fid) is None

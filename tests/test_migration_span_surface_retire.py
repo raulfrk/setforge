@@ -36,10 +36,9 @@ from setforge.migrations._span_surface_retire import (
 )
 from setforge.migrations.registry import find_migration_path
 from setforge.reconcile import file_id
-from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.host_local_view import host_local_headings_from_store
 from setforge.reconcile.hunks import extract_hunks, serialize
 from setforge.reconcile.types import HunkClass
-from setforge.source import HostLocalSectionName
 
 runner = CliRunner()
 
@@ -231,9 +230,7 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
         h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
         for h in hunks
     )
-    proj = host_local_sections_from_store("default", fid)
-    assert set(proj["notes"]) == {"## My Tweaks"}
-    assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
+    assert host_local_headings_from_store("default", fid) == {"## My Tweaks"}
 
 
 def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> None:
@@ -293,8 +290,7 @@ def test_apply_folds_undeployed_section_without_loss(tmp_path) -> None:
         b"## Alpha\n## My Tweaks\nmy custom line\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
     )
     assert reconcile.read_local("default", fid) == expected_local
-    proj = host_local_sections_from_store("default", fid)
-    assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
+    assert host_local_headings_from_store("default", fid) == {"## My Tweaks"}
 
 
 def test_apply_is_idempotent_no_double_seed(tmp_path) -> None:
@@ -315,8 +311,7 @@ def test_apply_is_idempotent_no_double_seed(tmp_path) -> None:
 
     assert reconcile.read_local("default", fid) == local_after_first
     assert reconcile.read_index("default") == index_after_first
-    proj = host_local_sections_from_store("default", fid)
-    assert set(proj["notes"]) == {"## My Tweaks"}
+    assert host_local_headings_from_store("default", fid) == {"## My Tweaks"}
 
 
 def test_apply_strips_retired_surface_from_local_yaml(tmp_path) -> None:

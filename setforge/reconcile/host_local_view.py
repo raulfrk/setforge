@@ -1,84 +1,55 @@
-"""Project host-local markdown sections back OUT of the reconcile store.
+"""Read host-local markdown section headings back OUT of the reconcile store.
 
 Host-local markdown sections live ONLY in the reconcile per-unit store, as
 LOCAL line units carrying a stable ``reloc_anchor`` heading identity (minted in
-:func:`setforge.reconcile.hunks.serialize`). This module reads those units back
-as ``{tracked_file_id: {section_name: HostLocalSection}}``. Its one caller in
-the engine is the seed-once gate of
-:func:`setforge.reconcile.host_local_record.seed_section_slots_to_store`, which
-reads only the section names; the bodies are what the tests of the seed and of
-the migration that folds old declarations into the store assert on.
+:func:`setforge.reconcile.hunks.serialize`). This module reports which headings
+a tracked file currently holds that way. Its callers are the seed-once gate of
+:func:`setforge.reconcile.host_local_record.seed_section_slots_to_store` and the
+fold-idempotency gate of the span-surface-retire migration; both need only the
+heading names.
 
 A store unit is a host-local section iff its persisted index row is
 ``cls == "local"`` AND carries a ``reloc_anchor``. The persisted rows hold no byte
 spans (spans are recomputed fresh every run — see :mod:`setforge.reconcile.hunks`),
-so the section body is recovered by re-extracting the base->local diff, running the
-engine's own :func:`~setforge.reconcile.hunks.classify` to carry the stored
-class + ``reloc_anchor`` onto the fresh (spanned) hunks, then slicing the
-LOCAL+reloc region out of the verbatim ``local`` bytes. Reusing ``classify`` keeps
-the identity match byte-for-byte aligned with how the staging layer wrote the row.
+so the base->local diff is re-extracted and the engine's own
+:func:`~setforge.reconcile.hunks.classify` carries the stored class +
+``reloc_anchor`` onto the fresh hunks. A row with no matching hunk in that diff
+does not count, so the answer follows the recorded base/local bytes, not the rows
+alone.
 """
 
 from __future__ import annotations
 
-from setforge.anchors import AnchorAfterHeading
 from setforge.reconcile import store
 from setforge.reconcile.hunks import classify, extract_hunks
-from setforge.reconcile.merge import split_lines
-from setforge.reconcile.types import FileId, HunkClass, file_id
-from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.reconcile.types import FileId, HunkClass
 
-__all__ = ["host_local_sections_from_store"]
+__all__ = ["host_local_headings_from_store"]
 
 
-def host_local_sections_from_store(
-    profile: str, fid: FileId | None = None
-) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
-    """Return the host-local sections represented in ``profile``'s reconcile store.
+def host_local_headings_from_store(profile: str, fid: FileId) -> set[str]:
+    """Return the host-local section headings recorded for ``fid`` in ``profile``.
 
-    ``{tracked_file_id: {section_name: HostLocalSection}}``, with the inner map
-    keyed by the provenance-marked :data:`HostLocalSectionName` and any file that
-    projects to no section dropped (so ``tf_id in result`` means "has at least one
-    host-local section"). Pass ``fid`` to scope the projection to a single tracked
-    file; ``None`` (the default) scans every indexed file for the profile.
+    Empty when the file has no LOCAL+``reloc_anchor`` unit that matches a hunk of
+    its recorded base->local diff, and also when the base or local leg is missing
+    or recorded absent (the store is mid-write; fail soft).
     """
-    index = store.read_index(profile)
-    keys = [str(fid)] if fid is not None else list(index.files)
-    result: dict[str, dict[HostLocalSectionName, HostLocalSection]] = {}
-    for key in keys:
-        entry = index.files.get(key)
-        if entry is None:
-            continue
-        sections = _sections_for_file(profile, file_id(key), entry.hunks)
-        if sections:
-            result[key] = sections
-    return result
-
-
-def _sections_for_file(
-    profile: str, fid: FileId, stored: list[dict[str, object]]
-) -> dict[HostLocalSectionName, HostLocalSection]:
-    """Project one file's LOCAL+reloc_anchor units to :class:`HostLocalSection` s."""
+    entry = store.read_index(profile).files.get(str(fid))
+    if entry is None:
+        return set()
+    stored = entry.hunks
     # Fast exit: skip the base/local read entirely when no row needs it.
     if not any(
         row.get("cls") == HunkClass.LOCAL.value and row.get("reloc_anchor") is not None
         for row in stored
     ):
-        return {}
+        return set()
     base = store.read_base(profile, fid)
     local = store.read_local(profile, fid)
-    # A missing/absent leg means the store is mid-write; fail soft.
     if base is None or not isinstance(local, bytes):
-        return {}
-    local_lines = split_lines(local)
-    sections: dict[HostLocalSectionName, HostLocalSection] = {}
-    for hunk in classify(extract_hunks(base, local), stored):
-        if hunk.cls is not HunkClass.LOCAL or hunk.reloc_anchor is None:
-            continue
-        j1, j2 = hunk.live_span
-        body = b"".join(local_lines[j1:j2]).decode("utf-8")
-        sections[HostLocalSectionName(hunk.reloc_anchor)] = HostLocalSection(
-            anchor=AnchorAfterHeading(value=hunk.reloc_anchor),
-            body=body,
-        )
-    return sections
+        return set()
+    return {
+        hunk.reloc_anchor
+        for hunk in classify(extract_hunks(base, local), stored)
+        if hunk.cls is HunkClass.LOCAL and hunk.reloc_anchor is not None
+    }
