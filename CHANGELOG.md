@@ -109,6 +109,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `install --auto=use-tracked` no longer replaces a whole YAML or JSON file that
+  cannot be parsed when you have marked part of it keep-local with `stage`. The
+  file is merged like any other, so a kept-local part that the tracked copy did
+  not change stays. Where the tracked copy changed the same lines,
+  `--auto=use-tracked` still takes the tracked version, and a file with no
+  keep-local part is still replaced whole.
 - In the Claude-assisted merge, a draft you edit by hand is now checked like
   Claude's own drafts: an empty edit or one that still contains conflict markers
   is refused with a message, and you stay on the review screen to edit again or
