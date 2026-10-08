@@ -41,6 +41,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge migrate` now stops before changing anything when its state
   directory is not writable ("transition state dir not writable"), instead of
   migrating the config and then failing.
+- `setforge completion install` now writes the completion script from the
+  SetForge you are running. It used to start whichever `setforge` came first on
+  your `PATH` and, if that failed, fall back to a bundled copy with a warning.
+  The script it writes is unchanged.
 
 ### Changed
 

@@ -8,33 +8,28 @@ between the markers rather than appending a second copy.
 
 from __future__ import annotations
 
-import importlib.resources
-import logging
-import os
 import re
-import shutil
-import subprocess
+import stat
 import sys
-import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, assert_never
 
 import typer
 from rich.console import Console
+from typer.completion import get_completion_script
 
+from setforge.atomicio import atomic_write_text
 from setforge.cli import app
 from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
 from setforge.cli._output import make_console
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
-LOGGER: logging.Logger = logging.getLogger(__name__)
-
-# Bound on the ``setforge --show-completion=<shell>`` child subprocess.
-# Anything past this is treated as a hard fault and falls back to the
-# vendored template — typer's completion generation is sub-second in
-# practice, so a 10s wait is generous slack for a healthy install.
-_SHOW_COMPLETION_TIMEOUT_SECONDS = 10.0
+# The program name and the environment variable the generated script sets
+# to ask setforge for completions; Typer derives the variable from the
+# program name (``_<NAME>_COMPLETE``), so the two must stay in step.
+_PROG_NAME = "setforge"
+_COMPLETE_VAR = "_SETFORGE_COMPLETE"
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -121,98 +116,17 @@ def _rc_path(shell: ShellKind) -> Path | None:
     assert_never(shell)
 
 
-def _vendored_template_name(shell: ShellKind) -> str:
-    """Return the package-data filename for ``shell``'s vendored template."""
-    if shell is ShellKind.ZSH:
-        return "_setforge"
-    if shell is ShellKind.BASH:
-        return "setforge.bash"
-    if shell is ShellKind.FISH:
-        return "setforge.fish"
-    assert_never(shell)
-
-
-def _load_vendored_template(shell: ShellKind) -> str:
-    """Load the vendored fallback completion script for ``shell``.
-
-    Reads the file shipped as package data under
-    :mod:`setforge.cli.completions`. Used only on the fallback arm of
-    :func:`_render_completion_script` — callers must already have logged
-    WHY they're falling back before invoking this.
-    """
-    name = _vendored_template_name(shell)
-    return (
-        importlib.resources.files("setforge.cli.completions")
-        .joinpath(name)
-        .read_text(encoding="utf-8")
-    )
-
-
 def _render_completion_script(shell: ShellKind) -> str:
-    """Return the completion script for ``shell``, preferring typer-generated.
+    """Return the completion script for ``shell``, generated in-process.
 
-    Tries ``setforge --show-completion=<shell>`` in a subprocess; on any
-    of the four documented failure modes (binary missing, subprocess
-    timeout, non-zero exit, empty stdout) logs a WARNING that names the
-    failure mode and falls back to the vendored template shipped under
-    :mod:`setforge.cli.completions`. The vendored copy is seeded from
-    typer-generated output at commit time, so the fallback content is
-    drop-in compatible with the wiring lines :func:`_write_wiring`
-    appends to the user's rc file.
+    Uses the generator behind ``setforge --show-completion=<shell>``, so
+    the installed file matches that output byte for byte (``click.echo``
+    ends the printed script with a newline, hence the ``+ "\\n"``).
     """
-    # Without _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1, typer
-    # treats --show-completion as a bool and falls back to the parent
-    # $SHELL — wrong when we're installing for a DIFFERENT shell.
-    child_env = {**os.environ, "_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION": "1"}
-    # ``shutil.which`` resolves ``setforge`` on PATH the same way the
-    # user's shell did when they invoked us; falling back to
-    # ``sys.argv[0]`` lets the command still work when called via an
-    # absolute path that isn't on PATH (e.g. ``uv run setforge ...``
-    # inside a venv whose bin dir wasn't activated).
-    bin_path = shutil.which("setforge") or sys.argv[0]
-    try:
-        result = subprocess.run(
-            [bin_path, f"--show-completion={shell.value}"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=_SHOW_COMPLETION_TIMEOUT_SECONDS,
-            env=child_env,
-        )
-    except FileNotFoundError:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: binary not found at %r "
-            "(FileNotFoundError); using vendored template",
-            shell.value,
-            bin_path,
-        )
-        return _load_vendored_template(shell)
-    except subprocess.TimeoutExpired:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: subprocess timeout after "
-            "%.1fs; using vendored template",
-            shell.value,
-            _SHOW_COMPLETION_TIMEOUT_SECONDS,
-        )
-        return _load_vendored_template(shell)
-    if result.returncode != 0:
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: typer regression "
-            "(exit %d) stderr=%r; using vendored template",
-            shell.value,
-            result.returncode,
-            result.stderr.strip(),
-        )
-        return _load_vendored_template(shell)
-    if not result.stdout.strip():
-        LOGGER.warning(
-            "setforge --show-completion %s fallback: empty stdout from "
-            "subprocess (exit %d); using vendored template",
-            shell.value,
-            result.returncode,
-        )
-        return _load_vendored_template(shell)
-    return result.stdout
+    script = get_completion_script(
+        prog_name=_PROG_NAME, complete_var=_COMPLETE_VAR, shell=shell.value
+    )
+    return f"{script}\n"
 
 
 def _zsh_wiring_body() -> str:
@@ -252,40 +166,6 @@ def _detect_wiring(rc_path: Path) -> bool:
     return _SENTINEL_BEGIN in text and _SENTINEL_END in text
 
 
-def _atomic_write_rc_file(rc_path: Path, content: str) -> None:
-    """Atomically replace ``rc_path``'s content with ``content``.
-
-    Writes to a uniquely-named ``<rc_path.name>.<rand>.setforge-tmp``
-    file in the same directory (so concurrent invocations don't collide
-    on a fixed tmp name), mirrors the existing file's mode bits via
-    :func:`shutil.copystat`, then ``os.replace`` swaps the tmp file over
-    the target. The same-directory placement is load-bearing —
-    ``os.replace`` is only atomic when source and destination live on
-    the same filesystem, which the parent-dir placement guarantees. The
-    caller has already validated that ``rc_path`` exists. On any
-    exception after the tmp file is created, it is removed before
-    re-raising so a failed write never leaves a stray tmp file behind.
-    A symlinked ``rc_path`` (dotfile managers) is resolved first so the
-    link target is updated and the link itself is kept.
-    """
-    rc_path = rc_path.resolve()
-    fd, name = tempfile.mkstemp(
-        dir=rc_path.parent, prefix=f"{rc_path.name}.", suffix=".setforge-tmp"
-    )
-    os.close(fd)
-    tmp = Path(name)
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        # Copy mode bits (+ atime/mtime + flags where supported) from the
-        # original BEFORE the replace so the swapped-in file inherits the
-        # user's chmod choices (e.g. 0600 on a private rc file).
-        shutil.copystat(rc_path, tmp)
-        tmp.replace(rc_path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def _write_wiring(rc_path: Path, body: str) -> None:
     """Insert/replace the setforge sentinel block in ``rc_path``.
 
@@ -295,9 +175,11 @@ def _write_wiring(rc_path: Path, body: str) -> None:
     is appended to the end of the file. Refuses to create ``rc_path``
     if it doesn't exist — the user's shell-rc file is their territory.
 
-    The actual disk write goes through :func:`_atomic_write_rc_file` so
-    a SIGINT mid-write leaves the original rc file byte-identical (the
-    tmp file is the only victim).
+    The write goes through :func:`setforge.atomicio.atomic_write_text`
+    with the file's existing mode bits, so a SIGINT mid-write leaves the
+    original rc file byte-identical (the tmp file is the only victim). A
+    symlinked rc file (dotfile managers) is resolved first so the link
+    target is updated and the link itself is kept.
     """
     if not rc_path.exists():
         raise SetforgeError(
@@ -313,7 +195,8 @@ def _write_wiring(rc_path: Path, body: str) -> None:
         if existing and not existing.endswith("\n"):
             existing = f"{existing}\n"
         new_text = f"{existing}{block}"
-    _atomic_write_rc_file(rc_path, new_text)
+    target = rc_path.resolve()
+    atomic_write_text(target, new_text, mode=stat.S_IMODE(target.stat().st_mode))
 
 
 def _stdin_is_tty() -> bool:
