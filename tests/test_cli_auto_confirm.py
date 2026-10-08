@@ -440,9 +440,10 @@ def test_install_bare_no_auto_no_confirm(
     """Bare install never invokes the confirm wizard."""
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli._install_helpers.confirm_auto_operation", confirm)
-    runner.invoke(
+    result = runner.invoke(
         app, ["install", "--profile=testp", f"--config={stubbed_install_env}"]
     )
+    assert result.exit_code == 0, result.output
     assert confirm.call_count == 0
 
 
@@ -454,7 +455,7 @@ def test_install_auto_keep_live_no_confirm(
     """Non-mutating --auto=keep-live never invokes the confirm wizard."""
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli._install_helpers.confirm_auto_operation", confirm)
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "install",
@@ -463,6 +464,7 @@ def test_install_auto_keep_live_no_confirm(
             "--auto=keep-live",
         ],
     )
+    assert result.exit_code == 0, result.output
     assert confirm.call_count == 0
 
 
@@ -473,7 +475,10 @@ def test_sync_bare_no_auto_no_confirm(
 ) -> None:
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
-    runner.invoke(app, ["sync", "--profile=testp", f"--config={stubbed_install_env}"])
+    result = runner.invoke(
+        app, ["sync", "--profile=testp", f"--config={stubbed_install_env}"]
+    )
+    assert result.exit_code == 0, result.output
     assert confirm.call_count == 0
 
 
@@ -484,7 +489,7 @@ def test_sync_auto_keep_tracked_no_confirm(
 ) -> None:
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "sync",
@@ -493,6 +498,7 @@ def test_sync_auto_keep_tracked_no_confirm(
             "--auto=keep-tracked",
         ],
     )
+    assert result.exit_code == 0, result.output
     assert confirm.call_count == 0
 
 

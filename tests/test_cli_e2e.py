@@ -250,6 +250,11 @@ def _invoke(args: list[str]) -> Result:
     return CliRunner().invoke(app, args)
 
 
+def _transition_dirs() -> set[str]:
+    root = transitions_root()
+    return {p.name for p in root.iterdir() if p.is_dir()} if root.exists() else set()
+
+
 # ---------------------------------------------------------------------------
 # install — exercises one variant per major tracked_file mechanism
 # ---------------------------------------------------------------------------
@@ -413,7 +418,13 @@ class TestInstall:
     @pytest.mark.parametrize("edit_live", [True, False], ids=["live-edit", "no-drift"])
     @pytest.mark.parametrize("with_yes", [True, False], ids=["yes", "no-yes"])
     @pytest.mark.parametrize(
-        "flag", ["--auto-accept-tracked", "--auto-accept-live", "--auto=use-tracked"]
+        "flag",
+        [
+            "--auto-accept-tracked",
+            "--auto-accept-live",
+            "--auto=use-tracked",
+            "--auto=keep-live",
+        ],
     )
     def test_auto_flags_leave_a_live_only_edit_alone_without_a_prompt(
         self,
@@ -904,10 +915,12 @@ class TestRevert:
         compared = _invoke(["compare", *args, "--check"])
         assert compared.exit_code == 0, compared.output
 
+        transitions_before = _transition_dirs()
         synced = _invoke(["sync", *args, "--auto=keep-tracked", "--yes"])
         assert synced.exit_code == 0, synced.output
         for tracked, before in tracked_before.items():
             assert tracked.read_bytes() == before, tracked
+        assert _transition_dirs() == transitions_before
 
         reverted = _invoke(["revert", *args, "--yes"])
         assert reverted.exit_code == 0, reverted.output

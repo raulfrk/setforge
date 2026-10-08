@@ -156,6 +156,25 @@ def test_local_edit_preserved_when_upstream_unchanged(repo: Path) -> None:
     assert _live().read_text(encoding="utf-8") == "locally edited\n"
 
 
+def test_auto_use_tracked_leaves_a_live_only_text_edit_alone(repo: Path) -> None:
+    # A line-merged (plain text) file whose live copy was edited while the
+    # tracked source did not change is a clean no-op even under
+    # --auto=use-tracked: the edit survives byte-for-byte, no transition is
+    # recorded, and no revert hint is printed.
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    _live().write_text("locally edited\n", encoding="utf-8")
+    transitions_before = _transition_dirs()
+
+    result = _install(config, "--auto=use-tracked")
+
+    assert result.exit_code == 0, result.output
+    assert _live().read_bytes() == b"locally edited\n"
+    assert _transition_dirs() == transitions_before
+    assert "revert with" not in result.output
+
+
 def test_stale_toml_anchor_has_identical_cli_diagnostics_without_mutation(
     repo: Path,
 ) -> None:
