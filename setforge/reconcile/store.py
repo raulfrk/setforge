@@ -41,7 +41,6 @@ from setforge.errors import (
     IndexVersionError,
     InvariantViolation,
     ReconcileStoreError,
-    UnsafeFileId,
 )
 from setforge.paths import state_root
 from setforge.reconcile import index_model
@@ -53,8 +52,10 @@ from setforge.reconcile.types import (
     HunkClass,
     UnitKind,
     UnitRef,
+    check_profile_name,
     content_sha,
     file_id,
+    resolve_store_path,
 )
 
 _DIR_MODE = 0o700
@@ -77,7 +78,7 @@ __all__ = [
 
 
 # --------------------------------------------------------------------------- #
-# Roots + path-safe resolver
+# Roots + index path
 # --------------------------------------------------------------------------- #
 
 
@@ -96,41 +97,9 @@ def _index_root() -> Path:
     return state_root() / "index"
 
 
-def _check_segment(value: str, kind: str, *, allow_slash: bool) -> None:
-    """Reject a path segment that could escape the store subtree.
-
-    Both profile and file-id come from semi-trusted config and share the
-    file-id grammar (no empty / ``.`` / ``..`` / absolute / control char). A
-    profile is a SINGLE directory level, so it additionally forbids ``/``; a
-    file-id mirrors a relative path and may contain ``/``.
-    """
-    file_id(value)  # raises UnsafeFileId on empty / '.' / '..' / absolute / control
-    if not allow_slash and "/" in value:
-        raise UnsafeFileId(f"unsafe {kind} {value!r}: must not contain '/'")
-
-
-def _resolve(sub_root: Path, profile: str, fid: str) -> Path:
-    """Map ``(profile, fid)`` to a path under ``sub_root``, guarding traversal.
-
-    Guards BOTH ``profile`` and ``fid`` (the latent gap in
-    :func:`setforge.base_store._resolve_target` is the unguarded profile), and
-    pins containment to a **constant** ``sub_root`` rather than a profile-derived
-    root, so a malicious profile can never widen the allowed area.
-    """
-    _check_segment(profile, "profile", allow_slash=False)
-    _check_segment(fid, "file-id", allow_slash=True)
-    root = sub_root.resolve()
-    target = (root / profile / fid).resolve()
-    if target != root and root not in target.parents:
-        raise ReconcileStoreError(
-            f"path for {profile}/{fid} resolves outside {sub_root.name}/"
-        )
-    return target
-
-
 def _index_path(profile: str) -> Path:
     """Resolve ``index/<profile>.json``, guarding the profile segment."""
-    _check_segment(profile, "profile", allow_slash=False)
+    check_profile_name(profile)
     root = _index_root().resolve()
     target = (root / f"{profile}.json").resolve()
     if target.parent != root:
@@ -164,8 +133,8 @@ def write_base(profile: str, fid: FileId, data: bytes) -> None:
 
 
 def _local_paths(profile: str, fid: FileId) -> tuple[Path, Path]:
-    content = _resolve(_local_root(), profile, str(fid))
-    marker = _resolve(_local_absent_root(), profile, str(fid))
+    content = resolve_store_path(_local_root(), profile, str(fid))
+    marker = resolve_store_path(_local_absent_root(), profile, str(fid))
     return content, marker
 
 
@@ -227,17 +196,17 @@ def _drafts_path(profile: str, fid: FileId) -> Path:
 
 def local_content_path(profile: str, key: str) -> Path:
     """The local keep-content file path for ``key`` (one leg of the local store)."""
-    return _resolve(_local_root(), profile, key)
+    return resolve_store_path(_local_root(), profile, key)
 
 
 def local_absent_path(profile: str, key: str) -> Path:
     """The local absence-marker file path for ``key`` (the other local leg)."""
-    return _resolve(_local_absent_root(), profile, key)
+    return resolve_store_path(_local_absent_root(), profile, key)
 
 
 def drafts_manifest_path(profile: str, key: str) -> Path:
     """The per-fid drafts manifest path for ``key``."""
-    return _resolve(_drafts_root(), profile, key)
+    return resolve_store_path(_drafts_root(), profile, key)
 
 
 def index_manifest_path(profile: str) -> Path:

@@ -17,9 +17,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Final, NewType
 
-from setforge.errors import UnsafeFileId
+from setforge.errors import ReconcileStoreError, UnsafeFileId
 
 FileId = NewType("FileId", str)
 
@@ -46,6 +47,41 @@ def file_id(key: str) -> FileId:
     if any(part in ("", ".", "..") for part in key.split("/")):
         raise UnsafeFileId(f"unsafe file-id {key!r}: empty / '.' / '..' path part")
     return FileId(key)
+
+
+def check_profile_name(profile: str) -> None:
+    """Reject a profile name that could escape a store subtree.
+
+    A profile comes from semi-trusted config and shares the file-id grammar (no
+    empty / ``.`` / ``..`` / absolute / control char). It is a SINGLE directory
+    level, so it additionally forbids ``/``.
+    """
+    file_id(profile)  # raises UnsafeFileId on empty / '.' / '..' / absolute / control
+    if "/" in profile:
+        raise UnsafeFileId(f"unsafe profile {profile!r}: must not contain '/'")
+
+
+def resolve_store_path(
+    sub_root: Path, profile: str, fid: str, *, suffix: str = ""
+) -> Path:
+    """Map ``(profile, fid)`` to ``<sub_root>/<profile>/<fid><suffix>``, guarding
+    traversal.
+
+    Guards BOTH ``profile`` and ``fid`` and pins containment to a **constant**
+    ``sub_root`` rather than a profile-derived root, so a malicious profile can
+    never widen the allowed area. Raises :class:`~setforge.errors.UnsafeFileId`
+    for an unsafe segment and :class:`~setforge.errors.ReconcileStoreError` when
+    the resolved path (symlinks followed) leaves ``sub_root``.
+    """
+    check_profile_name(profile)
+    file_id(fid)
+    root = sub_root.resolve()
+    target = (root / profile / f"{fid}{suffix}").resolve()
+    if root not in target.parents:
+        raise ReconcileStoreError(
+            f"file-id {fid!r} resolves outside {sub_root.name}/{profile}/"
+        )
+    return target
 
 
 class HunkClass(StrEnum):

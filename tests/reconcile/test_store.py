@@ -33,21 +33,26 @@ from setforge.reconcile.types import (
 # --------------------------------------------------------------------------- #
 
 
-def test_resolver_ok(tmp_state: Path) -> None:
-    p = store._resolve(store._local_root(), "deb", file_id("claude/CLAUDE.md"))
-    assert str(p).endswith("/local/deb/claude/CLAUDE.md")
-
-
 @pytest.mark.parametrize("profile", ["../../etc", "..", "", ".", "a/b", "x\x00y"])
-def test_resolver_rejects_bad_profile(tmp_state: Path, profile: str) -> None:
-    with pytest.raises(UnsafeFileId):
-        store._resolve(store._local_root(), profile, file_id("x"))
+def test_local_paths_reject_bad_profile(tmp_state: Path, profile: str) -> None:
+    for accessor in (
+        store.local_content_path,
+        store.local_absent_path,
+        store.drafts_manifest_path,
+    ):
+        with pytest.raises(UnsafeFileId):
+            accessor(profile, "x")
 
 
 @pytest.mark.parametrize("fid", ["a/../../x", "/abs", "..", "", "a/\x00/b"])
-def test_resolver_rejects_bad_fileid(tmp_state: Path, fid: str) -> None:
-    with pytest.raises(UnsafeFileId):
-        store._resolve(store._local_root(), "p", fid)  # raw str; resolver re-checks
+def test_local_paths_reject_bad_fileid(tmp_state: Path, fid: str) -> None:
+    for accessor in (
+        store.local_content_path,
+        store.local_absent_path,
+        store.drafts_manifest_path,
+    ):
+        with pytest.raises(UnsafeFileId):
+            accessor("p", fid)
 
 
 def test_index_path_rejects_bad_profile(tmp_state: Path) -> None:
@@ -79,7 +84,7 @@ def test_local_bytes_verbatim(tmp_state: Path) -> None:
 def test_local_perms(tmp_state: Path) -> None:
     fid = file_id("f")
     store.write_local("p", fid, b"x")
-    path = store._resolve(store._local_root(), "p", fid)
+    path = store.local_content_path("p", str(fid))
     assert path.stat().st_mode & 0o777 == 0o600
     assert path.parent.stat().st_mode & 0o077 == 0
 
@@ -892,7 +897,7 @@ def test_verify_ok_after_record(tmp_state: Path) -> None:
 def test_verify_detects_missing_local(tmp_state: Path) -> None:
     fid = file_id("f")
     _record_locked("p", fid, base=b"B", local=b"L")
-    store._resolve(store._local_root(), "p", fid).unlink()
+    store.local_content_path("p", str(fid)).unlink()
     with pytest.raises(InvariantViolation):
         store.verify("p", fid)
 
@@ -908,7 +913,7 @@ def test_verify_detects_orphan_local(tmp_state: Path) -> None:
 def test_verify_detects_hash_mismatch(tmp_state: Path) -> None:
     fid = file_id("f")
     _record_locked("p", fid, base=b"B", local=b"L")
-    store._resolve(store._local_root(), "p", fid).write_bytes(b"tampered")
+    store.local_content_path("p", str(fid)).write_bytes(b"tampered")
     with pytest.raises(InvariantViolation):
         store.verify("p", fid)
 

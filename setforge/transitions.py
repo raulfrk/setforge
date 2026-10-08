@@ -45,7 +45,12 @@ from typing import Any, Final, NewType
 from pydantic import ValidationError
 
 from setforge import __version__, atomicio, base_store, scalar_base_store
-from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+from setforge.errors import (
+    InvalidTransitionRecord,
+    ReconcileStoreError,
+    RevertFailed,
+    SetforgeError,
+)
 from setforge.ownership import (
     ClaimEvent,
     OwnershipClaim,
@@ -54,6 +59,7 @@ from setforge.ownership import (
 )
 from setforge.paths import state_root
 from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import resolve_store_path
 
 TransitionDir = NewType("TransitionDir", Path)
 """A directory holding one transition record (``meta.json`` and its sidecars).
@@ -811,29 +817,20 @@ _STATE_SNAPSHOTS_MANIFEST: Final[str] = "manifest.json"
 
 
 def _spans_manifest_path(profile: str, key: str) -> Path:
-    """SPANS sidecar manifest path, guarding traversal inline.
+    """SPANS sidecar manifest path, guarding traversal.
 
-    Replicates the traversal guard the retired ``spans_store.manifest_path``
-    applied — so the legacy module stays unimported yet the guard is NOT
-    dropped: an absolute or ``..``-bearing ``key`` is rejected, and the
-    resolved path is confirmed to stay inside ``spans/<profile>/``. A
+    Applies the store-wide path guard
+    (:func:`setforge.reconcile.types.resolve_store_path`) to the retired
+    ``spans_store`` layout without importing that module: an unsafe ``profile``
+    or ``key``, or a resolved path outside ``spans/``, is rejected. A
     hand-edited ``store="spans"`` transition record therefore can never
     write a payload outside the subtree on revert (the same threat model
     :func:`_validate_one_state_snapshot` guards ``payload_file`` against).
     """
-    candidate = Path(key)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise InvalidTransitionRecord(
-            f"unsafe spans file-id {key!r}: must be a relative path with no "
-            "'..' components"
-        )
-    profile_root = (state_root() / "spans" / profile).resolve()
-    target = (profile_root / f"{candidate}.json").resolve()
-    if profile_root not in target.parents:
-        raise InvalidTransitionRecord(
-            f"spans file-id {key!r} resolves outside spans/{profile}/"
-        )
-    return target
+    try:
+        return resolve_store_path(state_root() / "spans", profile, key, suffix=".json")
+    except ReconcileStoreError as err:
+        raise InvalidTransitionRecord(str(err)) from err
 
 
 def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
