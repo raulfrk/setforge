@@ -193,9 +193,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, but these commands used to treat the unknown variable as empty and use the
   shortened path (`~/x.txt`). Destinations that `validate` accepts resolve
   exactly as before. `revert` still undoes an earlier install after such a
-  typo, and a typo in a file that only another profile uses does not stop
-  `install`, `compare`, `cleanup-orphans` (including `--scan`) or
-  `ownership revert` for the profile you selected.
+  typo, and a typo in a tracked file that only another profile uses does not
+  stop `install`, `compare`, `cleanup-orphans` (including `--scan`) or
+  `ownership revert` for the profile you selected. A typo in another profile's
+  bundle file component does still stop `cleanup-orphans --scan`.
 - `setforge config add --local marketplaces.add NAME` now writes the marketplace
   under `marketplaces: add:` in `local.yaml`, beside any existing `add` and
   `remove` entries, and refuses a name that is already there or that begins
