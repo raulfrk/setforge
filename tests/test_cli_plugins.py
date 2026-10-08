@@ -16,9 +16,11 @@ from typer.testing import CliRunner
 
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import codex_plugins as codex_plugins_mod
+from setforge import reconcile_adapter
 from setforge.cli import app
+from setforge.config import load_config, resolve_profile
 from setforge.errors import ProfileNotFound
-from tests.conftest import FakeClaude
+from tests.conftest import FakeClaude, FakeGit, _local_clone_yaml
 from tests.shared_helpers import write_setforge_yaml
 
 
@@ -783,6 +785,52 @@ def test_codex_plugin_add_unknown_profile_restores_config_and_native_inventory(
     assert cfg.read_bytes() == before
     assert cfg.stat().st_mode == mode_before
     assert marketplaces == {}
+
+
+@pytest.mark.parametrize("local_clone", [False, True])
+@pytest.mark.parametrize("marketplace_declared", [False, True])
+def test_claude_plugin_add_no_install_makes_no_native_or_cache_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude: Callable[..., FakeClaude],
+    fake_git: Callable[..., FakeGit],
+    local_clone: bool,
+    marketplace_declared: bool,
+) -> None:
+    body = _PLUGIN_ADD_FIXTURE_YAML
+    if marketplace_declared:
+        body = body.replace(
+            "profiles:\n",
+            "marketplaces:\n  newmp: {source: github, repo: o/newmp}\nprofiles:\n",
+        )
+    cfg = write_setforge_yaml(tmp_path, body)
+    if local_clone:
+        _local_clone_yaml(tmp_path, monkeypatch)
+    claude = fake_claude()
+    git = fake_git(known_repos={"o/newmp"})
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            "--no-install",
+            f"--config={cfg}",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert claude.calls == []
+    assert git.calls == []
+    assert not (tmp_path / "marketplaces").exists()
+    reloaded = load_config(cfg)
+    assert reloaded.marketplaces["newmp"].repo == "o/newmp"
+    assert reloaded.claude_plugins["review"].marketplace == "newmp"
+    resolved = resolve_profile(reloaded, "p")
+    assert reconcile_adapter.plugin_bare_names(reloaded, resolved) == ["review"]
 
 
 def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(

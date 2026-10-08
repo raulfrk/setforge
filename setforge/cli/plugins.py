@@ -181,7 +181,9 @@ def plugin_add(
         if profile not in cfg.profiles:
             # Reject before the marketplace/plugin writes and the native call.
             raise ProfileNotFound(f"profile not found: {profile}")
-        _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
+        _register_plugin_in_yaml(
+            config, profile, plugin_name, mp_name, source, no_install=no_install
+        )
         if not no_install:
             _execute_plugin_add(plugin_name, mp_name)
 
@@ -335,11 +337,17 @@ def _register_plugin_in_yaml(
     plugin_name: str,
     mp_name: str,
     source: MarketplaceSource,
+    *,
+    no_install: bool,
 ) -> None:
-    """Register the marketplace, plugin, and profile binding in setforge.yaml."""
+    """Register the marketplace, plugin, and profile binding in setforge.yaml.
+
+    ``no_install`` keeps this YAML-only: the native marketplace is not added.
+    """
     mp_added = claude_yaml_editor_mod.yaml_add_marketplace(config, mp_name, source)
     if mp_added:
         typer.echo(f"registered marketplace: {mp_name}")
+    if mp_added and not no_install:
         try:
             claude_plugins_mod.marketplace_add(
                 mp_name, _resolve_add_source(source, mp_name)
