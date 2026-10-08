@@ -153,6 +153,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SetForge you are running. It used to start whichever `setforge` came first on
   your `PATH` and, if that failed, fall back to a bundled copy with a warning.
   The script it writes is unchanged.
+- `setforge inspect` on a tracked file whose destination you deleted now shows the
+  live file as missing, in the header and as an empty live pane in the JSON
+  output. It used to show the copy recorded at the last install as if it were
+  still on disk, so it looked like the next `install` would restore the file.
 
 ### Removed
 

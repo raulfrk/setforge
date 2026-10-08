@@ -218,17 +218,12 @@ def inspect(
     )
     with profile_lock(profile):
         base = reconcile_store.read_base(profile, fid)
-        recorded = reconcile_store.read_local(profile, fid)
         entry = reconcile_store.read_index(profile).files.get(str(fid))
     staging = staging_rows[0] if staging_rows else None
 
-    # Absent-live falls back to recorded-local; matched on ABSENT, not truthiness.
-    if dst.exists():
-        live: bytes | Absent = dst.read_bytes()
-    elif isinstance(recorded, bytes):
-        live = recorded
-    else:
-        live = ABSENT
+    # Live state is the disk, not the recorded copy: a deleted file is absent,
+    # matched on ABSENT (a zero-byte file is present and empty).
+    live: bytes | Absent = dst.read_bytes() if dst.exists() else ABSENT
     upstream: bytes | Absent = src.read_bytes() if src.exists() else ABSENT
     if upstream is not ABSENT and generated is not None:
         upstream = rendered_source(src, generated).encode("utf-8")
@@ -269,6 +264,8 @@ def inspect(
             else RichLayout.STACKED
         )
         merge_status = _merge_status(parse_problem, base_present, result_clean)
+        if live is ABSENT:
+            merge_status = f"live file is missing; {merge_status}"
         header = theme.styled(
             f"inspect {dst}  ({merge_status})",
             theme.Role.HEADING,

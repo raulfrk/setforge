@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import shlex
 from pathlib import Path
+from typing import Any
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from tests.shared_fixtures import ConfigRepo
 
 _BASE = b"line one\nline two\nline three\n"
 _LIVE = b"line one\nlive edit\nline three\n"
@@ -441,3 +444,95 @@ def test_inspect_header_keeps_long_path_unbroken_when_piped(
 
     assert result.exit_code == 0, result.output
     assert f"inspect {long_dst}" in result.output
+
+
+_P = "p"
+
+
+def _installed(
+    config_repo: ConfigRepo, name: str, body: bytes
+) -> tuple[Path, Path, Path]:
+    """Install ``body`` as the tracked file ``name``; return (config, live, tracked)."""
+    tracked = config_repo.write_tracked(name, body)
+    config = config_repo.write_config(
+        profile=_P,
+        tracked_files={"cfg": {"src": name, "dst": f"~/.inspect_acc/{name}"}},
+    )
+    live = Path.home() / ".inspect_acc" / name
+    result = _run("install", config)
+    assert result.exit_code == 0, result.output
+    assert live.read_bytes() == body
+    return config, live, tracked
+
+
+def _run(verb: str, config: Path, *extra: str) -> Result:
+    common = [f"--profile={_P}", f"--config={config}"]
+    if verb == "install":
+        return CliRunner().invoke(
+            app,
+            [verb, *extra, *common, "--no-secrets-scan", "--no-git-check", "--yes"],
+        )
+    return CliRunner().invoke(app, ["--format=json", verb, *extra, *common])
+
+
+def _inspect(config: Path) -> dict[str, Any]:
+    result = _run("inspect", config, "cfg")
+    assert result.exit_code == 0, result.output
+    data: dict[str, Any] = json.loads(result.stdout)["data"]
+    return data
+
+
+def _files(root: Path) -> dict[str, bytes]:
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
+
+
+@pytest.mark.parametrize("live_after", [None, b""], ids=["deleted", "emptied"])
+def test_inspect_shows_a_deleted_destination_as_absent_not_as_stored_bytes(
+    config_repo: ConfigRepo, tmp_path: Path, live_after: bytes | None
+) -> None:
+    config, live, _ = _installed(config_repo, "note.md", b"original text\n")
+    if live_after is None:
+        live.unlink()
+    else:
+        live.write_bytes(live_after)
+    before = _files(tmp_path)
+
+    data = _inspect(config)
+
+    assert _files(tmp_path) == before
+    assert data["base_present"] is True
+    assert data["panes"]["base"] == "original text\n"
+    assert data["panes"]["live"] == (None if live_after is None else "")
+    assert "original text" not in data["panes"]["merge"]
+    assert data["index"]["conflict"] == []
+    human = CliRunner().invoke(
+        app, ["inspect", "cfg", f"--profile={_P}", f"--config={config}"]
+    )
+    assert human.exit_code == 0, human.output
+    assert ("live file is missing" in human.output) is (live_after is None)
+
+    install = _run("install", config)
+    assert install.exit_code == 0, install.output
+    if live_after is None:
+        assert not live.exists()
+    else:
+        assert live.read_bytes() == b""
+
+
+def test_inspect_deleted_destination_without_a_recorded_base(
+    config_repo: ConfigRepo,
+) -> None:
+    config_repo.write_tracked("note.md", "tracked text\n")
+    config = config_repo.write_config(
+        profile=_P,
+        tracked_files={"cfg": {"src": "note.md", "dst": "~/.inspect_acc/note.md"}},
+    )
+
+    data = _inspect(config)
+
+    assert data["base_present"] is False
+    assert data["panes"]["live"] is None
