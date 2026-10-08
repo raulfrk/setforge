@@ -312,6 +312,13 @@ def test_spans_manifest_path_rejects_traversal(state_dir: Path) -> None:
             snapshot_store_state(SnapshotStore.SPANS, _PROFILE, bad_key)
 
 
+@pytest.mark.parametrize("bad_profile", ["../escape", "..", "", "a/b", "v\x00m"])
+def test_spans_manifest_path_rejects_unsafe_profile(bad_profile: str) -> None:
+    """A ``store="spans"`` profile that is not one safe directory name is refused."""
+    with pytest.raises(InvalidTransitionRecord, match=r"^unsafe "):
+        snapshot_store_state(SnapshotStore.SPANS, bad_profile, "claude/CLAUDE.md")
+
+
 def test_snapshot_store_state_reads_current_bytes(state_dir: Path) -> None:
     """snapshot_store_state captures present bytes and absent-as-None."""
     base = _store_paths(state_dir)[SnapshotStore.BASE]

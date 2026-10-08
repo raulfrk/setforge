@@ -257,7 +257,7 @@ def test_staged_capture_promotes_only_shared_and_keeps_base(
     assert b"workdir: /home/generic" in out  # LOCAL kept base
     assert b"workdir: /home/raul" not in out  # LOCAL not leaked to tracked
     assert store.read_base("p", fid) == _A5_BASE  # base UNCHANGED on sync
-    assert store.reconstruct("p", fid) == _A5_LIVE  # local holds full live (INV-2)
+    assert store.read_local("p", fid) == _A5_LIVE  # local holds full live (INV-2)
     store.verify("p")
 
 
@@ -635,7 +635,7 @@ def test_apply_writes_the_planned_bytes_not_a_later_live(
     assert [staged_src.read_bytes(), (repo / "tracked" / "notes").read_bytes()] == (
         planned
     )
-    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    assert store.read_local("p", file_id("CLAUDE.md")) == _A5_LIVE
     store.verify("p")
 
 
@@ -661,7 +661,7 @@ def test_apply_checks_the_bytes_read_back_before_recording(
     with pytest.raises(InvariantViolation, match="INV-8"):
         capture_mod.apply_capture("p", plan)
 
-    assert store.reconstruct("p", file_id("CLAUDE.md")) == _A5_LIVE
+    assert store.read_local("p", file_id("CLAUDE.md")) == _A5_LIVE
     assert not (repo / "tracked" / "notes").exists()
 
 
@@ -800,7 +800,7 @@ def test_staged_capture_structured_promotes_only_shared(
     assert b"workdir: /home/generic" in out  # LOCAL key kept base value
     assert b"/home/raul" not in out  # LOCAL host value not leaked to tracked
     assert store.read_base("p", fid) == _SY_BASE  # base UNCHANGED on sync
-    assert store.reconstruct("p", fid) == _SY_LIVE  # local holds full live (INV-2)
+    assert store.read_local("p", fid) == _SY_LIVE  # local holds full live (INV-2)
     store.verify("p")
 
 

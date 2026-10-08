@@ -62,7 +62,6 @@ def test_local_round_trip_byte_exact(fid: str, data: bytes) -> None:
         f = file_id(fid)
         store.write_local("prof", f, data)
         assert store.read_local("prof", f) == data
-        assert store.reconstruct("prof", f) == data
 
 
 @_io_bound

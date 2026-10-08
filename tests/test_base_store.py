@@ -1,6 +1,7 @@
 """Tests for the per-host stored-base bytes store."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,100 @@ def test_write_base_rejects_absolute() -> None:
 def test_read_base_rejects_traversal() -> None:
     with pytest.raises(BaseStoreError):
         base_store.read_base("vm", "../escape")
+
+
+_UNSAFE_PROFILES = ["../escape", "..", ".", "", "a/b", "v\x00m"]
+
+
+@pytest.mark.parametrize("profile", _UNSAFE_PROFILES)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda profile: base_store.write_base(profile, "claude/CLAUDE.md", b"x"),
+        lambda profile: base_store.read_base(profile, "claude/CLAUDE.md"),
+        lambda profile: base_store.base_path(profile, "claude/CLAUDE.md"),
+        lambda profile: base_store.list_base_ids(profile),
+        lambda profile: base_store.prune(profile, set()),
+    ],
+    ids=["write_base", "read_base", "base_path", "list_base_ids", "prune"],
+)
+def test_unsafe_profile_is_refused(
+    state_dir: Path, call: Callable[[str], object], profile: str
+) -> None:
+    with pytest.raises(BaseStoreError, match=r"^unsafe "):
+        call(profile)
+    assert list(state_dir.rglob("*")) == []
+
+
+def test_prune_of_a_parent_profile_name_keeps_every_file(state_dir: Path) -> None:
+    keep = state_dir / "keep.txt"
+    keep.write_bytes(b"kept")
+    with pytest.raises(BaseStoreError):
+        base_store.prune("..", set())
+    assert keep.read_bytes() == b"kept"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: base_store.write_base("a/b", "f", b"x"),
+        lambda: base_store.read_base("a/b", "f"),
+        lambda: base_store.list_base_ids("a/b"),
+        lambda: base_store.prune("a/b", set()),
+    ],
+    ids=["write_base", "read_base", "list_base_ids", "prune"],
+)
+def test_profile_separator_error_names_the_profile(
+    call: Callable[[], object],
+) -> None:
+    with pytest.raises(
+        BaseStoreError, match=r"^unsafe profile 'a/b': must not contain"
+    ):
+        call()
+
+
+def test_dotted_profile_name_is_accepted() -> None:
+    base_store.write_base("my.profile", "f", b"x")
+    assert base_store.read_base("my.profile", "f") == b"x"
+
+
+@pytest.mark.parametrize("file_id", ["a/./b", "a//b", "", "a\x00b"])
+def test_malformed_file_id_is_refused(file_id: str) -> None:
+    with pytest.raises(BaseStoreError, match=r"^unsafe file-id"):
+        base_store.base_path("vm", file_id)
+
+
+def test_file_id_through_a_symlink_out_of_the_store_is_refused(
+    state_dir: Path,
+) -> None:
+    profile_root = state_dir / "base" / "vm"
+    profile_root.mkdir(parents=True)
+    (profile_root / "out").symlink_to(state_dir)
+    with pytest.raises(
+        BaseStoreError, match=r"^file-id 'out/x' resolves outside base/vm/$"
+    ):
+        base_store.base_path("vm", "out/x")
+
+
+def test_file_id_through_a_symlink_into_another_profile_is_refused(
+    state_dir: Path,
+) -> None:
+    (state_dir / "base" / "p1").mkdir(parents=True)
+    base_store.write_base("p2", "victim", b"p2 bytes")
+    (state_dir / "base" / "p1" / "sib").symlink_to(state_dir / "base" / "p2")
+    with pytest.raises(
+        BaseStoreError, match=r"^file-id 'sib/victim' resolves outside base/p1/$"
+    ):
+        base_store.read_base("p1", "sib/victim")
+
+
+def test_profile_directory_that_is_a_symlink_is_refused(state_dir: Path) -> None:
+    base_store.write_base("real", "f", b"x")
+    (state_dir / "base" / "vm").symlink_to(state_dir / "base" / "real")
+    with pytest.raises(
+        BaseStoreError, match=r"^file-id 'f' resolves outside base/vm/$"
+    ):
+        base_store.base_path("vm", "f")
 
 
 def test_concurrent_forked_writers_no_torn_bytes(state_dir: Path) -> None:

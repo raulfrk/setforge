@@ -39,6 +39,19 @@ def test_manifest_path_rejects_absolute() -> None:
         scalar_base_store.manifest_path("vm", "/etc/passwd")
 
 
+@pytest.mark.parametrize("profile", ["../escape", "..", ".", "", "a/b", "v\x00m"])
+def test_manifest_path_rejects_unsafe_profile(profile: str) -> None:
+    with pytest.raises(BaseStoreError, match=r"^unsafe "):
+        scalar_base_store.manifest_path(profile, "settings")
+
+
+def test_manifest_path_profile_separator_error_names_the_profile() -> None:
+    with pytest.raises(
+        BaseStoreError, match=r"^unsafe profile 'a/b': must not contain"
+    ):
+        scalar_base_store.manifest_path("a/b", "settings")
+
+
 def test_manifest_path_rejects_symlink_escape(state_dir: Path) -> None:
     profile_root = state_dir / "scalar-base" / "vm"
     profile_root.mkdir(parents=True)

@@ -40,7 +40,7 @@ in this file.
 from pathlib import Path
 
 from setforge import atomicio, base_store_format
-from setforge.errors import BaseStoreError, BaseStoreIOError
+from setforge.errors import BaseStoreError, BaseStoreIOError, ReconcileStoreError
 from setforge.paths import state_root
 
 
@@ -50,29 +50,36 @@ def base_root() -> Path:
 
 
 def _profile_root(profile: str) -> Path:
-    """Resolved root of ``profile``'s stored-base subtree."""
+    """Resolved root of ``profile``'s stored-base subtree.
+
+    Rejects a ``profile`` that is not a single safe directory name (a path
+    separator, ``.``/``..``, empty, or a control character).
+    """
+    # Imported lazily: ``setforge.reconcile`` imports this module at load time.
+    from setforge.reconcile.types import check_profile_name
+
+    try:
+        check_profile_name(profile)
+    except ReconcileStoreError as err:
+        raise BaseStoreError(str(err)) from err
     return (base_root() / profile).resolve()
 
 
 def _resolve_target(profile: str, file_id: str) -> Path:
     """Map ``(profile, file_id)`` to its on-disk base path, guarding traversal.
 
-    Rejects a ``file_id`` that is absolute or contains a ``..``
-    component, and verifies the resolved target stays within the
-    profile's subtree, so a malicious or buggy file-id can never write a
-    base outside ``base/<profile>/``.
+    Applies the store-wide path guard
+    (:func:`setforge.reconcile.types.resolve_store_path`) to both segments, so
+    a malicious or buggy profile or file-id can never touch a base outside
+    ``base/<profile>/``.
     """
-    candidate = Path(file_id)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise BaseStoreError(
-            f"unsafe file-id {file_id!r}: must be a relative path with no "
-            "'..' components"
-        )
-    profile_root = _profile_root(profile)
-    target = (profile_root / candidate).resolve()
-    if target != profile_root and profile_root not in target.parents:
-        raise BaseStoreError(f"file-id {file_id!r} resolves outside base/{profile}/")
-    return target
+    # Imported lazily: ``setforge.reconcile`` imports this module at load time.
+    from setforge.reconcile.types import resolve_store_path
+
+    try:
+        return resolve_store_path(base_root(), profile, file_id)
+    except ReconcileStoreError as err:
+        raise BaseStoreError(str(err)) from err
 
 
 def base_path(profile: str, file_id: str) -> Path:
