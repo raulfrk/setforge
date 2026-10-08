@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -126,10 +127,15 @@ def _fixture(
     *,
     empty_tree: bool = False,
     existing_parent: bool = False,
+    symlinked_home: bool = False,
 ) -> tuple[Path, Path, Path, dict[str, str]]:
     root = tmp_path.resolve()
     home = root / "home"
-    home.mkdir()
+    if symlinked_home:
+        (root / "realhome").mkdir()
+        home.symlink_to(root / "realhome", target_is_directory=True)
+    else:
+        home.mkdir()
     live = home / "live"
     if existing_parent:
         live.mkdir()
@@ -423,3 +429,81 @@ def test_install_alias_recovers_in_fresh_process(
     if retarget:
         assert sentinel.read_bytes() == b"foreign alias bytes"
         assert sentinel.stat().st_ino == inode
+
+
+def _manifest(directory: Path) -> dict[str, tuple[int, int, bytes | str | None]]:
+    """Describe everything below ``directory`` except SetForge's own cache."""
+    entries: dict[str, tuple[int, int, bytes | str | None]] = {}
+    for path in sorted(directory.rglob("*")):
+        if path.relative_to(directory).parts[0] == ".cache":
+            continue
+        info = path.lstat()
+        content: bytes | str | None = None
+        if path.is_symlink():
+            content = str(path.readlink())
+        elif path.is_file():
+            content = path.read_bytes()
+        entries[str(path.relative_to(directory))] = (
+            info.st_ino,
+            info.st_mode,
+            content,
+        )
+    return entries
+
+
+@pytest.mark.parametrize(
+    ("point", "replaced"),
+    [("after", False), ("bound", False), ("tree", False), ("tree", True)],
+)
+def test_install_below_symlinked_home_recovers_only_its_absent_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: str, replaced: bool
+) -> None:
+    config, _live, repo, env = _fixture(tmp_path, monkeypatch, symlinked_home=True)
+    home = tmp_path / "home"
+    real = tmp_path / "realhome"
+    outside = tmp_path / "outside"
+    for bystander in (real / "notes", outside / ".claude/tree/item"):
+        bystander.parent.mkdir(parents=True, exist_ok=True)
+        bystander.write_bytes(b"bystander\n")
+    destination = home / ".claude/tree"
+    document = YAML().load(config.read_text())
+    document["tracked_files"]["tree"]["dst"] = str(destination)
+    YAML().dump(document, config)
+    env["SETFORGE_TEST_DESTINATION"] = str(destination)
+    assert destination.resolve().is_relative_to(tmp_path.resolve())
+    before = _manifest(real), _manifest(outside)
+    assert set(before[0]) == {"notes"}
+
+    crashed = _crash(config, repo, env, point)
+    assert crashed.returncode == {"after": 80, "bound": 82, "tree": 86}[point], (
+        crashed.stdout,
+        crashed.stderr,
+    )
+    assert (real / ".claude").is_dir()
+    if point == "tree":
+        assert (real / ".claude/tree/item").read_bytes() == b"tree\n"
+    assert operations.active("p") is not None
+    if replaced:
+        created = tmp_path / "created"
+        (real / ".claude").rename(created)
+        foreign = real / ".claude/tree/item"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(b"foreign root bytes")
+        replacement = _manifest(real)
+        refused = _recover(repo, env)
+        assert refused.returncode == 1
+        assert "parent changed" in refused.stderr
+        assert "Traceback" not in refused.stderr
+        assert _manifest(real) == replacement
+        assert (created / "tree/item").read_bytes() == b"tree\n"
+        assert operations.active("p") is not None
+        shutil.rmtree(real / ".claude")
+        created.rename(real / ".claude")
+
+    recovered = _recover(repo, env)
+
+    assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+    assert operations.active("p") is None
+    assert home.is_symlink()
+    assert home.resolve() == real.resolve()
+    assert (_manifest(real), _manifest(outside)) == before
