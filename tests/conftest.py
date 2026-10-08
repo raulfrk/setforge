@@ -787,3 +787,15 @@ def claude_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ClaudeStub:
     monkeypatch.setenv("STUB_LOG", str(log))
     _cs._resolve_claude_bin.cache_clear()
     return ClaudeStub(log, monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures defined in tests/shared_fixtures.py
+# ---------------------------------------------------------------------------
+
+from tests.shared_fixtures import (  # noqa: E402, F401
+    config_repo,
+    fake_code,
+    git_template,
+    init_git_repo,
+)

@@ -12,30 +12,13 @@ Per SPEC 4 mockup — value completion dispatches on the dotted path:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 import typer
 
 from setforge.cli.config import _complete_value
-
-
-class _FakeCtx:
-    """Minimal stand-in for :class:`typer.Context` in completion tests."""
-
-    def __init__(
-        self,
-        *,
-        path: str | None = None,
-        local: bool = True,
-        info_name: str | None = "add",
-    ) -> None:
-        self.params: dict[str, Any] = {
-            "path": path,
-            "local": local,
-            "tracked": not local,
-        }
-        self.info_name = info_name
+from tests.fakes import FakeCtx
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +31,7 @@ def _isolate_local(tmp_path: Path) -> Path:
 
 def test_value_completion_unknown_path_yields_empty() -> None:
     """An unknown dotted-path yields no value suggestions."""
-    ctx = _FakeCtx(path="bogus.field")
+    ctx = FakeCtx(path="bogus.field")
     assert _complete_value(cast(typer.Context, ctx), "") == []
 
 
@@ -61,7 +44,7 @@ def test_value_completion_enum_yields_members() -> None:
     ``isinstance(list)`` but is useless for the user, so the assertion
     pins both expected values explicitly.
     """
-    ctx = _FakeCtx(path="source.kind")
+    ctx = FakeCtx(path="source.kind")
     suggestions = _complete_value(cast(typer.Context, ctx), "")
     assert "path" in suggestions, suggestions
     assert "git" in suggestions, suggestions
@@ -69,7 +52,7 @@ def test_value_completion_enum_yields_members() -> None:
 
 def test_value_completion_with_empty_path_yields_empty() -> None:
     """No path argument means no value suggestion possible."""
-    ctx = _FakeCtx(path=None)
+    ctx = FakeCtx(path=None)
     assert _complete_value(cast(typer.Context, ctx), "") == []
 
 
@@ -84,6 +67,6 @@ def test_value_completion_empty_for_scalar_with_no_enum() -> None:
     irrelevant universe values (e.g., from a misrouted enum lookup)
     for free-form scalars.
     """
-    ctx = _FakeCtx(path="binaries.code")
+    ctx = FakeCtx(path="binaries.code")
     out = _complete_value(cast(typer.Context, ctx), "")
     assert out == []

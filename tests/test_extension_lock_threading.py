@@ -5,10 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-import subprocess
 import zipfile
-from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -84,32 +81,10 @@ def test_provisioner_detaches_pin_mapping(monkeypatch: pytest.MonkeyPatch) -> No
     assert seen == [pin]
 
 
-class _FakeCode:
-    def __init__(self, installed: list[str]) -> None:
-        self.installed = list(installed)
-        self.calls: list[list[str]] = []
-
-    def run(self, args: list[str], **_: Any) -> subprocess.CompletedProcess:
-        self.calls.append(list(args))
-        if args[1] == "--list-extensions":
-            out = "\n".join(self.installed) + ("\n" if self.installed else "")
-            return subprocess.CompletedProcess(args, 0, out, "")
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    @property
-    def install_args(self) -> list[str]:
-        return [c[2] for c in self.calls if c[1] == "--install-extension"]
-
-
 def test_reconcile_routes_pinned_ext_through_strong_path(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_code
 ) -> None:
-    fake = _FakeCode([])
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary",
-        lambda name: Path("/usr/bin/code") if name == "code" else None,
-    )
-    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake.run)
+    fake = fake_code()
     monkeypatch.setattr(
         "setforge.provision.resolve.extension.download_vsix",
         lambda *a, **k: _VSIX,

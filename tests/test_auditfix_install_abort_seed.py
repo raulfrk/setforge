@@ -23,6 +23,7 @@ from setforge.cli import app
 from setforge.reconcile.host_local_view import host_local_headings_from_store
 from setforge.reconcile.types import file_id
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "seed-test"
 
@@ -38,41 +39,24 @@ _TEMPLATE_BODY = "## Python conventions\n\nSEEDED PYTHON CONVENTIONS\n"
 
 
 @pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    (target / "tracked").mkdir(parents=True)
-    (target / "tracked" / "doc.md").write_text(_DOC, encoding="utf-8")
-    (target / "templates").mkdir(parents=True)
-    (target / "templates" / "py-conv.md").write_text(_TEMPLATE_BODY, encoding="utf-8")
-    return target
+def repo(config_repo: ConfigRepo) -> ConfigRepo:
+    config_repo.write_tracked("doc.md", _DOC)
+    templates = config_repo.root / "templates"
+    templates.mkdir(parents=True)
+    (templates / "py-conv.md").write_text(_TEMPLATE_BODY, encoding="utf-8")
+    return config_repo
 
 
-def _write_config(repo: Path, *, src: str = "doc.md") -> Path:
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        f"    src: {src}\n"
-        "    dst: ~/.setforge_seed/doc.md\n"
-        "section_templates:\n"
-        "  py-conv:\n"
-        "    src: py-conv.md\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - doc\n"
-        "    bootstrap:\n"
-        "      - ~/.setforge_seed/bootstrap.txt\n"
-        "    section_slots:\n"
-        "      python-conventions: py-conv\n",
-        encoding="utf-8",
+def _write_config(repo: ConfigRepo, *, src: str = "doc.md") -> Path:
+    return repo.write_config(
+        profile=_PROFILE,
+        tracked_files={"doc": {"src": src, "dst": "~/.setforge_seed/doc.md"}},
+        extra={"section_templates": {"py-conv": {"src": "py-conv.md"}}},
+        profile_extra={
+            "bootstrap": ["~/.setforge_seed/bootstrap.txt"],
+            "section_slots": {"python-conventions": "py-conv"},
+        },
     )
-    return config
 
 
 def _seeded_in_store() -> bool:
@@ -107,7 +91,7 @@ def _invoke(config: Path) -> Result:
 
 
 def test_secrets_abort_leaves_store_unseeded(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A secrets-scan abort fires BEFORE deploy+seed — the store must stay
     unseeded."""
@@ -190,7 +174,7 @@ def test_secret_silence_decision_plans_no_write(
 
 
 def test_drift_gate_abort_leaves_store_unseeded(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The unexpected-drift reject fires BEFORE deploy+seed — the store must
     stay unseeded."""
@@ -206,7 +190,7 @@ def test_drift_gate_abort_leaves_store_unseeded(
     assert not _seeded_in_store(), "a drift-gate abort must not seed the store"
 
 
-def test_validate_srcs_abort_leaves_store_unseeded(repo: Path) -> None:
+def test_validate_srcs_abort_leaves_store_unseeded(repo: ConfigRepo) -> None:
     """A profile referencing a missing tracked src aborts at
     validate_srcs_exist — the store must stay unseeded."""
     config = _write_config(repo, src="does-not-exist.md")
