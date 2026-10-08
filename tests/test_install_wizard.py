@@ -26,32 +26,17 @@ from setforge.cli import app
 from setforge.cli import install as install_mod
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.wizard import WizardResult
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "test-wizard"
 _FILE_ID = "shared_text"
 _TRACKED_CONFLICT = b"one\ntwo-TRACKED\nthree\n"
 
 
-def _write_config(repo: Path) -> Path:
-    """Write a setforge.yaml with a shared tracked file; return its path."""
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  shared_text:\n"
-        "    src: text/note.txt\n"
-        "    dst: ~/.setforge_wiz/note.txt\n"
-        "  anchor:\n"
-        "    src: text/anchor.txt\n"
-        "    dst: ~/.setforge_wiz/anchor.txt\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - shared_text\n"
-        "      - anchor\n",
-        encoding="utf-8",
-    )
-    return config
+_TRACKED = {
+    "shared_text": {"src": "text/note.txt", "dst": "~/.setforge_wiz/note.txt"},
+    "anchor": {"src": "text/anchor.txt", "dst": "~/.setforge_wiz/anchor.txt"},
+}
 
 
 def _write_tracked(repo: Path, body: str) -> None:
@@ -150,7 +135,7 @@ def _script_wizard(
 def _seed_conflict(repo: Path) -> Path:
     """First-install, then diverge both sides on the same line for a conflict."""
     _write_tracked(repo, "one\ntwo\nthree\n")
-    config = _write_config(repo)
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
     assert _install(config).exit_code == 0
     _live_path().write_text("one\ntwo-LIVE\nthree\n", encoding="utf-8")
     _write_tracked(repo, "one\ntwo-TRACKED\nthree\n")

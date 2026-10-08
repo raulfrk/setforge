@@ -53,28 +53,9 @@ from setforge.cli._output import (
     render,
     wrap_json,
 )
+from tests.shared_fixtures import ConfigRepo
 
 _ANSI_RE = re.compile(r"\x1b\[")
-
-
-def _write_minimal_config(tmp_path: Path, *, profile: str = "vm-headless") -> Path:
-    """Build a minimal setforge.yaml under ``tmp_path``; return its path."""
-    tracked = tmp_path / "tracked" / "doc.md"
-    tracked.parent.mkdir(parents=True, exist_ok=True)
-    tracked.write_text("hello\n", encoding="utf-8")
-    yaml_path = tmp_path / "setforge.yaml"
-    yaml_path.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.local/share/setforge-test/doc.md\n"
-        "profiles:\n"
-        f"  {profile}:\n"
-        "    tracked_files: [doc]\n",
-        encoding="utf-8",
-    )
-    return yaml_path
 
 
 @pytest.fixture
@@ -86,7 +67,14 @@ def runner() -> CliRunner:
 @pytest.fixture
 def minimal_config(tmp_path: Path) -> Path:
     """Materialise a minimal setforge.yaml + tracked tree; return yaml path."""
-    return _write_minimal_config(tmp_path)
+    repo = ConfigRepo(tmp_path)
+    repo.write_tracked("doc.md", "hello\n")
+    return repo.write_config(
+        profile="vm-headless",
+        tracked_files={
+            "doc": {"src": "doc.md", "dst": "~/.local/share/setforge-test/doc.md"}
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

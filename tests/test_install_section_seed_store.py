@@ -20,6 +20,7 @@ These tests pin that behavior end-to-end through the ``install`` CLI:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import Result
@@ -28,6 +29,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.reconcile.host_local_view import host_local_headings_from_store
 from setforge.reconcile.types import file_id
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "seed-test"
 
@@ -56,26 +58,12 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return target
 
 
-def _write_config(repo: Path) -> Path:
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.setforge_seed/doc.md\n"
-        "section_templates:\n"
-        "  py-conv:\n"
-        "    src: py-conv.md\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - doc\n"
-        "    section_slots:\n"
-        "      python-conventions: py-conv\n",
-        encoding="utf-8",
-    )
-    return config
+_CONFIG: dict[str, Any] = {
+    "profile": _PROFILE,
+    "tracked_files": {"doc": {"src": "doc.md", "dst": "~/.setforge_seed/doc.md"}},
+    "extra": {"section_templates": {"py-conv": {"src": "py-conv.md"}}},
+    "profile_extra": {"section_slots": {"python-conventions": "py-conv"}},
+}
 
 
 def _invoke(config: Path) -> Result:
@@ -114,7 +102,7 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
 ) -> None:
     """A fresh install records the template as a LOCAL store unit and writes
     NOTHING to local.yaml."""
-    config = _write_config(repo)
+    config = ConfigRepo(repo).write_config(**_CONFIG)
     # Must be $HOME (the fixture's monkeypatched real scaffold root), not
     # tmp_path, or the no-write assert below would pass vacuously.
     local_yaml = tmp_path / "home" / ".config" / "setforge" / "local.yaml"
@@ -141,7 +129,7 @@ def test_fresh_seed_participates_and_capture_keeps_body_host_local(
     from setforge.reconcile import store
     from tests.verb_calls import capture_profile
 
-    config_path = _write_config(repo)
+    config_path = ConfigRepo(repo).write_config(**_CONFIG)
     result = _invoke(config_path)
     assert result.exit_code == 0, result.output
 
@@ -165,7 +153,7 @@ def test_second_install_does_not_reseed_and_deploys_host_local(
 ) -> None:
     """The seed-once gate reads the store: a second install neither reseeds nor
     duplicates, and the seeded host-local body deploys into the live file."""
-    config = _write_config(repo)
+    config = ConfigRepo(repo).write_config(**_CONFIG)
 
     first = _invoke(config)
     assert first.exit_code == 0, first.output
@@ -187,7 +175,7 @@ def test_deleted_seeded_section_stays_deleted_when_upstream_changes(
 ) -> None:
     """A seeded section the user deletes from the live file is not seeded again,
     whether or not the next install also advances the merge base."""
-    config = _write_config(repo)
+    config = ConfigRepo(repo).write_config(**_CONFIG)
     first = _invoke(config)
     assert first.exit_code == 0, first.output
 
@@ -216,7 +204,7 @@ def test_edited_seeded_section_is_preserved_when_upstream_changes(
 ) -> None:
     """A seeded section the user edited keeps its edit when upstream changes, and
     the template is not injected a second time."""
-    config = _write_config(repo)
+    config = ConfigRepo(repo).write_config(**_CONFIG)
     first = _invoke(config)
     assert first.exit_code == 0, first.output
 
