@@ -727,59 +727,6 @@ def _basis(item: ProjectSyncFilePlan) -> tuple[object, ...]:
     )
 
 
-def _ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
-    stored = item.stored
-    addition = item.addition
-    mode: int | None
-    if item.desired_upstream is ABSENT or item.desired_mode is None:
-        if stored is None:
-            raise SetforgeError("project ownership state has no upstream payload")
-        payload = stored.upstream_payload
-        mode = stored.upstream_mode
-        source = stored.source
-        action = stored.action
-        previous_payload = stored.previous_payload
-        previous_mode = stored.previous_mode
-        parents = stored.created_parents
-    else:
-        if stored is None and addition is None:
-            raise SetforgeError("project member has no ownership source plan")
-        payload = item.desired_upstream
-        mode = item.desired_mode
-        if stored is not None:
-            source = addition.source if addition is not None else stored.source
-            action = stored.action
-            previous_payload = stored.previous_payload
-            previous_mode = stored.previous_mode
-            parents = stored.created_parents
-        else:
-            assert addition is not None
-            source = addition.source
-            action = addition.action
-            previous_payload = addition.previous_payload
-            previous_mode = addition.previous_mode
-            parents = addition.created_parents
-    if mode is None:
-        raise SetforgeError("project ownership state has no upstream mode")
-    merged = item.result.merged() if item.result.clean else None
-    applied_payload = merged if isinstance(merged, bytes) else None
-    return ProjectFilePlan(
-        file_id=item.file_id,
-        declaring_profile=item.declaring_profile,
-        source=source,
-        destination=target / item.relative_destination,
-        relative_destination=item.relative_destination,
-        source_payload=payload,
-        source_mode=mode,
-        source_digest=_sha256(payload),
-        applied_payload=applied_payload,
-        action=action,
-        previous_payload=previous_payload,
-        previous_mode=previous_mode,
-        created_parents=parents,
-    )
-
-
 def _prior_ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
     stored = item.stored
     if stored is None:
@@ -863,13 +810,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             owners[injection.profile] = recorded_owner
 
         store = OwnershipStore()
-        ownership_plans = {
-            (item.profile, item.relative_destination): _ownership_plan(
-                item, plan.target
-            )
-            for item in plan.files
-            if item.kind is not SyncFileKind.REMOVE
-        }
         injection_by_profile = {
             injection.profile: injection for injection in plan.injections
         }
@@ -1098,7 +1038,10 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     if claim is not None and claim.lifecycle is ClaimLifecycle.RELEASED:
                         claim = store.restore_locked(claim)
                         expected_generation = claim.generation
-                    ownership_plan = ownership_plans[key]
+                    # The fresh plan matched above gives every added or updated
+                    # member the profile's own plan of that file.
+                    ownership_plan = item.addition
+                    assert ownership_plan is not None
                     store.claim_locked(
                         resource_id=resource,
                         owner_id=owners[item.profile],
