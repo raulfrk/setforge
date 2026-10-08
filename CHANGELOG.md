@@ -19,14 +19,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   marketplace and exits 1. The "keep the existing clone" step shows the repo
   as `owner/repo`. A cache created by the old "both" choice keeps working.
   `plugin reconcile --yes` is still accepted but no longer does anything.
-
 - `upgrade` no longer tries to show release notes or guess at schema changes
   (it could not find the changelog in an installed copy anyway). It prints the
   changelog link instead and offers "Upgrade" or "Upgrade + `migrate --check`".
   `--no-prompt` runs the second one, as it already did for installed copies.
   The yanked and pre-release warnings and the `migrate --check` after the
   upgrade are unchanged.
-
 - `upgrade --check` and `--to` now look up the version list with a single plain
   request to PyPI instead of a custom client. `--to` no longer makes a second
   request, a version PyPI does not list is reported as such, and the small
@@ -79,6 +77,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes", and could re-add a missing private exclude entry; `project sync`
   does that. The message no longer says which of the profile, the visibility
   flag or a file differs.
+- `setforge validate` suggests a "Did you mean" name in more cases, including
+  shortened names such as `plugins` for `claude_plugins`.
+- `setforge sync --yes` now captures all live drift on its own; it used to stop
+  with "--yes requires --auto". `--auto=use-live --yes` still works and does
+  the same thing.
+- `setforge cleanup` no longer records a transition when it deletes a package.
+  That record held nothing to undo, yet it became the newest one, so the next
+  `setforge revert` reverted nothing and exited 0. `revert` now goes to your
+  last real install or sync. Records written by earlier versions stay listed
+  and behave as before; `revert --to-before=<id>` still goes past them.
 
 ### Fixed
 
@@ -126,22 +134,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SetForge you are running. It used to start whichever `setforge` came first on
   your `PATH` and, if that failed, fall back to a bundled copy with a warning.
   The script it writes is unchanged.
-
-### Changed
-
-- `setforge validate` suggests a "Did you mean" name in more cases, including
-  shortened names such as `plugins` for `claude_plugins`.
-
-### Changed
-
-- `setforge sync --yes` now captures all live drift on its own; it used to stop
-  with "--yes requires --auto". `--auto=use-live --yes` still works and does
-  the same thing.
-- `setforge cleanup` no longer records a transition when it deletes a package.
-  That record held nothing to undo, yet it became the newest one, so the next
-  `setforge revert` reverted nothing and exited 0. `revert` now goes to your
-  last real install or sync. Records written by earlier versions stay listed
-  and behave as before; `revert --to-before=<id>` still goes past them.
 
 ### Removed
 
