@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from setforge import locking, reconcile
+from setforge import base_store, locking, reconcile
+from setforge.base_store_format import SIDECAR_NAME
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import load_config, resolve_profile
 from setforge.errors import ConfigError, MarkerError
@@ -476,6 +477,11 @@ class MarkerRetireMigration:
             for profile in plan.profiles:
                 paths.extend(_store_legs(profile, plan.fid))
         return tuple(paths)
+
+    def rollback_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        """Each seeded profile's base-store format sidecar, stamped by the seed."""
+        profiles = sorted({p for plan in _file_plans(roots) for p in plan.profiles})
+        return tuple(base_store.base_path(p, SIDECAR_NAME) for p in profiles)
 
     def apply(self, *, roots: MigrationRoots) -> None:
         """Retire every marker, then stamp 2.1 (see the class docstring)."""

@@ -361,6 +361,9 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     if choice is MigrateChoice.ABORT:
         typer.echo("aborted: no migrations applied.")
         return
+    # An absent state root would be journaled for removal, which recovery
+    # refuses once this run's transition records and locks live inside it.
+    transitions.ensure_state_dir_writable()
     journal = operations.prepare(
         command="migrate",
         profile=transitions.MIGRATE_TRANSITION_PROFILE,
@@ -375,7 +378,9 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         kind=operations.CheckpointKind.REVERSIBLE,
     )
     try:
-        _execute_chain(chain=chain, roots=roots, choice=choice)
+        journal = _execute_chain(
+            chain=chain, roots=roots, choice=choice, journal=journal
+        )
         _run_post_apply_validate(cfg_path=cfg_path)
         if _chain_owns_transition(chain):
             _finalize_owned_transition(
@@ -385,9 +390,21 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
             )
     except BaseException as primary:
         try:
-            _recover_migration_journal(journal)
+            _recover_migration_journal(operations.load(journal.profile))
         except BaseException as recovery_error:
             primary.add_note(f"automatic recovery failed: {recovery_error}")
+            typer.secho(
+                "automatic rollback did not complete; to finish it run: "
+                f"setforge recover --profile={journal.profile} --apply",
+                err=True,
+                fg=typer.colors.RED,
+            )
+        else:
+            typer.secho(
+                "rolled back to the pre-migration state.",
+                err=True,
+                fg=typer.colors.RED,
+            )
         raise
     # file_post AFTER the chain so the record covers the full forward
     # delta. (post-apply validate is read-only — it adds nothing to the delta;
@@ -999,12 +1016,58 @@ def _dialog_text(*, chain: Sequence[Migration], roots: MigrationRoots) -> str:
     )
 
 
+def _step_rollback_paths(
+    migration: Migration, roots: MigrationRoots
+) -> tuple[Path, ...]:
+    """Every path one step may write, resolved against the current files.
+
+    ``affected_paths`` plus the optional ``rollback_paths`` hook: paths a step
+    writes that are restored on failure but are not user content, so they get
+    no backup, preview, or transition entry (a store's format sidecar).
+    """
+    extra = getattr(migration, "rollback_paths", None)
+    return (
+        *migration.affected_paths(roots=roots),
+        *(extra(roots=roots) if extra is not None else ()),
+    )
+
+
+def _journal_step_paths(
+    journal: operations.OperationJournal,
+    *,
+    migration: Migration,
+    roots: MigrationRoots,
+) -> operations.OperationJournal:
+    """Journal the paths ``migration`` is about to write that are not yet covered.
+
+    The chain-start journal holds only what each step could name before any
+    earlier step ran. A step that seeds a store, or whose targets depend on an
+    earlier step's output, names the rest here, before it mutates them.
+    """
+    known = {item.path for item in journal.paths}
+    discovered = tuple(
+        path
+        for path in _step_rollback_paths(migration, roots)
+        if path.expanduser().absolute() not in known
+    )
+    if not discovered:
+        return journal
+    journal = operations.finish_checkpoint(journal)
+    journal = operations.extend_paths(journal, discovered)
+    return operations.begin_checkpoint(
+        journal,
+        name=f"migration-step-{migration.from_version}-{migration.to_version}",
+        kind=operations.CheckpointKind.REVERSIBLE,
+    )
+
+
 def _execute_chain(
     *,
     chain: Sequence[Migration],
     roots: MigrationRoots,
     choice: MigrateChoice,
-) -> None:
+    journal: operations.OperationJournal,
+) -> operations.OperationJournal:
     """Backup every affected file (if requested), then ``apply()`` the chain.
 
     Backup-loop posture: principled-fail. Iterate every affected path
@@ -1056,59 +1119,49 @@ def _execute_chain(
     snapshots: dict[Path, bytes | None] = {
         path: (path.read_bytes() if path.exists() else None) for path in affected_paths
     }
-    store_snapshot: dict[Path, bytes] | None = (
-        transitions.snapshot_state_root() if _chain_owns_transition(chain) else None
-    )
     applied: list[str] = []
     for migration in chain:
         step = f"{migration.from_version} → {migration.to_version}"
         try:
+            journal = _journal_step_paths(journal, migration=migration, roots=roots)
             migration.apply(roots=roots)
         except KeyboardInterrupt:
             # BaseException, not caught below; re-raise bare to keep exit 130.
-            _rollback(snapshots, store_snapshot=store_snapshot)
+            _rollback(snapshots)
             typer.secho(
-                f"migration interrupted during step {step}; "
-                f"rolled back to the pre-migration state.",
+                f"migration interrupted during step {step}.",
                 err=True,
                 fg=typer.colors.RED,
             )
             raise
         except Exception as exc:
-            _rollback(snapshots, store_snapshot=store_snapshot)
+            _rollback(snapshots)
             typer.secho(
                 f"migration step {step} failed after "
                 f"{len(applied)} completed step(s) "
-                f"({', '.join(applied) or 'none'}); "
-                f"rolled back to the pre-migration state: {exc}",
+                f"({', '.join(applied) or 'none'}): {exc}",
                 err=True,
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1) from exc
         applied.append(step)
         typer.echo(f"  applied: {step}")
+    return journal
 
 
-def _rollback(
-    snapshots: dict[Path, bytes | None],
-    *,
-    store_snapshot: Mapping[Path, bytes] | None = None,
-) -> None:
-    """Restore each affected path — and the reconcile store — to pre-chain state.
+def _rollback(snapshots: dict[Path, bytes | None]) -> None:
+    """Restore each affected path to its pre-chain state.
 
     ``None`` marks a path that did not exist before the migration — it is
     removed if a partial apply created it. Best-effort recovery path:
     direct writes (not atomic), since the goal is to undo a failed
     multi-step apply rather than to survive a crash mid-rollback.
-    ``store_snapshot`` is restored AFTER the file bytes, so it wins on overlap.
     """
     for path, original in snapshots.items():
         if original is None:
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(original)
-    if store_snapshot is not None:
-        transitions.restore_state_root(store_snapshot)
 
 
 def _run_post_apply_validate(*, cfg_path: Path) -> None:

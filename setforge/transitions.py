@@ -918,50 +918,6 @@ def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
             atomicio.atomic_write_bytes(target, entry.payload)
 
 
-def snapshot_state_root() -> dict[Path, bytes]:
-    """Capture every file under :func:`state_root`: whole-tree, since only
-    the migration (not the driver) knows which store legs a cutover touches."""
-    root = state_root()
-    if not root.exists():
-        return {}
-    return {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
-
-
-def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
-    """Restore ``snapshot``, then sweep post-snapshot files: store legs
-    whole-tree (best-effort), transition records scoped to this migrate."""
-    for path, payload in snapshot.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomicio.atomic_write_bytes(path, payload)
-    root = state_root()
-    if not root.exists():
-        return
-    tx_root = transitions_root()
-    for p in root.rglob("*"):
-        if not p.is_file() or p in snapshot:
-            continue
-        if _is_within(p, tx_root) and not _is_migrate_transition_file(p, tx_root):
-            continue
-        p.unlink(missing_ok=True)
-
-
-def _is_within(path: Path, parent: Path) -> bool:
-    return path == parent or parent in path.parents
-
-
-def _is_migrate_transition_file(path: Path, tx_root: Path) -> bool:
-    try:
-        tx_dir = path.relative_to(tx_root).parts[0]
-    except (ValueError, IndexError):
-        return False
-    meta_file = tx_root / tx_dir / "meta.json"
-    try:
-        payload = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return payload.get("profile") == MIGRATE_TRANSITION_PROFILE
-
-
 def _stage_state_snapshots(
     pending: Path, snapshots: tuple[StateSnapshotEntry, ...]
 ) -> None:

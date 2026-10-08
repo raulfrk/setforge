@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Final
 from setforge import atomicio, base_store, locking, reconcile, transitions
 from setforge._redact import redact_argv
 from setforge.anchors import Anchor
+from setforge.base_store_format import SIDECAR_NAME
 from setforge.body_canon import canonical_body, inject_body_at_anchor
 from setforge.compare import resolve_src
 from setforge.config import Config, resolve_profile
@@ -161,6 +162,11 @@ class SpanSurfaceRetireMigration:
         for profile in {fold.profile for fold in folds}:
             seen.setdefault(reconcile_store.index_manifest_path(profile), None)
         return tuple(seen)
+
+    def rollback_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        """Each folded profile's base-store format sidecar, stamped by the fold."""
+        profiles = sorted({fold.profile for fold in _build_section_folds(roots)})
+        return tuple(base_store.base_path(p, SIDECAR_NAME) for p in profiles)
 
     def apply(self, *, roots: MigrationRoots) -> None:
         """Fold the residual host-local section surface, then stamp + strip.

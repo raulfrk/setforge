@@ -33,6 +33,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already was for the rest of its per-host state. Such a name could previously
   reach files outside the profile's own directory. A profile directory that is
   itself a symlink is now refused too.
+- A `setforge migrate` whose automatic rollback cannot finish can now be undone
+  with `setforge recover`; before, recover stopped with "refusing to remove
+  non-empty recovery directory". `migrate` now says the rollback did not
+  complete and prints the `setforge recover` command to run, instead of
+  claiming it rolled back.
+- `setforge migrate` now stops before changing anything when its state
+  directory is not writable ("transition state dir not writable"), instead of
+  migrating the config and then failing.
 
 ## [1.4.0] - 2026-10-05
 
