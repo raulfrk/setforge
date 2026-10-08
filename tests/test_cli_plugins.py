@@ -19,7 +19,7 @@ from setforge import codex_plugins as codex_plugins_mod
 from setforge import reconcile_adapter
 from setforge.cli import app
 from setforge.config import load_config, resolve_profile
-from setforge.errors import ProfileNotFound
+from setforge.errors import ConfigError, ProfileNotFound
 from tests.conftest import FakeClaude, FakeGit, _local_clone_yaml
 from tests.shared_helpers import write_setforge_yaml
 
@@ -550,7 +550,11 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
         plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
     )
     monkeypatch.setattr(
-        plugins_mod, "load_config", lambda c: SimpleNamespace(profiles={"x": object()})
+        plugins_mod,
+        "load_config",
+        lambda c: SimpleNamespace(
+            profiles={"x": SimpleNamespace(packages=[])}, packages={}
+        ),
     )
     # New marketplace → the register path invokes `claude marketplace add`.
     monkeypatch.setattr(
@@ -793,6 +797,113 @@ def test_codex_plugin_add_unknown_profile_changes_nothing(
     assert cfg.stat().st_mode == mode_before
     assert isinstance(result.exception, ProfileNotFound)
     assert "profile not found: typo" in str(result.exception)
+
+
+@pytest.mark.parametrize("no_install", [False, True])
+@pytest.mark.parametrize(
+    ("package_yaml", "conflict"),
+    [
+        ("review: {type: cargo, crate: ripgrep}", "type cargo"),
+        ("review: {type: plugin, plugin: other}", "declares plugin 'other'"),
+    ],
+    ids=["other-package-type", "other-plugin"],
+)
+def test_claude_plugin_add_package_key_conflict_changes_nothing(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    package_yaml: str,
+    conflict: str,
+    no_install: bool,
+) -> None:
+    cfg = write_setforge_yaml(
+        tmp_path,
+        _PLUGIN_ADD_FIXTURE_YAML.replace(
+            "profiles:\n", f"packages:\n  {package_yaml}\nprofiles:\n"
+        ),
+    )
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    claude = fake_claude()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert claude.calls == []
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert isinstance(result.exception, ConfigError)
+    assert f"package 'review' already exists ({conflict})" in str(result.exception)
+
+
+@pytest.mark.parametrize(
+    ("packages_yaml", "profile_packages", "bound_before"),
+    [
+        ("review: {type: plugin, plugin: review}", "[]", []),
+        (
+            "review: {type: cargo, crate: ripgrep}\n"
+            "  myrev: {type: plugin, plugin: review}",
+            "[myrev]",
+            ["review"],
+        ),
+    ],
+    ids=["shared-plugin-package", "bound-under-another-key"],
+)
+def test_claude_plugin_add_reuses_an_existing_plugin_package(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    packages_yaml: str,
+    profile_packages: str,
+    bound_before: list[str],
+) -> None:
+    cfg = write_setforge_yaml(
+        tmp_path,
+        _PLUGIN_ADD_FIXTURE_YAML.replace(
+            "profiles:\n  p:\n",
+            "marketplaces:\n  newmp: {source: github, repo: o/newmp}\n"
+            "claude_plugins:\n  review: {marketplace: newmp}\n"
+            f"packages:\n  {packages_yaml}\n"
+            f"profiles:\n  p:\n    packages: {profile_packages}\n",
+        ),
+    )
+    claude = fake_claude()
+    before = load_config(cfg)
+    assert (
+        reconcile_adapter.plugin_bare_names(before, resolve_profile(before, "p"))
+        == bound_before
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=p",
+            "--no-install",
+            f"--config={cfg}",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    after = load_config(cfg)
+    assert after.packages == before.packages
+    assert reconcile_adapter.plugin_bare_names(after, resolve_profile(after, "p")) == [
+        "review"
+    ]
+    assert claude.calls == []
 
 
 @pytest.mark.parametrize("local_clone", [False, True])

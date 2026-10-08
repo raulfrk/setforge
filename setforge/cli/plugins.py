@@ -177,7 +177,9 @@ def plugin_add(
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        _require_known_profile(config, profile)
+        claude_yaml_editor_mod.require_plugin_package_available(
+            _require_known_profile(config, profile), profile, plugin_name
+        )
         _register_plugin_in_yaml(
             config, profile, plugin_name, mp_name, source, no_install=no_install
         )
@@ -266,10 +268,12 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
             typer.echo(f"installed Codex plugin: {plugin_name}@{marketplace}")
 
 
-def _require_known_profile(config: Path, profile: str) -> None:
-    """Reject an unknown ``profile`` before any config write or native call."""
-    if profile not in load_config(config).profiles:
+def _require_known_profile(config: Path, profile: str) -> Config:
+    """Load ``config``, rejecting an unknown ``profile`` before any change."""
+    cfg = load_config(config)
+    if profile not in cfg.profiles:
         raise ProfileNotFound(f"profile not found: {profile}")
+    return cfg
 
 
 def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:

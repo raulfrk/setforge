@@ -158,7 +158,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   marketplace and plugin in `setforge.yaml` and register the marketplace with
   Claude before the command failed with "profile not found" (Codex called its
   tool and then undid it, and reported just the profile name). It now fails
-  first with "profile not found: <name>" and changes nothing.
+  first with "profile not found: <name>" and changes nothing. For Claude, it
+  also refuses up front when `packages` already holds a different package under
+  the plugin's name (it used to bind the profile to that package and report
+  success), naming the package and leaving the config and Claude untouched.
 - `setforge plugin add --no-install` for Claude now only edits `setforge.yaml`,
   as its help says. It used to still register a new marketplace with Claude
   (and, with `claude.install_mode: local-clone`, clone it into the local cache).
