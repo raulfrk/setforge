@@ -7,17 +7,23 @@ own state for deletion."""
 
 from __future__ import annotations
 
+import os
+import pty
 import re
+import select
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from setforge import operations
+import setforge.cli.install as install_mod
+from setforge import operations, paths, transitions
 from setforge.locking import mutation_locks
-from setforge.ownership import read_owner_id
+from setforge.ownership import OwnershipError, read_owner_id
 from setforge.reconcile.types import check_profile_name
 
 from .support import INSTALL_FLAGS, REPO_ROOT, Host, claim_ids_for, tree
@@ -64,6 +70,202 @@ def test_adopting_an_existing_unowned_file_needs_consent(
     assert host.live("note.txt").read_bytes() == b"one\n"
     assert _states(host) == ["claimed"]
     assert host.cli("compare", "--check").exit_code == 0
+
+
+class _Tty:
+    stdin = SimpleNamespace(isatty=lambda: True)
+
+
+def _journals() -> list[Path]:
+    root = paths.journals_root()
+    return sorted(root.glob("*.json")) if root.exists() else []
+
+
+def test_declining_the_adoption_question_leaves_no_change_and_no_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+    asked: list[str] = []
+
+    def decline(text: str, **_kwargs: object) -> bool:
+        asked.append(text)
+        return False
+
+    monkeypatch.setattr(install_mod, "sys", _Tty)
+    monkeypatch.setattr(install_mod.typer, "confirm", decline)
+
+    declined = host.cli("install", *_NO_PROMPT)
+
+    assert declined.exit_code == 1
+    assert ["note.txt" in text for text in asked] == [True]
+    assert "file ownership change declined" in str(declined.exception)
+    assert tree(host.live_dir) == {"note.txt": b"local\n"}
+    assert host.cli("ownership", "list", config=False, profile=False).output == (
+        "(no ownership claims)\n"
+    )
+    assert _journals() == []
+    assert transitions.list_transitions(profile_filter=[host.profile]) == []
+    with pytest.raises(OwnershipError):
+        read_owner_id(host.repo)
+    # The lock was released: the next command runs instead of waiting.
+    assert host.proc("install", *INSTALL_FLAGS).returncode == 0
+
+
+def _install_on_a_terminal_without_keyboard(
+    host: Host, *flags: str, stdin: int
+) -> tuple[int, str]:
+    """Run install with a terminal on stdout only; a run that blocks fails."""
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "setforge.cli",
+                "install",
+                *flags,
+                f"--config={host.config}",
+                f"--profile={host.profile}",
+            ],
+            cwd=REPO_ROOT,
+            env=host.proc_env(),
+            stdin=stdin,
+            stdout=slave,
+            stderr=slave,
+        )
+    finally:
+        os.close(slave)
+    shown = b""
+    deadline = time.monotonic() + 60
+    try:
+        while time.monotonic() < deadline:
+            if not select.select([master], [], [], 0.2)[0]:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # the terminal closed with the process
+                break
+            if not chunk:
+                break
+            shown += chunk
+        try:
+            code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"install waited for input it cannot get:\n{shown!r}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        os.close(master)
+        if proc.stdin is not None:
+            proc.stdin.close()
+    return code, shown.decode(errors="replace")
+
+
+@pytest.mark.parametrize(
+    "stdin", [subprocess.DEVNULL, subprocess.PIPE], ids=["closed", "open-pipe"]
+)
+def test_adoption_without_a_keyboard_is_refused_before_any_reconcile_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdin: int
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+
+    code, shown = _install_on_a_terminal_without_keyboard(
+        host, *_NO_PROMPT, "--reconcile-user-sections", stdin=stdin
+    )
+
+    assert code == 1, shown
+    assert "file adoption requires confirmation for" in shown
+    assert "rerun with --yes" in shown
+    assert "seed merge base" not in shown
+    assert "Input is not a terminal" not in shown
+    assert host.live("note.txt").read_bytes() == b"local\n"
+    # The lock was released: the next command runs instead of waiting.
+    assert host.proc("install", *INSTALL_FLAGS).returncode == 0
+
+
+def test_a_blocked_file_is_refused_before_any_reconcile_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch, tracked={"note.txt": "one\ntwo\nthree\n"})
+    assert host.install().exit_code == 0
+    (claim,) = claim_ids_for(
+        host.cli("ownership", "list", config=False, profile=False).output, "note.txt"
+    )
+    released = host.cli("ownership", "release", claim, "--yes", profile=False)
+    assert released.exit_code == 0, released.output
+    host.live("note.txt").write_bytes(b"one\ntwo-live\nthree\n")
+    host.tracked("note.txt").write_bytes(b"one\ntwo-tracked\nthree\n")
+
+    code, shown = _install_on_a_terminal_without_keyboard(
+        host, *INSTALL_FLAGS, "--reconcile-user-sections", stdin=subprocess.DEVNULL
+    )
+
+    assert code == 1, shown
+    assert "tracked file ownership blocks install for" in shown
+    assert "Input is not a terminal" not in shown
+    assert "\x1b[?1049h" not in shown  # no full-screen conflict screen opened
+    assert host.live("note.txt").read_bytes() == b"one\ntwo-live\nthree\n"
+
+
+def test_another_install_waits_while_the_adoption_question_is_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+    waiting: list[subprocess.Popen[str]] = []
+    journals_while_asked: list[list[Path]] = []
+
+    def answer_after_another_install_waited(*_args: object, **_kwargs: object) -> bool:
+        other = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "setforge.cli",
+                "install",
+                *INSTALL_FLAGS,
+                f"--config={host.config}",
+                f"--profile={host.profile}",
+            ],
+            cwd=REPO_ROOT,
+            env=host.proc_env(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        waiting.append(other)
+        with pytest.raises(subprocess.TimeoutExpired):
+            other.wait(timeout=4)
+        # Nothing is journalled before the answer.
+        journals_while_asked.append(_journals())
+        return True
+
+    monkeypatch.setattr(install_mod, "sys", _Tty)
+    monkeypatch.setattr(
+        install_mod.typer, "confirm", answer_after_another_install_waited
+    )
+    try:
+        accepted = host.cli("install", *_NO_PROMPT)
+        assert len(waiting) == 1, accepted.output
+        out, err = waiting[0].communicate(timeout=60)
+    finally:
+        for other in waiting:
+            if other.poll() is None:
+                other.kill()
+                other.wait()
+
+    assert accepted.exit_code == 0, accepted.output
+    assert journals_while_asked == [[]]
+    assert waiting[0].returncode == 0, (out, err)
+    assert host.live("note.txt").read_bytes() == b"local\n"
+    assert _states(host) == ["claimed"]
 
 
 def test_a_file_claimed_by_another_configuration_is_transferred_only_with_consent(

@@ -8,6 +8,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `install` now asks whether to manage or transfer existing files and packages
+  after it has worked out the full plan and while it holds the lock, instead of
+  before. The questions, `--yes`, the refusal without a terminal and the exit
+  codes are the same; declining still changes nothing. Another `setforge`
+  command started meanwhile waits until the question is answered. Problems the
+  plan finds (a missing tracked source, a managed-tree conflict, an interrupted
+  operation that needs `setforge recover`) are now reported before the
+  ownership question or refusal. `--reconcile-user-sections` shows its conflict
+  screens before the question, but a file whose ownership blocks the install is
+  still refused first, and the screens open only when the question can be
+  answered: with `--yes`, or with a terminal on standard input. Without either,
+  `install` refuses a pending adoption as before and, when nothing needs
+  adopting, leaves conflicts unresolved the way a piped `install` does instead
+  of opening a screen it cannot read keys for. `install` no longer checks
+  packages twice. A
+  config file edited while `install` is starting or waiting for an answer is
+  refused with "install configuration changed while loading; retry" or
+  "install inputs changed after planning", replacing the "changed after
+  confirmation" messages.
 - With `claude.install_mode: local-clone`, a marketplace whose cache directory
   already holds a clone of a different repo (two repos with the same name, such
   as `alice/tools` and `bob/tools`) no longer opens the keep/update/both/abort
