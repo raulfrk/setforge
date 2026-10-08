@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from setforge.project_injection import (
     resolve_injection_plan,
 )
 from setforge.project_overlay import process_filter
+from setforge.project_record import ProjectFileAction
 from setforge.project_sync import (
     AutoResolution,
     ProjectSyncPlan,
@@ -91,8 +93,13 @@ def _render_removal(plan: ProjectRemovePlan) -> None:
     typer.echo(f"project profile: {plan.profile}")
     typer.echo(f"target: {plan.target}")
     for item in plan.files:
-        if item.relative_destination in plan.git_removed:
+        created = item.action is ProjectFileAction.CREATE
+        if item.relative_destination in plan.git_removed or (
+            created and not os.path.lexists(item.destination)
+        ):
             typer.echo(f"  leave absent: {item.relative_destination}")
+        elif created:
+            typer.echo(f"  delete: {item.relative_destination}")
         else:
             typer.echo(f"  restore {item.action.value}: {item.relative_destination}")
 

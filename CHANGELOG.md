@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `setforge project remove` previews a file that injection created as
+  `delete:` instead of `restore create:`, and says `leave absent:` for one that
+  is already gone.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed
