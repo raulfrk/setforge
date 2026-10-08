@@ -88,7 +88,8 @@ def apply_update(existing: LockFile, updated: ResolvedPin) -> LockFile:
     replaced = False
     for pin in existing.packages:
         if pin.sort_key() == key:
-            packages.append(updated.model_copy(update={"profiles": pin.profiles}))
+            profiles = _union_profiles(pin.profiles, updated.profiles)
+            packages.append(updated.model_copy(update={"profiles": profiles}))
             replaced = True
         else:
             packages.append(pin)
