@@ -18,30 +18,7 @@ from setforge._pypi_client import (
     fetch_version_info,
 )
 from setforge.errors import PyPIFetchError
-
-
-class _FakeResponse:
-    """Stand-in for the ``http.client.HTTPResponse`` returned by urlopen."""
-
-    def __init__(
-        self,
-        *,
-        status: int = 200,
-        body: bytes = b"{}",
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        self.status = status
-        self._body = body
-        self.headers = headers or {}
-
-    def read(self) -> bytes:
-        return self._body
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
+from tests.fakes import FakeResponse
 
 
 def _pypi_body(
@@ -65,12 +42,12 @@ def _pypi_body(
 def _patch_urlopen(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    response_factory: Callable[..., _FakeResponse],
+    response_factory: Callable[..., FakeResponse],
 ) -> list[tuple[str, dict[str, str]]]:
     """Replace ``urllib.request.urlopen`` with a factory; record calls."""
     calls: list[tuple[str, dict[str, str]]] = []
 
-    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: Any, timeout: float | None = None) -> FakeResponse:
         headers = {k.title(): v for k, v in request.header_items()}
         calls.append((request.full_url, headers))
         return response_factory(request)
@@ -85,8 +62,8 @@ def test_fetch_latest_version_returns_highest_stable(
     """The highest non-prerelease, non-yanked version wins."""
     body = _pypi_body()
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200,
             body=json.dumps(body).encode("utf-8"),
             headers={"ETag": "abc123"},
@@ -116,8 +93,8 @@ def test_fetch_latest_version_filters_prereleases_by_default(
         }
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps(body).encode("utf-8"), headers={"ETag": "x"}
         )
 
@@ -138,8 +115,8 @@ def test_fetch_latest_version_includes_prereleases_when_asked(
         }
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps(body).encode("utf-8"), headers={"ETag": "x"}
         )
 
@@ -164,8 +141,8 @@ def test_fetch_latest_version_skips_yanked_releases(
         }
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps(body).encode("utf-8"), headers={"ETag": "x"}
         )
 
@@ -186,8 +163,8 @@ def test_fetch_version_info_uses_release_metadata(
         yanked_reason="broken release",
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
 
     calls = _patch_urlopen(monkeypatch, response_factory=factory)
     info = fetch_version_info(
@@ -208,8 +185,8 @@ def test_fetch_version_info_rejects_mismatched_release(
 ) -> None:
     body = _pypi_body(info_version="2.0.1")
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(status=200, body=json.dumps(body).encode("utf-8"))
 
     _patch_urlopen(monkeypatch, response_factory=factory)
     with pytest.raises(PyPIFetchError, match="returned version"):
@@ -226,8 +203,8 @@ def test_fetch_latest_version_sends_user_agent_and_etag(
         encoding="utf-8",
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200,
             body=json.dumps(_pypi_body()).encode("utf-8"),
             headers={"ETag": "new-etag"},
@@ -254,7 +231,7 @@ def test_fetch_latest_version_uses_304_cache(
         encoding="utf-8",
     )
 
-    def factory(request: Any) -> _FakeResponse:
+    def factory(request: Any) -> FakeResponse:
         raise urllib.error.HTTPError(
             url=request.full_url,
             code=304,
@@ -275,8 +252,8 @@ def test_fetch_latest_version_writes_etag_cache_after_200(
 ) -> None:
     body = _pypi_body()
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200,
             body=json.dumps(body).encode("utf-8"),
             headers={"ETag": "fresh-etag"},
@@ -296,7 +273,7 @@ def test_fetch_latest_version_writes_etag_cache_after_200(
 def test_fetch_latest_version_raises_on_http_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def factory(request: Any) -> _FakeResponse:
+    def factory(request: Any) -> FakeResponse:
         raise urllib.error.HTTPError(
             url=request.full_url,
             code=503,
@@ -315,7 +292,7 @@ def test_fetch_latest_version_raises_on_http_error(
 def test_fetch_latest_version_raises_on_network_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def factory(_request: Any) -> _FakeResponse:
+    def factory(_request: Any) -> FakeResponse:
         raise urllib.error.URLError("no route to host")
 
     _patch_urlopen(monkeypatch, response_factory=factory)
@@ -328,8 +305,8 @@ def test_fetch_latest_version_raises_on_network_error(
 def test_fetch_latest_version_raises_on_invalid_json(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(status=200, body=b"not-json", headers={"ETag": "x"})
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(status=200, body=b"not-json", headers={"ETag": "x"})
 
     _patch_urlopen(monkeypatch, response_factory=factory)
     with pytest.raises(PyPIFetchError, match="non-JSON"):
@@ -341,8 +318,8 @@ def test_fetch_latest_version_raises_on_invalid_json(
 def test_fetch_latest_version_raises_when_releases_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps({"info": {}}).encode(), headers={"ETag": "x"}
         )
 
@@ -363,8 +340,8 @@ def test_fetch_latest_version_raises_when_all_versions_yanked(
         }
     )
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps(body).encode(), headers={"ETag": "x"}
         )
 
@@ -386,8 +363,8 @@ def test_fetch_latest_version_propagates_yanked_reason_when_target_yanked(
         },
     }
 
-    def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
+    def factory(_request: Any) -> FakeResponse:
+        return FakeResponse(
             status=200, body=json.dumps(body).encode(), headers={"ETag": "x"}
         )
 

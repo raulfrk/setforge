@@ -22,60 +22,34 @@ from setforge.git_ops import (
     status_porcelain,
 )
 
-
-def _git_init(repo: Path, *, initial_branch: str = "main") -> Path:
-    """Initialize a git repo at ``repo`` with one commit on ``initial_branch``."""
-    repo.mkdir(parents=True, exist_ok=True)
-    # -q quiet; -b sets initial branch (git 2.28+)
-    subprocess.run(
-        ["git", "init", "-q", "-b", initial_branch],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    # Configure identity (required for commit)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
-    )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    # Initial commit so HEAD exists
-    (repo / "README.md").write_text("# initial\n")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "initial"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    return repo
-
-
 # ---------------------------------------------------------------------------
 # status_porcelain
 # ---------------------------------------------------------------------------
 
 
 class TestStatusPorcelain:
-    def test_clean_repo_returns_empty_string(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_clean_repo_returns_empty_string(
+        self, tmp_path: Path, init_git_repo
+    ) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         assert status_porcelain(repo) == ""
 
-    def test_modified_file_shown(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_modified_file_shown(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "README.md").write_text("# changed\n")
         out = status_porcelain(repo)
         assert "README.md" in out
         assert "M" in out  # modified-flag char
 
-    def test_untracked_file_shown(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_untracked_file_shown(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "new.txt").write_text("new\n")
         out = status_porcelain(repo)
         assert "new.txt" in out
         assert "??" in out  # untracked-flag chars
 
-    def test_path_scope_filters_results(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_path_scope_filters_results(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "tracked").mkdir()
         (repo / "tracked" / "a.txt").write_text("a\n")
         (repo / "outside.txt").write_text("o\n")
@@ -97,8 +71,8 @@ class TestStatusPorcelain:
 
 
 class TestGitClone:
-    def test_clones_local_path_to_dest(self, tmp_path: Path) -> None:
-        upstream = _git_init(tmp_path / "upstream")
+    def test_clones_local_path_to_dest(self, tmp_path: Path, init_git_repo) -> None:
+        upstream = init_git_repo(tmp_path / "upstream")
         dest = tmp_path / "clone"
         git_clone(str(upstream), dest)
         assert (dest / ".git").exists()
@@ -109,8 +83,8 @@ class TestGitClone:
         with pytest.raises(GitOpError, match="git clone"):
             git_clone(str(tmp_path / "nonexistent.git"), tmp_path / "dest")
 
-    def test_clone_creates_parent_dir(self, tmp_path: Path) -> None:
-        upstream = _git_init(tmp_path / "upstream")
+    def test_clone_creates_parent_dir(self, tmp_path: Path, init_git_repo) -> None:
+        upstream = init_git_repo(tmp_path / "upstream")
         nested_dest = tmp_path / "a" / "b" / "c" / "clone"
         git_clone(str(upstream), nested_dest)
         assert (nested_dest / ".git").exists()
@@ -145,7 +119,7 @@ class TestGitClone:
 
 
 class TestGitFetch:
-    def test_fetch_origin_succeeds(self, tmp_path: Path) -> None:
+    def test_fetch_origin_succeeds(self, tmp_path: Path, init_git_repo) -> None:
         # Bare remote + local clone with origin configured.
         remote = tmp_path / "remote.git"
         subprocess.run(
@@ -153,7 +127,7 @@ class TestGitFetch:
             check=True,
             capture_output=True,
         )
-        source_repo = _git_init(tmp_path / "source")
+        source_repo = init_git_repo(tmp_path / "source")
         subprocess.run(
             ["git", "remote", "add", "origin", str(remote)],
             cwd=source_repo,
@@ -171,8 +145,8 @@ class TestGitFetch:
         # No exception -> success
         git_fetch(clone)
 
-    def test_fetch_with_no_origin_raises(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_fetch_with_no_origin_raises(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         with pytest.raises(GitOpError, match="git fetch"):
             git_fetch(repo)
 
@@ -183,8 +157,8 @@ class TestGitFetch:
 
 
 class TestGitCheckout:
-    def test_checkout_branch_succeeds(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_checkout_branch_succeeds(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         # Create a second branch with a different commit.
         subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=repo, check=True)
         (repo / "feature.txt").write_text("feature\n")
@@ -199,8 +173,8 @@ class TestGitCheckout:
         git_checkout(repo, "main")
         assert not (repo / "feature.txt").exists()
 
-    def test_checkout_sha_succeeds(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_checkout_sha_succeeds(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         # Get the SHA of the initial commit.
         sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -223,8 +197,10 @@ class TestGitCheckout:
         # The "next" file should be gone in the older commit.
         assert not (repo / "next.txt").exists()
 
-    def test_checkout_nonexistent_ref_raises(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_checkout_nonexistent_ref_raises(
+        self, tmp_path: Path, init_git_repo
+    ) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         with pytest.raises(GitOpError, match="git checkout"):
             git_checkout(repo, "does-not-exist-branch")
 

@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 
 from setforge import base_store
 from setforge.cli import app
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "test-syncmsg"
 _MD_ID = "doc"
@@ -47,43 +48,17 @@ Original body.
 _DOC_LIVE_EDIT = _DOC.replace("Original body.", "MY LIVE EDIT.")
 
 
-def _write_config(repo: Path) -> Path:
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.setforge_syncmsg/doc.md\n"
-        "    disposition: shared\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - doc\n",
-        encoding="utf-8",
+def _write_config(config_repo: ConfigRepo) -> Path:
+    return config_repo.write_config(
+        profile=_PROFILE,
+        tracked_files={
+            "doc": {
+                "src": "doc.md",
+                "dst": "~/.setforge_syncmsg/doc.md",
+                "disposition": "shared",
+            }
+        },
     )
-    return config
-
-
-def _write_tracked(repo: Path, md_body: str) -> None:
-    tracked = repo / "tracked"
-    tracked.mkdir(parents=True, exist_ok=True)
-    (tracked / "doc.md").write_text(md_body, encoding="utf-8")
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
-
-
-def _tracked_src(repo: Path) -> Path:
-    return repo / "tracked" / "doc.md"
 
 
 def _live_md() -> Path:
@@ -114,7 +89,7 @@ def _sync(config: Path) -> Result:
 
 
 def test_sync_ctrl_c_restores_tracked_and_base(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An interrupted sync restores the tracked src AND the byte base.
 
@@ -124,11 +99,11 @@ def test_sync_ctrl_c_restores_tracked_and_base(
     fix the sync handler printed "files restored from snapshot" but did NOT
     restore — both the tracked src and the base stayed mutated.
     """
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
+    config_repo.write_tracked("doc.md", _DOC)
+    config = _write_config(config_repo)
 
     assert _install(config).exit_code == 0
-    pre_sync_tracked = _tracked_src(repo).read_bytes()
+    pre_sync_tracked = config_repo.tracked("doc.md").read_bytes()
     pre_sync_base = base_store.read_base(_PROFILE, _MD_ID)
     assert pre_sync_base is not None
 
@@ -137,7 +112,7 @@ def test_sync_ctrl_c_restores_tracked_and_base(
     def _partial_then_interrupt(*_args: object, **_kwargs: object) -> list[object]:
         # Simulate capture committing one write + a base advance with no
         # internal rollback, then the user hitting Ctrl-C.
-        _tracked_src(repo).write_text(_DOC_LIVE_EDIT, encoding="utf-8")
+        config_repo.tracked("doc.md").write_text(_DOC_LIVE_EDIT, encoding="utf-8")
         base_store.write_base(_PROFILE, _MD_ID, b"ADVANCED-BASE-BYTES\n")
         raise KeyboardInterrupt
 
@@ -152,12 +127,12 @@ def test_sync_ctrl_c_restores_tracked_and_base(
     assert "files restored from snapshot" in result.output
 
     # The load-bearing assertions: both halves restored to pre-sync state.
-    assert _tracked_src(repo).read_bytes() == pre_sync_tracked
+    assert config_repo.tracked("doc.md").read_bytes() == pre_sync_tracked
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base
 
 
 def test_sync_oserror_restores_tracked_and_base(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A mid-capture ``OSError`` restores the tracked src AND the byte base.
 
@@ -166,18 +141,18 @@ def test_sync_oserror_restores_tracked_and_base(
     The rollback must fire on this path too, and the ``OSError`` must
     propagate so the user sees the failure.
     """
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
+    config_repo.write_tracked("doc.md", _DOC)
+    config = _write_config(config_repo)
 
     assert _install(config).exit_code == 0
-    pre_sync_tracked = _tracked_src(repo).read_bytes()
+    pre_sync_tracked = config_repo.tracked("doc.md").read_bytes()
     pre_sync_base = base_store.read_base(_PROFILE, _MD_ID)
     assert pre_sync_base is not None
 
     _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
 
     def _partial_then_oserror(*_args: object, **_kwargs: object) -> list[object]:
-        _tracked_src(repo).write_text(_DOC_LIVE_EDIT, encoding="utf-8")
+        config_repo.tracked("doc.md").write_text(_DOC_LIVE_EDIT, encoding="utf-8")
         base_store.write_base(_PROFILE, _MD_ID, b"ADVANCED-BASE-BYTES\n")
         raise OSError(28, "No space left on device")
 
@@ -191,16 +166,16 @@ def test_sync_oserror_restores_tracked_and_base(
     assert isinstance(result.exception, OSError)
 
     # The load-bearing assertions: both halves restored to pre-sync state.
-    assert _tracked_src(repo).read_bytes() == pre_sync_tracked
+    assert config_repo.tracked("doc.md").read_bytes() == pre_sync_tracked
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base
 
 
 def test_sync_recovery_failure_never_masks_capture_error(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unexpected compensator failure is attached to the primary error."""
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
+    config_repo.write_tracked("doc.md", _DOC)
+    config = _write_config(config_repo)
     assert _install(config).exit_code == 0
 
     primary = OSError(28, "capture failed")
@@ -221,15 +196,15 @@ def test_sync_recovery_failure_never_masks_capture_error(
 
 
 def test_capture_ctrl_c_message_not_false_restore(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Plain ``capture``'s Ctrl-C message must not claim a restore.
 
     ``capture`` takes no snapshot, so the old "files restored from
     snapshot" wording was always false on this path.
     """
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
+    config_repo.write_tracked("doc.md", _DOC)
+    config = _write_config(config_repo)
     assert _install(config).exit_code == 0
     _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
 

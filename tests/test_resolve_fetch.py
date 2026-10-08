@@ -4,49 +4,21 @@ from __future__ import annotations
 
 import gzip
 import tracemalloc
-from types import TracebackType
 
 import pytest
 
 from setforge.errors import ResolveError
 from setforge.provision.resolve import _fetch
-
-
-class _FakeResponse:
-    def __init__(
-        self, body: bytes, final_url: str, read_calls: list[int] | None = None
-    ) -> None:
-        self._body = body
-        self._final_url = final_url
-        self._read_calls = read_calls
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        return None
-
-    def geturl(self) -> str:
-        return self._final_url
-
-    def read(self, n: int) -> bytes:
-        if self._read_calls is not None:
-            self._read_calls.append(n)
-        return self._body[:n]
+from tests.fakes import FakeResponse
 
 
 def _patch_urlopen(
     monkeypatch: pytest.MonkeyPatch,
-    response: _FakeResponse,
+    response: FakeResponse,
     *,
     captured: dict[str, object] | None = None,
 ) -> None:
-    def _fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def _fake_urlopen(request: object, timeout: float | None = None) -> FakeResponse:
         if captured is not None:
             captured["timeout"] = timeout
             captured["request"] = request
@@ -62,7 +34,7 @@ def test_rejects_http_request_url() -> None:
 
 def test_rejects_redirect_downgrade(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_urlopen(
-        monkeypatch, _FakeResponse(b"payload", final_url="http://evil.example/x")
+        monkeypatch, FakeResponse(b"payload", final_url="http://evil.example/x")
     )
     with pytest.raises(ResolveError, match="redirect target"):
         _fetch.fetch_bytes("https://example.com/x", timeout=5, max_bytes=1024)
@@ -70,7 +42,7 @@ def test_rejects_redirect_downgrade(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_enforces_wire_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_urlopen(
-        monkeypatch, _FakeResponse(b"abcdef", final_url="https://example.com/x")
+        monkeypatch, FakeResponse(b"abcdef", final_url="https://example.com/x")
     )
     with pytest.raises(ResolveError, match="wire cap"):
         _fetch.fetch_bytes("https://example.com/x", timeout=5, max_bytes=5)
@@ -80,7 +52,7 @@ def test_reads_max_bytes_plus_one(monkeypatch: pytest.MonkeyPatch) -> None:
     read_calls: list[int] = []
     _patch_urlopen(
         monkeypatch,
-        _FakeResponse(b"ok", final_url="https://example.com/x", read_calls=read_calls),
+        FakeResponse(b"ok", final_url="https://example.com/x", read_calls=read_calls),
     )
     _fetch.fetch_bytes("https://example.com/x", timeout=5, max_bytes=100)
     assert read_calls == [101]
@@ -90,7 +62,7 @@ def test_passes_timeout_through(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
     _patch_urlopen(
         monkeypatch,
-        _FakeResponse(b"ok", final_url="https://example.com/x"),
+        FakeResponse(b"ok", final_url="https://example.com/x"),
         captured=captured,
     )
     _fetch.fetch_bytes("https://example.com/x", timeout=17.5, max_bytes=1024)
@@ -99,7 +71,7 @@ def test_passes_timeout_through(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_returns_body_under_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_urlopen(
-        monkeypatch, _FakeResponse(b"hello", final_url="https://example.com/x")
+        monkeypatch, FakeResponse(b"hello", final_url="https://example.com/x")
     )
     assert (
         _fetch.fetch_bytes("https://example.com/x", timeout=5, max_bytes=1024)
@@ -111,7 +83,7 @@ def test_user_agent_added_when_supplied(monkeypatch: pytest.MonkeyPatch) -> None
     captured: dict[str, object] = {}
     _patch_urlopen(
         monkeypatch,
-        _FakeResponse(b"ok", final_url="https://example.com/x"),
+        FakeResponse(b"ok", final_url="https://example.com/x"),
         captured=captured,
     )
     _fetch.fetch_bytes(
@@ -122,7 +94,7 @@ def test_user_agent_added_when_supplied(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_network_error_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(request: object, timeout: float | None = None) -> _FakeResponse:
+    def _boom(request: object, timeout: float | None = None) -> FakeResponse:
         raise TimeoutError("slow")
 
     monkeypatch.setattr(_fetch.urllib.request, "urlopen", _boom)
@@ -134,7 +106,7 @@ def test_post_body_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
     _patch_urlopen(
         monkeypatch,
-        _FakeResponse(b"resp", final_url="https://example.com/q"),
+        FakeResponse(b"resp", final_url="https://example.com/q"),
         captured=captured,
     )
     out = _fetch.fetch_bytes(
@@ -150,7 +122,7 @@ def test_decode_gzip_returns_decoded_payload(monkeypatch: pytest.MonkeyPatch) ->
     payload = b"decoded VSIX payload bytes" * 4
     wire = gzip.compress(payload)
     _patch_urlopen(
-        monkeypatch, _FakeResponse(wire, final_url="https://example.com/vsix")
+        monkeypatch, FakeResponse(wire, final_url="https://example.com/vsix")
     )
     out = _fetch.fetch_bytes(
         "https://example.com/vsix",
@@ -172,7 +144,7 @@ def test_wire_cap_fires_before_gzip_decode(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(_fetch.zlib, "decompressobj", _explode)
     _patch_urlopen(
-        monkeypatch, _FakeResponse(wire, final_url="https://example.com/bomb")
+        monkeypatch, FakeResponse(wire, final_url="https://example.com/bomb")
     )
     with pytest.raises(ResolveError, match="wire cap"):
         _fetch.fetch_bytes(
@@ -186,7 +158,7 @@ def test_wire_cap_fires_before_gzip_decode(monkeypatch: pytest.MonkeyPatch) -> N
 def test_non_gzip_body_with_decode_gzip_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_urlopen(
         monkeypatch,
-        _FakeResponse(b"not gzip at all", final_url="https://example.com/x"),
+        FakeResponse(b"not gzip at all", final_url="https://example.com/x"),
     )
     with pytest.raises(ResolveError, match="failed to gzip-decode"):
         _fetch.fetch_bytes(
@@ -201,7 +173,7 @@ def test_gzip_bomb_over_decompressed_cap_raises(
     bomb = gzip.compress(b"\x00" * (cap * 4))
     assert len(bomb) < cap
     _patch_urlopen(
-        monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
+        monkeypatch, FakeResponse(bomb, final_url="https://example.com/bomb")
     )
     with pytest.raises(ResolveError, match="decompressed cap"):
         _fetch.fetch_bytes(
@@ -220,7 +192,7 @@ def test_gzip_bomb_aborts_without_materializing_full_output(
     original = b"\x00" * (cap * 200)
     bomb = gzip.compress(original)
     _patch_urlopen(
-        monkeypatch, _FakeResponse(bomb, final_url="https://example.com/bomb")
+        monkeypatch, FakeResponse(bomb, final_url="https://example.com/bomb")
     )
 
     tracemalloc.start()
@@ -243,7 +215,7 @@ def test_multi_member_gzip_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     payload_a = b"AAA" * 500
     payload_b = b"BBB" * 500
     wire = gzip.compress(payload_a) + gzip.compress(payload_b)
-    _patch_urlopen(monkeypatch, _FakeResponse(wire, final_url="https://example.com/q"))
+    _patch_urlopen(monkeypatch, FakeResponse(wire, final_url="https://example.com/q"))
     out = _fetch.fetch_bytes(
         "https://example.com/q",
         timeout=5,
@@ -259,7 +231,7 @@ def test_legit_gzip_under_decompressed_cap_round_trips(
 ) -> None:
     payload = b"legit marketplace query response" * 100
     wire = gzip.compress(payload)
-    _patch_urlopen(monkeypatch, _FakeResponse(wire, final_url="https://example.com/q"))
+    _patch_urlopen(monkeypatch, FakeResponse(wire, final_url="https://example.com/q"))
     out = _fetch.fetch_bytes(
         "https://example.com/q",
         timeout=5,

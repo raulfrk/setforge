@@ -34,39 +34,13 @@ from setforge.source import GitSource, PathSource
 from setforge.ui.widgets import CANCEL
 
 
-def _git_init(repo: Path, *, initial_branch: str = "main") -> Path:
-    """Initialize a git repo at ``repo`` with one commit on ``initial_branch``."""
-    repo.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "init", "-q", "-b", initial_branch],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=repo,
-        check=True,
-    )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    (repo / "README.md").write_text("# initial\n")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "initial"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    return repo
-
-
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def _create_stale_feature_cache(tmp_path: Path) -> tuple[Path, Path]:
+def _create_stale_feature_cache(tmp_path: Path, init_git_repo) -> tuple[Path, Path]:
     """Create a cache whose main is fresh while configured feature is stale."""
-    publisher = _git_init(tmp_path / "publisher")
+    publisher = init_git_repo(tmp_path / "publisher")
     _git("switch", "-q", "-c", "feature", cwd=publisher)
     (publisher / "README.md").write_text("# feature one\n", encoding="utf-8")
     _git("commit", "-qam", "feature one", cwd=publisher)
@@ -116,12 +90,14 @@ class TestGitRun:
 
 
 class TestCheckPathSourceClean:
-    def test_returns_empty_for_clean_repo(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_returns_empty_for_clean_repo(self, tmp_path: Path, init_git_repo) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         assert check_path_source_clean(repo) == []
 
-    def test_parses_modified_added_untracked(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_parses_modified_added_untracked(
+        self, tmp_path: Path, init_git_repo
+    ) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         # Modified tracked file
         (repo / "README.md").write_text("# changed\n")
         # Staged new file
@@ -156,13 +132,13 @@ class TestCheckPathSourceClean:
         assert check_path_source_clean(bare) == []
 
     def test_ignores_submodule_dirt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """``--ignore-submodules=all`` keeps nested untracked files invisible."""
         # Submodule fixture is complex; assert via stub: confirm the
         # subprocess call carries the flag rather than constructing a
         # real submodule.
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         captured_cmd: list[str] = []
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -206,10 +182,10 @@ class TestFormatPorcelainV2Line:
 
 class TestIsDetachedHead:
     def test_parses_branch_head_detached(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """``# branch.head (detached)`` porcelain-v2 line → True."""
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         stdout = (
             "# branch.oid 0123456789abcdef0123456789abcdef01234567\n"
             "# branch.head (detached)\n"
@@ -222,10 +198,10 @@ class TestIsDetachedHead:
         assert _is_detached_head(repo) is True
 
     def test_parses_branch_head_named_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """``# branch.head main`` → False (HEAD is on a branch)."""
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         stdout = (
             "# branch.oid 0123456789abcdef0123456789abcdef01234567\n"
             "# branch.head main\n"
@@ -250,10 +226,10 @@ class TestCheckGitSourceFresh:
         assert check_git_source_fresh(plain) == ()
 
     def test_returns_empty_when_up_to_date(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """Local SHA == remote SHA → cache is fresh."""
-        cache = _git_init(tmp_path / "cache")
+        cache = init_git_repo(tmp_path / "cache")
         # Wire a stub origin pointing at the same commit.
         local_sha = subprocess.run(
             ["git", "-C", str(cache), "rev-parse", "HEAD"],
@@ -279,10 +255,10 @@ class TestCheckGitSourceFresh:
         assert check_git_source_fresh(cache) == ()
 
     def test_returns_commits_behind_remote(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """Local lags by 2 commits → tuple has 2 oneline entries."""
-        cache = _git_init(tmp_path / "cache")
+        cache = init_git_repo(tmp_path / "cache")
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
@@ -310,9 +286,10 @@ class TestCheckGitSourceFresh:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        init_git_repo,
     ) -> None:
         """ls-remote non-zero exit → warn-and-proceed (empty tuple)."""
-        cache = _git_init(tmp_path / "cache")
+        cache = init_git_repo(tmp_path / "cache")
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
@@ -336,9 +313,10 @@ class TestCheckGitSourceFresh:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        init_git_repo,
     ) -> None:
         """``TimeoutExpired`` on ls-remote → warn-and-proceed."""
-        cache = _git_init(tmp_path / "cache")
+        cache = init_git_repo(tmp_path / "cache")
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
@@ -418,16 +396,18 @@ class TestRunGitCheckOrRaise:
         # No git repo at tmp_path, but flag is set → must return None.
         run_git_check_or_raise(source=source, no_git_check=True)
 
-    def test_clean_path_source_returns_silently(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
+    def test_clean_path_source_returns_silently(
+        self, tmp_path: Path, init_git_repo
+    ) -> None:
+        repo = init_git_repo(tmp_path / "repo")
         source = PathSource(path=repo)
         run_git_check_or_raise(source=source, no_git_check=False)
 
     def test_dirty_path_source_non_tty_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """Dirty path source + non-TTY caller → mutate-gate raises."""
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: False)
         source = PathSource(path=repo)
@@ -435,10 +415,10 @@ class TestRunGitCheckOrRaise:
             run_git_check_or_raise(source=source, no_git_check=False)
 
     def test_dirty_path_source_proceed_choice_returns_silently(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """User picks PROCEED → function returns None (install continues)."""
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(
@@ -449,12 +429,12 @@ class TestRunGitCheckOrRaise:
         run_git_check_or_raise(source=source, no_git_check=False)
 
     def test_dirty_path_source_abort_choice_raises_exit(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """User picks ABORT → typer.Exit(1)."""
         import typer
 
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(
@@ -467,10 +447,10 @@ class TestRunGitCheckOrRaise:
         assert exc.value.exit_code == 1
 
     def test_show_diff_then_proceed_loops(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """SHOW_DIFF is an inspection step — re-prompt until ABORT or PROCEED."""
-        repo = _git_init(tmp_path / "repo")
+        repo = init_git_repo(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         choices = iter([GitCheckChoice.SHOW_DIFF, GitCheckChoice.PROCEED])
@@ -489,17 +469,17 @@ class TestRunGitCheckOrRaise:
 
 class TestGitSourceCachePath:
     def test_git_source_checks_configured_ref_not_remote_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
-        origin, cache = _create_stale_feature_cache(tmp_path)
+        origin, cache = _create_stale_feature_cache(tmp_path, init_git_repo)
         source = GitSource(url=str(origin), ref="feature", clone_dest=cache)
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: False)
 
         with pytest.raises(ConfirmRequiresInteractive, match="stale state"):
             run_git_check_or_raise(source=source, no_git_check=False)
 
-    def test_show_diff_uses_configured_ref(self, tmp_path: Path) -> None:
-        origin, cache = _create_stale_feature_cache(tmp_path)
+    def test_show_diff_uses_configured_ref(self, tmp_path: Path, init_git_repo) -> None:
+        origin, cache = _create_stale_feature_cache(tmp_path, init_git_repo)
         _git("fetch", "-q", "origin", "feature", cwd=cache)
         source = GitSource(url=str(origin), ref="feature", clone_dest=cache)
         output = StringIO()
@@ -530,10 +510,10 @@ class TestGitSourceCachePath:
             run_git_check_or_raise(source=source, no_git_check=False)
 
     def test_git_source_cache_existing_clone_clean(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init_git_repo
     ) -> None:
         """Existing cache, ls-remote SHA matches local HEAD → no prompt fires."""
-        cache = _git_init(tmp_path / "cache")
+        cache = init_git_repo(tmp_path / "cache")
         local_sha = subprocess.run(
             ["git", "-C", str(cache), "rev-parse", "HEAD"],
             check=True,
