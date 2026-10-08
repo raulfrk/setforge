@@ -109,6 +109,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `plugin reconcile --dry-run` (and a plugin policy of `report`) now reports a
+  marketplace cache directory that holds a different repo, with the same
+  `FAILED` line a real run prints, without cloning or changing anything. It used
+  to list only the plugin actions, so the error showed up only on the real run.
+  The exit code is 1, as before.
 - In the Claude-assisted merge, a draft you edit by hand is now checked like
   Claude's own drafts: an empty edit or one that still contains conflict markers
   is refused with a message, and you stay on the review screen to edit again or
