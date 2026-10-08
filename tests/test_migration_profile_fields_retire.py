@@ -27,7 +27,7 @@ from setforge.migrations._profile_fields_retire import (
     _ProfileFieldsRetireReverse,
 )
 from setforge.migrations._yaml_ops import yaml_rt
-from tests.shared_helpers import file_images
+from tests.shared_helpers import file_images, write_setforge_yaml
 
 _CFG = """\
 schema_version: "5.0"
@@ -54,8 +54,7 @@ profiles:
 
 def _write_cfg(tmp_path: Path, body: str = _CFG) -> MigrationRoots:
     """Write ``body`` to ``tmp_path/setforge.yaml`` and return roots at it."""
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
+    cfg = write_setforge_yaml(tmp_path, body)
     return MigrationRoots(cfg_path=cfg, repo_root=tmp_path, home=tmp_path)
 
 

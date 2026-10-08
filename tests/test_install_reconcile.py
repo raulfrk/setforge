@@ -28,32 +28,13 @@ from setforge.config import load_config, resolve_profile
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import HunkClass
 from setforge.transitions import transitions_root
+from tests.shared_fixtures import ConfigRepo
 from tests.verb_calls import capture_profile, preview_capture_profile
 
 _PROFILE = "test-recon"
 
 
-def _write_config(repo: Path) -> Path:
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  note:\n"
-        "    src: note.md\n"
-        "    dst: ~/.setforge_recon/note.md\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - note\n",
-        encoding="utf-8",
-    )
-    return config
-
-
-def _write_tracked(repo: Path, body: str) -> None:
-    tracked = repo / "tracked"
-    tracked.mkdir(parents=True, exist_ok=True)
-    (tracked / "note.md").write_text(body, encoding="utf-8")
+_TRACKED = {"note": {"src": "note.md", "dst": "~/.setforge_recon/note.md"}}
 
 
 def _live() -> Path:
@@ -128,18 +109,18 @@ def _status(repo: Path, config: Path) -> Result:
 
 
 def test_first_install_creates_and_records_base(repo: Path) -> None:
-    _write_tracked(repo, "v1\n")
-    config = _write_config(repo)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "v1\n"
     assert _base() == b"v1\n"
 
 
 def test_upstream_change_fast_forwards_live(repo: Path) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
-    _write_tracked(repo, "v2\n")
+    ConfigRepo(repo).write_tracked("note.md", "v2\n")
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "v2\n"
     assert _base() == b"v2\n"
@@ -148,8 +129,8 @@ def test_upstream_change_fast_forwards_live(repo: Path) -> None:
 def test_local_edit_preserved_when_upstream_unchanged(repo: Path) -> None:
     # The F1/F2 fix: a re-install does NOT clobber a local edit with the
     # tracked source when upstream did not change.
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().write_text("locally edited\n", encoding="utf-8")
     assert _install(config).exit_code == 0
@@ -161,8 +142,8 @@ def test_auto_use_tracked_leaves_a_live_only_text_edit_alone(repo: Path) -> None
     # tracked source did not change is a clean no-op even under
     # --auto=use-tracked: the edit survives byte-for-byte, no transition is
     # recorded, and no revert hint is printed.
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().write_text("locally edited\n", encoding="utf-8")
     transitions_before = _transition_dirs()
@@ -322,8 +303,8 @@ def test_divergent_live_without_base_seeds_and_keeps_live(repo: Path) -> None:
     # SEEDS the merge base from upstream non-interactively while KEEPING the
     # local file — never silently overwritten with the tracked source. The
     # recorded base means the next install reconciles instead of re-seeding.
-    _write_tracked(repo, "tracked\n")
-    config = _write_config(repo)
+    ConfigRepo(repo).write_tracked("note.md", "tracked\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
     live = _live()
     live.parent.mkdir(parents=True, exist_ok=True)
     live.write_text("pre-existing local\n", encoding="utf-8")
@@ -342,8 +323,8 @@ def test_clean_reinstall_is_idempotent(repo: Path) -> None:
     # merge base is not rewritten. The stronger INV-4 clause (a true no-op
     # writes NO transition dir at all) is pinned by the companion strict-xfail
     # test below, NOT blessed here as an empty-but-present transition.
-    config = _write_config(repo)
-    _write_tracked(repo, "stable\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "stable\n")
     assert _install(config).exit_code == 0
     before = _live().read_text(encoding="utf-8")
     base_mtime_before = _base_mtime_ns()
@@ -363,8 +344,8 @@ def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
     # INV-4 (no-op-ness): no-new-upstream + no-local-edits must write NO new
     # transition dir. Asserted strictly here instead of being relaxed to
     # "exactly one empty transition" — see the xfail reason above.
-    config = _write_config(repo)
-    _write_tracked(repo, "stable\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "stable\n")
     assert _install(config).exit_code == 0
     transitions_before = _transition_dirs()
     assert _install(config).exit_code == 0
@@ -374,8 +355,8 @@ def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
 def test_converged_dry_run_previews_no_transition_and_mutates_nothing(
     repo: Path,
 ) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "stable\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "stable\n")
     assert _install(config).exit_code == 0
     transitions_before = _transition_dirs()
     base_mtime_before = _base_mtime_ns()
@@ -395,8 +376,8 @@ def test_converged_dry_run_previews_no_transition_and_mutates_nothing(
 def test_dry_run_previews_a_kept_local_edit_as_noop_and_mutates_nothing(
     repo: Path,
 ) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().write_text("drifted by hand\n", encoding="utf-8")
     transitions_before = _transition_dirs()
@@ -497,8 +478,8 @@ def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) 
 
 def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) -> None:
     """Transition provenance may be older even though deployed bytes match HEAD."""
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     _git(repo, "init", "-b", "main")
     _git(repo, "add", ".")
     _git(
@@ -512,7 +493,7 @@ def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) 
         "initial",
     )
 
-    _write_tracked(repo, "v2\n")
+    ConfigRepo(repo).write_tracked("note.md", "v2\n")
     assert _install(config).exit_code == 0
     transitions_after_dirty_install = _transition_dirs()
     _git(repo, "add", "tracked/note.md")
@@ -539,11 +520,11 @@ def test_noop_install_reports_committed_dirty_deployment_as_current(repo: Path) 
 
 def _setup_conflict(repo: Path) -> Path:
     """Install v1, then diverge BOTH live and tracked → a real conflict."""
-    config = _write_config(repo)
-    _write_tracked(repo, "l1\nl2\nl3\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "l1\nl2\nl3\n")
     assert _install(config).exit_code == 0
     _live().write_text("l1\nLOCAL\nl3\n", encoding="utf-8")
-    _write_tracked(repo, "l1\nUPSTREAM\nl3\n")
+    ConfigRepo(repo).write_tracked("note.md", "l1\nUPSTREAM\nl3\n")
     return config
 
 
@@ -593,8 +574,8 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
     # Revert must restore the reconcile base, not just the live file: else the
     # next install sees a stale base (theirs == base) and treats the
     # reverted-away file as a deletion instead of re-deploying it.
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     assert _base() == b"v1\n"
 
@@ -609,8 +590,8 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
 
 
 def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     assert _live().exists()
 
@@ -623,8 +604,8 @@ def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
 
 
 def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
     assert _install(config).exit_code == 0
@@ -635,11 +616,11 @@ def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
 
 
 def test_delete_modify_routes_to_deferred(repo: Path) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
-    _write_tracked(repo, "v2\n")
+    ConfigRepo(repo).write_tracked("note.md", "v2\n")
     result = _install(config)
     assert result.exit_code != 0, result.output
     assert "conflict" in result.output.lower()
@@ -647,8 +628,8 @@ def test_delete_modify_routes_to_deferred(repo: Path) -> None:
 
 
 def test_revert_restores_deletion_and_no_resurrect(repo: Path) -> None:
-    config = _write_config(repo)
-    _write_tracked(repo, "v1\n")
+    config = ConfigRepo(repo).write_config(profile=_PROFILE, tracked_files=_TRACKED)
+    ConfigRepo(repo).write_tracked("note.md", "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
     assert _install(config).exit_code == 0

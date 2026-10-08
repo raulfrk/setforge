@@ -574,28 +574,12 @@ def test_move_recovery_rejects_semantically_tampered_intent(
     assert refused > 1
 
 
-def test_checkout_uuid_shared_by_worktrees_but_not_clone(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
+def test_checkout_uuid_shared_by_worktrees_but_not_clone(
+    tmp_path: Path, init_git_repo
+) -> None:
+    repo = init_git_repo(tmp_path / "repo")
     linked = tmp_path / "linked"
     clone = tmp_path / "clone"
-    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True)
-    subprocess.run(
-        ["git", "-C", str(repo), "config", "user.name", "SetForge Test"], check=True
-    )
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "config",
-            "user.email",
-            "setforge@example.invalid",
-        ],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"], check=True
-    )
     subprocess.run(
         ["git", "-C", str(repo), "worktree", "add", "-b", "linked", str(linked)],
         check=True,
