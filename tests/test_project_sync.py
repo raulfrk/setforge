@@ -2128,3 +2128,16 @@ def test_ordinary_member_with_adjacent_edits_on_both_sides_is_a_conflict(
     assert plan.files[0].result.segments == (
         Conflict(base=b"one\ntwo\n", ours=b"ONE\ntwo\n", theirs=b"one\nTWO\n"),
     )
+
+
+def test_sync_plan_refuses_a_record_whose_file_id_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    payload["files"][0]["file_id"] = ""
+    record.write_text(json.dumps(payload))
+
+    with pytest.raises(SetforgeError) as failure:
+        plan_sync(target)
+
+    assert str(failure.value) == "project injection state has an invalid file record"

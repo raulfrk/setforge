@@ -47,6 +47,7 @@ from setforge.project_injection import (
     plan_removal,
 )
 from setforge.project_overlay import clean_content, read_overlay
+from setforge.project_record import _record_files
 from setforge.project_sync import (
     RecordedProjectInjection,
     StoredProjectFile,
@@ -114,23 +115,6 @@ def _records() -> tuple[Path, ...]:
     return tuple(sorted(root.glob("*.json"))) if root.exists() else ()
 
 
-def _file_visibility(
-    raw: dict[str, object], entry: dict[str, object]
-) -> ProjectVisibility:
-    value = entry.get("visibility")
-    try:
-        return ProjectVisibility(str(value))
-    except ValueError as exc:
-        raise SetforgeError("project injection state has invalid visibility") from exc
-
-
-def _entry_action(entry: dict[str, object]) -> ProjectFileAction:
-    try:
-        return ProjectFileAction(str(entry["action"]))
-    except (KeyError, ValueError) as exc:
-        raise SetforgeError("project injection state has invalid file action") from exc
-
-
 def _record_config_paths(raw: dict[str, object]) -> tuple[Path, Path]:
     """Return the record's resolved config root and config manifest path."""
     config_root = Path(str(raw["config_root"])).resolve(strict=True)
@@ -183,36 +167,27 @@ def _ordinary_actual_visibility(
 
 def _actual_visibility(
     *,
-    raw: dict[str, object],
-    entry: dict[str, object],
     target: Path,
     profile: str,
     git_dir: Path | None,
-    stored: StoredProjectFile | None = None,
+    stored: StoredProjectFile,
 ) -> ProjectFileVisibility:
-    relative = Path(str(entry["destination"]))
-    if relative.is_absolute() or relative == Path() or ".." in relative.parts:
-        raise SetforgeError("project injection state has invalid destination")
+    relative = stored.destination
     destination = target / relative
     info = destination.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise SetforgeError(f"injected project file is not regular: {relative}")
-    expected_mode = entry.get("applied_mode")
-    if (
-        not isinstance(expected_mode, int)
-        or stat.S_IMODE(info.st_mode) != expected_mode
-    ):
+    if stat.S_IMODE(info.st_mode) != stored.applied_mode:
         raise SetforgeError(f"injected project file has drifted: {relative}")
     live_payload = destination.read_bytes()
     if git_dir is None:
         return ProjectFileVisibility.NOT_APPLICABLE
-    declared = _file_visibility(raw, entry)
-    action = _entry_action(entry)
-    if action is ProjectFileAction.OVERLAY:
+    declared = stored.visibility
+    if stored.action is ProjectFileAction.OVERLAY:
         overlay = read_overlay(target, relative)
         if overlay is None:
             raise SetforgeError(f"tracked project overlay is missing: {relative}")
-        if stored is not None and (
+        if (
             overlay.base != stored.previous_payload
             or overlay.local != stored.applied_payload
         ):
@@ -238,11 +213,7 @@ def _actual_visibility(
             else ProjectFileVisibility.TRACKED
         )
     else:
-        expected_digest = entry.get("applied_digest")
-        if (
-            not isinstance(expected_digest, str)
-            or _sha256(live_payload) != expected_digest
-        ):
+        if _sha256(live_payload) != stored.applied_digest:
             raise SetforgeError(f"injected project file has drifted: {relative}")
         actual, expected = _ordinary_actual_visibility(
             target=target,
@@ -308,8 +279,6 @@ def list_projects() -> tuple[ProjectListFile, ...]:
             target = injection.target
             profile = injection.profile
             git_dir = injection.git_dir
-            entries = raw["files"]
-            assert isinstance(entries, list)
             if not stored_files:
                 rows.append(
                     ProjectListFile(
@@ -320,18 +289,13 @@ def list_projects() -> tuple[ProjectListFile, ...]:
                         visibility=None,
                     )
                 )
-            for entry, stored in zip(entries, stored_files, strict=True):
-                if not isinstance(entry, dict):
-                    raise SetforgeError("project injection state has an invalid file")
-                relative = Path(str(entry["destination"]))
+            for stored in stored_files:
                 try:
                     visibility = (
                         ProjectFileVisibility.DELETED_LOCALLY
                         if stored.applied_digest is None
                         and not os.path.lexists(target / stored.destination)
                         else _actual_visibility(
-                            raw=raw,
-                            entry=entry,
                             target=target,
                             profile=profile,
                             git_dir=git_dir,
@@ -353,7 +317,7 @@ def list_projects() -> tuple[ProjectListFile, ...]:
                         record=record,
                         target=target,
                         profile=profile,
-                        destination=relative,
+                        destination=stored.destination,
                         visibility=visibility,
                         error=error,
                     )
@@ -403,18 +367,12 @@ def _render_manifest(
     rendered = dict(raw)
     entries = raw["files"]
     assert isinstance(entries, list)
-    new_entries: list[dict[str, object]] = []
-    for value in entries:
-        if not isinstance(value, dict):
-            raise SetforgeError("project injection state has an invalid file")
-        entry = dict(value)
-        entry["visibility"] = (
-            requested.value
-            if entry.get("destination") == destination.as_posix()
-            else _file_visibility(raw, entry).value
-        )
-        new_entries.append(entry)
-    rendered["files"] = new_entries
+    rendered["files"] = [
+        {**entry, "visibility": requested.value}
+        if entry["destination"] == destination.as_posix()
+        else entry
+        for entry in entries
+    ]
     return (json.dumps(rendered, separators=(",", ":"), sort_keys=True) + "\n").encode()
 
 
@@ -504,8 +462,8 @@ def _plan_ordinary_visibility(
 
 def _find_record(
     root: Path, destination: Path
-) -> tuple[Path, dict[str, object], bytes, dict[str, object]]:
-    matches: list[tuple[Path, dict[str, object], bytes, dict[str, object]]] = []
+) -> tuple[Path, dict[str, object], bytes]:
+    matches: list[tuple[Path, dict[str, object], bytes]] = []
     for record in _records():
         raw, payload = _read_record_document(record)
         if raw["target"] != str(root):
@@ -518,7 +476,7 @@ def _find_record(
                 isinstance(entry, dict)
                 and entry.get("destination") == destination.as_posix()
             ):
-                matches.append((record, raw, payload, entry))
+                matches.append((record, raw, payload))
     if not matches:
         raise SetforgeError(
             f"project file is not recorded at this target: {destination}"
@@ -542,7 +500,7 @@ def plan_project_visibility(
         or destination.as_posix() != str(destination)
     ):
         raise SetforgeError("project visibility file must be target-relative")
-    record, raw, payload, entry = _find_record(root, destination)
+    record, raw, payload = _find_record(root, destination)
     if raw["target_inode"] != root.stat().st_ino:
         raise SetforgeError("project target identity does not match the record")
     profile = str(raw["profile"])
@@ -556,12 +514,16 @@ def plan_project_visibility(
     git_dir = Path(str(raw["git_dir"])) if raw["git_dir"] is not None else None
     if git_dir != actual_git_dir:
         raise SetforgeError("project injection Git identity does not match the target")
+    stored = next(
+        item
+        for item in _record_files(raw, target=root)
+        if item.destination == destination
+    )
     current = _actual_visibility(
-        raw=raw,
-        entry=entry,
         target=root,
         profile=profile,
         git_dir=git_dir,
+        stored=stored,
     )
     after = _render_manifest(raw, destination=destination, requested=requested)
     if git_dir is None:
@@ -598,7 +560,7 @@ def plan_project_visibility(
     overlay_git_plan: OverlayGitPlan | None = None
     remove_from_index = False
     index_path: Path | None = None
-    if _entry_action(entry) is ProjectFileAction.OVERLAY:
+    if stored.action is ProjectFileAction.OVERLAY:
         overlay_git_plan = _plan_overlay_visibility(
             root=root,
             git_dir=git_dir,
@@ -607,7 +569,7 @@ def plan_project_visibility(
             current=current,
             requested=requested,
         )
-    if _entry_action(entry) is not ProjectFileAction.OVERLAY:
+    else:
         visibility_plan, index_path, remove_from_index = _plan_ordinary_visibility(
             root=root,
             git_dir=git_dir,

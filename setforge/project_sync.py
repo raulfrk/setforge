@@ -46,7 +46,6 @@ from setforge.project_injection import (
     _claim_matches_plan,
     _exclude_paths,
     _is_tracked,
-    _load_manifest,
     _load_manifest_payload,
     _overlay_git_paths,
     _plan_file,
@@ -214,10 +213,7 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
 
 
 def _stored_files(record: RecordedProjectInjection) -> tuple[StoredProjectFile, ...]:
-    files = _record_files(
-        _load_manifest(record.manifest_path),
-        target=record.target,
-    )
+    files = _record_files(json.loads(record.manifest_payload), target=record.target)
     # Removal must still read a record whose file id is empty; sync refuses it.
     if any(not item.file_id for item in files):
         raise SetforgeError("project injection state has an invalid file record")
