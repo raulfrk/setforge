@@ -32,7 +32,7 @@ from setforge.config import (
     TreePolicy,
     load_config,
 )
-from setforge.errors import ConfirmRequiresInteractive, OwnershipError
+from setforge.errors import ConfigError, ConfirmRequiresInteractive, OwnershipError
 from setforge.file_ownership import observe_file, observe_tree
 from setforge.locking import MutationLockGuards, mutation_locks
 from setforge.ownership import (
@@ -531,7 +531,13 @@ def _resolve_file_authority(
 ) -> tuple[Path, TreePolicy | None]:
     candidates: list[tuple[str, Path, TreePolicy | None]] = []
     for name, tracked in cfg.tracked_files.items():
-        destination = resolve_dst(tracked)
+        # A dst that won't render is skipped (not raised) here: the claim names
+        # one declaration, so a typo in an unrelated file must not block it, and
+        # a dst that won't render cannot be the one the claim locates.
+        try:
+            destination = resolve_dst(tracked)
+        except ConfigError:
+            continue
         if tracked.tree is not None:
             candidates.append((f"tracked_files.{name}", destination, tracked.tree))
             continue
