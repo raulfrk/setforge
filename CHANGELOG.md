@@ -155,11 +155,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The script it writes is unchanged.
 - A misspelled variable in a `template: true` destination (for example
   `{{ home_typo }}/x.txt`) now stops `install`, `install --dry-run`, `sync`,
-  `compare`, `status` and the other commands that locate your files with an
-  error naming the variable, before anything is written. `validate` already
-  rejected it, but these commands used to treat the unknown variable as empty
-  and use the shortened path (`~/x.txt`). Destinations that `validate` accepts
-  resolve exactly as before.
+  `compare`, `status`, `migrate` (and `migrate --check`, which reads every
+  profile's files) and the other commands that locate your files with an error
+  naming the variable, before anything is written. `validate` already rejected
+  it, but these commands used to treat the unknown variable as empty and use the
+  shortened path (`~/x.txt`). Destinations that `validate` accepts resolve
+  exactly as before. `revert` still undoes an earlier install after such a
+  typo, and a typo in a file that only another profile uses does not stop
+  `install`, `compare`, `cleanup-orphans` or `ownership revert` for the
+  profile you selected.
 
 ### Removed
 
