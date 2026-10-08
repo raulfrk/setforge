@@ -20,12 +20,7 @@ from setforge.cli.config import (
 from setforge.config import Config
 from setforge.errors import SetforgeError
 from setforge.local_config import LocalConfig
-
-
-class _FakeCtx:
-    def __init__(self, *, local: bool = True) -> None:
-        self.params: dict[str, Any] = {"local": local, "tracked": not local}
-        self.info_name = "show"
+from tests.fakes import FakeCtx
 
 
 def test_static_local_template_matches_model_fields() -> None:
@@ -57,7 +52,7 @@ def test_dispatch_falls_back_on_schema_walk_error(
         raise SetforgeError("schema walk exploded")
 
     monkeypatch.setattr("setforge.cli.config._complete_path_local", _explode)
-    result = _complete_path_dispatch(cast(typer.Context, _FakeCtx(local=True)), "")
+    result = _complete_path_dispatch(cast(typer.Context, FakeCtx(local=True)), "")
     # Fallback list arrives instead of an exception.
     assert "source" in result
     assert "binaries" in result
