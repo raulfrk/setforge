@@ -425,6 +425,11 @@ and `migrate --check` reports what your config actually needs.
 - After an upgrade it prints the `uv tool install --reinstall` command that
   rolls back to the previous version.
 
+The version list comes from one request to `https://pypi.org/pypi/setforge/json`
+(10-second timeout, certificates verified, redirects to another host refused).
+If PyPI cannot be reached or answers with an error, `upgrade` prints one
+`error:` line, exits 1 and changes nothing. Nothing is cached between runs.
+
 ## Revert
 
 `revert` undoes the most recent `install` or `sync` for the named profile by

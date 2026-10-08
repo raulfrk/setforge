@@ -24,6 +24,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The yanked and pre-release warnings and the `migrate --check` after the
   upgrade are unchanged.
 
+- `upgrade --check` and `--to` now look up the version list with a single plain
+  request to PyPI instead of a custom client. `--to` no longer makes a second
+  request, a version PyPI does not list is reported as such, and the small
+  cache file the old client kept in the cache directory is no longer used (it
+  can be deleted). Timeouts, certificate checks, the clear error and exit code 1
+  when PyPI is unreachable or answers with an error (nothing is changed) and the
+  way versions are compared are unchanged. A redirect to another host is now
+  refused instead of followed.
+
 ### Fixed
 
 - `setforge recover` after an interrupted install now also restores a file that

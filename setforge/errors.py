@@ -343,9 +343,9 @@ class PyPIFetchError(SetforgeError):
     """Raised when ``setforge upgrade`` cannot fetch latest-version metadata
     from the PyPI JSON API.
 
-    Triggered by :func:`setforge._pypi_client.fetch_latest_version` on
-    network failure, HTTP non-200/304 responses, JSON decode errors, or
-    on cache-disk failures when reading/writing the ETag sidecar.
+    Triggered by the PyPI lookup in :mod:`setforge.cli.upgrade` on network
+    failure, a timeout, a non-200 answer, a redirect to another host, a body
+    that is not the expected JSON, or a release that PyPI does not list.
     Message is suitable for direct surface to the user — the CLI top-
     level handler renders it as ``error: <message>`` and exits 1.
     """

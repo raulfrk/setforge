@@ -1,10 +1,10 @@
 """``setforge upgrade`` — PyPI version check + uv wrapper.
 
-Single-command surface that fetches the latest setforge release from
-PyPI and shells out to ``uv tool upgrade setforge`` after an arrow-key
-confirm with three choices: abort, upgrade, upgrade + migrate-check
-(the default). Release notes are not shown: the installed wheel does not
-carry the changelog, so the command prints the changelog URL instead.
+Single-command surface that reads the setforge release list from PyPI (one
+GET of the project's JSON) and shells out to ``uv tool upgrade setforge``
+after an arrow-key confirm with three choices: abort, upgrade, upgrade +
+migrate-check (the default). Release notes are not shown: the installed wheel
+does not carry the changelog, so the command prints the changelog URL instead.
 
 Flags:
 
@@ -22,14 +22,20 @@ so the user can revert without leaving the terminal.
 
 from __future__ import annotations
 
+import http.client
+import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import IO, Any, cast
+from urllib.parse import urlsplit
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -37,11 +43,6 @@ from rich.console import Console
 from rich.panel import Panel
 
 from setforge import __version__ as _CURRENT_VERSION
-from setforge._pypi_client import (
-    PyPIVersionInfo,
-    fetch_latest_version,
-    fetch_version_info,
-)
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
 from setforge.cli._output import make_console
@@ -88,6 +89,121 @@ class UpgradePlan:
 
 
 # ---------------------------------------------------------------------------
+# PyPI lookup — one GET of the project's JSON
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PYPI_BASE: str = "https://pypi.org/pypi"
+# ``SETFORGE_PYPI_BASE`` replaces the base URL so the Docker e2e suite can point
+# the lookup at a local server serving a hand-written ``<base>/setforge/json``.
+_PYPI_BASE_ENV: str = "SETFORGE_PYPI_BASE"
+_PYPI_TIMEOUT_SECONDS: float = 10.0
+
+_Releases = dict[Version, list[dict[str, Any]]]
+
+
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to the same scheme and host.
+
+    The default handler follows any redirect, including to another host or from
+    https down to http.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        old, new = urlsplit(req.full_url), urlsplit(newurl)
+        if (old.scheme, old.netloc) != (new.scheme, new.netloc):
+            raise PyPIFetchError(
+                f"PyPI redirected {req.full_url} to {newurl}, which is a "
+                "different host or scheme; refusing to follow it"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_pypi_releases() -> _Releases:
+    """GET the project's JSON from PyPI; return its ``releases`` map.
+
+    Every failure — no network, a timeout, a non-200 answer, a refused
+    redirect, a body that is not the expected JSON — raises
+    :class:`PyPIFetchError` before anything is installed or changed.
+    """
+    base = os.environ.get(_PYPI_BASE_ENV, _DEFAULT_PYPI_BASE).rstrip("/")
+    url = f"{base}/{_PACKAGE_NAME}/json"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": f"setforge/{_CURRENT_VERSION} "
+            "(+https://github.com/raulfrk/setforge)"
+        },
+    )
+    opener = urllib.request.build_opener(_SameHostRedirects)
+    try:
+        with opener.open(request, timeout=_PYPI_TIMEOUT_SECONDS) as response:
+            status = response.status
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raise PyPIFetchError(
+            f"PyPI returned HTTP {exc.code} for {url}: {exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise PyPIFetchError(
+            f"network error contacting PyPI ({url}): {exc.reason}"
+        ) from exc
+    except TimeoutError as exc:
+        raise PyPIFetchError(f"timeout contacting PyPI ({url})") from exc
+    except (OSError, http.client.HTTPException) as exc:
+        raise PyPIFetchError(f"network error contacting PyPI ({url}): {exc}") from exc
+    if status != 200:
+        raise PyPIFetchError(f"PyPI returned unexpected status {status} for {url}")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PyPIFetchError(f"PyPI returned non-JSON body for {url}: {exc}") from exc
+    raw_releases = payload.get("releases") if isinstance(payload, dict) else None
+    if not isinstance(raw_releases, dict):
+        raise PyPIFetchError(f"PyPI body for {_PACKAGE_NAME} missing 'releases' map")
+    releases: _Releases = {}
+    for name, files in raw_releases.items():
+        try:
+            version = Version(name)
+        except InvalidVersion:
+            continue
+        releases[version] = (
+            [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+        )
+    return releases
+
+
+def _is_yanked(files: list[dict[str, Any]]) -> bool:
+    """A release is yanked when it has files and every one of them is yanked."""
+    return bool(files) and all(f.get("yanked") for f in files)
+
+
+def _latest_release(releases: _Releases, *, include_prereleases: bool) -> Version:
+    """Pick the highest installable release.
+
+    A release with no files, or whose files are all yanked, cannot be installed
+    and is skipped; pre-releases count only when ``include_prereleases``.
+    """
+    candidates = [
+        version
+        for version, files in releases.items()
+        if files
+        and not _is_yanked(files)
+        and (include_prereleases or not version.is_prerelease)
+    ]
+    if not candidates:
+        raise PyPIFetchError(f"no non-yanked release found for {_PACKAGE_NAME} on PyPI")
+    return max(candidates)
+
+
+# ---------------------------------------------------------------------------
 # Plan construction
 # ---------------------------------------------------------------------------
 
@@ -121,33 +237,27 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
     """Resolve the target version and its PyPI status → UpgradePlan."""
     if to is not None:
         to = _canonical_version(to)
-    info: PyPIVersionInfo = fetch_latest_version(
-        package=_PACKAGE_NAME,
-        current_version=_CURRENT_VERSION,
+    releases = _fetch_pypi_releases()
+    latest = _latest_release(
+        releases,
         include_prereleases=prerelease or (to is not None and _looks_prerelease(to)),
     )
-    target_info = (
-        fetch_version_info(
-            package=_PACKAGE_NAME,
-            version=to,
-            current_version=_CURRENT_VERSION,
-        )
-        if to is not None
-        else info
-    )
-    target = target_info.version
+    target = latest if to is None else Version(to)
+    files = releases.get(target)
+    if files is None:
+        raise PyPIFetchError(f"{_PACKAGE_NAME} {target} is not a release on PyPI")
+    yanked = _is_yanked(files)
+    reason = files[0].get("yanked_reason") if yanked else None
     warnings: list[str] = []
-    if to is not None and to != info.version:
-        warnings.append(
-            f"--to={to} pins a version other than PyPI latest ({info.version})."
-        )
+    if to is not None and target != latest:
+        warnings.append(f"--to={to} pins a version other than PyPI latest ({latest}).")
     return UpgradePlan(
         current_version=_CURRENT_VERSION,
-        target_version=target,
-        is_major_bump=_is_major_bump(_CURRENT_VERSION, target),
-        yanked=target_info.yanked,
-        yanked_reason=target_info.yanked_reason,
-        is_prerelease=target_info.is_prerelease,
+        target_version=str(target),
+        is_major_bump=_is_major_bump(_CURRENT_VERSION, str(target)),
+        yanked=yanked,
+        yanked_reason=reason if isinstance(reason, str) else None,
+        is_prerelease=target.is_prerelease,
         extra_warnings=tuple(warnings),
     )
 

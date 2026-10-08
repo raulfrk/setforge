@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import http.server
+import json
+import shutil
+import socket
+import ssl
 import subprocess
-from collections.abc import Iterable
+import threading
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,7 +17,6 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from setforge._pypi_client import PyPIVersionInfo
 from setforge.cli import app
 from setforge.cli import upgrade as upgrade_mod
 from setforge.cli.upgrade import (
@@ -35,6 +40,104 @@ molecule v26.4.0
 setforge v1.3.2
 - setforge
 """
+
+
+class _QuietServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """A client that gave up or refused our certificate is expected here."""
+
+
+class FakePyPI:
+    """Loopback HTTP server standing in for pypi.org.
+
+    The real urllib stack talks to it, so redirects, status codes, timeouts and
+    bad bodies behave as they would against PyPI, and nothing leaves the
+    machine. ``requests`` records every ``(path, headers)`` it served.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, dict[str, str]]] = []
+        self.stall = False
+        self._unblock = threading.Event()
+        self._routes: dict[str, tuple[int, bytes, dict[str, str]]] = {}
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                fake.requests.append((self.path, dict(self.headers.items())))
+                if fake.stall:
+                    fake._unblock.wait(30)
+                status, body, headers = fake._routes.get(
+                    self.path, (404, b"not found", {})
+                )
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        self.server = _QuietServer(("127.0.0.1", 0), Handler)
+        threading.Thread(
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+            daemon=True,
+        ).start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/pypi"
+
+    def route(
+        self,
+        path: str,
+        status: int = 200,
+        body: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self._routes[path] = (status, body, headers or {})
+
+    def publish_releases(self, releases: dict[str, list[dict[str, Any]]]) -> None:
+        body = json.dumps({"info": {}, "releases": releases}).encode("utf-8")
+        self.route("/pypi/setforge/json", 200, body)
+
+    def publish(
+        self, *versions: str, yanked: dict[str, str | None] | None = None
+    ) -> None:
+        """Serve a project JSON listing ``versions``; ``yanked`` maps to a reason."""
+        yanked = yanked or {}
+        self.publish_releases(
+            {
+                v: [{"yanked": v in yanked, "yanked_reason": yanked.get(v)}]
+                for v in versions
+            }
+        )
+
+    def close(self) -> None:
+        self._unblock.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture(autouse=True)
+def fake_pypi(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakePyPI]:
+    """Point every test in this file at a loopback PyPI, never the real one."""
+    server = FakePyPI()
+    monkeypatch.setenv("SETFORGE_PYPI_BASE", server.base_url)
+    for var in ("http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.upper(), raising=False)
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    try:
+        yield server
+    finally:
+        server.close()
 
 
 @pytest.mark.parametrize("operation", ["upgrade", "verify", "migrate"])
@@ -166,34 +269,6 @@ def test_changelog_url_matches_the_package_metadata() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_pypi(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    version: str,
-    is_prerelease: bool = False,
-    yanked: bool = False,
-) -> None:
-    def fake_fetch(**_kwargs: Any) -> PyPIVersionInfo:
-        return PyPIVersionInfo(
-            version=version,
-            is_prerelease=is_prerelease,
-            yanked=yanked,
-            yanked_reason=None,
-        )
-
-    monkeypatch.setattr("setforge.cli.upgrade.fetch_latest_version", fake_fetch)
-
-    def fake_fetch_version(*, version: str, **_kwargs: Any) -> PyPIVersionInfo:
-        return PyPIVersionInfo(
-            version=version,
-            is_prerelease=is_prerelease,
-            yanked=yanked,
-            yanked_reason=None,
-        )
-
-    monkeypatch.setattr("setforge.cli.upgrade.fetch_version_info", fake_fetch_version)
-
-
 def _newer_version() -> str:
     """Return a version string strictly greater than the installed one.
 
@@ -220,35 +295,26 @@ _NEXT_VERSION = _newer_version()
 
 
 def test_build_upgrade_plan_passes_through_pypi_version(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.5.0")
+    fake_pypi.publish("0.4.0", "0.5.0")
     plan = _build_upgrade_plan(to=None, prerelease=False)
     assert plan.target_version == "0.5.0"
 
 
 def test_build_upgrade_plan_to_pins_target(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.5.0")
+    fake_pypi.publish("0.4.2", "0.5.0")
     plan = _build_upgrade_plan(to="0.4.2", prerelease=False)
     assert plan.target_version == "0.4.2"
     assert any("--to=0.4.2 pins" in w for w in plan.extra_warnings)
 
 
 def test_build_upgrade_plan_surfaces_pinned_yanked_release(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.5.0")
-    monkeypatch.setattr(
-        "setforge.cli.upgrade.fetch_version_info",
-        lambda **_kwargs: PyPIVersionInfo(
-            version="0.4.2",
-            is_prerelease=False,
-            yanked=True,
-            yanked_reason="broken release",
-        ),
-    )
+    fake_pypi.publish("0.4.2", "0.5.0", yanked={"0.4.2": "broken release"})
 
     result = CliRunner().invoke(app, ["upgrade", "--check", "--to", "0.4.2"])
 
@@ -258,18 +324,9 @@ def test_build_upgrade_plan_surfaces_pinned_yanked_release(
 
 
 def test_build_upgrade_plan_surfaces_pinned_prerelease(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
-    _patch_pypi(monkeypatch, version="9.9.9", is_prerelease=False)
-    monkeypatch.setattr(
-        "setforge.cli.upgrade.fetch_version_info",
-        lambda **_kwargs: PyPIVersionInfo(
-            version="8.0.0rc1",
-            is_prerelease=True,
-            yanked=False,
-            yanked_reason=None,
-        ),
-    )
+    fake_pypi.publish("8.0.0rc1", "9.9.9")
 
     result = CliRunner().invoke(app, ["upgrade", "--check", "--to", "8.0.0rc1"])
 
@@ -278,10 +335,7 @@ def test_build_upgrade_plan_surfaces_pinned_prerelease(
     assert "8.0.0rc1 is a pre-release" in result.output
 
 
-def test_build_upgrade_plan_rejects_invalid_to(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_pypi(monkeypatch, version="0.5.0")
+def test_build_upgrade_plan_rejects_invalid_to() -> None:
     from setforge.errors import UpgradeError
 
     with pytest.raises(UpgradeError, match="not a valid version"):
@@ -289,10 +343,10 @@ def test_build_upgrade_plan_rejects_invalid_to(
 
 
 def test_build_upgrade_plan_accepts_canonical_prerelease_spelling(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
     """2.0.0rc1 is how pip and PyPI write a release candidate."""
-    _patch_pypi(monkeypatch, version="2.0.0rc1")
+    fake_pypi.publish("2.0.0rc1")
 
     plan = _build_upgrade_plan(to="2.0.0rc1", prerelease=False)
 
@@ -300,10 +354,10 @@ def test_build_upgrade_plan_accepts_canonical_prerelease_spelling(
 
 
 def test_build_upgrade_plan_canonicalises_a_non_canonical_pin(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
 ) -> None:
     """A non-canonical spelling resolves to what uv will install and report."""
-    _patch_pypi(monkeypatch, version="1.3.2")
+    fake_pypi.publish("1.3.2", "1.3.2.post1")
 
     plan = _build_upgrade_plan(to="1.3.2-1", prerelease=False)
 
@@ -344,11 +398,10 @@ def _patch_subprocess_run(
 
 
 def test_cli_upgrade_check_mode_does_not_mutate(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pypi: FakePyPI
 ) -> None:
     """``--check`` neither shells out nor bootstraps host-local config."""
-    _patch_pypi(monkeypatch, version="0.3.0")
+    fake_pypi.publish("0.3.0")
 
     def fail_run(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("--check must not invoke subprocess.run")
@@ -367,11 +420,11 @@ def test_cli_upgrade_check_mode_does_not_mutate(
 
 
 def test_cli_upgrade_already_latest_short_circuits(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
     from setforge import __version__ as current
 
-    _patch_pypi(monkeypatch, version=current)
+    fake_pypi.publish(current)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     runner = CliRunner()
     result = runner.invoke(app, ["upgrade", "--no-prompt"])
@@ -386,10 +439,10 @@ class _FakeTty:
 
 
 def test_cli_upgrade_plain_upgrade_choice_skips_migrate_check(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
     """Choosing "Upgrade": pypi → wrap → verify → changelog URL + rollback line."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     # CliRunner swaps sys.stdin during invoke, so pretend a terminal is attached.
     monkeypatch.setattr(upgrade_mod, "sys", SimpleNamespace(stdin=_FakeTty()))
@@ -424,10 +477,10 @@ def test_cli_upgrade_plain_upgrade_choice_skips_migrate_check(
 
 
 def test_cli_upgrade_full_flow_with_migrate_check(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pypi: FakePyPI
 ) -> None:
     """``--no-prompt`` runs the default choice: upgrade, then migrate --check."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
@@ -478,9 +531,9 @@ def test_cli_upgrade_full_flow_with_migrate_check(
 
 
 def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pypi: FakePyPI
 ) -> None:
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
@@ -532,10 +585,10 @@ def test_migrate_check_timeout_raises_upgrade_error(
 
 
 def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pypi: FakePyPI
 ) -> None:
     """An unresolvable manifest must not fail an upgrade that succeeded."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     monkeypatch.chdir(tmp_path)  # no setforge.yaml in any source layer
@@ -561,10 +614,10 @@ def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
 
 
 def test_cli_upgrade_skips_migrate_check_when_host_config_is_broken(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pypi: FakePyPI
 ) -> None:
     """A pydantic ValidationError must not fail an upgrade that succeeded."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     broken = tmp_path / "local.yaml"
@@ -591,10 +644,10 @@ def test_cli_upgrade_skips_migrate_check_when_host_config_is_broken(
 
 
 def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
     """Per research brief §2: STDOUT 'Nothing to upgrade' = no-op, exit 0."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -617,9 +670,9 @@ def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
 
 
 def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -641,9 +694,9 @@ def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
 
 
 def test_cli_upgrade_post_verify_failure(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -749,19 +802,255 @@ def test_post_verify_rejects_non_identical_reported_version(
         upgrade_mod._verify_post_upgrade(expected="1.3.2")
 
 
-def test_cli_upgrade_pypi_fetch_error_exits_one(
-    monkeypatch: pytest.MonkeyPatch,
+# ---------------------------------------------------------------------------
+# PyPI lookup over HTTP (loopback server; no real network)
+# ---------------------------------------------------------------------------
+
+
+def _forbid_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_run(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("nothing may be installed when the PyPI lookup fails")
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", fail_run)
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+
+
+def test_check_makes_one_request_and_reports_the_latest_release(
+    fake_pypi: FakePyPI,
 ) -> None:
-    from setforge.errors import PyPIFetchError
+    fake_pypi.publish("0.1.0", "0.2.0", _NEXT_VERSION)
 
-    def boom(**_kwargs: Any) -> PyPIVersionInfo:
-        raise PyPIFetchError("no network")
+    result = CliRunner().invoke(app, ["upgrade", "--check"])
 
-    monkeypatch.setattr("setforge.cli.upgrade.fetch_latest_version", boom)
-    runner = CliRunner()
-    result = runner.invoke(app, ["upgrade", "--check"])
+    assert result.exit_code == 0, result.output
+    assert f"upgrade available: {upgrade_mod._CURRENT_VERSION} → {_NEXT_VERSION}" in (
+        result.output
+    )
+    assert [path for path, _ in fake_pypi.requests] == ["/pypi/setforge/json"]
+    user_agent = fake_pypi.requests[0][1]["User-Agent"]
+    assert user_agent.startswith(f"setforge/{upgrade_mod._CURRENT_VERSION} ")
+
+
+def test_pinning_a_version_still_makes_one_request(fake_pypi: FakePyPI) -> None:
+    fake_pypi.publish("0.4.2", "0.5.0")
+
+    result = CliRunner().invoke(app, ["upgrade", "--check", "--to", "0.4.2"])
+
+    assert result.exit_code == 0, result.output
+    assert len(fake_pypi.requests) == 1
+
+
+def test_latest_skips_prereleases_unless_asked(fake_pypi: FakePyPI) -> None:
+    fake_pypi.publish("2.0.0", "3.0.0rc1")
+
+    default = _build_upgrade_plan(to=None, prerelease=False)
+    including = _build_upgrade_plan(to=None, prerelease=True)
+
+    assert default.target_version == "2.0.0"
+    assert including.target_version == "3.0.0rc1"
+    assert including.is_prerelease
+
+
+def test_latest_skips_yanked_and_file_less_releases(fake_pypi: FakePyPI) -> None:
+    fake_pypi.publish_releases(
+        {
+            "1.0.0": [{"yanked": False}],
+            "1.1.0": [{"yanked": True, "yanked_reason": "bad"}],
+            "1.2.0": [],
+            "not-a-version": [{"yanked": False}],
+        }
+    )
+
+    plan = _build_upgrade_plan(to=None, prerelease=False)
+
+    assert plan.target_version == "1.0.0"
+
+
+def test_latest_compares_versions_not_strings(fake_pypi: FakePyPI) -> None:
+    fake_pypi.publish("1.9.0", "1.10.0", "1.2.0")
+
+    assert _build_upgrade_plan(to=None, prerelease=False).target_version == "1.10.0"
+
+
+def test_pin_matches_a_release_listed_under_another_spelling(
+    fake_pypi: FakePyPI,
+) -> None:
+    fake_pypi.publish("1.0", "2.0")
+
+    plan = _build_upgrade_plan(to="1.0.0", prerelease=False)
+
+    assert plan.target_version == "1.0.0"
+    assert any("--to=1.0.0 pins" in w for w in plan.extra_warnings)
+
+
+def test_pin_of_an_unlisted_release_fails_before_anything_is_installed(
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
+) -> None:
+    _forbid_subprocess(monkeypatch)
+    fake_pypi.publish("0.4.2", "0.5.0")
+
+    result = CliRunner().invoke(app, ["upgrade", "--no-prompt", "--to", "9.9.9"])
+
     assert result.exit_code == 1
-    assert "no network" in result.output
+    assert "setforge 9.9.9 is not a release on PyPI" in result.output
+
+
+@pytest.mark.parametrize("args", [["--check"], ["--no-prompt"]])
+@pytest.mark.parametrize(
+    ("status", "body", "message"),
+    [
+        (500, b"boom", "PyPI returned HTTP 500"),
+        (404, b"nope", "PyPI returned HTTP 404"),
+        (200, b"<html>not json</html>", "non-JSON body"),
+        (200, b"[]", "missing 'releases' map"),
+        (200, b'{"releases": {}}', "no non-yanked release found"),
+    ],
+)
+def test_a_pypi_failure_is_one_clear_error_and_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pypi: FakePyPI,
+    args: list[str],
+    status: int,
+    body: bytes,
+    message: str,
+) -> None:
+    _forbid_subprocess(monkeypatch)
+    fake_pypi.route("/pypi/setforge/json", status, body)
+
+    result = CliRunner().invoke(app, ["upgrade", *args])
+
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert message in result.output
+
+
+@pytest.mark.parametrize("args", [["--check"], ["--no-prompt"]])
+def test_offline_is_one_clear_error_and_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> None:
+    _forbid_subprocess(monkeypatch)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setenv("SETFORGE_PYPI_BASE", f"http://127.0.0.1:{closed_port}/pypi")
+
+    result = CliRunner().invoke(app, ["upgrade", *args])
+
+    assert result.exit_code == 1
+    assert "error: network error contacting PyPI" in result.output
+
+
+def test_a_stalled_pypi_times_out_instead_of_hanging(
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
+) -> None:
+    _forbid_subprocess(monkeypatch)
+    monkeypatch.setattr(upgrade_mod, "_PYPI_TIMEOUT_SECONDS", 0.3)
+    fake_pypi.publish(_NEXT_VERSION)
+    fake_pypi.stall = True
+
+    result = CliRunner().invoke(app, ["upgrade", "--no-prompt"])
+
+    assert result.exit_code == 1
+    assert "error: timeout contacting PyPI" in result.output
+
+
+def test_the_default_pypi_url_and_timeout_are_unchanged() -> None:
+    assert upgrade_mod._DEFAULT_PYPI_BASE == "https://pypi.org/pypi"
+    assert upgrade_mod._PYPI_TIMEOUT_SECONDS == 10.0
+
+
+def test_a_redirect_to_another_host_is_refused(
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
+) -> None:
+    _forbid_subprocess(monkeypatch)
+    fake_pypi.route(
+        "/pypi/setforge/json",
+        302,
+        headers={"Location": "https://evil.example.invalid/pypi/setforge/json"},
+    )
+
+    result = CliRunner().invoke(app, ["upgrade", "--no-prompt"])
+
+    assert result.exit_code == 1
+    assert "different host or scheme; refusing to follow it" in result.output
+    assert len(fake_pypi.requests) == 1
+
+
+def test_a_redirect_to_another_port_on_the_same_machine_is_refused(
+    fake_pypi: FakePyPI,
+) -> None:
+    other = FakePyPI()
+    try:
+        other.publish(_NEXT_VERSION)
+        fake_pypi.route(
+            "/pypi/setforge/json",
+            301,
+            headers={"Location": f"{other.base_url}/setforge/json"},
+        )
+
+        result = CliRunner().invoke(app, ["upgrade", "--check"])
+
+        assert result.exit_code == 1
+        assert "refusing to follow it" in result.output
+        assert other.requests == []
+    finally:
+        other.close()
+
+
+def test_a_redirect_within_the_same_host_is_followed(fake_pypi: FakePyPI) -> None:
+    fake_pypi.route(
+        "/pypi/setforge/json", 301, headers={"Location": "/mirror/setforge/json"}
+    )
+    fake_pypi.route(
+        "/mirror/setforge/json",
+        200,
+        json.dumps({"releases": {_NEXT_VERSION: [{"yanked": False}]}}).encode("utf-8"),
+    )
+
+    result = CliRunner().invoke(app, ["upgrade", "--check"])
+
+    assert result.exit_code == 0, result.output
+    assert _NEXT_VERSION in result.output
+    assert [path for path, _ in fake_pypi.requests] == [
+        "/pypi/setforge/json",
+        "/mirror/setforge/json",
+    ]
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="needs the openssl CLI")
+def test_a_certificate_that_does_not_verify_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """TLS verification stays on: a self-signed server must not be trusted."""
+    key, cert = tmp_path / "key.pem", tmp_path / "cert.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "1",
+            "-subj", "/CN=127.0.0.1",
+            "-addext", "subjectAltName=IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+    _forbid_subprocess(monkeypatch)
+    tls = FakePyPI()
+    try:
+        tls.publish(_NEXT_VERSION)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        tls.server.socket = context.wrap_socket(tls.server.socket, server_side=True)
+        port = tls.server.server_address[1]
+        monkeypatch.setenv("SETFORGE_PYPI_BASE", f"https://127.0.0.1:{port}/pypi")
+
+        result = CliRunner().invoke(app, ["upgrade", "--check"])
+
+        assert result.exit_code == 1
+        assert "error: network error contacting PyPI" in result.output
+        assert "CERTIFICATE_VERIFY_FAILED" in result.output
+        assert tls.requests == []
+    finally:
+        tls.close()
 
 
 # ---------------------------------------------------------------------------
@@ -770,11 +1059,11 @@ def test_cli_upgrade_pypi_fetch_error_exits_one(
 
 
 def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
     from setforge.errors import ConfirmRequiresInteractive
 
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -794,10 +1083,10 @@ def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
 
 
 def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fake_pypi: FakePyPI
 ) -> None:
     """``--no-prompt`` on a non-TTY auto-applies (``yes=True``) and proceeds."""
-    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
+    fake_pypi.publish(_NEXT_VERSION)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 

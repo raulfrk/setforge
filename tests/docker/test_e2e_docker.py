@@ -1247,8 +1247,8 @@ def test_e2e_docker_upgrade_check_mode(
     no network egress is attempted, and the exit code is 0.
 
     The fake-PyPI fixture body shape mirrors the real PyPI JSON API
-    (``info`` + ``releases`` dict) so the unit-tested filter logic in
-    :mod:`setforge._pypi_client` lights up identically.
+    (``info`` + ``releases`` dict) so the release filter in
+    :mod:`setforge.cli.upgrade` lights up identically.
     """
     c = docker_container()
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
