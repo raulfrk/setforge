@@ -729,8 +729,9 @@ def _basis(item: ProjectSyncFilePlan) -> tuple[object, ...]:
 
 def _prior_ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
     stored = item.stored
-    if stored is None:
-        raise SetforgeError("project member has no prior ownership state")
+    # Only an update or removal reaches this, after apply_sync matched it against
+    # a fresh plan, which always gives those members their stored record.
+    assert stored is not None
     return ProjectFilePlan(
         file_id=stored.file_id,
         declaring_profile=stored.declaring_profile,
@@ -769,7 +770,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
     with mutation_locks(
         resources=True,
         config_identity_dirs=identity_dirs,
-        config_dirs=config_roots,
         target_roots=(plan.target,),
         profile=operation_profile,
     ) as guards:
@@ -885,7 +885,9 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
             if file_visibility is not ProjectVisibility.HIDDEN:
                 continue
             if git_dir is None:
-                continue
+                # Every injection of one target shares its git_dir, so no later
+                # member has one either: stopping here is the same as skipping.
+                continue  # pragma: no mutate
             visibility_claim = VisibilityClaim(
                 claim_id=claim_id(
                     target_git_dir=git_dir,

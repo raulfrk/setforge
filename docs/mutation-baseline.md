@@ -49,10 +49,30 @@ reconcile/merge`
 `project_record`, `reconcile_apply` and `reconcile/merge` joined the scope on
 2026-10-04, when the retired `markdown_merge` and `yaml_merge` modules were
 deleted. The first complete run on that scope (nightly gate, 2026-10-05) scored 91.32%.
-Two allowlist entries (`project_sync.x_apply_sync__mutmut_433` and `_436`) are
-stale: the gate only warns about them. Renumbering the allowlist and killing the
-cheap survivors in `project_sync`, `reconcile_apply`, `structural_merge` and
-`reconcile/merge` need a per-mutant survivor list from a full run.
+Killing the cheap survivors in `project_sync`, `reconcile_apply`,
+`structural_merge` and `reconcile/merge` needs a per-mutant survivor list from a
+full run.
+
+### Excusing an equivalent mutant
+
+An equivalent mutant (no test can tell it from the original) is excused where
+the code is, when its line allows it:
+
+- **`# pragma: no mutate`** on the statement, with the reason in a comment
+  above it, when *every* mutant of that line is equivalent. mutmut 3.6 reads
+  the pragma only as the trailing comment of a simple statement or of a
+  compound-statement header (`if …:  # pragma: no mutate`), and then generates
+  no mutant for any node that starts on that statement's first line. It cannot
+  single out one mutant of a line, and a comment inside a multi-line expression
+  is ignored.
+- **`tests/mutmut_allowlist.txt`** (mutant id + reason) for an equivalent mutant
+  that shares its line, or its multi-line call, with mutants the tests do kill:
+  a pragma there would stop those being generated too. Ids are numbered by
+  position inside the function, so an edit above a listed mutant renumbers it;
+  re-check that function's entries with `uv run mutmut show <id>`. The gate
+  warns about an id that no longer exists but cannot see one that now names a
+  different mutant.
+- Provably unreachable code is deleted, not excused.
 
 The mutmut run executes a **sandbox-clean test selection** (see
 `pyproject.toml [tool.mutmut]`), because mutmut runs the suite from a copied
