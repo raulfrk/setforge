@@ -180,7 +180,7 @@ def _plan_staged(
             f"staged file {sub_name!r} live bytes cannot be read: {err}"
         ) from err
     stored_drafts = reconcile_store.read_drafts(profile, fid)
-    engine = engine_for(dst)
+    engine = engine_for(dst, base, entry.hunks)
     stored = index_model.require_unit_kind(entry.hunks, engine.kind)
     if engine.fmt is None:
         _require_utf8(sub_name, base, live)

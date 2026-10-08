@@ -3,18 +3,19 @@
 Staging, capture and compare run the same steps on either kind of unit —
 extract the base↔live units, carry the stored classifications onto them, bind
 drafts, reconstruct the tracked content, assert INV-8, serialise the index rows.
-:func:`engine_for` picks the engine by the live path's format, so a caller is
-written once against :class:`UnitEngine`.
+:func:`engine_for` picks the engine of a file, so a caller is written once
+against :class:`UnitEngine`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
 from typing import Any, Final
 
+from setforge.errors import StructuredParseError
 from setforge.reconcile import hunks
 from setforge.reconcile import structured_units as su
 from setforge.reconcile.hunks import Hunk
@@ -114,11 +115,31 @@ def structured_engine(fmt: StructuredFormat) -> UnitEngine[KeyUnit]:
     )
 
 
-def engine_for(dst: Path) -> UnitEngine[Any]:
+def _parses_as_units(base: bytes, fmt: StructuredFormat) -> bool:
+    try:
+        su.extract_structured_units(base, base, fmt)
+    except StructuredParseError:
+        return False
+    return True
+
+
+def engine_for(
+    dst: Path, base: bytes, stored: Sequence[Mapping[str, object]]
+) -> UnitEngine[Any]:
     """The engine that stages the file deployed at ``dst``.
+
+    A file with stored rows keeps their kind, so it never changes kind. A
+    structured file without rows stages by key when its recorded ``base`` parses
+    and by line when it does not; any other file stages by line. A structured
+    file whose rows mix kinds gets the key engine, which rejects the line rows.
 
     The unit type is erased because the format is only known at run time; units
     an engine produces are only ever handed back to that same engine.
     """
     fmt = su.structured_format(dst)
-    return LINE if fmt is None else structured_engine(fmt)
+    if fmt is None:
+        return LINE
+    if stored:
+        all_line = all(row.get("kind") == UnitKind.LINE for row in stored)
+        return LINE if all_line else structured_engine(fmt)
+    return structured_engine(fmt) if _parses_as_units(base, fmt) else LINE
