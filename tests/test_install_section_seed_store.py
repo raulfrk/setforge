@@ -12,9 +12,9 @@ These tests pin that behavior end-to-end through the ``install`` CLI:
   writes NOTHING to ``local.yaml``;
 - a second install does not reseed (gate reads the store) and deploys the
   seeded host-local body into the live file;
-- a section the user deleted from the live file is seeded again when the same
-  install also advances the merge base (the gate follows the recorded
-  base/local diff, so the stale store row no longer counts).
+- a seeded section the user deleted from the live file stays deleted, also when
+  the same install advances the merge base (the gate reads the store row alone);
+- a seeded section the user edited keeps its edit and is not seeded again.
 """
 
 from __future__ import annotations
@@ -183,27 +183,61 @@ def test_second_install_does_not_reseed_and_deploys_host_local(
     assert "SEEDED PYTHON CONVENTIONS" in deployed
 
 
-def test_deleted_seeded_section_is_seeded_again_when_upstream_changes(
+def test_deleted_seeded_section_stays_deleted_when_upstream_changes(
     repo: Path, tmp_path: Path
 ) -> None:
-    """Pins today's seed-once rule for a stale store row: the user deletes the
-    seeded section from the live file and an unrelated tracked line changes, so
-    the install advances the merge base and keeps the old row. The gate re-diffs
-    the recorded base against the recorded local, finds no section there, and
-    seeds the template again."""
+    """A seeded section the user deletes from the live file is not seeded again,
+    whether or not the next install also advances the merge base."""
     config = _write_config(repo)
     first = _invoke(config)
     assert first.exit_code == 0, first.output
 
     _dst(tmp_path).write_text(_DOC, encoding="utf-8")
+
+    unchanged = _invoke(config)
+    assert unchanged.exit_code == 0, unchanged.output
+    assert "seeded host-local section template(s)" not in unchanged.output
+    assert "SEEDED PYTHON CONVENTIONS" not in _dst(tmp_path).read_text(encoding="utf-8")
+
     (repo / "tracked" / "doc.md").write_text(
         _DOC.replace("upstream notes body", "upstream notes body v2"),
         encoding="utf-8",
     )
 
-    second = _invoke(config)
-    assert second.exit_code == 0, second.output
-    assert "seeded host-local section template(s): python-conventions" in second.output
+    changed = _invoke(config)
+    assert changed.exit_code == 0, changed.output
+    assert "seeded host-local section template(s)" not in changed.output
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
     assert "upstream notes body v2" in deployed
-    assert "SEEDED PYTHON CONVENTIONS" in deployed
+    assert "SEEDED PYTHON CONVENTIONS" not in deployed
+
+
+def test_edited_seeded_section_is_preserved_when_upstream_changes(
+    repo: Path, tmp_path: Path
+) -> None:
+    """A seeded section the user edited keeps its edit when upstream changes, and
+    the template is not injected a second time."""
+    config = _write_config(repo)
+    first = _invoke(config)
+    assert first.exit_code == 0, first.output
+
+    live = _dst(tmp_path)
+    live.write_text(
+        live.read_text(encoding="utf-8").replace(
+            "SEEDED PYTHON CONVENTIONS", "MY OWN PYTHON CONVENTIONS"
+        ),
+        encoding="utf-8",
+    )
+    (repo / "tracked" / "doc.md").write_text(
+        _DOC.replace("# Title", "# Title v2"),
+        encoding="utf-8",
+    )
+
+    second = _invoke(config)
+    assert second.exit_code == 0, second.output
+    assert "seeded host-local section template(s)" not in second.output
+    deployed = live.read_text(encoding="utf-8")
+    assert "# Title v2" in deployed
+    assert "MY OWN PYTHON CONVENTIONS" in deployed
+    assert "SEEDED PYTHON CONVENTIONS" not in deployed
+    assert deployed.count("## Python conventions") == 1

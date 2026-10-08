@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A host-local section that `install` seeded from a `section_templates` entry and
+  that you later deleted now stays deleted. It used to come back on the next
+  install that also brought a change to the same tracked file.
 - `setforge recover` after an interrupted install now also restores a file that
   install was updating through a symlink at its destination, along with that
   file's `.bak` copy; the symlink itself is left alone.

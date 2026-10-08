@@ -585,7 +585,8 @@ config repo's `templates/` directory), then map a host-local section NAME to it
 in a profile's `section_slots:`. On `install`, an empty or missing host-local
 section named there is seeded **once** from the template body; a section that
 already has content is left untouched (the host owns it), so later template
-edits do not propagate to a host that has already adopted the section.
+edits do not propagate to a host that has already adopted the section. A seeded
+section you delete stays deleted: a later `install` does not seed it again.
 
 ## Host-local, never-tracked files
 

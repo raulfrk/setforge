@@ -155,16 +155,16 @@ def seed_section_slots_to_store(
 
     Call INSIDE ``profile_lock`` and AFTER deploy (so deploy's pre-install store
     snapshot is the pre-seed baseline a ``revert`` restores to). For each slot
-    whose template-body heading is not already a LOCAL+``reloc_anchor`` unit in
-    the profile's reconcile store, inject the canonical template body at
+    whose template-body heading is not already a LOCAL+``reloc_anchor`` row in
+    the profile's reconcile store index, inject the canonical template body at
     end-of-file into the target markdown tracked file's stored ``base``/``local``
     and records it as a LOCAL unit via :func:`record_local_reloc_sections`
-    (host-local, survives re-baselining). Returns the section names newly seeded
-    (empty on the
-    seed-once no-op / no slots / no markdown target).
+    (host-local, survives re-baselining). A seeded section the user later
+    deletes keeps its row, so it is not seeded again. Returns the section names
+    newly seeded (empty on the seed-once no-op / no slots / no markdown target).
 
     Writes NOTHING to ``local.yaml``; the host-local intent lives only
-    in the reconcile store, where :func:`host_local_headings_from_store` reads
+    in the reconcile store, where :func:`seeded_headings_from_rows` reads
     it back for the seed-once gate. Raises
     :class:`~setforge.errors.ConfigError` on an unreadable or headingless
     template body (the store identity is heading-based, so a headingless body has
@@ -174,7 +174,7 @@ def seed_section_slots_to_store(
     from setforge.anchors import AnchorAtEndOfFile
     from setforge.body_canon import canonical_body, inject_body_at_anchor
     from setforge.compare import resolve_dst, resolve_src
-    from setforge.reconcile.host_local_view import host_local_headings_from_store
+    from setforge.reconcile.host_local_view import seeded_headings_from_rows
     from setforge.reconcile.types import file_id
 
     if not resolved.section_slots:
@@ -184,8 +184,8 @@ def seed_section_slots_to_store(
         return []
     fid = file_id(target_id)
 
-    # Seed-once: a heading already a LOCAL store unit is host-owned, skip it.
-    already = host_local_headings_from_store(profile, fid)
+    # Seed-once: a heading with a LOCAL store row is host-owned, skip it.
+    already = seeded_headings_from_rows(profile, fid)
 
     residual: list[tuple[str, str]] = []
     seeded: list[str] = []
