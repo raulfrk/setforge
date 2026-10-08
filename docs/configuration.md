@@ -96,7 +96,11 @@ setforge project remove application /path/to/worktree --yes
 A profile is injected into a directory once. Injecting it there again stops
 with "already injected" and exit status 1, naming `setforge project sync
 <path>`, which is the command that applies profile changes and restores a lost
-private exclude entry.
+private exclude entry. Sync keeps the config file and each file's Git
+visibility recorded at injection, so the message also names
+`setforge project visibility <path> <file>` for changing visibility and
+`setforge project remove <profile> <path> --config <recorded config>` to run
+before injecting from another config file of the same checkout.
 
 Injection creates missing files, retains byte-and-mode-identical untracked
 files, and snapshots differing untracked files so `remove` can restore their

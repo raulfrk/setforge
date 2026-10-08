@@ -124,6 +124,17 @@ def _config(tmp_path: Path) -> Path:
     return config
 
 
+def _already_injected(target: Path, config: Path) -> str:
+    return (
+        f"project profile 'demo' is already injected at {target}; use "
+        f"`setforge project sync {target}`. Sync keeps the config and each file's "
+        "Git visibility recorded at injection: change a file's visibility with "
+        f"`setforge project visibility {target} <file> --hidden` or `--tracked`, "
+        "and to inject from another config file of the same checkout first run "
+        f"`setforge project remove demo {target} --config {config.resolve()}`"
+    )
+
+
 def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
@@ -182,10 +193,7 @@ def test_second_injection_is_refused_and_leaves_record_and_visibility_alone(
     reinjected = CliRunner().invoke(app, command)
 
     assert reinjected.exit_code == 1
-    assert str(reinjected.exception) == (
-        f"project profile 'demo' is already injected at {target}; use "
-        f"`setforge project sync {target}`"
-    )
+    assert str(reinjected.exception) == _already_injected(target, config)
     assert read_claims(target)[3] == ()
     assert manifest_path(target, "demo").read_bytes() == before
 
@@ -597,10 +605,7 @@ def test_second_injection_names_project_sync_whatever_changed(
     inject = ["project", "inject", "demo", str(target), "--config", str(config)]
     assert CliRunner().invoke(app, [*inject, "--yes"]).exit_code == 0
     record = manifest_path(target, "demo").read_bytes()
-    message = (
-        f"project profile 'demo' is already injected at {target}; use "
-        f"`setforge project sync {target}`"
-    )
+    message = _already_injected(target, config)
 
     for extra in (["--yes"], ["--dry-run"], ["--git-tracked", "--yes"]):
         second = CliRunner().invoke(app, [*inject, *extra])
@@ -613,6 +618,44 @@ def test_second_injection_names_project_sync_whatever_changed(
     assert str(changed.exception) == message
     assert (target / "AGENTS.md").read_text() == "local\n"
     assert manifest_path(target, "demo").read_bytes() == record
+
+
+def test_second_injection_with_another_config_or_visibility_names_what_applies(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    other = config.with_name("other.yaml")
+    other.write_bytes(config.read_bytes())
+    target = _git_repo(tmp_path / "target")
+    run = CliRunner().invoke
+    assert (
+        run(
+            app,
+            ["project", "inject", "demo", str(target), "--config", str(config), "-y"],
+        ).exit_code
+        == 0
+    )
+    again = ["project", "inject", "demo", str(target), "--config", str(other), "-y"]
+
+    refused = run(app, [*again, "--git-tracked"])
+
+    assert refused.exit_code == 1
+    assert str(refused.exception) == _already_injected(target, config)
+    exposed = run(
+        app, ["project", "visibility", str(target), "AGENTS.md", "--tracked", "-y"]
+    )
+    assert exposed.exit_code == 0, exposed.exception
+    assert read_claims(target)[3] == ()
+    removed = run(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "-y"],
+    )
+    assert removed.exit_code == 0, removed.exception
+    injected = run(app, again)
+    assert injected.exit_code == 0, injected.exception
+    record = json.loads(manifest_path(target, "demo").read_text())
+    assert record["config_path"] == str(other.resolve())
 
 
 @pytest.mark.parametrize("request_kind", ["dry-run", "unconfirmed"])
@@ -1567,10 +1610,7 @@ def test_recreated_project_at_the_same_path_names_a_working_remedy(
     ) in listed.output
     refused = runner.invoke(app, ["project", "inject", "demo", *arguments])
     assert refused.exit_code == 1
-    assert str(refused.exception) == (
-        f"project profile 'demo' is already injected at {target}; use "
-        f"`setforge project sync {target}`"
-    )
+    assert str(refused.exception) == _already_injected(target, config)
     assert not destination.exists()
 
     restored = runner.invoke(
@@ -2803,9 +2843,8 @@ def test_missing_tracked_overlay_file_names_project_remove_not_sync(
     ) in listed.output
     reinjected = runner.invoke(app, ["project", "inject", "demo", *arguments])
     assert reinjected.exit_code == 1
-    assert str(reinjected.exception) == (
-        f"project profile 'demo' is already injected at {target}; use "
-        f"`setforge project sync {target}`"
+    assert str(reinjected.exception) == _already_injected(
+        target, tmp_path / "config" / "setforge.yaml"
     )
     subprocess.run(
         ["git", "-C", str(target), "checkout", "--", "AGENTS.md"], check=True

@@ -978,7 +978,11 @@ def _refuse_existing_injection(
         )
     raise SetforgeError(
         f"project profile {profile!r} is already injected at {target}; use "
-        f"`setforge project sync {target}`"
+        f"`setforge project sync {target}`. Sync keeps the config and each file's "
+        "Git visibility recorded at injection: change a file's visibility with "
+        f"`setforge project visibility {target} <file> --hidden` or `--tracked`, "
+        "and to inject from another config file of the same checkout first run "
+        f"`setforge project remove {profile} {target} --config {raw['config_path']}`"
     )
 
 

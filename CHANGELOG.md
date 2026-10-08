@@ -24,7 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   converted record.
 - `setforge project inject` of a profile that is already injected in that
   directory now always stops with "already injected; use `setforge project
-  sync <path>`" and exit status 1. An exact repeat used to exit 0 with "no
+  sync <path>`" and exit status 1, and also names `project visibility` and
+  `project remove` for a different Git visibility or config file, which sync
+  does not apply. An exact repeat used to exit 0 with "no
   changes", and could re-add a missing private exclude entry; `project sync`
   does that. The message no longer says which of the profile, the visibility
   flag or a file differs.
