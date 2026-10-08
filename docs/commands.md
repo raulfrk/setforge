@@ -283,8 +283,12 @@ Removing a declaration and running an ordinary `install` does not uninstall
 packages or rewrite resources outside the selected profile. Explicit retirement
 uses the scoped workflows above; history-only file edits are not supported.
 
-Mutating commands run one at a time per user: each holds a user-global mutation
-gate for its whole run, then locks the profile state it changes. The gate covers
+Mutating commands run one at a time per user: each command that changes
+SetForge's state, a managed file, a package, an extension or plugin, or a
+config repository holds a user-global mutation gate for its whole run, then
+locks the profile state it changes. `completion install` is the one exception:
+it only writes the completion script and the shell rc file, so it takes no
+gate and is not refused while an interrupted operation awaits recovery. The gate covers
 the interval before a write-ahead journal can be published, including migrations
 that later lock multiple real profiles.
 An interrupted
@@ -364,7 +368,7 @@ refused rather than traversed.
 Reversible deletion stores typed absent/file/symlink images, including
 arbitrary bytes or link target, mode, and nanosecond mtime. Crash recovery
 refuses to overwrite a replacement or traverse a changed/symlinked parent; the
-journal remains active and conflicting mutations remain blocked until the
+journal remains active and every other mutating command stays blocked until the
 operator moves the replacement aside and retries recovery.
 
 <!-- setforge-doc-flags: cleanup-orphans -->

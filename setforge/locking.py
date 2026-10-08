@@ -1,9 +1,13 @@
 """Ordered advisory locks for SetForge reads and mutations.
 
-Every mutating command holds the user-global mutation gate for its whole run,
-so the gate is the one writer lock: no two mutations overlap, whatever they
-touch. Two narrower locks remain because commands that do not take the gate
-also take them: the profile lock (``compare`` and ``inspect`` read under it)
+Every command that changes SetForge state, a managed file, a package, an
+adapter or a config repository holds the user-global mutation gate for its
+whole run, so the gate is the one writer lock: no two such mutations overlap,
+whatever they touch. ``completion install`` is the one command that writes
+without it: it touches only the completion script and the shell rc file, takes
+no lock and is not refused by an unfinished operation. Two narrower locks
+remain because commands that do not take the gate also take them: the profile
+lock (``compare`` and ``inspect`` read under it)
 and the config-identity lock (checkout identity is created on read paths too).
 The sole legal order is gate, config identity, then profile state.
 The rank guard rejects in-process inversions, while POSIX ``flock`` serializes

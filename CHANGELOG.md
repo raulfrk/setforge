@@ -9,11 +9,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - An interrupted operation that still needs `setforge recover` now blocks every
-  command that changes something, not only the ones touching the same profile,
-  config repository or packages. This includes `setforge config add` and
-  `config remove`: they refuse and name the `setforge recover` command to run
-  first. Read-only commands such as `compare`, `status` and `validate` keep
-  working.
+  command that changes SetForge's state, a managed file, a package, an
+  extension or plugin, or a config repository, not only the ones touching the
+  same profile, config repository or packages. This includes `setforge config
+  add` and `config remove`: they refuse and name the `setforge recover` command
+  to run first. Read-only commands such as `compare`, `status` and `validate`
+  keep working. So does `setforge completion install`, the one command that
+  writes without being blocked: it only writes the completion script and the
+  shell rc file.
 - An interrupted `setforge ownership release` or `ownership revert` is now
   undone instead of completed. Run the `setforge recover
   --profile=ownership-<owner-id> --apply` command that the next mutating
