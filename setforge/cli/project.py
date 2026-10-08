@@ -289,18 +289,6 @@ def project_inject(
         resolved=resolved,
         visibility=visibility,
     )
-    if plan.no_op:
-        changed = apply_injection(plan, mutate_visibility=not dry_run)
-        _render_injection(plan)
-        if dry_run:
-            typer.echo("dry run: no changes applied")
-        else:
-            typer.echo(
-                "visibility activated for the existing injection"
-                if changed
-                else "no changes: this exact injection is already current"
-            )
-        return
     _render_injection(plan)
     if dry_run:
         if not sys.stdin.isatty():
@@ -318,10 +306,8 @@ def project_inject(
     if resolved_plan is None:
         typer.echo("aborted: no changes applied")
         return
-    changed = apply_injection(resolved_plan)
-    typer.echo(
-        "injection complete" if changed else "no changes: injection already current"
-    )
+    apply_injection(resolved_plan)
+    typer.echo("injection complete")
 
 
 @project_app.command("sync", epilog=PROJECT_SYNC_EXAMPLES)

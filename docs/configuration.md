@@ -93,6 +93,11 @@ setforge project sync /path/to/worktree --dry-run
 setforge project remove application /path/to/worktree --yes
 ```
 
+A profile is injected into a directory once. Injecting it there again stops
+with "already injected" and exit status 1, naming `setforge project sync
+<path>`, which is the command that applies profile changes and restores a lost
+private exclude entry.
+
 Injection creates missing files, retains byte-and-mode-identical untracked
 files, and snapshots differing untracked files so `remove` can restore their
 exact bytes and mode. In a Git worktree, an already-tracked destination opens
