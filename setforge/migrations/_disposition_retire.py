@@ -162,6 +162,14 @@ class DispositionRetireMigration:
             seen.setdefault(reconcile_store.index_manifest_path(profile), None)
         return tuple(seen)
 
+    def rollback_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        """Format sidecars per profile: the seed stamps base and drops scalar-base."""
+        seen: dict[Path, None] = {}
+        for profile in sorted({rec.profile for rec in _build_legacy_records(roots)}):
+            seen.setdefault(base_store.base_path(profile, SIDECAR_NAME), None)
+            seen.setdefault(_scalar_base_sidecar(profile), None)
+        return tuple(seen)
+
     def apply(self, *, roots: MigrationRoots) -> None:
         """Run the cutover: validate -> seed -> stamp -> commit -> delete (see §2).
 
@@ -579,11 +587,14 @@ def _delete_legacy_stores(records: list[_FidLegacy], profiles: list[str]) -> Non
         _spans_manifest_path(rec.profile, key).unlink(missing_ok=True)
         scalar_base_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
     for profile in profiles:
-        # The profile root is the manifest's parent dir; drop its dangling
-        # scalar-base format-version sidecar so no reader points at a format
-        # whose store is gone.
-        root = scalar_base_store.manifest_path(profile, "_fmt_probe_").parent
-        (root / SIDECAR_NAME).unlink(missing_ok=True)
+        # Drop the dangling scalar-base format-version sidecar so no reader
+        # points at a format whose store is gone.
+        _scalar_base_sidecar(profile).unlink(missing_ok=True)
+
+
+def _scalar_base_sidecar(profile: str) -> Path:
+    """The profile's scalar-base format sidecar (the manifests' parent dir)."""
+    return scalar_base_store.manifest_path(profile, "_fmt_probe_").parent / SIDECAR_NAME
 
 
 def _span_specs_from_raw(raw_spans: object) -> tuple[_SpanSpec, ...]:
