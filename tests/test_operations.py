@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import itertools
 import json
 import os
 import subprocess
@@ -20,7 +21,6 @@ from setforge import codex_plugins, locking, operations, orphan_scan, transition
 from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks, profile_lock
 from setforge.ownership import (
-    OwnershipClaim,
     OwnershipStore,
     ProvenanceFact,
     ProvenanceFactKind,
@@ -28,6 +28,7 @@ from setforge.ownership import (
     ResourceScope,
     ScopeKind,
 )
+from tests.shared_helpers import at_record_write, crash
 
 
 @pytest.fixture
@@ -283,57 +284,59 @@ def test_recover_files_resolves_ownership_move_before_restoring_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = OwnershipStore()
-    owner = uuid.uuid4()
     scope = ResourceScope(ScopeKind.USER_HOST, "current-user")
-    source = ResourceId("package", "cargo", "source", scope)
-    destination = ResourceId("package", "cargo", "destination", scope)
-    with mutation_locks(resources=True):
-        claim = store.claim_locked(
-            resource_id=source,
-            owner_id=owner,
-            declaration_refs=("packages.cargo.source",),
-            provenance=(ProvenanceFact(ProvenanceFactKind.ORIGIN, "test"),),
-            locator="source",
-            fingerprint="before",
-            expected_generation=None,
+    for step in itertools.count(1):
+        owner = uuid.uuid4()
+        source = ResourceId("package", "cargo", f"source-{step}", scope)
+        destination = ResourceId("package", "cargo", f"destination-{step}", scope)
+        with mutation_locks(resources=True):
+            claim = store.claim_locked(
+                resource_id=source,
+                owner_id=owner,
+                declaration_refs=("packages.cargo.source",),
+                provenance=(ProvenanceFact(ProvenanceFactKind.ORIGIN, "test"),),
+                locator="source",
+                fingerprint="before",
+                expected_generation=None,
+            )
+        journal = operations.prepare(
+            command="install",
+            profile=f"p{step}",
+            config_dir=tmp_path,
+            resources_lock=True,
+            paths=(store.claim_path(source), store.claim_path(destination)),
         )
-    journal = _prepare(
-        tmp_path,
-        paths=(store.claim_path(source), store.claim_path(destination)),
-    )
-    applying = operations.begin_checkpoint(
-        journal,
-        name="move-claim",
-        kind=operations.CheckpointKind.REVERSIBLE,
-        recovery="restore claim identity",
-    )
-    real_unlink = store._unlink_intent
-
-    def crash_after_move(
-        intent_id: uuid.UUID, *, directory_fd: int | None = None
-    ) -> None:
-        raise OSError("crash after move")
-
-    monkeypatch.setattr(store, "_unlink_intent", crash_after_move)
-    with (
-        mutation_locks(resources=True, allow_operation_id=journal.operation_id),
-        pytest.raises(OSError, match="crash after move"),
-    ):
-        store.move_locked(
-            source,
-            destination,
-            expected_owner=owner,
-            expected_generation=claim.generation,
+        applying = operations.begin_checkpoint(
+            journal,
+            name="move-claim",
+            kind=operations.CheckpointKind.REVERSIBLE,
+            recovery="restore claim identity",
         )
-    monkeypatch.setattr(store, "_unlink_intent", real_unlink)
 
-    with mutation_locks(resources=True, allow_operation_id=journal.operation_id):
-        operations.recover_files(applying)
+        try:
+            with (
+                at_record_write(monkeypatch, step, before=crash),
+                mutation_locks(resources=True, allow_operation_id=journal.operation_id),
+            ):
+                store.move_locked(
+                    source,
+                    destination,
+                    expected_owner=owner,
+                    expected_generation=claim.generation,
+                )
+        except OSError:
+            pass
+        else:
+            assert step > 1, "the move made no write the test could interrupt"
+            return
 
-    restored = store.read(source)
-    assert isinstance(restored, OwnershipClaim)
-    assert store.read(destination) is None
-    assert not tuple(store.intents_root.glob("*.json"))
+        with mutation_locks(resources=True, allow_operation_id=journal.operation_id):
+            recovered = operations.recover_files(applying)
+
+        assert store.read(source) == claim
+        assert store.read(destination) is None
+        assert not tuple(store.intents_root.glob("*.json"))
+        operations.complete(recovered)
 
 
 def test_recover_files_restores_file_symlink_directory_and_absence(

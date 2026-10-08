@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import subprocess
 import uuid
@@ -25,7 +26,6 @@ from setforge.errors import (
 from setforge.locking import mutation_locks
 from setforge.ownership import (
     Authority,
-    ClaimEvent,
     ClaimLifecycle,
     OwnershipClaim,
     OwnershipStore,
@@ -37,6 +37,7 @@ from setforge.ownership import (
     load_or_create_owner_id,
     read_owner_id,
 )
+from tests.shared_helpers import at_record_write, crash
 
 
 def _resource(coordinate: str = "ripgrep", *, provider: str = "cargo") -> ResourceId:
@@ -437,38 +438,68 @@ def test_claim_reader_refuses_symlinked_state(tmp_path: Path) -> None:
         store.read(claim.resource_id)
 
 
-def test_move_intent_blocks_reads_and_recovers_before_destination(
+def _interrupted_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[OwnershipStore, OwnershipClaim, ResourceId]]:
+    """Yield a store whose move of one claim stopped before each of its writes.
+
+    Ends at the first write the move does not reach, where the move completes.
+    """
+    destination = _resource("rg")
+    for step in itertools.count(1):
+        store = OwnershipStore(tmp_path / f"stopped-before-write-{step}")
+        owner = uuid.uuid4()
+        source = _claim(store, owner)
+        try:
+            with (
+                at_record_write(monkeypatch, step, before=crash),
+                mutation_locks(resources=True),
+            ):
+                store.move_locked(
+                    source.resource_id,
+                    destination,
+                    expected_owner=owner,
+                    expected_generation=1,
+                )
+        except OSError:
+            yield store, source, destination
+        else:
+            assert step > 1, "the move made no write the test could interrupt"
+            return
+
+
+def _pending_intents(store: OwnershipStore) -> tuple[Path, ...]:
+    return tuple(store.intents_root.glob("*.json"))
+
+
+def _claim_files(store: OwnershipStore) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in store.claims_root.glob("*.json")}
+
+
+def test_a_move_stopped_at_any_write_is_completed_by_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = OwnershipStore(tmp_path)
-    owner = uuid.uuid4()
-    source = _claim(store, owner)
-    destination = _resource("rg")
-    real_write = store._write_claim
+    resolved_by_recovery = 0
+    for store, source, destination in _interrupted_moves(tmp_path, monkeypatch):
+        decided = bool(_pending_intents(store))
+        if decided:
+            with pytest.raises(OwnershipError, match="unfinished ownership move"):
+                store.read(source.resource_id)
 
-    def fail_destination(claim: OwnershipClaim, *, directory_fd: int) -> None:
-        if claim.resource_id == destination:
-            raise OSError("injected crash")
-        real_write(claim, directory_fd=directory_fd)
+        with mutation_locks(resources=True):
+            store.recover_moves_locked()
 
-    monkeypatch.setattr(store, "_write_claim", fail_destination)
-    with mutation_locks(resources=True), pytest.raises(OSError, match="injected crash"):
-        store.move_locked(
-            source.resource_id,
-            destination,
-            expected_owner=owner,
-            expected_generation=1,
-        )
-    monkeypatch.setattr(store, "_write_claim", real_write)
-
-    with pytest.raises(OwnershipError, match="unfinished ownership move"):
-        store.read(source.resource_id)
-    with mutation_locks(resources=True):
-        store.recover_moves_locked()
-    assert store.read(source.resource_id) is None
-    moved = store.read(destination)
-    assert moved is not None
-    assert moved.generation == 2
+        assert not _pending_intents(store)
+        if decided:
+            resolved_by_recovery += 1
+            assert store.read(source.resource_id) is None
+            moved = store.read(destination)
+            assert moved is not None
+            assert moved.generation == 2
+        else:
+            assert store.read(source.resource_id) == source
+            assert store.read(destination) is None
+    assert resolved_by_recovery > 1
 
 
 def test_move_destination_collision_refuses_without_intent(tmp_path: Path) -> None:
@@ -491,148 +522,56 @@ def test_move_destination_collision_refuses_without_intent(tmp_path: Path) -> No
     assert not store.intents_root.exists()
 
 
-@pytest.mark.parametrize("checkpoint", ["after_destination", "after_source"])
-def test_move_recovery_completes_later_crash_checkpoints(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkpoint: str
+def test_move_recovery_retains_conflicting_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = OwnershipStore(tmp_path)
-    owner = uuid.uuid4()
-    source = _claim(store, owner)
-    destination = _resource("rg")
-    real_claim_unlink = store._unlink_claim
-    real_intent_unlink = store._unlink_intent
-    if checkpoint == "after_destination":
+    for store, _source, destination in _interrupted_moves(tmp_path, monkeypatch):
+        intents = _pending_intents(store)
+        if not intents or store.claim_path(destination).exists():
+            continue
+        # The move was decided but its destination is not written yet; a
+        # different claim took the destination's place.
+        conflict = {
+            **json.loads(intents[0].read_text(encoding="utf-8"))["destination"],
+            "fingerprint": "sha256:conflict",
+        }
+        store.claim_path(destination).write_text(json.dumps(conflict), encoding="utf-8")
+        claims = _claim_files(store)
 
-        def fail_claim_unlink(
-            resource_id: ResourceId, *, directory_fd: int | None = None
-        ) -> None:
-            raise OSError("crash after destination")
+        with (
+            mutation_locks(resources=True),
+            pytest.raises(CorruptOwnershipState, match="conflicts with live claims"),
+        ):
+            store.recover_moves_locked()
 
-        monkeypatch.setattr(store, "_unlink_claim", fail_claim_unlink)
-    else:
-
-        def fail_intent_unlink(
-            intent_id: uuid.UUID, *, directory_fd: int | None = None
-        ) -> None:
-            raise OSError("crash after source")
-
-        monkeypatch.setattr(store, "_unlink_intent", fail_intent_unlink)
-    with mutation_locks(resources=True), pytest.raises(OSError, match="crash after"):
-        store.move_locked(
-            source.resource_id,
-            destination,
-            expected_owner=owner,
-            expected_generation=1,
-        )
-    if checkpoint == "after_destination":
-        monkeypatch.setattr(store, "_unlink_claim", real_claim_unlink)
-    else:
-        monkeypatch.setattr(store, "_unlink_intent", real_intent_unlink)
-
-    with mutation_locks(resources=True):
-        store.recover_moves_locked()
-    assert store.read(source.resource_id) is None
-    assert store.read(destination) is not None
-    assert not tuple(store.intents_root.glob("*.json"))
-
-
-def test_move_recovery_retains_conflicting_destination(tmp_path: Path) -> None:
-    store = OwnershipStore(tmp_path)
-    owner = uuid.uuid4()
-    source = _claim(store, owner)
-    destination_id = _resource("rg")
-    moved_history = (*source.history, ClaimEvent("move", owner, 2))
-    destination = OwnershipClaim(
-        resource_id=destination_id,
-        owner_id=owner,
-        declaration_refs=source.declaration_refs,
-        authority=source.authority,
-        lifecycle=source.lifecycle,
-        provenance=source.provenance,
-        locator=source.locator,
-        fingerprint="sha256:conflict",
-        generation=source.generation + 1,
-        history=moved_history,
-    )
-    intended = OwnershipClaim(
-        resource_id=destination_id,
-        owner_id=owner,
-        declaration_refs=source.declaration_refs,
-        authority=source.authority,
-        lifecycle=source.lifecycle,
-        provenance=source.provenance,
-        locator=source.locator,
-        fingerprint=source.fingerprint,
-        generation=source.generation + 1,
-        history=moved_history,
-    )
-    intent = store._intent_path(uuid.uuid4())
-    store.intents_root.mkdir(parents=True)
-    intent.write_text(
-        json.dumps(
-            {
-                "destination": ownership_module._claim_to_json(intended),
-                "intent_id": intent.stem,
-                "schema_version": "1.0",
-                "source": ownership_module._claim_to_json(source),
-            }
-        ),
-        encoding="utf-8",
-    )
-    with ownership_module._open_dir_chain(
-        store.root, "claims", create=True
-    ) as claims_fd:
-        assert claims_fd is not None
-        store._write_claim(destination, directory_fd=claims_fd)
-
-    with (
-        mutation_locks(resources=True),
-        pytest.raises(CorruptOwnershipState, match="conflicts with live claims"),
-    ):
-        store.recover_moves_locked()
-    assert intent.exists()
-    assert store._read_path(store._claim_path(destination_id)) == destination
+        assert intents[0].exists()
+        assert _claim_files(store) == claims
+        return
+    pytest.fail("no stopped move had an intent without its destination")
 
 
 def test_move_recovery_rejects_semantically_tampered_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = OwnershipStore(tmp_path)
-    owner = uuid.uuid4()
-    source = _claim(store, owner)
-    destination = _resource("rg")
-    real_write = store._write_claim
+    refused = 0
+    for store, _source, _destination in _interrupted_moves(tmp_path, monkeypatch):
+        if not (intents := _pending_intents(store)):
+            continue
+        raw = json.loads(intents[0].read_text(encoding="utf-8"))
+        raw["destination"]["fingerprint"] = "sha256:tampered"
+        intents[0].write_text(json.dumps(raw), encoding="utf-8")
+        claims = _claim_files(store)
 
-    def fail_destination(claim: OwnershipClaim, *, directory_fd: int) -> None:
-        if claim.resource_id == destination:
-            raise OSError("stop after intent")
-        real_write(claim, directory_fd=directory_fd)
+        with (
+            mutation_locks(resources=True),
+            pytest.raises(CorruptOwnershipState, match="invalid ownership move intent"),
+        ):
+            store.recover_moves_locked()
 
-    monkeypatch.setattr(store, "_write_claim", fail_destination)
-    with (
-        mutation_locks(resources=True),
-        pytest.raises(OSError, match="stop after intent"),
-    ):
-        store.move_locked(
-            source.resource_id,
-            destination,
-            expected_owner=owner,
-            expected_generation=1,
-        )
-    monkeypatch.setattr(store, "_write_claim", real_write)
-    intent = next(store.intents_root.glob("*.json"))
-    raw = json.loads(intent.read_text(encoding="utf-8"))
-    raw["destination"]["fingerprint"] = "sha256:tampered"
-    intent.write_text(json.dumps(raw), encoding="utf-8")
-
-    with (
-        mutation_locks(resources=True),
-        pytest.raises(CorruptOwnershipState, match="invalid ownership move intent"),
-    ):
-        store.recover_moves_locked()
-    assert store._read_path(store._claim_path(source.resource_id)) == source
-    assert store._read_path(store._claim_path(destination)) is None
-    assert intent.exists()
+        assert intents[0].exists()
+        assert _claim_files(store) == claims
+        refused += 1
+    assert refused > 1
 
 
 def test_checkout_uuid_shared_by_worktrees_but_not_clone(tmp_path: Path) -> None:
@@ -824,15 +763,13 @@ def test_claim_publication_is_anchored_and_detects_directory_swap(
     owner = uuid.uuid4()
     _claim(store, owner)
     displaced = tmp_path / "displaced-claims"
-    real_write = ownership_module._atomic_write_at
 
-    def swap_after_write(directory_fd: int, name: str, payload: bytes) -> None:
-        real_write(directory_fd, name, payload)
+    def swap_claims_directory() -> None:
         store.claims_root.rename(displaced)
         store.claims_root.mkdir()
 
-    monkeypatch.setattr(ownership_module, "_atomic_write_at", swap_after_write)
     with (
+        at_record_write(monkeypatch, 1, after=swap_claims_directory),
         mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="binding changed"),
     ):
@@ -855,6 +792,7 @@ def test_move_refuses_symlinked_intents_directory(tmp_path: Path) -> None:
     store = OwnershipStore(tmp_path / "store")
     owner = uuid.uuid4()
     source = _claim(store, owner)
+    claims = _claim_files(store)
     store.intents_root.symlink_to(outside, target_is_directory=True)
 
     with (
@@ -868,7 +806,7 @@ def test_move_refuses_symlinked_intents_directory(tmp_path: Path) -> None:
             expected_generation=1,
         )
     assert not tuple(outside.iterdir())
-    assert store._read_path(store._claim_path(source.resource_id)) == source
+    assert _claim_files(store) == claims
 
 
 def test_move_refuses_ownership_root_swap_before_publication(
@@ -914,17 +852,13 @@ def test_move_refuses_intents_child_swap_before_claim_publication(
     source = _claim(store, owner)
     destination = _resource("rg")
     displaced = tmp_path / "displaced-intents"
-    real_write = store._write_intent
 
-    def swap_then_write(
-        intent: ownership_module._MoveIntent, *, directory_fd: int
-    ) -> None:
+    def swap_intents_directory() -> None:
         store.intents_root.rename(displaced)
         store.intents_root.mkdir()
-        real_write(intent, directory_fd=directory_fd)
 
-    monkeypatch.setattr(store, "_write_intent", swap_then_write)
     with (
+        at_record_write(monkeypatch, 1, before=swap_intents_directory),
         mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="binding changed"),
     ):
@@ -935,7 +869,7 @@ def test_move_refuses_intents_child_swap_before_claim_publication(
             expected_generation=source.generation,
         )
 
-    assert store._read_path(store._claim_path(source.resource_id)) == source
-    assert store._read_path(store._claim_path(destination)) is None
+    assert store.read(source.resource_id) == source
+    assert store.read(destination) is None
     assert not tuple(store.intents_root.iterdir())
     assert len(tuple(displaced.glob("*.json"))) == 1

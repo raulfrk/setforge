@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import errno
+import os
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from typing import NoReturn
 
+import pytest
 from ruamel.yaml import YAML
 
 from setforge.migrations import MigrationRoots
@@ -81,3 +86,69 @@ def legacy_crash_log(
     if claim_before is not None:
         claim_before[0].write_bytes(claim_before[1])
     return log
+
+
+def crash() -> NoReturn:
+    """A write hook that stops the write the way a killed process would."""
+    raise OSError(errno.EIO, "injected crash")
+
+
+@contextmanager
+def at_record_write(
+    monkeypatch: pytest.MonkeyPatch,
+    step: int,
+    *,
+    before: Callable[[], None] | None = None,
+    after: Callable[[], None] | None = None,
+) -> Iterator[None]:
+    """Run ``before`` or ``after`` around the ``step``-th record write (1-based).
+
+    A record write publishes (``os.replace``) or removes (``os.unlink``) a
+    ``*.json`` record through a directory descriptor, which is how ownership
+    claims, move intents and history transitions reach disk. Staging a
+    temporary file does not count. ``before=crash`` leaves the store as if the
+    process died just before that write; ``after=crash`` as if it died just
+    after. The hooks are active only inside the ``with`` block.
+    """
+    real_replace, real_unlink = os.replace, os.unlink
+    writes = 0
+
+    def hooked(name: object, write: Callable[[], None]) -> None:
+        nonlocal writes
+        if not (
+            isinstance(name, str)
+            and name.endswith(".json")
+            and not name.startswith(".")
+        ):
+            write()
+            return
+        writes += 1
+        mine = writes == step
+        if mine and before is not None:
+            before()
+        write()
+        if mine and after is not None:
+            after()
+
+    def replace(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        def write() -> None:
+            real_replace(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+        hooked(dst if dst_dir_fd is not None else None, write)
+
+    def unlink(path: str, *, dir_fd: int | None = None) -> None:
+        def write() -> None:
+            real_unlink(path, dir_fd=dir_fd)
+
+        hooked(path if dir_fd is not None else None, write)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", replace)
+        patch.setattr(os, "unlink", unlink)
+        yield
