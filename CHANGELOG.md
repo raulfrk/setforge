@@ -57,6 +57,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to complete it exits 0, changes nothing and prints the `setforge recover`
   command to use. Scripts that call `ownership recover --apply` after a crash
   should call `setforge recover` instead.
+- Project injection records written before SetForge 1.3.0 are converted to
+  the current format the first time `project inject`, `sync`, `visibility` or
+  `remove` runs against their directory without `--dry-run`; the command says
+  which profiles it converted. Only the record is rewritten. `project list` and
+  `--dry-run` no longer read such a record: they report it as an error naming
+  `setforge project sync <path>`, or `setforge project remove <profile> <path>`
+  when its directory is gone or was replaced. A record in the oldest format, from before
+  1.2.0, behaves differently in two ways: its first sync now merges three ways
+  instead of asking about every differing line, and a record whose file and
+  profile source have both changed since injection is refused and needs one
+  `project sync` with SetForge 1.3 or 1.4 first. A file overlaid on tracked
+  content by a build between 1.2.0 and 1.3.0 stays hidden from Git instead of
+  being exposed by its first sync. SetForge 1.3.0 and later keep reading a
+  converted record.
+- `setforge project inject` of a profile that is already injected in that
+  directory now always stops with "already injected; use `setforge project
+  sync <path>`" and exit status 1, and also names `project visibility` and
+  `project remove` for a different Git visibility or config file, which sync
+  does not apply. An exact repeat used to exit 0 with "no
+  changes", and could re-add a missing private exclude entry; `project sync`
+  does that. The message no longer says which of the profile, the visibility
+  flag or a file differs.
 
 ### Fixed
 

@@ -93,6 +93,15 @@ setforge project sync /path/to/worktree --dry-run
 setforge project remove application /path/to/worktree --yes
 ```
 
+A profile is injected into a directory once. Injecting it there again stops
+with "already injected" and exit status 1, naming `setforge project sync
+<path>`, which is the command that applies profile changes and restores a lost
+private exclude entry. Sync keeps the config file and each file's Git
+visibility recorded at injection, so the message also names
+`setforge project visibility <path> <file>` for changing visibility and
+`setforge project remove <profile> <path> --config <recorded config>` to run
+before injecting from another config file of the same checkout.
+
 Injection creates missing files, retains byte-and-mode-identical untracked
 files, and snapshots differing untracked files so `remove` can restore their
 exact bytes and mode. In a Git worktree, an already-tracked destination opens
@@ -122,12 +131,29 @@ When one side of a conflict is an absent file, the wizard records whether Ours
 or Theirs was selected so deletion remains distinct from choosing an
 intentionally empty file.
 
-Older injection records did not retain ancestor bytes. Their first sync exposes
-each differing line hunk as a conflict instead of guessing its author. A
-successful resolution upgrades only that record to the current private schema
-and establishes the profile bytes as the ancestor for later true three-way
-syncs. Dry runs, unresolved conflicts, cancellation, and faults do not migrate
-records or partially update another profile at the target.
+An injection record written before SetForge 1.3.0 is in an older format.
+The first `project inject`, `sync`, `visibility` or `remove` run against that
+directory without `--dry-run` converts each such record to the current format
+before it plans anything, and says so. Conversion rewrites the record only:
+project files and Git state stay as they are. `project list` and every
+`--dry-run` change nothing, so they report an unconverted record as an error
+that names `setforge project sync <path>`. A record whose directory is gone or
+was replaced is not converted: the error names
+`setforge project remove <profile> <path>` instead, which drops it as usual.
+An unconverted record in one linked Git worktree can also stop `project inject`
+or `project visibility` in another worktree of the same repository with exit
+status 1; the error names `setforge project sync <path>` for the worktree that
+holds the record.
+
+The oldest format, which predates 1.2.0, kept only a digest of the injected
+content. Conversion takes
+the content from the project file, or from the profile source when the file
+was edited. When both have changed since injection, the record cannot be
+converted and is left untouched: run `setforge project sync` once with
+SetForge 1.3 or 1.4, which still read that format, or put the injected content
+back in the project file or the profile source. Until then every `project
+inject`, `sync`, `visibility` and `remove` without `--dry-run` in that
+directory stops on that record, including one for a different profile.
 
 New profile members inherit their injection's visibility. A new member whose
 destination already contains differing local bytes or mode is a conflict, not
@@ -159,8 +185,9 @@ and its private Git entries and leaves project files unchanged.
 `project visibility <path> <file> --tracked|--hidden` changes
 one normalized target-relative destination. For an overlay, tracked mode makes
 the injected hunk visible in the ordinary Git diff and hidden mode restores the
-private filter. Older injection-wide visibility records are expanded to
-per-file state atomically on the first successful change.
+private filter. An older record that held one visibility for the whole
+injection gets it for each file when it is converted; a file overlaid on
+tracked content is recorded as hidden while Git still filters it.
 
 Linked worktrees share the repository's `info/exclude`, `info/attributes`, and
 local filter configuration. Compatible hidden

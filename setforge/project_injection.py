@@ -12,7 +12,6 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -117,7 +116,6 @@ class ProjectInjectionPlan:
     manifest_path: Path
     visibility_plan: VisibilityPlan | None
     overlay_git_plan: OverlayGitPlan | None
-    no_op: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,10 +404,14 @@ def plan_injection(
     """
     root, git_dir, target_stat = _verified_project_target(target)
     state_path = manifest_path(root, profile)
+    if state_path.exists():
+        _refuse_existing_injection(
+            profile, root, target_stat.st_ino, git_dir, state_path
+        )
     files = tuple(
         _plan_file(root, item, git=git_dir is not None) for item in resolved.files
     )
-    if git_dir is None or state_path.exists():
+    if git_dir is None:
         visibility_plan = None
         overlay_git_plan = None
     else:
@@ -447,38 +449,6 @@ def plan_injection(
         visibility_plan=visibility_plan,
         overlay_git_plan=overlay_git_plan,
     )
-    if state_path.exists():
-        raw = _validate_existing_injection(plan)
-        if git_dir is not None:
-            raw_files = raw["files"]
-            assert isinstance(raw_files, list)
-            try:
-                recorded = tuple(
-                    ProjectVisibility(str(item.get("visibility", raw["visibility"])))
-                    for item in raw_files
-                    if isinstance(item, dict)
-                )
-            except ValueError as exc:
-                raise SetforgeError(
-                    "project injection state has invalid visibility"
-                ) from exc
-            visibility_plan, overlay_git_plan = _plan_injection_visibility(
-                target=root,
-                manifest=state_path,
-                git_dir=git_dir,
-                profile=profile,
-                files=files,
-                visibilities=recorded,
-            )
-        recorded_device = raw["target_device"]
-        assert isinstance(recorded_device, int)
-        return replace(
-            plan,
-            target_device=recorded_device,
-            visibility_plan=visibility_plan,
-            overlay_git_plan=overlay_git_plan,
-            no_op=True,
-        )
     _refuse_claimed_destinations(plan, read_owner)
     return plan
 
@@ -733,21 +703,20 @@ def _require_compatible_visibility(
         if path == manifest:
             continue
         try:
-            raw = _load_manifest(path)
+            raw, _payload = _read_record_document(path)
             if _sibling_exclude_path(raw) != exclude_path:
                 continue
+            _require_current_format(raw, path)
             raw_files = raw["files"]
             assert isinstance(raw_files, list)
             other_visibilities = {
-                str(item["destination"]): ProjectVisibility(
-                    str(item.get("visibility", raw["visibility"]))
-                )
+                str(item["destination"]): ProjectVisibility(str(item.get("visibility")))
                 for item in raw_files
                 if isinstance(item, dict) and "destination" in item
             }
         except (AssertionError, OSError, SetforgeError, ValueError) as exc:
             raise SetforgeError(
-                f"cannot validate sibling project visibility record: {path}"
+                f"cannot validate sibling project visibility record: {path}: {exc}"
             ) from exc
         conflicts = sorted(relative_paths & other_visibilities.keys())
         mismatched = next(
@@ -877,8 +846,13 @@ def _manifest_payload(plan: ProjectInjectionPlan, owner_id: uuid.UUID) -> bytes:
     return (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
 
 
-def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
-    """Load and validate a manifest while retaining its exact bound bytes."""
+def _read_record_document(path: Path) -> tuple[dict[str, object], bytes]:
+    """Read a record of any known format and check its top-level fields.
+
+    Conversion is the only reader of an older record's content. Other callers
+    use this for a record's address alone: to drop a stale record, or to skip
+    one that belongs to another directory before requiring the current format.
+    """
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError as exc:
@@ -933,7 +907,7 @@ def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
         "target_inode",
         "visibility",
     }
-    if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
+    if schema != _LEGACY_MANIFEST_SCHEMA:
         required.add("config_path")
     if (
         set(raw) != required
@@ -947,97 +921,69 @@ def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
     return raw, payload
 
 
+def _require_current_format(raw: dict[str, object], path: Path) -> None:
+    """Refuse an older record, naming the command that settles it.
+
+    Conversion skips a record whose directory is gone or was replaced, so
+    that record can only be dropped.
+    """
+    if raw["schema"] == _MANIFEST_SCHEMA:
+        return
+    target = Path(str(raw["target"]))
+    try:
+        stale = (
+            not target.is_dir()
+            or target.resolve() != target
+            or target.stat().st_ino != raw["target_inode"]
+        )
+    except OSError:
+        stale = True
+    remedy = (
+        f"`setforge project remove {raw['profile']} {target}` to drop it"
+        if stale
+        else f"`setforge project sync {target}` to convert it"
+    )
+    raise SetforgeError(
+        f"project injection record is in an older format: {path}; run {remedy}"
+    )
+
+
+def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:
+    """Load and validate a manifest while retaining its exact bound bytes."""
+    raw, payload = _read_record_document(path)
+    _require_current_format(raw, path)
+    return raw, payload
+
+
 def _load_manifest(path: Path) -> dict[str, object]:
     raw, _payload = _load_manifest_payload(path)
     return raw
 
 
-def _validate_existing_injection(  # noqa: C901 - one fail-closed record comparison
-    plan: ProjectInjectionPlan,
-) -> dict[str, object]:
-    raw = _load_manifest(plan.manifest_path)
-    if raw["target_inode"] != plan.target_inode:
+def _refuse_existing_injection(
+    profile: str, target: Path, inode: int, git_dir: Path | None, record: Path
+) -> None:
+    """Refuse a second injection, naming the command that applies instead."""
+    raw = _load_manifest(record)
+    if raw["target_inode"] != inode:
         raise SetforgeError(
-            f"a stale injection record exists for {plan.target}; run "
-            f"`setforge project remove {plan.profile} {plan.target}` to drop it, "
+            f"a stale injection record exists for {target}; run "
+            f"`setforge project remove {profile} {target}` to drop it, "
             "then inject again"
         )
-    remedy = identity_remedy(raw, plan.target, plan.target_inode, plan.git_dir)
+    remedy = identity_remedy(raw, target, inode, git_dir)
     if remedy is not None:
         raise SetforgeError(
-            f"project profile {plan.profile!r} is already injected at "
-            f"{plan.target}, but {remedy}"
+            f"project profile {profile!r} is already injected at {target}, but {remedy}"
         )
-    if (
-        raw["profile"] != plan.profile
-        or raw["target"] != str(plan.target)
-        or raw["config_root"] != str(plan.config_root)
-        or (
-            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
-            and raw["config_path"] != str(plan.config_path)
-        )
-    ):
-        raise SetforgeError(
-            f"project profile {plan.profile!r} is already injected at {plan.target} "
-            f"from another config ({raw['config_root']}); remove it with that "
-            "config first"
-        )
-    if raw["visibility"] != plan.visibility.value:
-        raise SetforgeError(
-            f"project profile {plan.profile!r} is already injected at {plan.target} "
-            f"with {raw['visibility']} Git visibility; change one file with "
-            "`setforge project visibility`, or run `setforge project remove` and "
-            "inject again"
-        )
-    raw_files = raw["files"]
-    assert isinstance(raw_files, list)
-    expected = [
-        (item.relative_destination.as_posix(), item.source_digest, item.source_mode)
-        for item in plan.files
-    ]
-    observed = [
-        (item.get("destination"), item.get("source_digest"), item.get("applied_mode"))
-        for item in raw_files
-        if isinstance(item, dict)
-    ]
-    if observed != expected:
-        raise SetforgeError(
-            "project profile or source changed since injection; run "
-            f"`setforge project sync {plan.target}`"
-        )
-    for item, record in zip(plan.files, raw_files, strict=True):
-        assert isinstance(record, dict)
-        try:
-            info = item.destination.lstat()
-        except FileNotFoundError as exc:
-            remedy = missing_file_remedy(
-                plan.target, plan.profile, record.get("action")
-            )
-            raise SetforgeError(
-                f"injected project file is missing: {item.destination}; {remedy}"
-            ) from exc
-        live_payload = item.destination.read_bytes()
-        valid_payload = _sha256(live_payload) == str(record.get("applied_digest"))
-        if record.get("action") == ProjectFileAction.OVERLAY.value:
-            overlay = read_overlay(plan.target, item.relative_destination)
-            if overlay is None:
-                valid_payload = False
-            else:
-                valid_payload = _sha256(overlay.local) == str(
-                    record.get("applied_digest")
-                )
-                if valid_payload:
-                    clean_content(overlay, live_payload)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or stat.S_ISLNK(info.st_mode)
-            or not valid_payload
-            or stat.S_IMODE(info.st_mode) != int(record.get("applied_mode", -1))
-        ):
-            raise SetforgeError(
-                f"injected project file has drifted: {item.destination}"
-            )
-    return raw
+    raise SetforgeError(
+        f"project profile {profile!r} is already injected at {target}; use "
+        f"`setforge project sync {target}`. Sync keeps the config and each file's "
+        "Git visibility recorded at injection: change a file's visibility with "
+        f"`setforge project visibility {target} <file> --hidden` or `--tracked`, "
+        "and to inject from another config file of the same checkout first run "
+        f"`setforge project remove {profile} {target} --config {raw['config_path']}`"
+    )
 
 
 def _require_guards(guards: MutationLockGuards, target: Path) -> None:
@@ -1197,10 +1143,156 @@ def _remove_created_parent(guard: TargetLockGuard, relative: Path) -> None:
             os.fsync(parent_fd)
 
 
+def _injected_content(path: Path, destination: Path, entry: dict[str, object]) -> bytes:
+    """Recover the bytes a format-1 record names only by digest."""
+    for candidate in (destination, Path(str(entry.get("source")))):
+        try:
+            if not stat.S_ISREG(candidate.lstat().st_mode):
+                continue
+            payload = candidate.read_bytes()
+        except OSError:
+            continue
+        if _sha256(payload) == entry.get("applied_digest"):
+            return payload
+    raise SetforgeError(
+        f"project injection record is in an older format and cannot be converted: "
+        f"{path}: {destination} and its profile source both differ from the "
+        "injected content, which this record does not hold. Run `setforge project "
+        "sync` with SetForge 1.3 or 1.4, or put the injected content back"
+    )
+
+
+def _converted_record(
+    path: Path, raw: dict[str, object], root: Path, git_dir: Path | None
+) -> bytes:
+    """Render an older record in the current format, adding only what it lacks.
+
+    The result must pass the current format's own validation, so a malformed
+    older record is refused instead of converted.
+    """
+    invalid = SetforgeError(f"project injection state has invalid fields: {path}")
+    legacy = raw["schema"] == _LEGACY_MANIFEST_SCHEMA
+    document = dict(raw)
+    if legacy:
+        try:
+            document["config_path"] = str(
+                (Path(str(raw["config_root"])) / "setforge.yaml").resolve(strict=True)
+            )
+        except OSError as exc:
+            raise SetforgeError(
+                f"project injection config cannot be resolved safely: {path}"
+            ) from exc
+    recorded_git_dir = raw["git_dir"]
+    entries: list[dict[str, object]] = []
+    raw_files = raw["files"]
+    assert isinstance(raw_files, list)
+    for value in raw_files:
+        if not isinstance(value, dict) or "visibility" in value:
+            raise invalid
+        entry = dict(value)
+        relative = Path(str(entry.get("destination", "")))
+        if relative.is_absolute() or relative == Path() or ".." in relative.parts:
+            raise invalid
+        overlay = entry.get("action") == ProjectFileAction.OVERLAY.value
+        if legacy:
+            added = {"applied_payload", "upstream_mode", "upstream_payload"}
+            if overlay or added & entry.keys():
+                raise invalid
+            content = base64.b64encode(
+                _injected_content(path, root / relative, entry)
+            ).decode("ascii")
+            entry["applied_payload"] = entry["upstream_payload"] = content
+            entry["upstream_mode"] = entry.get("applied_mode")
+        entry["visibility"] = raw["visibility"]
+        if overlay and git_dir is not None and isinstance(recorded_git_dir, str):
+            # These formats filtered every tracked file whatever visibility was
+            # recorded, so record what the repository actually holds.
+            claim = OverlayClaim(
+                overlay_claim_id(
+                    git_dir=Path(recorded_git_dir),
+                    profile=str(raw["profile"]),
+                    relative_path=relative.as_posix(),
+                ),
+                relative.as_posix(),
+            )
+            entry["visibility"] = (
+                ProjectVisibility.TRACKED
+                if plan_overlay_git(root, add=(claim,)).added
+                else ProjectVisibility.HIDDEN
+            ).value
+        entries.append(entry)
+    document["schema"] = _MANIFEST_SCHEMA
+    document["files"] = entries
+    _record_files(document, target=root)
+    return (json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n").encode()
+
+
+def convert_older_records(target: Path) -> tuple[str, ...]:
+    """Rewrite every older-format record of ``target`` in the current format.
+
+    Returns the converted profiles. Each record is rewritten under the locks
+    and journal of any other record mutation; project files and Git state are
+    never touched. A record whose directory is gone or was replaced is left
+    for ``project remove`` to drop.
+    """
+    lexical = Path(os.path.normpath(target.expanduser().absolute()))
+    records = state_root() / "project-injections"
+    if not lexical.is_dir() or not records.is_dir():
+        return ()
+    root, _git_dir, _info = _verified_project_target(lexical)
+    converted: list[str] = []
+    for path in sorted(records.glob("*.json")):
+        try:
+            with path.open("rb") as handle:
+                listed = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if (
+            not isinstance(listed, dict)
+            or listed.get("schema")
+            not in (_LEGACY_MANIFEST_SCHEMA, _PRIOR_MANIFEST_SCHEMA)
+            or listed.get("target") != str(root)
+        ):
+            continue
+        raw, _payload = _read_record_document(path)
+        try:
+            config_root = Path(str(raw["config_root"])).resolve(strict=True)
+        except OSError as exc:
+            raise SetforgeError(
+                f"project injection config cannot be resolved safely: {path}"
+            ) from exc
+        operation_profile = f"project-{_injection_key(root, str(raw['profile']))}"
+        with mutation_locks(
+            resources=True,
+            config_dir=config_root,
+            target_roots=(root,),
+            profile=operation_profile,
+        ) as guards:
+            _require_guards(guards, root)
+            _root, git_dir, info = _verified_project_target(root)
+            raw, before = _read_record_document(path)
+            if raw["schema"] == _MANIFEST_SCHEMA or raw["target_inode"] != info.st_ino:
+                continue
+            after = _converted_record(path, raw, root, git_dir)
+            with _project_transaction(
+                command="project-convert",
+                profile=operation_profile,
+                config_dir=config_root,
+                paths=(path,),
+                checkpoint="convert-project-record",
+                recovery="restore the project injection record",
+            ):
+                if path.read_bytes() != before:
+                    raise SetforgeError("project injection record changed; retry")
+                atomicio.atomic_write_bytes(path, after, mode=0o600)
+        converted.append(str(raw["profile"]))
+    return tuple(converted)
+
+
 def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
-    plan: ProjectInjectionPlan, *, mutate_visibility: bool = True
-) -> bool:
-    """Apply a previously confirmed plan; return False for an exact no-op."""
+    plan: ProjectInjectionPlan,
+) -> None:
+    """Apply a previously confirmed plan as one journaled transaction."""
     operation_profile = f"project-{_injection_key(plan.target, plan.profile)}"
     with mutation_locks(
         resources=True,
@@ -1256,50 +1348,9 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
                 "a project destination already has an active tracked-file "
                 "ownership claim"
             )
-        owner_id = (
-            read_owner_id_locked(plan.config_root, identity_fd)
-            if fresh.no_op
-            else load_or_create_owner_id_locked(
-                plan.config_root, identity_fd, uuid.uuid4()
-            )
+        owner_id = load_or_create_owner_id_locked(
+            plan.config_root, identity_fd, uuid.uuid4()
         )
-        transaction = partial(
-            _project_transaction,
-            command="project-inject",
-            profile=operation_profile,
-            config_dir=plan.config_root,
-        )
-        if fresh.no_op:
-            if any(
-                claim is None
-                or not _claim_matches_plan(
-                    claim,
-                    resource=resource,
-                    owner_id=owner_id,
-                    profile=plan.profile,
-                    item=item,
-                    lifecycle=ClaimLifecycle.CLAIMED,
-                )
-                for item, resource, claim in zip(
-                    plan.files, resources, claims, strict=True
-                )
-            ):
-                raise SetforgeError(
-                    "project injection ownership state is missing or mismatched"
-                )
-            if (
-                fresh.visibility_plan is None
-                or not fresh.visibility_plan.changed
-                or not mutate_visibility
-            ):
-                return False
-            with transaction(
-                paths=(fresh.visibility_plan.exclude_path,),
-                checkpoint="activate-project-visibility",
-                recovery="restore the repository-private Git visibility file",
-            ):
-                apply_claims(fresh.visibility_plan)
-            return True
         for item, claim in zip(plan.files, claims, strict=True):
             refuse_unavailable_claim(
                 claim, item.relative_destination.as_posix(), lambda: owner_id
@@ -1321,7 +1372,10 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             for item in plan.files
             if item.action is not ProjectFileAction.RETAIN
         )
-        with transaction(
+        with _project_transaction(
+            command="project-inject",
+            profile=operation_profile,
+            config_dir=plan.config_root,
             paths=paths,
             checkpoint="materialize-project-files-and-state",
             recovery="restore project files, manifest, and ownership claims",
@@ -1372,7 +1426,6 @@ def apply_injection(  # noqa: C901 - one fail-closed journaled transaction
             atomicio.atomic_write_bytes(
                 plan.manifest_path, _manifest_payload(plan, owner_id), mode=0o600
             )
-    return True
 
 
 def _resolved_from_plan(plan: ProjectInjectionPlan) -> ResolvedProjectProfile:
@@ -1413,18 +1466,12 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     config_root = canonical_config_path.parent
     state_path = manifest_path(root, profile)
     raw = _load_manifest(state_path)
-    schema = raw["schema"]
-    if not isinstance(schema, int):
-        raise SetforgeError("project injection state has invalid schema")
     if (
         raw["profile"] != profile
         or raw["target"] != str(root)
         or raw["target_inode"] != target_stat.st_ino
         or raw["config_root"] != str(config_root)
-        or (
-            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
-            and raw["config_path"] != str(canonical_config_path)
-        )
+        or raw["config_path"] != str(canonical_config_path)
     ):
         raise SetforgeError(
             "project injection state belongs to a different config manifest"
@@ -1439,7 +1486,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
     file_visibilities: dict[Path, ProjectVisibility] = {}
     all_parents: set[Path] = set()
     git_removed: list[Path] = []
-    for stored in _record_files(raw, schema=schema, target=root):
+    for stored in _record_files(raw, target=root):
         relative = stored.destination
         destination = root / relative
         action = stored.action
@@ -1465,23 +1512,9 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         applied_absent = (
             applied_payload is None and applied_digest is None and applied_mode is None
         )
-        if schema == _LEGACY_MANIFEST_SCHEMA and (
-            (
-                action is ProjectFileAction.RETAIN
-                and (previous_payload != live_payload or previous_mode != applied_mode)
-            )
-            or (
-                action is ProjectFileAction.REPLACE
-                and previous_payload == live_payload
-                and previous_mode == applied_mode
-            )
-        ):
-            raise SetforgeError(
-                "project injection state has an inconsistent file record"
-            )
         overlay: ProjectOverlay | None = None
         live_matches_absent = info is None and applied_absent
-        if schema == _LEGACY_MANIFEST_SCHEMA or not require_profile_content:
+        if not require_profile_content:
             expected_digest, expected_mode = applied_digest, applied_mode
         else:
             expected_digest, expected_mode = source_digest, upstream_mode
@@ -1497,8 +1530,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         removable_missing = info is None and require_profile_content
         if action is ProjectFileAction.OVERLAY:
             if (
-                schema == _LEGACY_MANIFEST_SCHEMA
-                or applied_payload is None
+                applied_payload is None
                 or previous_payload is None
                 or applied_mode is None
                 or (
@@ -1558,16 +1590,6 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 "would discard the difference. Save your changes elsewhere, delete "
                 "the file, then remove again"
             )
-        if upstream_payload is not None and upstream_mode is not None:
-            claim_payload = upstream_payload
-            claim_mode = upstream_mode
-        else:
-            if live_payload is None or applied_mode is None:
-                raise SetforgeError(
-                    "legacy project injection has incomplete applied state"
-                )
-            claim_payload = live_payload
-            claim_mode = applied_mode
         all_parents.update(parents)
         file_visibilities[relative] = stored.visibility
         files.append(
@@ -1577,8 +1599,8 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
                 source=stored.source,
                 destination=destination,
                 relative_destination=relative,
-                source_payload=claim_payload,
-                source_mode=claim_mode,
+                source_payload=upstream_payload,
+                source_mode=upstream_mode,
                 source_digest=source_digest,
                 applied_payload=applied_payload,
                 action=action,
@@ -1636,10 +1658,7 @@ def plan_removal(  # noqa: C901 - one fail-closed parser for untrusted state
         for item in files
         if claim_git_dir is not None
         and item.action is ProjectFileAction.OVERLAY
-        and (
-            schema < _MANIFEST_SCHEMA
-            or file_visibilities[item.relative_destination] is ProjectVisibility.HIDDEN
-        )
+        and file_visibilities[item.relative_destination] is ProjectVisibility.HIDDEN
     )
     if visibility_plan is not None and claim_git_dir != git_dir:
         held = set(
@@ -1949,15 +1968,15 @@ def plan_stale_removal(  # noqa: C901 - record-backed and record-less leftovers
     state_path = manifest_path(root, profile)
     store = OwnershipStore()
     if state_path.exists():
-        raw = _load_manifest(state_path)
+        # Dropping a stale record needs only its address, whatever its format.
+        raw, _payload = _read_record_document(state_path)
         if raw["profile"] != profile or raw["target"] != str(root):
             return None
         stale = _stale_record_claims(raw, live)
         if stale is None:
             return None
         if raw["config_root"] != str(canonical_config_path.parent) or (
-            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
-            and raw["config_path"] != str(canonical_config_path)
+            "config_path" in raw and raw["config_path"] != str(canonical_config_path)
         ):
             raise SetforgeError(
                 "project injection state belongs to a different config manifest"

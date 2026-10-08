@@ -23,21 +23,21 @@ setforge.project_sync.x_apply_sync__mutmut_14  # equivalent: mutation_locks and 
 setforge.project_sync.x_apply_sync__mutmut_16  # equivalent: mutation_locks and operations.prepare independently canonicalize/sort config directories.
 setforge.project_sync.x_apply_sync__mutmut_20  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
 setforge.project_sync.x_apply_sync__mutmut_22  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
-setforge.project_sync.x_apply_sync__mutmut_188  # equivalent: discover_injections validates one shared git_dir; after None every remaining member is also non-Git.
-setforge.project_sync.x_apply_sync__mutmut_287  # equivalent: initial None and False are only replaced with True or ORed with the boolean state_changed result.
-setforge.project_sync.x_apply_sync__mutmut_300  # equivalent: explicit paths plus captured absent ancestors are the complete journal.paths; omitted selection covers the same set.
-setforge.project_sync.x_apply_sync__mutmut_307  # equivalent: explicit paths plus captured absent ancestors are the complete journal.paths; omitted selection covers the same set.
-setforge.project_sync.x_apply_sync__mutmut_301  # equivalent: this journal has no state_snapshots, so the default restore_state evaluates to the explicit False.
-setforge.project_sync.x_apply_sync__mutmut_308  # equivalent: this journal has no state_snapshots, so the default restore_state evaluates to the explicit False.
-setforge.project_sync.x_apply_sync__mutmut_433  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
-setforge.project_sync.x_apply_sync__mutmut_436  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
-setforge.project_sync.x_apply_sync__mutmut_345  # equivalent: valid non-removal overlays always have byte-valued base and result; plan construction refuses absent live overlays.
-setforge.project_sync.x_apply_sync__mutmut_348  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
-setforge.project_sync.x_apply_sync__mutmut_349  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
-setforge.project_sync.x_apply_sync__mutmut_350  # equivalent: valid non-removal overlays always have byte-valued base and result; incomplete-overlay diagnostic is unreachable.
+setforge.project_sync.x_apply_sync__mutmut_176  # equivalent: discover_injections validates one shared git_dir; after None every remaining member is also non-Git.
+setforge.project_sync.x_apply_sync__mutmut_250  # equivalent: initial None and False are only replaced with True or ORed with the boolean state_changed result.
+setforge.project_sync.x_apply_sync__mutmut_389  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
+setforge.project_sync.x_apply_sync__mutmut_392  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
 setforge.project_sync.x_plan_sync__mutmut_30  # equivalent: addition destinations are disjoint from this injection's own recorded files, so rechecking its manifest cannot find a visibility conflict.
-setforge.project_sync.x_plan_sync__mutmut_159  # equivalent: _legacy_result does not read its live_mode argument.
-setforge.project_sync.x_plan_sync__mutmut_160  # equivalent: _legacy_result does not read its stored argument.
-setforge.project_sync.x_plan_sync__mutmut_238  # equivalent: _legacy_result does not read its live_mode argument.
-setforge.project_sync.x_plan_sync__mutmut_239  # equivalent: _legacy_result does not read its stored argument.
 setforge.project_sync.x_resolve_sync_plan__mutmut_3  # equivalent: the flag is read only as an operand of `or` under `merged == b"" and (...)`, where None and False select the same branch.
+setforge.project_sync.x__prior_ownership_plan__mutmut_3  # equivalent: only update and removal members reach this, after apply_sync matched their stored record against a fresh plan that always has one; this diagnostic is unreachable.
+setforge.project_sync.x__prior_ownership_plan__mutmut_4  # equivalent: only update and removal members reach this, after apply_sync matched their stored record against a fresh plan that always has one; this diagnostic is unreachable.
+setforge.project_sync.x__prior_ownership_plan__mutmut_5  # equivalent: only update and removal members reach this, after apply_sync matched their stored record against a fresh plan that always has one; this diagnostic is unreachable.
+setforge.project_sync.x__prior_ownership_plan__mutmut_7  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_8  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_11  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_14  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_15  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_16  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_17  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_sync.x__prior_ownership_plan__mutmut_18  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_record.x__record_files__mutmut_208  # equivalent: a created parent with a `..` part is never among the parents of its destination, which has none, so the next clause refuses it with the same message.

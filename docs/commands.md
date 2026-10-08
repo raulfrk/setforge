@@ -139,6 +139,10 @@ afterwards. The same command clears claims left behind when the
 record itself was lost. A stale record never blocks injecting other projects.
 A directory that is still the same one but gained, lost, or changed its Git
 directory is not stale: `project remove` restores it normally.
+A record in an older format is listed as an error until a `project inject`,
+`sync`, `visibility` or `remove` without `--dry-run` converts it; when its
+directory is gone or was replaced, the error names `project remove` instead. See
+[Configuration](configuration.md).
 
 `setforge project visibility <path> <file>` changes one normalized,
 target-relative destination. `--tracked` exposes an injected hunk as an
@@ -155,7 +159,7 @@ $ setforge project visibility /path/to/worktree AGENTS.md --hidden --yes
 
 `setforge project sync <path>` discovers every recorded profile injection for
 that exact Git worktree and plans them as one transaction. `--dry-run` prints
-updates, membership additions/removals, legacy records, and conflict counts
+updates, membership additions/removals, and conflict counts
 without changing files or private state. A live run preserves independent local
 edits with three-way reconciliation and opens the existing per-region wizard for
 overlapping edits when stdin is a TTY.

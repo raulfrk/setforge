@@ -22,9 +22,7 @@ from setforge.file_ownership import (
     publish_file_claim_locked,
 )
 from setforge.git_visibility import (
-    apply_claims,
     info_exclude_path,
-    plan_claims,
     read_claims,
 )
 from setforge.locking import TargetLockGuard
@@ -126,6 +124,17 @@ def _config(tmp_path: Path) -> Path:
     return config
 
 
+def _already_injected(target: Path, config: Path) -> str:
+    return (
+        f"project profile 'demo' is already injected at {target}; use "
+        f"`setforge project sync {target}`. Sync keeps the config and each file's "
+        "Git visibility recorded at injection: change a file's visibility with "
+        f"`setforge project visibility {target} <file> --hidden` or `--tracked`, "
+        "and to inject from another config file of the same checkout first run "
+        f"`setforge project remove demo {target} --config {config.resolve()}`"
+    )
+
+
 def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
@@ -156,7 +165,7 @@ def test_project_inject_and_remove_round_trip(tmp_path: Path, monkeypatch) -> No
     assert not (target / "AGENTS.md").exists()
 
 
-def test_reinjection_preserves_recorded_per_file_visibility(
+def test_second_injection_is_refused_and_leaves_record_and_visibility_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
@@ -179,12 +188,14 @@ def test_reinjection_preserves_recorded_per_file_visibility(
     assert exposed.exit_code == 0, exposed.exception
     assert read_claims(target)[3] == ()
 
+    before = manifest_path(target, "demo").read_bytes()
+
     reinjected = CliRunner().invoke(app, command)
 
-    assert reinjected.exit_code == 0, reinjected.exception
+    assert reinjected.exit_code == 1
+    assert str(reinjected.exception) == _already_injected(target, config)
     assert read_claims(target)[3] == ()
-    record = json.loads(manifest_path(target, "demo").read_text())
-    assert record["files"][0]["visibility"] == "tracked"
+    assert manifest_path(target, "demo").read_bytes() == before
 
 
 def test_apply_freshness_reuses_selected_config_manifest(
@@ -503,7 +514,8 @@ def test_project_inject_tracks_only_unrelated_edits_and_removes_local_hunk(
             "--yes",
         ],
     )
-    assert repeated.exit_code == 0, repeated.exception
+    assert repeated.exit_code == 1
+    assert "is already injected at" in str(repeated.exception)
     assert destination.read_text() == "team instructions edited\nmanaged instructions\n"
     diff = subprocess.run(
         ["git", "-C", str(target), "diff", "--", "AGENTS.md"],
@@ -584,90 +596,66 @@ def _rewrite_only_claim(
     return claim_path, original
 
 
-def test_identical_injection_is_idempotent_and_source_change_refuses(
+def test_second_injection_names_project_sync_whatever_changed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
     target = _git_repo(tmp_path / "target")
+    inject = ["project", "inject", "demo", str(target), "--config", str(config)]
+    assert CliRunner().invoke(app, [*inject, "--yes"]).exit_code == 0
+    record = manifest_path(target, "demo").read_bytes()
+    message = _already_injected(target, config)
 
-    first = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    second = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    assert first.exit_code == second.exit_code == 0
-    assert "already current" in second.output
-
+    for extra in (["--yes"], ["--dry-run"], ["--git-tracked", "--yes"]):
+        second = CliRunner().invoke(app, [*inject, *extra])
+        assert second.exit_code == 1
+        assert str(second.exception) == message
     (config.parent / "project" / "demo" / "AGENTS.md").write_text("updated\n")
-    changed = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
+    (target / "AGENTS.md").write_text("local\n")
+    changed = CliRunner().invoke(app, [*inject, "--yes"])
     assert changed.exit_code == 1
-    assert changed.exception is not None
-    assert "changed since injection" in str(changed.exception)
-    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
+    assert str(changed.exception) == message
+    assert (target / "AGENTS.md").read_text() == "local\n"
+    assert manifest_path(target, "demo").read_bytes() == record
 
 
-@pytest.mark.parametrize("claim_state", ["missing", "released", "mismatched"])
-def test_idempotent_reinject_requires_exact_active_claim(
-    tmp_path: Path, monkeypatch, claim_state: str
+def test_second_injection_with_another_config_or_visibility_names_what_applies(
+    tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
+    other = config.with_name("other.yaml")
+    other.write_bytes(config.read_bytes())
     target = _git_repo(tmp_path / "target")
-    command = [
-        "project",
-        "inject",
-        "demo",
-        str(target),
-        "--config",
-        str(config),
-        "--yes",
-    ]
-    assert CliRunner().invoke(app, command).exit_code == 0
-    state = manifest_path(target, "demo")
-    before_manifest = state.read_bytes()
-    store = OwnershipStore()
-    claims = store.list_claims()
-    assert len(claims) == 1
-    claim = claims[0]
-    claim_path = store.claim_path(claim.resource_id)
-    if claim_state == "missing":
-        claim_path.unlink()
-        expected_claim = None
-    else:
-        if claim_state == "released":
-            generation = claim.generation + 1
-            claim = replace(
-                claim,
-                authority=Authority.NONE,
-                lifecycle=ClaimLifecycle.RELEASED,
-                generation=generation,
-                history=(
-                    *claim.history,
-                    ClaimEvent("release", claim.owner_id, generation),
-                ),
-            )
-        else:
-            claim = replace(claim, fingerprint="mismatched")
-        claim_path.write_text(json.dumps(ownership_claim_to_json(claim)) + "\n")
-        expected_claim = claim_path.read_bytes()
+    run = CliRunner().invoke
+    assert (
+        run(
+            app,
+            ["project", "inject", "demo", str(target), "--config", str(config), "-y"],
+        ).exit_code
+        == 0
+    )
+    again = ["project", "inject", "demo", str(target), "--config", str(other), "-y"]
 
-    reinjected = CliRunner().invoke(app, command)
-    assert reinjected.exit_code == 1
-    assert reinjected.exception is not None
-    assert "ownership state is missing or mismatched" in str(reinjected.exception)
-    assert state.read_bytes() == before_manifest
-    assert (target / "AGENTS.md").read_text() == "managed instructions\n"
-    if expected_claim is not None:
-        assert claim_path.read_bytes() == expected_claim
-    else:
-        assert not claim_path.exists()
+    refused = run(app, [*again, "--git-tracked"])
+
+    assert refused.exit_code == 1
+    assert str(refused.exception) == _already_injected(target, config)
+    exposed = run(
+        app, ["project", "visibility", str(target), "AGENTS.md", "--tracked", "-y"]
+    )
+    assert exposed.exit_code == 0, exposed.exception
+    assert read_claims(target)[3] == ()
+    removed = run(
+        app,
+        ["project", "remove", "demo", str(target), "--config", str(config), "-y"],
+    )
+    assert removed.exit_code == 0, removed.exception
+    injected = run(app, again)
+    assert injected.exit_code == 0, injected.exception
+    record = json.loads(manifest_path(target, "demo").read_text())
+    assert record["config_path"] == str(other.resolve())
 
 
 @pytest.mark.parametrize("request_kind", ["dry-run", "unconfirmed"])
@@ -764,8 +752,7 @@ def test_remove_refuses_drift_and_preserves_manifest(
         ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
     )
     assert reinjected.exit_code == 1
-    assert reinjected.exception is not None
-    assert "drifted" in str(reinjected.exception)
+    assert "is already injected at" in str(reinjected.exception)
 
     removed = CliRunner().invoke(
         app,
@@ -934,8 +921,8 @@ def test_recorded_injection_survives_a_changed_device_number(
         assert listed.exit_code == 0, listed.output
         assert listed.output == f"{target}  [demo]\n  {visibility}: AGENTS.md\n"
         repeated = runner.invoke(app, [*inject, "--yes"])
-        assert repeated.exit_code == 0, repeated.output
-        assert "already current" in repeated.output
+        assert repeated.exit_code == 1
+        assert "is already injected at" in str(repeated.exception)
         if git_target:
             tracked = runner.invoke(
                 app,
@@ -1436,32 +1423,6 @@ def test_hidden_injection_works_in_repository_without_info_directory(
     assert (target / ".git" / "info" / "exclude").read_bytes() == b""
 
 
-def test_reinjection_errors_name_the_command_that_applies_the_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _two_profiles_one_destination(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    runner = CliRunner()
-    inject = ["project", "inject", "demo", str(target), "--config", str(config), "-y"]
-    assert runner.invoke(app, inject).exit_code == 0
-
-    other_flag = runner.invoke(app, [*inject, "--git-tracked"])
-    assert other_flag.exit_code == 1
-    assert str(other_flag.exception) == (
-        f"project profile 'demo' is already injected at {target} with hidden Git "
-        "visibility; change one file with `setforge project visibility`, or run "
-        "`setforge project remove` and inject again"
-    )
-    (config.parent / "project" / "demo" / "AGENTS.md").write_text("updated\n")
-    changed = runner.invoke(app, inject)
-    assert changed.exit_code == 1
-    assert str(changed.exception) == (
-        "project profile or source changed since injection; run "
-        f"`setforge project sync {target}`"
-    )
-
-
 def test_visibility_conflict_between_profiles_does_not_blame_linked_worktrees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1649,9 +1610,7 @@ def test_recreated_project_at_the_same_path_names_a_working_remedy(
     ) in listed.output
     refused = runner.invoke(app, ["project", "inject", "demo", *arguments])
     assert refused.exit_code == 1
-    assert str(refused.exception) == (
-        f"injected project file is missing: {destination}; {remedy}"
-    )
+    assert str(refused.exception) == _already_injected(target, config)
     assert not destination.exists()
 
     restored = runner.invoke(
@@ -2155,43 +2114,6 @@ def test_linked_hidden_claims_release_independently_and_conflict_with_tracked(
     assert hidden_conflict.exception is not None
     assert "recorded tracked, requested hidden" in str(hidden_conflict.exception)
     assert not (linked / "AGENTS.md").exists()
-
-
-def test_existing_g2_hidden_record_activates_only_on_live_reinject(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    command = [
-        "project",
-        "inject",
-        "demo",
-        str(target),
-        "--config",
-        str(config),
-    ]
-    first = CliRunner().invoke(app, [*command, "--yes"])
-    assert first.exit_code == 0, first.exception
-    claim = read_claims(target)[3][0]
-    apply_claims(plan_claims(target, remove=(claim,)))
-    assert (
-        subprocess.run(
-            ["git", "-C", str(target), "status", "--short"],
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
-        == "?? AGENTS.md\n"
-    )
-
-    dry = CliRunner().invoke(app, [*command, "--dry-run"])
-    assert dry.exit_code == 0, dry.exception
-    assert read_claims(target)[3] == ()
-    live = CliRunner().invoke(app, [*command, "--yes"])
-    assert live.exit_code == 0, live.exception
-    assert "visibility activated" in live.output
-    assert read_claims(target)[3] == (claim,)
 
 
 def test_corrupt_sibling_manifest_blocks_visibility_without_mutation(
@@ -2921,8 +2843,8 @@ def test_missing_tracked_overlay_file_names_project_remove_not_sync(
     ) in listed.output
     reinjected = runner.invoke(app, ["project", "inject", "demo", *arguments])
     assert reinjected.exit_code == 1
-    assert str(reinjected.exception) == (
-        f"injected project file is missing: {destination}; {remedy}"
+    assert str(reinjected.exception) == _already_injected(
+        target, tmp_path / "config" / "setforge.yaml"
     )
     subprocess.run(
         ["git", "-C", str(target), "checkout", "--", "AGENTS.md"], check=True

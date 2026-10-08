@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import json
 import stat
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.errors import SetforgeError
-from setforge.project_injection import manifest_path
+from setforge.project_injection import convert_older_records, manifest_path
 from setforge.project_overlay import build_overlay, overlay_path, write_overlay
-from setforge.project_sync import apply_sync, plan_sync
-from tests.project_helpers import _config, _git, _git_repo
+from setforge.project_sync import apply_sync, plan_sync, render_sync_manifests
+from setforge.reconcile.merge_model import MergeResult
+from tests.project_helpers import _config, _git, _git_repo, _write_older_record
 from tests.project_helpers import (
     candidate_filter_entrypoint as candidate_filter_entrypoint,
 )
@@ -206,9 +209,13 @@ def test_sync_removes_overlay_state_and_preserves_unrelated_git_settings(
     assert apply_sync(plan_sync(target)) is False
 
 
-def test_sync_migrates_legacy_tracked_overlay_to_visible_git_content(
+def test_converting_a_format_two_overlay_records_the_filter_git_still_holds(
     tmp_path: Path,
 ) -> None:
+    """Format 2 filtered every tracked file, whatever visibility it recorded.
+
+    Conversion records that state instead of exposing the content to Git.
+    """
     _config_path, target = _inject_overlay(tmp_path)
     record = manifest_path(target, "demo")
     raw = json.loads(record.read_bytes())
@@ -219,15 +226,19 @@ def test_sync_migrates_legacy_tracked_overlay_to_visible_git_content(
     record.write_text(json.dumps(raw, separators=(",", ":"), sort_keys=True) + "\n")
     assert _git(target, "diff", "--", "AGENTS.md") == ""
 
-    assert apply_sync(plan_sync(target)) is True
+    attributes = (target / ".git/info/attributes").read_text()
+
+    assert convert_older_records(target) == ("demo",)
+    apply_sync(plan_sync(target))
 
     migrated = json.loads(record.read_bytes())
     assert migrated["schema"] == 3
-    assert migrated["files"][0]["visibility"] == "tracked"
+    assert migrated["visibility"] == "tracked"
+    assert migrated["files"][0]["visibility"] == "hidden"
     assert (target / "AGENTS.md").read_text() == "managed\n"
-    assert "+managed\n" in _git(target, "diff", "--", "AGENTS.md")
+    assert _git(target, "diff", "--", "AGENTS.md") == ""
     assert overlay_path(target, Path("AGENTS.md")).exists()
-    assert (target / ".git/info/attributes").read_text() == "*.keep -text\n"
+    assert (target / ".git/info/attributes").read_text() == attributes
     assert _git(target, "config", "--get", "test.membership") == "preserved\n"
 
 
@@ -633,3 +644,72 @@ def test_overlay_membership_and_visibility_preserve_unmanaged_worktree_edits(
     assert _git(sibling, "ls-files", "--stage") == sibling_index_before
     assert {path: path.read_bytes() for path in metadata} == metadata_before
     assert not overlay_path(target, Path("AGENTS.md")).exists()
+
+
+@pytest.mark.parametrize(
+    ("lost", "expected"),
+    [
+        ({"desired_mode": None}, "current project member has no upstream payload"),
+        ({"addition": None}, "current project member lost its source plan"),
+        (
+            {"overlay_base": None},
+            "tracked project sync has no Git-facing overlay base",
+        ),
+    ],
+)
+def test_render_refuses_a_member_that_lost_part_of_its_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lost: dict[str, Any],
+    expected: str,
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    _config_path, target = _inject_overlay(tmp_path)
+    plan = plan_sync(target)
+    assert render_sync_manifests(plan)
+    incomplete = replace(plan, files=(replace(plan.files[0], **lost),))
+
+    with pytest.raises(SetforgeError) as failure:
+        render_sync_manifests(incomplete)
+
+    assert str(failure.value) == expected
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_sync_plan_names_the_older_record_and_the_command_that_converts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema: int
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    _config_path, target = _inject_overlay(tmp_path)
+    record = manifest_path(target, "demo")
+    before = _write_older_record(record, schema)
+
+    with pytest.raises(SetforgeError) as failure:
+        plan_sync(target)
+
+    assert str(failure.value) == (
+        f"project injection record is in an older format: {record}; run "
+        f"`setforge project sync {target}` to convert it"
+    )
+    assert record.read_bytes() == before
+
+
+def test_apply_refuses_to_delete_an_overlaid_member_and_restores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    _config_path, target = _inject_overlay(tmp_path)
+    live = target / "AGENTS.md"
+    private = overlay_path(target, Path("AGENTS.md"))
+    record = manifest_path(target, "demo")
+    before = (live.read_bytes(), private.read_bytes(), record.read_bytes())
+    plan = plan_sync(target)
+    deleting = replace(
+        plan, files=(replace(plan.files[0], result=MergeResult((), absent=True)),)
+    )
+
+    with pytest.raises(SetforgeError) as failure:
+        apply_sync(deleting)
+
+    assert str(failure.value) == "tracked project sync has incomplete overlay state"
+    assert (live.read_bytes(), private.read_bytes(), record.read_bytes()) == before

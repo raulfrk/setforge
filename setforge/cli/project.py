@@ -25,6 +25,7 @@ from setforge.project_injection import (
     apply_injection,
     apply_removal,
     apply_stale_removal,
+    convert_older_records,
     plan_injection,
     plan_removal,
     plan_stale_removal,
@@ -69,6 +70,20 @@ def _confirm(command: str, *, yes: bool) -> bool:
             f"setforge project {command} requires --yes when stdin is not a TTY"
         )
     return typer.confirm(f"Proceed with project {command}?", default=False)
+
+
+def _convert_older_records(path: Path, *, dry_run: bool) -> None:
+    """Bring this directory's older-format records up to date before planning.
+
+    A preview changes nothing, so it leaves an older record to be refused.
+    """
+    if dry_run:
+        return
+    for profile in convert_older_records(path):
+        typer.echo(
+            f"converted the injection record of project profile {profile!r} "
+            "to the current format"
+        )
 
 
 def _render_injection(plan: ProjectInjectionPlan) -> None:
@@ -135,7 +150,6 @@ def _render_sync(plan: ProjectSyncPlan) -> None:
         if (
             item.kind.value == "update"
             and item.stored is not None
-            and not item.legacy
             and item.result.clean
             and not item.mode_conflict
             and item.result.merged() == item.live
@@ -156,8 +170,6 @@ def _render_sync(plan: ProjectSyncPlan) -> None:
             status += f" ({conflicts} content conflict(s))"
         if item.mode_conflict:
             status += " (mode conflict)"
-        if item.legacy:
-            status += " (legacy two-way)"
         typer.echo(f"  {item.profile}: {status}: {item.relative_destination}")
 
 
@@ -209,6 +221,7 @@ def project_visibility(
     if hidden == tracked:
         raise SetforgeError("exactly one of --hidden or --tracked is required")
     requested = ProjectVisibility.HIDDEN if hidden else ProjectVisibility.TRACKED
+    _convert_older_records(path, dry_run=dry_run)
     plan = plan_project_visibility(path, file, requested)
     typer.echo(f"target: {plan.target}")
     typer.echo(f"project profile: {plan.profile}")
@@ -267,6 +280,7 @@ def project_inject(
         if git_tracked
         else resolved.default_visibility
     )
+    _convert_older_records(path, dry_run=dry_run)
     plan = plan_injection(
         profile=profile,
         target=path,
@@ -275,18 +289,6 @@ def project_inject(
         resolved=resolved,
         visibility=visibility,
     )
-    if plan.no_op:
-        changed = apply_injection(plan, mutate_visibility=not dry_run)
-        _render_injection(plan)
-        if dry_run:
-            typer.echo("dry run: no changes applied")
-        else:
-            typer.echo(
-                "visibility activated for the existing injection"
-                if changed
-                else "no changes: this exact injection is already current"
-            )
-        return
     _render_injection(plan)
     if dry_run:
         if not sys.stdin.isatty():
@@ -304,10 +306,8 @@ def project_inject(
     if resolved_plan is None:
         typer.echo("aborted: no changes applied")
         return
-    changed = apply_injection(resolved_plan)
-    typer.echo(
-        "injection complete" if changed else "no changes: injection already current"
-    )
+    apply_injection(resolved_plan)
+    typer.echo("injection complete")
 
 
 @project_app.command("sync", epilog=PROJECT_SYNC_EXAMPLES)
@@ -326,6 +326,7 @@ def project_sync(
     ),
 ) -> None:
     """Synchronize every recorded profile injection at PATH atomically."""
+    _convert_older_records(path, dry_run=dry_run)
     plan = plan_sync(path)
     _render_sync(plan)
     if dry_run:
@@ -365,6 +366,7 @@ def project_remove(
     claims, and private Git entries instead and leaves project files alone.
     """
     config = _resolve_config_arg(config)
+    _convert_older_records(path, dry_run=dry_run)
     stale = plan_stale_removal(profile=profile, target=path, config_path=config)
     if stale is not None:
         _render_stale_removal(stale)
