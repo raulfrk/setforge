@@ -281,7 +281,7 @@ def test_emit_reconcile_summary_renders_all_status_columns(
     excluded from the totals — they represent rollback bookkeeping for
     items the user explicitly abandoned, not items reconciled. The
     ``K skipped`` parenthetical lists ids comma-separated so the user
-    can spot which item to re-target with ``--retry-failed``.
+    can spot which item the next install will retry.
     """
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
         ReconcileOutcome(

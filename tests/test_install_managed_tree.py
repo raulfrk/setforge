@@ -1057,7 +1057,7 @@ def test_selected_file_preserves_other_resources_and_state(
 
 
 @pytest.mark.parametrize(
-    "case", ["unknown", "nonmember", "unowned", "foreign", "released", "retry"]
+    "case", ["unknown", "nonmember", "unowned", "foreign", "released"]
 )
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_file_selection_refuses_without_resource_effects(
@@ -1115,8 +1115,6 @@ def test_file_selection_refuses_without_resource_effects(
     before_index = copy.deepcopy(reconcile_store.read_index("p"))
     selected = "missing" if case == "unknown" else "one"
     extra = [f"--file={selected}"]
-    if case == "retry":
-        extra.append("--retry-failed")
     if dry_run:
         extra.append("--dry-run")
     result = runner.invoke(app, [*args, *extra])

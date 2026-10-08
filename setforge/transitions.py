@@ -9,8 +9,6 @@ under ``~/.local/state/setforge/transitions/`` containing:
   added / removed marketplaces (omitted if no plugin delta)
 - ``mcp.json`` — added / updated MCP-server registrations (omitted if no
   MCP delta)
-- ``reconcile_outcomes.json`` — per-item plugin/extension reconcile
-  outcomes (omitted if none)
 - ``filesystem_deltas.json`` — pre/post images (kind, bytes, link target,
   mode) of every file, symlink and directory the command changed (omitted
   if none); marked ``complete`` because it covers every file change.
@@ -589,9 +587,8 @@ class ReconcileKind(StrEnum):
 
     StrEnum (not bare ``Literal[...]``) per CLAUDE.md's
     "StrEnum / IntEnum for closed sets — never bare module-level magic
-    strings" rule. Members compare equal to their string values, so the
-    on-disk ``reconcile_outcomes.json`` shape — and existing tests that
-    assert ``outcome.kind == "plugin"`` — keep working unchanged.
+    strings" rule. Members compare equal to their string values, so tests
+    that assert ``outcome.kind == "plugin"`` keep working unchanged.
     """
 
     PLUGIN = "plugin"
@@ -617,159 +614,16 @@ class ReconcileStatus(StrEnum):
 class ReconcileOutcome:
     """One per-item outcome from a plugin or extension reconcile pass.
 
-    Serialized alongside ``ExtensionDelta`` / ``PluginDelta`` into the
-    transition record's ``reconcile_outcomes.json`` sibling, so the
-    ``install --retry-failed`` flag can rebuild the set of skipped
-    items on the next invocation and a future ``revert`` step can see
-    which items landed only partially.
-
-    Backward compatibility: old transition records written before
-    the reconcile-outcomes schema bump have no ``reconcile_outcomes.json`` file;
-    :func:`load_reconcile_outcomes` returns ``()`` in that case.
-    Within ``reconcile_outcomes.json``, ``kind`` and ``status``
-    continue to serialize as their string values (``"plugin"`` /
-    ``"ok"`` / ...) because :class:`StrEnum` members ARE strings;
-    deserialization wraps each raw string in the enum constructor
-    inside :func:`_validate_one_outcome`.
+    Held in memory for the run that produced it: it drives the failure
+    summary and the install exit status, and is never written to the
+    transition record. A ``reconcile_outcomes.json`` left in a record by an
+    earlier release is ignored.
     """
 
     item_id: str
     kind: ReconcileKind
     status: ReconcileStatus
     error_summary: str | None
-
-
-def _serialize_reconcile_outcomes(
-    outcomes: tuple[ReconcileOutcome, ...],
-) -> str | None:
-    """Return the ``reconcile_outcomes.json`` body, or ``None`` when empty.
-
-    Emits ``kind`` and ``status`` as their underlying string values via
-    explicit ``.value`` access so the on-disk shape is stable
-    regardless of ``json.dumps``'s implementation-defined behavior on
-    :class:`StrEnum` instances.
-    """
-    if not outcomes:
-        return None
-    return (
-        json.dumps(
-            {
-                "outcomes": [
-                    {
-                        "item_id": o.item_id,
-                        "kind": o.kind.value,
-                        "status": o.status.value,
-                        "error_summary": o.error_summary,
-                    }
-                    for o in outcomes
-                ]
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-
-
-_VALID_OUTCOME_KINDS: frozenset[str] = frozenset(k.value for k in ReconcileKind)
-_VALID_OUTCOME_STATUSES: frozenset[str] = frozenset(s.value for s in ReconcileStatus)
-
-
-def _validate_one_outcome(entry: object) -> ReconcileOutcome:
-    """Validate one JSON entry into a :class:`ReconcileOutcome`.
-
-    Raises :class:`InvalidTransitionRecord` on any deviation from the
-    four-field shape. Kept as a free function so
-    :func:`reconcile_outcomes_from_json`'s per-entry block flattens to
-    one ``append(_validate_one_outcome(entry))`` call (nesting depth 2,
-    not 3). Wraps the raw string ``kind`` / ``status`` payload in the
-    :class:`ReconcileKind` / :class:`ReconcileStatus` enum constructors
-    after the membership-check guard fires; the explicit guard keeps
-    the error message stable and lets us raise
-    :class:`InvalidTransitionRecord` rather than the bare
-    :class:`ValueError` that would surface from a direct enum
-    constructor on a bogus payload.
-    """
-    if not isinstance(entry, dict):
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: entry must be a dict, got {type(entry).__name__}"
-        )
-    item_id = entry.get("item_id")
-    kind = entry.get("kind")
-    status = entry.get("status")
-    err = entry.get("error_summary")
-    if not isinstance(item_id, str):
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: item_id must be str, got "
-            f"{type(item_id).__name__}"
-        )
-    if kind not in _VALID_OUTCOME_KINDS:
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: kind must be in "
-            f"{sorted(_VALID_OUTCOME_KINDS)}, got {kind!r}"
-        )
-    if status not in _VALID_OUTCOME_STATUSES:
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: status must be in "
-            f"{sorted(_VALID_OUTCOME_STATUSES)}, got {status!r}"
-        )
-    if err is not None and not isinstance(err, str):
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: error_summary must be str | None, "
-            f"got {type(err).__name__}"
-        )
-    return ReconcileOutcome(
-        item_id=item_id,
-        kind=ReconcileKind(kind),
-        status=ReconcileStatus(status),
-        error_summary=err,
-    )
-
-
-def reconcile_outcomes_from_json(
-    raw: dict[str, object],
-) -> tuple[ReconcileOutcome, ...]:
-    """Reconstruct ``tuple[ReconcileOutcome, ...]`` from a JSON payload.
-
-    Validates each entry against the four-field shape; raises
-    :class:`InvalidTransitionRecord` on any deviation. The empty
-    ``{"outcomes": []}`` payload returns ``()`` so the boundary is
-    backward-compat-safe with old transition records (no file → empty
-    tuple at the loader; valid-but-empty payload → same shape).
-    """
-    raw_list = raw.get("outcomes", [])
-    if not isinstance(raw_list, list):
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: outcomes must be a list, got "
-            f"{type(raw_list).__name__}"
-        )
-    return tuple(_validate_one_outcome(entry) for entry in raw_list)
-
-
-def load_reconcile_outcomes(
-    transition_dir: TransitionDir,
-) -> tuple[ReconcileOutcome, ...]:
-    """Return the reconcile-outcome tuple for a transition directory.
-
-    Returns ``()`` when the ``reconcile_outcomes.json`` file is absent —
-    the backward-compat path for transitions written before that schema bump.
-    Raises :class:`InvalidTransitionRecord` when the file exists but its
-    shape is corrupt (delegated to :func:`reconcile_outcomes_from_json`).
-    """
-    path = transition_dir / "reconcile_outcomes.json"
-    if not path.exists():
-        return ()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise InvalidTransitionRecord(
-            f"cannot read reconcile_outcomes.json at {path}: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: top-level must be a dict, got "
-            f"{type(raw).__name__}"
-        )
-    return reconcile_outcomes_from_json(raw)
 
 
 class SnapshotStore(StrEnum):
@@ -1669,7 +1523,6 @@ def write_transition(
     file_post: Mapping[Path, FilesystemImage],
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
-    reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
     state_snapshots: tuple[StateSnapshotEntry, ...] = (),
     mcp_delta: MCPDelta | None = None,
     filesystem_deltas: tuple[FilesystemDelta, ...] = (),
@@ -1692,8 +1545,7 @@ def write_transition(
 
     Write order: stage ``extensions.json`` (if delta non-empty),
     ``plugins.json`` (if delta non-empty), ``mcp.json`` (if delta
-    non-empty), ``reconcile_outcomes.json`` (if non-empty),
-    ``filesystem_deltas.json`` (if any file changed), and
+    non-empty), ``filesystem_deltas.json`` (if any file changed), and
     ``state_snapshots/`` (if non-empty) into a ``.pending-<dirname>/``
     staging dir; ``pending.rename(target)`` — atomic POSIX ``Path.rename``,
     same fs; write ``meta.json`` inside the now-real ``target/`` dir as
@@ -1703,8 +1555,8 @@ def write_transition(
     ``<dirname>/`` without ``meta.json`` (skipped by the existing
     meta.json filter).
 
-    ``reconcile_outcomes`` and ``state_snapshots`` default to empty
-    tuples so the legacy call shapes stay backward-compatible; an empty
+    ``state_snapshots`` defaults to an empty tuple so the legacy call
+    shapes stay backward-compatible; an empty
     ``state_snapshots`` writes no ``state_snapshots/`` dir at all, which
     :func:`load_state_snapshots` reads back as its ``None`` sentinel.
 
@@ -1799,10 +1651,6 @@ def write_transition(
     mcp_payload = _serialize_mcp_payload(mcp_delta)
     if mcp_payload is not None:
         _write_text_durable(pending / "mcp.json", mcp_payload)
-
-    outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
-    if outcomes_payload is not None:
-        _write_text_durable(pending / "reconcile_outcomes.json", outcomes_payload)
 
     if filesystem_payload is not None:
         _write_text_durable(pending / _FILESYSTEM_DELTAS_FILENAME, filesystem_payload)
@@ -2164,8 +2012,8 @@ def load_latest(
     transitions whose ``meta.json`` ``command`` field equals that
     enum's string value. ``None`` (the default) returns the latest
     transition of ANY command type — preserves backward compatibility
-    for callers that want "the last thing that happened" (e.g. revert,
-    install --retry-failed). Filtering callers (e.g. status's
+    for callers that want "the last thing that happened" (e.g. revert).
+    Filtering callers (e.g. status's
     last-install line) pass ``command=TransitionCommand.INSTALL`` so a
     later sync/revert doesn't shadow the install they want to display.
 

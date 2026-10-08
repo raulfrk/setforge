@@ -155,11 +155,7 @@ from setforge.reconcile import host_local_record
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import FileId, file_id
 from setforge.secrets import SecretAction, SecretsScanResult
-from setforge.transitions import (
-    ReconcileStatus,
-    load_latest,
-    load_reconcile_outcomes,
-)
+from setforge.transitions import ReconcileStatus
 from setforge.tree_management import (
     TreeActionKind,
     TreeEntryKind,
@@ -1185,7 +1181,6 @@ def _validate_external_plan(plan: InstallPlan) -> None:
 def _apply_extension_plan(
     plan: InstallPlan,
     *,
-    retry_failed_ids: frozenset[str],
     yes: bool,
     lock: LockFile | None,
 ) -> tuple[
@@ -1197,7 +1192,6 @@ def _apply_extension_plan(
     return _reconcile_extensions(
         plan.ctx.cfg,
         plan.ctx.resolved,
-        retry_failed_ids=retry_failed_ids,
         yes=yes,
         pins=extension_pins(lock),
         plan=plan.extensions,
@@ -1207,7 +1201,6 @@ def _apply_extension_plan(
 def _apply_plugin_plan(
     plan: InstallPlan,
     *,
-    retry_failed_ids: frozenset[str],
     yes: bool,
     lock: LockFile | None,
 ) -> tuple[
@@ -1219,7 +1212,6 @@ def _apply_plugin_plan(
     return _reconcile_plugins(
         plan.ctx.cfg,
         plan.ctx.resolved,
-        retry_failed_ids=retry_failed_ids,
         yes=yes,
         pins=plugin_pins(lock),
         plan=plan.plugins,
@@ -1292,15 +1284,11 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
     active_lock: LockFile | None,
     tracked_checkpoint_paths: tuple[Path, ...],
     adapter_kinds: set[operations.AdapterKind],
-    retry_failed: bool,
     yes: bool,
     mutation_guards: MutationLockGuards,
 ) -> None:
     """Apply frozen target plans in the selected bundles' graph order."""
     cfg = plan.ctx.cfg
-    retry_failed_ids = (
-        _collect_retry_failed_ids(profile) if retry_failed else frozenset()
-    )
 
     def apply_packages() -> CapabilityActivation:
         with (
@@ -1432,7 +1420,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         ):
             run.ext_delta, run.ext_outcomes = _apply_extension_plan(
                 plan,
-                retry_failed_ids=retry_failed_ids,
                 yes=yes,
                 lock=active_lock,
             )
@@ -1466,7 +1453,6 @@ def _apply_capability_targets(  # noqa: C901 - one closure per frozen target pha
         ):
             run.plugin_delta, run.plugin_outcomes = _apply_plugin_plan(
                 plan,
-                retry_failed_ids=retry_failed_ids,
                 yes=yes,
                 lock=active_lock,
             )
@@ -2487,15 +2473,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         "--no-secrets-scan",
         help="Skip pre-deploy secrets scan (gitleaks) for automation.",
     ),
-    retry_failed: bool = typer.Option(
-        False,
-        "--retry-failed",
-        help=(
-            "Re-attempt only the items skipped during the previous install's "
-            "reconcile (per the prior transition's reconcile_outcomes). "
-            "Other reconcile work is suppressed for this run."
-        ),
-    ),
     no_git_check: bool = typer.Option(
         False,
         "--no-git-check",
@@ -2537,8 +2514,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
 ) -> None:
     """Deploy tracked → live for the profile or selected managed files."""
     file_selection = None if file is None else frozenset(file)
-    if file_selection is not None and retry_failed:
-        raise SetforgeError("--file and --retry-failed cannot be combined")
     # Canonicalize once so a symlink retarget cannot split source discovery,
     # locking, config loading, and input snapshots across two repositories.
     config_is_explicit = config is not None
@@ -2840,7 +2815,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             active_lock=active_lock,
             tracked_checkpoint_paths=tracked_checkpoint_paths,
             adapter_kinds=adapter_kinds,
-            retry_failed=retry_failed,
             yes=yes,
             mutation_guards=mutation_guards,
         )
@@ -2895,7 +2869,6 @@ def _apply_install(
     active_lock: LockFile | None,
     tracked_checkpoint_paths: tuple[Path, ...],
     adapter_kinds: set[operations.AdapterKind],
-    retry_failed: bool,
     yes: bool,
     mutation_guards: MutationLockGuards,
 ) -> _AppliedInstall:
@@ -2942,7 +2915,6 @@ def _apply_install(
         active_lock=active_lock,
         tracked_checkpoint_paths=tracked_checkpoint_paths,
         adapter_kinds=adapter_kinds,
-        retry_failed=retry_failed,
         yes=yes,
         mutation_guards=mutation_guards,
     )
@@ -3054,7 +3026,6 @@ def _record_install(
                 run.plugin_delta,
                 codex_plugin_delta=run.codex_plugin_delta,
                 source_dir=ctx.repo_root,
-                reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
                 state_snapshots=state_pre,
                 mcp_delta=mcp_delta,
                 filesystem_deltas=tree_filesystem_deltas,
@@ -3301,20 +3272,3 @@ def _apply_secrets_and_bootstrap(
     ):
         _apply_secret_plan(secret_plan)
         deploy.bootstrap_local(bootstrap)
-
-
-def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
-    """Read the previous transition's ``reconcile_outcomes`` and return
-    the set of items whose status was ``"skipped"``.
-
-    Returns an empty :class:`frozenset` when there's no prior transition
-    or the previous transition has no ``reconcile_outcomes.json`` file
-    (backward-compat path for transitions written before the schema bump).
-    Used by ``setforge install --retry-failed`` to filter the reconcile
-    work list to only those previously-failed ids.
-    """
-    prev = load_latest(profile)
-    if prev is None:
-        return frozenset()
-    outcomes = load_reconcile_outcomes(prev)
-    return frozenset(o.item_id for o in outcomes if o.status is ReconcileStatus.SKIPPED)

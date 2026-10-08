@@ -48,6 +48,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same capture and can be undone with `setforge revert`. Unlike `capture`,
   `sync` also brings the profile's extension list in `setforge.yaml` in line
   with the extensions installed on the host, and records a transition.
+- `setforge install --retry-failed` is gone. Run `setforge install` again
+  instead: it retries the plugins and extensions that failed last time and
+  leaves everything already in place alone. Install also stops writing
+  `reconcile_outcomes.json` into its undo records; files already there are
+  left untouched and ignored.
 - `setforge install` no longer accepts `--auto-accept-tracked` or
   `--auto-accept-live`. Both did the same thing: let install reset a file's
   permission bits to its declared `mode:`. Install now asks for that in its

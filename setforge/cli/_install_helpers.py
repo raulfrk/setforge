@@ -749,7 +749,6 @@ def _write_install_transition(
     plugin_delta: transitions.PluginDelta | None,
     *,
     source_dir: Path | None = None,
-    reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     mcp_delta: transitions.MCPDelta | None = None,
     filesystem_deltas: tuple[transitions.FilesystemDelta, ...] = (),
@@ -765,15 +764,9 @@ def _write_install_transition(
     ``file_pre`` / ``file_post``, whose modes make a mode-only install
     revertible too.
 
-    Two arguments carry schema-bump backward-compat history: ``source_dir``
-    (when set and pointing at a git repo,
+    When ``source_dir`` is set and points at a git repo,
     :func:`transitions.make_meta` records HEAD's sha so ``setforge
-    status`` can compute commits-since-last-install) and
-    ``reconcile_outcomes`` (defaults to empty so
-    pre-bump callers keep working; when non-empty, serialized to
-    ``reconcile_outcomes.json`` alongside ``extensions.json`` /
-    ``plugins.json`` so ``install --retry-failed`` can rebuild the
-    skipped-ids set on the next invocation).
+    status`` can compute commits-since-last-install.
 
     ``command_line`` is captured from
     ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
@@ -794,7 +787,6 @@ def _write_install_transition(
         file_post,
         ext_delta,
         plugin_delta=plugin_delta,
-        reconcile_outcomes=reconcile_outcomes,
         state_snapshots=state_snapshots,
         mcp_delta=mcp_delta,
         filesystem_deltas=filesystem_deltas,

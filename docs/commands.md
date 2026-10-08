@@ -253,7 +253,7 @@ uses its existing rendering and reconciliation context and retains unselected
 files and native integrations. It does not bootstrap directories, provision
 packages or reconcile plugins, extensions or MCP registrations. Every selected
 container must already be managed by the current checkout; this mode does not
-adopt or transfer resources. `--retry-failed` cannot be combined with `--file`.
+adopt or transfer resources.
 Package lock coverage is not checked in file-only mode and the lock is not
 refreshed.
 

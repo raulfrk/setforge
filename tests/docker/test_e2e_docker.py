@@ -823,9 +823,8 @@ def test_e2e_docker_install_plugin_failure_skip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """Default-skip path: a failing extension install with ``--yes`` short-
-    circuits the per-item prompt to SKIP, the install exits 0, and the
-    transition record carries a ``status="skipped"`` outcome for the
-    failing id.
+    circuits the per-item prompt to SKIP, the install exits 0, names the
+    failing id as skipped in its summary, and records a transition.
 
     Mirrors mockup E acceptance row 2 (default choice is "skip & continue").
     """
@@ -848,8 +847,7 @@ def test_e2e_docker_install_plugin_failure_skip(
         f"install with --yes (default-SKIP) should exit 0; "
         f"got returncode={result.returncode}\nstderr:{result.stderr}"
     )
-    # Surface the skipped id in the transition record so --retry-failed
-    # picks it up on the next run.
+    assert "1 skipped: force-fail.ext" in result.stdout, result.stdout
     show = c.exec(
         [
             "bash",
@@ -858,35 +856,18 @@ def test_e2e_docker_install_plugin_failure_skip(
         ],
         check=True,
     )
-    latest = show.stdout.strip()
-    assert latest, "no transition recorded"
-    outcomes = c.exec(
-        [
-            "cat",
-            f"/home/tester/.local/state/setforge/transitions/{latest}/reconcile_outcomes.json",
-        ],
-        check=True,
-    ).stdout
-    assert "force-fail.ext" in outcomes, outcomes
-    assert '"status": "skipped"' in outcomes, outcomes
+    assert show.stdout.strip(), "no transition recorded"
 
 
 @pytest.mark.xdist_group("docker_daemon")
-def test_e2e_docker_install_plugin_failure_retry_success(
+def test_e2e_docker_install_rerun_retries_a_skipped_extension(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """RETRY-success path: a flaky extension that fails first attempt but
-    succeeds on retry surfaces a ``status="retried_ok"`` outcome.
+    """A plain second install re-attempts the extension the first one skipped.
 
-    Today's prompt path requires a TTY for non-yes; we exercise the
-    underlying retry behavior by relying on the in-loop pre-prompt
-    failure list: ``vscode_extensions.reconcile`` doesn't currently
-    retry inside its own loop, so the failure surfaces to the prompt.
-    Without a TTY available we use ``--yes`` (default-SKIP). The flaky
-    stub still records the skipped state for this run, and the second
-    invocation under ``--retry-failed`` lands clean. This pair of
-    invocations is the end-to-end shape mockup E acceptance row 3
-    promises: 'retry re-attempts in-place'.
+    The flaky stub refuses ``flaky.ext`` on its first call only. Under
+    ``--yes`` the first install skips it (default-SKIP); the second install,
+    with no extra flag, asks the stub for it again.
     """
     c = docker_container()
     _seed_failing_code_stub(c)
@@ -905,25 +886,9 @@ def test_e2e_docker_install_plugin_failure_retry_success(
     )
     assert first.returncode == 0, first.stderr
     # First run: flaky.ext failed, was skipped.
-    show = c.exec(
-        [
-            "bash",
-            "-c",
-            "ls -1 ~/.local/state/setforge/transitions/ | sort | tail -1",
-        ],
-        check=True,
-    )
-    first_dir = show.stdout.strip()
-    outcomes = c.exec(
-        [
-            "cat",
-            f"/home/tester/.local/state/setforge/transitions/{first_dir}/reconcile_outcomes.json",
-        ],
-        check=True,
-    ).stdout
-    assert "flaky.ext" in outcomes
-    assert '"status": "skipped"' in outcomes
-    # Now retry — flaky.ext succeeds the second time per the stub.
+    assert "1 skipped: flaky.ext" in first.stdout, first.stdout
+    asked_first = int(c.exec(["cat", "/tmp/flaky.count"], check=True).stdout)
+    # A plain re-run asks for flaky.ext again; the stub lets it through.
     second = c.exec(
         [
             "uv",
@@ -933,11 +898,12 @@ def test_e2e_docker_install_plugin_failure_retry_success(
             "--profile=test-comprehensive",
             f"--config={patched}",
             "--yes",
-            "--retry-failed",
         ],
         check=False,
     )
     assert second.returncode == 0, second.stderr
+    asked_both = int(c.exec(["cat", "/tmp/flaky.count"], check=True).stdout)
+    assert asked_both > asked_first
 
 
 @pytest.mark.xdist_group("docker_daemon")
@@ -980,42 +946,6 @@ def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
         f"{FIXTURE_EXTENSION_ID} should remain installed under default-SKIP; "
         f"got stdout:{listed.stdout!r}\nstderr:{listed.stderr!r}"
     )
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_e2e_docker_install_retry_failed_flag(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """The ``--retry-failed`` flag is plumbed end-to-end: ``setforge
-    install --help`` advertises it, and passing it without a prior
-    transition (no skipped ids to retry) exits 0 — the flag is
-    idempotent on a fresh state.
-
-    Mirrors mockup E acceptance row 7 (``--retry-failed`` shortcut)
-    and pins the flag surface so a future renaming surfaces here too.
-    """
-    c = docker_container()
-    help_text = c.exec(
-        ["uv", "run", "setforge", "install", "--help"], check=True
-    ).stdout
-    assert "--retry-failed" in help_text
-    # First-time install with --retry-failed and no prior history — the
-    # flag is a no-op (frozenset() of skipped ids) and the install
-    # exits 0.
-    result = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "install",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            "--retry-failed",
-            "--yes",
-        ],
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 # Section: `setforge init` bootstrap (mockup J)
