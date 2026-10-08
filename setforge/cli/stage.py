@@ -216,6 +216,58 @@ class _PersistPlan:
     drafts: dict[UnitRef, bytes]
 
 
+#: A stageable file: its tracked-file name, its sub-name, its live path.
+type _Row = tuple[str, str, Path]
+
+
+def _stageable_rows(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> list[_Row]:
+    """Every plain file the profile tracks, one row per file under a directory."""
+    rows: list[_Row] = []
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        if tracked_file.generated is not None or tracked_file.tree is not None:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        rows.extend(
+            (name, sub_name, sub_dst)
+            for sub_name, _sub_src, sub_dst in expand_tracked_file(name, src, dst)
+        )
+    return rows
+
+
+def _select_rows(rows: list[_Row], arg: str) -> tuple[list[_Row], bool]:
+    """The rows ``arg`` names, and whether it named them by ID.
+
+    A tracked-file name or sub-name wins (a directory's name selects every file
+    under it); only when none has that ID do the live path (``~`` and relative
+    forms resolved) and then the live file name count.
+    """
+    by_id = [row for row in rows if arg in (row[0], row[1])]
+    if by_id:
+        return by_id, True
+    candidate = Path(arg).expanduser().resolve()
+    by_path = [row for row in rows if candidate == row[2].resolve()]
+    return by_path or [row for row in rows if arg == row[2].name], False
+
+
+def _refuse_ambiguous_stage_target(rows: list[_Row], arg: str) -> None:
+    """Refuse a live path or file name that picks out more than one file."""
+    matches, by_id = _select_rows(rows, arg)
+    if by_id or len(matches) < 2:
+        return
+    listing = ", ".join(f"{sub_name} ({dst})" for _name, sub_name, dst in matches)
+    typer.secho(
+        f"error: {arg}: matches {len(matches)} tracked files ({listing}); "
+        "pass the tracked-file name or the full path",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=2)
+
+
 def _collect(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -233,9 +285,19 @@ def _collect(
     present live, with a recorded merge base, and UTF-8 text that its engine can
     read. A binary file, or a live file its key engine cannot parse, gets no unit
     staging; capture writes it back verbatim.
-    ``only`` filters to a single file by tracked-file name, sub-name, live path,
-    or live basename.
+    ``only`` filters to a single file: by tracked-file name or sub-name when one
+    declares it, otherwise by live path or live basename.
     """
+    selected = (
+        None
+        if only is None
+        else {
+            sub_name
+            for _name, sub_name, _dst in _select_rows(
+                _stageable_rows(cfg, resolved, repo_root), only
+            )[0]
+        }
+    )
     stages: list[FileStage[Any]] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
@@ -246,12 +308,7 @@ def _collect(
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if kind is UnitKind.KEY and su_mod.structured_format(sub_dst) is None:
                 continue
-            if only is not None and only not in (
-                name,
-                sub_name,
-                str(sub_dst),
-                sub_dst.name,
-            ):
+            if selected is not None and sub_name not in selected:
                 continue
             if not sub_dst.exists():
                 continue
@@ -901,18 +958,28 @@ def _commit_persist(profile: str, fid: FileId, base: bytes, plan: _PersistPlan) 
 def _refuse_generated_stage_target(
     cfg: Config, resolved: ResolvedProfile, file: str
 ) -> None:
-    """Refuse staging when ``file`` names generated one-way output."""
+    """Refuse staging when ``file`` names generated one-way output.
+
+    A tracked file whose ID is ``file`` wins, so another file's live name equal to
+    it does not make the selector one-way output.
+    """
+    if any(
+        file == name
+        and cfg.tracked_files[name].generated is None
+        and cfg.tracked_files[name].tree is None
+        for name in resolved.tracked_files
+    ):
+        return
+    candidate = Path(file).expanduser().resolve()
     matched = any(
         (
             cfg.tracked_files[name].generated is not None
             or cfg.tracked_files[name].tree is not None
         )
-        and file
-        in {
-            name,
-            str(resolve_dst(cfg.tracked_files[name])),
-            resolve_dst(cfg.tracked_files[name]).name,
-        }
+        and (
+            file in {name, resolve_dst(cfg.tracked_files[name]).name}
+            or candidate == resolve_dst(cfg.tracked_files[name]).resolve()
+        )
         for name in resolved.tracked_files
     )
     if matched:
@@ -965,6 +1032,7 @@ def stage(
         raise typer.Exit(code=2)
 
     _refuse_generated_stage_target(cfg, resolved, file)
+    _refuse_ambiguous_stage_target(_stageable_rows(cfg, resolved, repo_root), file)
 
     staged: list[FileStage[Any]] = [
         *collect_stages(cfg, resolved, repo_root, profile, only=file),

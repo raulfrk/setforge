@@ -14,6 +14,7 @@ from setforge.cli.stage import QUIT, FileStage, _Quit, collect_stages, counts, w
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation
 from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from tests.shared_fixtures import ConfigRepo
 
 _BASE = b"## Tool prefs\nUse rg not grep.\n\n## Host paths\nworkdir: /home/generic\n"
 _LIVE = (
@@ -1099,3 +1100,306 @@ def test_walk_scales_to_many_hunks_no_whole_file_degrade(
     (stage2,) = collect_stages(cfg, resolved, repo, "p")
     _apply("p", stage2, walk(stage2.units, lambda h, i, n: Decision(HunkClass.LOCAL)))
     assert tracked_promotion() == base
+
+
+def _installed_files(
+    config_repo: ConfigRepo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live: dict[str, Path],
+    extra_specs: dict[str, dict[str, object]] | None = None,
+) -> list[str]:
+    """Install one plain file per ``live`` entry, then edit each on the host."""
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    scanner = tmp_path / "gitleaks"
+    scanner.write_text("#!/bin/sh\nexit 0\n")
+    scanner.chmod(0o755)
+    monkeypatch.setenv("SETFORGE_GITLEAKS_BIN", str(scanner))
+    for tid in live:
+        config_repo.write_tracked(tid, f"{tid}\nbase\n")
+    config = config_repo.write_config(
+        profile="p",
+        tracked_files={
+            tid: {"src": tid, "dst": str(dst), **(extra_specs or {}).get(tid, {})}
+            for tid, dst in live.items()
+        },
+        extra={"schema_version": "6.5", "minimum_version": "6.4"},
+    )
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(config_repo.root)], check=True
+    )
+    args = ["--profile=p", f"--config={config}"]
+    installed = CliRunner().invoke(
+        app, ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    )
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    for tid, dst in live.items():
+        dst.write_text(f"{tid}\nbase\nhost edit\n")
+    return args
+
+
+def _two_installed_files(
+    config_repo: ConfigRepo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra_specs: dict[str, dict[str, object]] | None = None,
+) -> tuple[list[str], dict[str, Path]]:
+    """Install two files, one whose ID is the other's live file name.
+
+    ``target`` is deployed to ``first.txt`` and ``other`` to a file called
+    ``target``; both are then edited on the host.
+    """
+    live_root = tmp_path / "home" / "live"
+    live = {"target": live_root / "first.txt", "other": live_root / "target"}
+    args = _installed_files(config_repo, tmp_path, monkeypatch, live, extra_specs)
+    return args, live
+
+
+def _stage_recording_files(
+    monkeypatch: pytest.MonkeyPatch, args: list[str], selector: str
+) -> list[str]:
+    """Run ``stage <selector>`` keeping every hunk local; return the files walked."""
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.cli.stage import Decision
+    from setforge.reconcile.hunks import Hunk
+    from tests.test_cli_cleanup import _TerminalInput
+
+    walked: list[str] = []
+
+    def choices(item: FileStage[Hunk]):
+        walked.append(item.sub_name)
+        return lambda _unit, _index, _total: Decision(HunkClass.LOCAL)
+
+    monkeypatch.setattr(stage_mod, "_interactive_choice", choices)
+    staged = CliRunner().invoke(app, ["stage", selector, *args], input=_TerminalInput())
+    assert staged.exit_code == 0, (staged.output, staged.exception)
+    return walked
+
+
+def _classified(args: list[str]) -> dict[str, tuple[int, int]]:
+    """Per tracked file ``(local, pending)`` hunk counts from ``stage --list``."""
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    listed = CliRunner().invoke(app, ["--format=json", "stage", "--list", *args])
+    assert listed.exit_code == 0, (listed.output, listed.exception)
+    return {
+        row["name"]: (row["local"], row["pending"])
+        for row in json.loads(listed.stdout)["data"]
+    }
+
+
+def test_stage_by_exact_id_does_not_also_select_a_file_named_like_it(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``stage target`` stages the file whose ID is ``target``, not ``other`` too."""
+    args, _live = _two_installed_files(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "target")
+
+    assert walked == ["target"]
+    assert _classified(args) == {"target": (1, 0), "other": (0, 1)}
+
+
+def test_stage_by_live_file_name_still_selects_when_no_id_matches(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no tracked file of that ID, the live file name still picks the file."""
+    args, _live = _two_installed_files(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "first.txt")
+
+    assert walked == ["target"]
+    assert _classified(args) == {"target": (1, 0), "other": (0, 1)}
+
+
+def test_stage_by_exact_id_of_an_unedited_file_selects_nothing_else(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ID that names an unedited file is not widened to the file named like it."""
+    args, live = _two_installed_files(config_repo, tmp_path, monkeypatch)
+    live["target"].write_text("target\nbase\n")
+
+    walked = _stage_recording_files(monkeypatch, args, "target")
+
+    assert walked == []
+    assert _classified(args) == {"target": (0, 0), "other": (0, 1)}
+
+
+def test_collect_by_directory_id_selects_each_file_under_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory's ID selects every file under it; ``dir/file`` selects one."""
+    from setforge import locking
+    from setforge.reconcile import store
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    for rel in ("a.txt", "b.txt"):
+        _write(repo / "tracked" / "conf" / rel, _BASE)
+        _write(tmp_path / "live" / "conf" / rel, _LIVE)
+        with locking.profile_lock("p"):
+            store.record("p", file_id(f"conf/{rel}"), base=_BASE, local=_LIVE)
+    cfg = Config(
+        tracked_files={
+            "conf": TrackedFile(src=Path("conf"), dst=str(tmp_path / "live" / "conf"))
+        },
+        profiles={"p": Profile(tracked_files=["conf"])},
+    )
+    resolved = resolve_profile(cfg, "p")
+
+    by_dir = collect_stages(cfg, resolved, repo, "p", only="conf")
+    by_sub_name = collect_stages(cfg, resolved, repo, "p", only="conf/a.txt")
+
+    assert [s.sub_name for s in by_dir] == ["conf/a.txt", "conf/b.txt"]
+    assert [s.sub_name for s in by_sub_name] == ["conf/a.txt"]
+
+
+def test_stage_by_exact_id_is_not_refused_for_a_generated_file_named_like_it(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generated file's live name does not stop ``stage`` of the ID it matches."""
+    args, _live = _two_installed_files(
+        config_repo,
+        tmp_path,
+        monkeypatch,
+        {"other": {"generated": {"inputs": {"home": "home"}}}},
+    )
+
+    walked = _stage_recording_files(monkeypatch, args, "target")
+
+    assert walked == ["target"]
+
+
+def test_stage_still_refuses_a_generated_file_by_its_own_id(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, _live = _two_installed_files(
+        config_repo,
+        tmp_path,
+        monkeypatch,
+        {"other": {"generated": {"inputs": {"home": "home"}}}},
+    )
+
+    staged = CliRunner().invoke(app, ["stage", "other", *args], input=_TerminalInput())
+
+    assert staged.exit_code == 2
+    assert "one-way output" in staged.output
+
+
+def _two_files_named_alike(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], dict[str, Path]]:
+    """Install ``first`` and ``second``, whose live files are both ``notes.txt``."""
+    live_root = tmp_path / "home" / "live"
+    live = {
+        "first": live_root / "x" / "notes.txt",
+        "second": live_root / "y" / "notes.txt",
+    }
+    return _installed_files(config_repo, tmp_path, monkeypatch, live), live
+
+
+def test_stage_by_a_live_file_name_shared_by_two_files_refuses_and_lists_them(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.reconcile.hunks import Hunk
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+    walked: list[str] = []
+
+    def choices(item: FileStage[Hunk]):
+        walked.append(item.sub_name)
+        return lambda _unit, _index, _total: None
+
+    monkeypatch.setattr(stage_mod, "_interactive_choice", choices)
+
+    staged = CliRunner().invoke(
+        app, ["stage", "notes.txt", *args], input=_TerminalInput()
+    )
+
+    assert staged.exit_code == 2
+    assert "notes.txt: matches 2 tracked files" in staged.output
+    assert f"first ({live['first']})" in staged.output
+    assert f"second ({live['second']})" in staged.output
+    assert walked == []
+    assert _classified(args) == {"first": (0, 1), "second": (0, 1)}
+
+
+def test_stage_by_an_id_still_works_when_two_files_share_a_live_file_name(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "second")
+
+    assert walked == ["second"]
+    assert _classified(args) == {"first": (0, 1), "second": (1, 0)}
+
+
+@pytest.mark.parametrize(
+    ("selector", "cwd"),
+    [("~/live/first.txt", ""), ("live/first.txt", ""), ("./first.txt", "live")],
+    ids=["tilde", "relative", "dot-relative"],
+)
+def test_stage_accepts_a_tilde_or_relative_live_path(
+    config_repo: ConfigRepo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+    cwd: str,
+) -> None:
+    args, _live = _two_installed_files(config_repo, tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path / "home" / cwd)
+
+    walked = _stage_recording_files(monkeypatch, args, selector)
+
+    assert walked == ["target"]
+
+
+def test_stage_by_a_tilde_path_picks_one_of_two_files_with_the_same_live_name(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "~/live/y/notes.txt")
+
+    assert walked == ["second"]
+    assert _classified(args) == {"first": (0, 1), "second": (1, 0)}
+
+
+def test_stage_refuses_a_generated_file_given_by_a_tilde_path(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, _live = _two_installed_files(
+        config_repo,
+        tmp_path,
+        monkeypatch,
+        {"other": {"generated": {"inputs": {"home": "home"}}}},
+    )
+
+    staged = CliRunner().invoke(
+        app, ["stage", "~/live/target", *args], input=_TerminalInput()
+    )
+
+    assert staged.exit_code == 2
+    assert "one-way output" in staged.output
