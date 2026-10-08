@@ -61,7 +61,7 @@ LOCAL_YAML_BASELINE_VERSION: Final[str] = "1.0"
 The implicit version every pre-versioning ``local.yaml`` is on — returned
 by :func:`detect_local_yaml_schema` when the file is absent, empty, or has
 no ``schema_version`` key. Deliberately a SEPARATE constant from
-:data:`setforge.schema_manifest.SCHEMA_MAJOR` (setforge.yaml's): the two
+``scripts/schema_manifest.py``'s ``SCHEMA_MAJOR`` (setforge.yaml's): the two
 documents version independently.
 """
 
