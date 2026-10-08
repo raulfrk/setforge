@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from uuid import UUID, uuid4
 
 import typer
@@ -2361,6 +2361,92 @@ def _package_owner_id(plan: InstallPlan):
     return plan.package_owner_id
 
 
+def _confirm_install(
+    plan: InstallPlan,
+    *,
+    config: Path,
+    local_overlay: LocalOverlayResolution,
+    ownership_preview: tuple[PackageDecision, ...],
+    file_ownership_preview: tuple[FileDecision, ...],
+    section_auto: reconcile_apply.ReconcileAuto | None,
+    fresh: bool,
+    auto: str | None,
+    yes: bool,
+    auto_accept_tracked: bool,
+    auto_accept_live: bool,
+    no_secrets_scan: bool,
+    no_transition: bool,
+) -> SecretPlan | None:
+    """Ask every under-lock question; ``None`` means the welcome was declined."""
+    ctx = plan.ctx
+    scan_result = secrets_mod.run_pre_deploy_scan(
+        tracked_root=config.parent / "tracked",
+        skip=no_secrets_scan,
+    )
+    if fresh:
+        reject_auto_on_fresh_host(auto=auto)
+        inventory = build_welcome_inventory(ctx, local_overlay=local_overlay)
+        welcome_choice = prompt_welcome(
+            inventory=inventory,
+            yes=yes,
+            run_dry_run=lambda: _render_install_plan(
+                plan,
+                scan_result,
+                transition=not no_transition,
+                refusals=_plan_refusals(
+                    plan,
+                    auto_accept_tracked=auto_accept_tracked,
+                    auto_accept_live=auto_accept_live,
+                ),
+            ),
+        )
+        if welcome_choice is not WelcomeChoice.PROCEED:
+            return None
+
+    _render_preinstall_staging(plan.staging)
+    _run_predeploy_gates(
+        drift_report=plan.drift_report,
+        ctx=ctx,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+        yes=yes,
+    )
+    install_helpers_mod._confirm_use_tracked_or_exit(
+        deploys=plan.deploys,
+        profile=ctx.profile,
+        section_auto=section_auto,
+        yes=yes,
+    )
+    if plan.provisioning.ownership != ownership_preview:
+        raise SetforgeError(
+            "package ownership inputs changed after confirmation; retry"
+        )
+    if plan.file_ownership != file_ownership_preview:
+        confirmation_actions = {
+            FileAction.ADOPT,
+            FileAction.TRANSFER,
+            FileAction.HOLD,
+        }
+        if any(
+            decision.action in confirmation_actions
+            for decision in (*file_ownership_preview, *plan.file_ownership)
+        ):
+            raise SetforgeError(
+                "file ownership inputs changed after confirmation; retry"
+            )
+
+    # Refuse-before-write: deploy_symlinked_file() raises on an occupied
+    # symlink dst only at write time, after earlier files have landed.
+    if plan.symlink_conflicts:
+        raise SetforgeError("\n".join(plan.symlink_conflicts))
+
+    secret_plan = _plan_secret_findings(scan_result, yes=yes)
+    if secret_plan is None:
+        typer.secho("install aborted by secrets scan", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    return secret_plan
+
+
 @app.command(epilog=INSTALL_EXAMPLES)
 def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     profile: str = _PROFILE_OPTION,
@@ -2627,9 +2713,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto=yes,
             package_owner_id=package_owner_id,
         )
-        ctx = plan.ctx
-        cfg = ctx.cfg
-        resolved = ctx.resolved
         planned_target_roots = {
             *(_tree_lock_target(tree.destination) for tree in plan.trees),
             *(codex.destination.parent for codex in plan.codex_configs),
@@ -2638,73 +2721,23 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             raise SetforgeError(
                 "managed tree targets changed after confirmation; retry"
             )
-        scan_result = secrets_mod.run_pre_deploy_scan(
-            tracked_root=config.parent / "tracked",
-            skip=no_secrets_scan,
-        )
-        if fresh:
-            reject_auto_on_fresh_host(auto=auto)
-            inventory = build_welcome_inventory(ctx, local_overlay=local_overlay)
-            welcome_choice = prompt_welcome(
-                inventory=inventory,
-                yes=yes,
-                run_dry_run=lambda: _render_install_plan(
-                    plan,
-                    scan_result,
-                    transition=not no_transition,
-                    refusals=_plan_refusals(
-                        plan,
-                        auto_accept_tracked=auto_accept_tracked,
-                        auto_accept_live=auto_accept_live,
-                    ),
-                ),
-            )
-            if welcome_choice is not WelcomeChoice.PROCEED:
-                return
-
-        _render_preinstall_staging(plan.staging)
-        _run_predeploy_gates(
-            drift_report=plan.drift_report,
-            ctx=ctx,
+        secret_plan = _confirm_install(
+            plan,
+            config=config,
+            local_overlay=local_overlay,
+            ownership_preview=ownership_preview,
+            file_ownership_preview=file_ownership_preview,
+            section_auto=section_auto,
+            fresh=fresh,
+            auto=auto,
+            yes=yes,
             auto_accept_tracked=auto_accept_tracked,
             auto_accept_live=auto_accept_live,
-            yes=yes,
+            no_secrets_scan=no_secrets_scan,
+            no_transition=no_transition,
         )
-        install_helpers_mod._confirm_use_tracked_or_exit(
-            deploys=plan.deploys,
-            profile=ctx.profile,
-            section_auto=section_auto,
-            yes=yes,
-        )
-        if plan.provisioning.ownership != ownership_preview:
-            raise SetforgeError(
-                "package ownership inputs changed after confirmation; retry"
-            )
-        if plan.file_ownership != file_ownership_preview:
-            confirmation_actions = {
-                FileAction.ADOPT,
-                FileAction.TRANSFER,
-                FileAction.HOLD,
-            }
-            if any(
-                decision.action in confirmation_actions
-                for decision in (*file_ownership_preview, *plan.file_ownership)
-            ):
-                raise SetforgeError(
-                    "file ownership inputs changed after confirmation; retry"
-                )
-
-        # Refuse-before-write: deploy_symlinked_file() raises on an occupied
-        # symlink dst only at write time, after earlier files have landed.
-        if plan.symlink_conflicts:
-            raise SetforgeError("\n".join(plan.symlink_conflicts))
-
-        secret_plan = _plan_secret_findings(scan_result, yes=yes)
         if secret_plan is None:
-            typer.secho(
-                "install aborted by secrets scan", err=True, fg=typer.colors.RED
-            )
-            raise typer.Exit(code=1)
+            return
 
         # This is the first mutation boundary. Every refusal and confirmation
         # above has completed, and apply consumes the frozen plan below.
@@ -2837,43 +2870,13 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
                 adapters=adapter_snapshots,
             )
         )
-        _apply_secrets_and_bootstrap(
-            run,
-            secret_plan=secret_plan,
-            bootstrap=plan.bootstrap,
-            checkpoint_paths=secrets_checkpoint_paths,
-            target_guards=mutation_guards.targets,
-            codex_roots=frozenset(
-                item.destination.parent.absolute() for item in plan.codex_configs
-            ),
-        )
-        ownership_transfers = (
-            *_publish_adoptions_checkpoint(plan, run),
-            *_publish_file_adoptions_checkpoint(plan, run),
-        )
-
-        # For symlink-deployed tracked_files the recorded file is the
-        # symlink's TARGET (where bytes actually land); the link itself is a
-        # tree filesystem delta. Store files (byte bases, spans sidecars,
-        # scalar-base manifests) are not recorded here: their pre-install
-        # state is captured at the pass-2 barrier (state_snapshots below) and
-        # revert restores them through that mechanism. Transfer claims have an
-        # exact, generation-checked sidecar inverse, so recording those claim
-        # files too would reverse them twice.
-        transfer_claim_paths = {
-            OwnershipStore().claim_path(transfer.after.resource_id)
-            for transfer in ownership_transfers
-        }
-        file_pre = {
-            path: image
-            for path, image in file_pre_images.items()
-            if path not in transfer_claim_paths
-        }
-
-        _apply_capability_targets(
+        applied = _apply_install(
             plan,
             run,
             profile=profile,
+            secret_plan=secret_plan,
+            secrets_checkpoint_paths=secrets_checkpoint_paths,
+            file_pre_images=file_pre_images,
             active_lock=active_lock,
             tracked_checkpoint_paths=tracked_checkpoint_paths,
             adapter_kinds=adapter_kinds,
@@ -2881,109 +2884,225 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             yes=yes,
             mutation_guards=mutation_guards,
         )
-        files_applied = run.deploy_outcome is not None
-        if files_applied:
-            _refresh_file_claims_checkpoint(plan, run)
-        deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome()
-        with run.checkpoint(
-            "mcp-servers",
-            operations.CheckpointKind.COMPENSATABLE,
-            adapters=(operations.AdapterKind.MCP,)
-            if operations.AdapterKind.MCP in adapter_kinds
-            else (),
-        ):
-            mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
-
-        file_post = transitions.capture_files(file_pre)
-        tree_post_images = {
-            path: transitions.snapshot_filesystem_image(path)
-            for path in tree_filesystem_paths
-        }
-        tree_filesystem_deltas = tuple(
-            transitions.FilesystemDelta(
-                path,
-                tree_pre_images[path],
-                tree_post_images[path],
-            )
-            for path in tree_filesystem_paths
-            if tree_pre_images[path] != tree_post_images[path] or path in symlink_paths
+        _record_install(
+            plan,
+            run,
+            profile=profile,
+            no_transition=no_transition,
+            ownership_transfers=applied.ownership_transfers,
+            file_pre=applied.file_pre,
+            files_applied=applied.files_applied,
+            deploy_outcome=applied.deploy_outcome,
+            mcp_delta=applied.mcp_delta,
+            state_pre=state_pre,
+            tree_filesystem_paths=tree_filesystem_paths,
+            tree_pre_images=tree_pre_images,
+            symlink_paths=symlink_paths,
         )
-
-        _emit_reconcile_summary(run.plugin_outcomes, run.ext_outcomes)
-
-        if not no_transition and not _install_recorded_nothing(
-            file_pre=file_pre,
-            file_post=file_post,
-            deploy_outcome=deploy_outcome,
-            ext_delta=run.ext_delta,
-            plugin_delta=run.plugin_delta,
-            codex_plugin_delta=run.codex_plugin_delta,
-            mcp_delta=mcp_delta,
-            reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
-            seeded=bool(run.seeded),
-            codex_base_mutated=any(
-                entry.store is transitions.SnapshotStore.BASE
-                and entry.key.startswith(("codex/config/", "codex/mcp-target/"))
-                and transitions.snapshot_store_state(
-                    entry.store, entry.profile, entry.key
-                )
-                != entry
-                for entry in state_pre
-            ),
-            filesystem_deltas=tree_filesystem_deltas,
-            ownership_transfers=ownership_transfers,
-        ):
-            with run.checkpoint(
-                "transition-record",
-                operations.CheckpointKind.REVERSIBLE,
-                restore_transitions=True,
-            ):
-                tracked_file_destinations = {}
-                if files_applied:
-                    tracked_file_destinations = {
-                        name: _ownership_destinations(tracked, destination)
-                        for tracked, name, _source, destination in plan.tracked_entries
-                    }
-                    tracked_file_destinations.update(
-                        {
-                            tree.name: (
-                                tree.destination,
-                                *(
-                                    tree.destination / entry.path
-                                    for entry in tree.plan.desired.inventory.entries
-                                ),
-                            )
-                            for tree in plan.trees
-                        }
-                    )
-                target = _write_install_transition(
-                    profile,
-                    file_pre,
-                    file_post,
-                    run.ext_delta,
-                    run.plugin_delta,
-                    codex_plugin_delta=run.codex_plugin_delta,
-                    source_dir=ctx.repo_root,
-                    reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
-                    state_snapshots=state_pre,
-                    mcp_delta=mcp_delta,
-                    filesystem_deltas=tree_filesystem_deltas,
-                    ownership_transfers=ownership_transfers,
-                    tracked_file_destinations=tracked_file_destinations,
-                )
-                typer.echo(f"transition: {target}")
-                typer.echo(f"↩  revert with: setforge revert --profile={profile}")
-
         operations.complete(run.journal)
 
-        _gate_on_mcp_failures(mcp_failed)
+        _gate_on_mcp_failures(applied.mcp_failed)
         if run.codex_plugin_failed:
             details = "; ".join(
                 f"{item}: {error}" for item, error in run.codex_plugin_failed
             )
             raise SetforgeError(f"Codex plugin reconciliation failed: {details}")
         _gate_on_provisioning_failures(list(run.provision_results))
-        _gate_on_deferred_reconcile(deploy_outcome.deferred_reconcile, interactive)
+        _gate_on_deferred_reconcile(
+            applied.deploy_outcome.deferred_reconcile, interactive
+        )
+
+
+class _AppliedInstall(NamedTuple):
+    """What the apply phase hands to the transition record and exit gates."""
+
+    ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...]
+    file_pre: dict[Path, transitions.FilesystemImage]
+    files_applied: bool
+    deploy_outcome: install_helpers_mod.DeployOutcome
+    mcp_delta: transitions.MCPDelta | None
+    mcp_failed: list[tuple[str, str]]
+
+
+def _apply_install(
+    plan: InstallPlan,
+    run: _InstallRun,
+    *,
+    profile: str,
+    secret_plan: SecretPlan,
+    secrets_checkpoint_paths: tuple[Path, ...],
+    file_pre_images: dict[Path, transitions.FilesystemImage],
+    active_lock: LockFile | None,
+    tracked_checkpoint_paths: tuple[Path, ...],
+    adapter_kinds: set[operations.AdapterKind],
+    retry_failed: bool,
+    yes: bool,
+    mutation_guards: MutationLockGuards,
+) -> _AppliedInstall:
+    """Apply the frozen plan, one journaled checkpoint per phase."""
+    cfg = plan.ctx.cfg
+    resolved = plan.ctx.resolved
+    _apply_secrets_and_bootstrap(
+        run,
+        secret_plan=secret_plan,
+        bootstrap=plan.bootstrap,
+        checkpoint_paths=secrets_checkpoint_paths,
+        target_guards=mutation_guards.targets,
+        codex_roots=frozenset(
+            item.destination.parent.absolute() for item in plan.codex_configs
+        ),
+    )
+    ownership_transfers = (
+        *_publish_adoptions_checkpoint(plan, run),
+        *_publish_file_adoptions_checkpoint(plan, run),
+    )
+
+    # For symlink-deployed tracked_files the recorded file is the
+    # symlink's TARGET (where bytes actually land); the link itself is a
+    # tree filesystem delta. Store files (byte bases, spans sidecars,
+    # scalar-base manifests) are not recorded here: their pre-install
+    # state is captured at the pass-2 barrier (state_snapshots below) and
+    # revert restores them through that mechanism. Transfer claims have an
+    # exact, generation-checked sidecar inverse, so recording those claim
+    # files too would reverse them twice.
+    transfer_claim_paths = {
+        OwnershipStore().claim_path(transfer.after.resource_id)
+        for transfer in ownership_transfers
+    }
+    file_pre = {
+        path: image
+        for path, image in file_pre_images.items()
+        if path not in transfer_claim_paths
+    }
+
+    _apply_capability_targets(
+        plan,
+        run,
+        profile=profile,
+        active_lock=active_lock,
+        tracked_checkpoint_paths=tracked_checkpoint_paths,
+        adapter_kinds=adapter_kinds,
+        retry_failed=retry_failed,
+        yes=yes,
+        mutation_guards=mutation_guards,
+    )
+    files_applied = run.deploy_outcome is not None
+    if files_applied:
+        _refresh_file_claims_checkpoint(plan, run)
+    deploy_outcome = run.deploy_outcome or install_helpers_mod.DeployOutcome()
+    with run.checkpoint(
+        "mcp-servers",
+        operations.CheckpointKind.COMPENSATABLE,
+        adapters=(operations.AdapterKind.MCP,)
+        if operations.AdapterKind.MCP in adapter_kinds
+        else (),
+    ):
+        mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved, plan=plan.mcp)
+    return _AppliedInstall(
+        ownership_transfers,
+        file_pre,
+        files_applied,
+        deploy_outcome,
+        mcp_delta,
+        mcp_failed,
+    )
+
+
+def _record_install(
+    plan: InstallPlan,
+    run: _InstallRun,
+    *,
+    profile: str,
+    no_transition: bool,
+    ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...],
+    file_pre: dict[Path, transitions.FilesystemImage],
+    files_applied: bool,
+    deploy_outcome: install_helpers_mod.DeployOutcome,
+    mcp_delta: transitions.MCPDelta | None,
+    state_pre: tuple[transitions.StateSnapshotEntry, ...],
+    tree_filesystem_paths: tuple[Path, ...],
+    tree_pre_images: dict[Path, transitions.FilesystemImage],
+    symlink_paths: frozenset[Path],
+) -> None:
+    """Write the transition record of what the applied install changed."""
+    ctx = plan.ctx
+    file_post = transitions.capture_files(file_pre)
+    tree_post_images = {
+        path: transitions.snapshot_filesystem_image(path)
+        for path in tree_filesystem_paths
+    }
+    tree_filesystem_deltas = tuple(
+        transitions.FilesystemDelta(
+            path,
+            tree_pre_images[path],
+            tree_post_images[path],
+        )
+        for path in tree_filesystem_paths
+        if tree_pre_images[path] != tree_post_images[path] or path in symlink_paths
+    )
+
+    _emit_reconcile_summary(run.plugin_outcomes, run.ext_outcomes)
+
+    if not no_transition and not _install_recorded_nothing(
+        file_pre=file_pre,
+        file_post=file_post,
+        deploy_outcome=deploy_outcome,
+        ext_delta=run.ext_delta,
+        plugin_delta=run.plugin_delta,
+        codex_plugin_delta=run.codex_plugin_delta,
+        mcp_delta=mcp_delta,
+        reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
+        seeded=bool(run.seeded),
+        codex_base_mutated=any(
+            entry.store is transitions.SnapshotStore.BASE
+            and entry.key.startswith(("codex/config/", "codex/mcp-target/"))
+            and transitions.snapshot_store_state(entry.store, entry.profile, entry.key)
+            != entry
+            for entry in state_pre
+        ),
+        filesystem_deltas=tree_filesystem_deltas,
+        ownership_transfers=ownership_transfers,
+    ):
+        with run.checkpoint(
+            "transition-record",
+            operations.CheckpointKind.REVERSIBLE,
+            restore_transitions=True,
+        ):
+            tracked_file_destinations = {}
+            if files_applied:
+                tracked_file_destinations = {
+                    name: _ownership_destinations(tracked, destination)
+                    for tracked, name, _source, destination in plan.tracked_entries
+                }
+                tracked_file_destinations.update(
+                    {
+                        tree.name: (
+                            tree.destination,
+                            *(
+                                tree.destination / entry.path
+                                for entry in tree.plan.desired.inventory.entries
+                            ),
+                        )
+                        for tree in plan.trees
+                    }
+                )
+            target = _write_install_transition(
+                profile,
+                file_pre,
+                file_post,
+                run.ext_delta,
+                run.plugin_delta,
+                codex_plugin_delta=run.codex_plugin_delta,
+                source_dir=ctx.repo_root,
+                reconcile_outcomes=run.plugin_outcomes + run.ext_outcomes,
+                state_snapshots=state_pre,
+                mcp_delta=mcp_delta,
+                filesystem_deltas=tree_filesystem_deltas,
+                ownership_transfers=ownership_transfers,
+                tracked_file_destinations=tracked_file_destinations,
+            )
+            typer.echo(f"transition: {target}")
+            typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
 
 def _gate_on_deferred_reconcile(
