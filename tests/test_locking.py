@@ -5,14 +5,20 @@ import errno
 import fcntl
 import inspect
 import os
-from collections.abc import Callable
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypedDict
 
 import pytest
+from typer.testing import CliRunner, Result
 
+from setforge import locking
+from setforge.cli import app
 from setforge.errors import SetforgeError
 from setforge.locking import (
     TargetLockRequest,
@@ -23,6 +29,8 @@ from setforge.locking import (
     target_guards,
 )
 from setforge.transitions import state_root
+from tests.conftest import FakeClaude, FakeGit, _local_clone_yaml
+from tests.shared_helpers import load_yaml
 
 
 class _MutationLockKwargs(TypedDict, total=False):
@@ -519,238 +527,187 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
     ]
 
 
-def test_live_reconcile_reloads_desired_state_inside_global_lock() -> None:
-    """Extension/plugin PRUNE state is refreshed inside serialization."""
-    from setforge.cli import ext, plugins
+def _parked_in_locking(thread: threading.Thread) -> bool:
+    """Whether ``thread`` is inside the locking module, waiting for the gate."""
+    frame = sys._current_frames().get(thread.ident or 0)
+    return frame is not None and frame.f_code.co_filename == locking.__file__
 
-    for writer in (
-        ext._run_ext_reconcile,
-        plugins._run_plugin_reconcile,
-        plugins.plugin_remove,
-        plugins.sync_cache,
+
+@contextmanager
+def _cli_waiting_for_the_lock(*args: str) -> Iterator[None]:
+    """Run ``setforge *args`` on a thread while this thread holds the writer lock.
+
+    The body runs once the command is parked in the locking module, so it has
+    already done everything it does before taking the lock. Leaving the body
+    releases the lock; the command must then finish with exit code 0.
+    """
+    results: list[Result] = []
+    thread = threading.Thread(
+        target=lambda: results.append(CliRunner().invoke(app, list(args))), daemon=True
+    )
+    try:
+        with mutation_locks():
+            thread.start()
+            deadline = time.monotonic() + 10
+            while not _parked_in_locking(thread):
+                assert thread.is_alive(), "the command finished without waiting"
+                assert time.monotonic() < deadline, "the command never reached the lock"
+                time.sleep(0.005)
+            yield
+    finally:
+        thread.join(timeout=30)
+    assert not thread.is_alive(), "the command is stuck after the lock was released"
+    assert results, "the command raised instead of exiting"
+    assert results[0].exit_code == 0, results[0].output
+
+
+_RECONCILE_CONFIG = """\
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files:
+  d: {{src: x, dst: {dst}}}
+marketplaces:
+  mp: {{source: github, repo: owner/mp}}
+claude_plugins:
+  one: {{marketplace: mp}}
+  two: {{marketplace: mp}}
+packages:
+  ext-one: {{type: extension, extension: pub.one}}
+  ext-two: {{type: extension, extension: pub.two}}
+  one: {{type: plugin, plugin: one}}
+  two: {{type: plugin, plugin: two}}
+profiles:
+  p:
+    tracked_files: [d]
+    packages: {packages}
+    reconcile:
+      extensions: {{policy: prune}}
+      plugins: {{policy: prune}}
+"""
+
+
+def _write_profile(tmp_path: Path, packages: list[str]) -> Path:
+    """Write a config whose profile ``p`` declares ``packages``."""
+    (tmp_path / "tracked").mkdir(exist_ok=True)
+    (tmp_path / "tracked" / "x").write_text("data\n", encoding="utf-8")
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        _RECONCILE_CONFIG.format(dst=tmp_path / "live", packages=packages),
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_extension_prune_reads_the_profile_as_it_is_after_the_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A waiting PRUNE must not uninstall what the lock holder just declared."""
+    cfg = _write_profile(tmp_path, ["ext-one"])
+    installed = {"pub.one", "pub.two"}
+
+    def fake_code(
+        args: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if args[1] == "--list-extensions":
+            return subprocess.CompletedProcess(args, 0, "\n".join(installed) + "\n", "")
+        if args[1] == "--uninstall-extension":
+            installed.discard(args[2])
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+    )
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_code)
+
+    with _cli_waiting_for_the_lock(
+        "ext", "reconcile", "--profile=p", f"--config={cfg}"
     ):
-        locked_loads = [
-            call
-            for node, calls in _with_entries(inspect.getsource(writer))
-            if _LOCK_ENTRIES.intersection(_names(calls))
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "load_config"
-        ]
-        assert locked_loads, f"{writer.__name__} does not reload under lock"
+        assert installed == {"pub.one", "pub.two"}
+        _write_profile(tmp_path, ["ext-one", "ext-two"])
+
+    assert installed == {"pub.one", "pub.two"}
 
 
-@pytest.mark.parametrize("adapter_name", ["ext", "plugin"])
-def test_live_reconcile_waits_for_lock_before_reloading(
-    adapter_name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_plugin_prune_reads_the_profile_as_it_is_after_the_wait(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
 ) -> None:
-    """The post-wait desired-state load runs while serialization is held."""
-    from setforge.cli import ext, plugins
-    from setforge.config import Config, Extensions, ReconcilePolicy, ResolvedProfile
+    """A waiting plugin PRUNE must not disable what the lock holder declared."""
+    cfg = _write_profile(tmp_path, ["one"])
+    claude = fake_claude(
+        marketplaces=[{"name": "mp", "source": "owner/mp"}],
+        plugins=[
+            {"id": "one@mp", "enabled": True, "scope": "user"},
+            {"id": "two@mp", "enabled": True, "scope": "user"},
+        ],
+    )
 
-    held = False
-    loads: list[bool] = []
+    with _cli_waiting_for_the_lock(
+        "plugin", "reconcile", "--profile=p", f"--config={cfg}", "--yes"
+    ):
+        assert claude.disable_args() == []
+        _write_profile(tmp_path, ["one", "two"])
 
-    @contextmanager
-    def recording_lock(**_kwargs: object):
-        nonlocal held
-        held = True
-        try:
-            yield
-        finally:
-            held = False
-
-    cfg = Config.model_construct()
-    resolved = ResolvedProfile()
-
-    def locked_load(_path: Path) -> Config:
-        loads.append(held)
-        return cfg
-
-    if adapter_name == "ext":
-        monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-        monkeypatch.setattr(ext, "load_config", locked_load)
-        monkeypatch.setattr(
-            ext,
-            "resolve_effective_profile",
-            lambda *_args: SimpleNamespace(resolved=resolved),
-        )
-        monkeypatch.setattr(
-            ext.vscode_extensions,
-            "reconcile",
-            lambda *_args, **_kwargs: object(),
-        )
-        ext._run_ext_reconcile(
-            tmp_path / "setforge.yaml",
-            "p",
-            tmp_path,
-            Extensions(reconcile=ReconcilePolicy.PRUNE),
-            dry_run=False,
-        )
-    else:
-        monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-        monkeypatch.setattr(plugins, "load_config", locked_load)
-        monkeypatch.setattr(
-            plugins,
-            "resolve_effective_profile",
-            lambda *_args: SimpleNamespace(resolved=resolved),
-        )
-        monkeypatch.setattr(
-            plugins.reconcile_adapter, "plugin_ids", lambda *_args: set()
-        )
-        monkeypatch.setattr(
-            plugins.claude_plugins_mod,
-            "reconcile",
-            lambda *_args, **_kwargs: object(),
-        )
-        plugins._run_plugin_reconcile(
-            tmp_path / "setforge.yaml",
-            "p",
-            tmp_path,
-            cfg,
-            resolved,
-            ReconcilePolicy.PRUNE,
-            dry_run=False,
-            auto=True,
-        )
-
-    assert loads == [True]
+    assert claude.disable_args() == []
+    assert all(plugin["enabled"] for plugin in claude.installed_state().values())
 
 
-def test_extension_remove_edits_desired_state_inside_global_lock(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_extension_remove_waits_for_the_lock_and_keeps_edits_made_meanwhile(
+    tmp_path: Path,
 ) -> None:
-    from setforge.cli import ext
+    cfg = _write_profile(tmp_path, ["ext-one"])
+    before = cfg.read_text(encoding="utf-8")
 
-    held = False
-    edits: list[bool] = []
+    with _cli_waiting_for_the_lock(
+        "ext", "remove", "pub.one", "--profile=p", f"--config={cfg}", "--exclude"
+    ):
+        assert cfg.read_text(encoding="utf-8") == before
+        cfg.write_text(before + "# edited while the command waited\n", encoding="utf-8")
 
-    @contextmanager
-    def recording_lock(**_kwargs: object):
-        nonlocal held
-        held = True
-        try:
-            yield
-        finally:
-            held = False
+    assert "# edited while the command waited" in cfg.read_text(encoding="utf-8")
+    assert load_yaml(cfg)["profiles"]["p"]["packages"] == []
 
-    def guarded_remove(*_args: object, **_kwargs: object) -> bool:
-        edits.append(held)
-        return True
 
-    monkeypatch.setattr(ext, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-    monkeypatch.setattr(ext.vscode_extensions, "remove_from_include", guarded_remove)
-
-    ext.ext_remove(
-        extension_id="pub.ext",
-        profile="profile",
-        config=tmp_path / "setforge.yaml",
-        exclude=True,
+def test_plugin_remove_disables_the_id_the_config_names_after_the_wait(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    cfg = _write_profile(tmp_path, ["one"])
+    claude = fake_claude(
+        marketplaces=[{"name": "mp", "source": "owner/mp"}],
+        plugins=[{"id": "one@mp", "enabled": True, "scope": "user"}],
     )
 
-    assert edits == [True]
-
-
-def test_plugin_remove_resolves_disable_id_from_post_wait_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from setforge.cli import plugins
-
-    held = False
-    disabled: list[str] = []
-
-    @contextmanager
-    def recording_lock(**_kwargs: object):
-        nonlocal held
-        held = True
-        try:
-            yield
-        finally:
-            held = False
-
-    def locked_load(_path: Path):
-        assert held
-        return SimpleNamespace(
-            claude_plugins={"p": SimpleNamespace(marketplace="post-wait")}
+    with _cli_waiting_for_the_lock(
+        "plugin", "remove", "one", "--disable", "--profile=p", f"--config={cfg}"
+    ):
+        assert claude.disable_args() == []
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace(
+                "one: {marketplace: mp}", "one: {marketplace: moved}"
+            ),
+            encoding="utf-8",
         )
 
-    monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-    monkeypatch.setattr(plugins, "load_config", locked_load)
-    monkeypatch.setattr(
-        plugins.claude_yaml_editor_mod,
-        "yaml_remove_plugin_from_profile",
-        lambda *_args: True,
-    )
-    monkeypatch.setattr(
-        plugins.claude_plugins_mod,
-        "plugin_disable",
-        lambda plugin_id: disabled.append(plugin_id),
-    )
-
-    plugins.plugin_remove(
-        name="p",
-        profile="profile",
-        config=tmp_path / "setforge.yaml",
-        disable=True,
-    )
-
-    assert disabled == ["p@post-wait"]
+    assert claude.disable_args() == ["one@moved"]
 
 
-def test_sync_cache_resolves_marketplaces_after_wait(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_sync_cache_clones_the_marketplaces_declared_after_the_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_git: Callable[..., FakeGit]
 ) -> None:
-    from setforge.cli import plugins
-    from setforge.config import ClaudeInstallMode
+    _local_clone_yaml(tmp_path, monkeypatch)
+    git = fake_git(known_repos={"owner/mp", "owner/moved"})
+    cfg = _write_profile(tmp_path, ["one"])
 
-    held = False
-    synced: list[object] = []
-    cfg = object()
-    resolved = object()
+    with _cli_waiting_for_the_lock(
+        "plugin", "sync-cache", "--profile=p", f"--config={cfg}"
+    ):
+        assert git.cloned == {}
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace("owner/mp", "owner/moved"),
+            encoding="utf-8",
+        )
 
-    @contextmanager
-    def recording_lock(**_kwargs: object):
-        nonlocal held
-        held = True
-        try:
-            yield
-        finally:
-            held = False
-
-    def locked_load(_path: Path):
-        assert held
-        return cfg
-
-    def locked_sync(seen_cfg: object, seen_resolved: object):
-        assert held
-        synced.extend((seen_cfg, seen_resolved))
-        return []
-
-    monkeypatch.setattr(plugins, "_resolve_config_arg", lambda path: path)
-    monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-    monkeypatch.setattr(plugins, "load_config", locked_load)
-    monkeypatch.setattr(
-        plugins.binaries,
-        "load_host_local_config",
-        lambda: SimpleNamespace(
-            claude=SimpleNamespace(install_mode=ClaudeInstallMode.LOCAL_CLONE)
-        ),
-    )
-    monkeypatch.setattr(
-        plugins,
-        "resolve_effective_profile",
-        lambda *_args: SimpleNamespace(resolved=resolved),
-    )
-    monkeypatch.setattr(
-        plugins.claude_mp_cache_mod, "sync_marketplace_cache", locked_sync
-    )
-
-    plugins.sync_cache(profile="profile", config=tmp_path / "setforge.yaml")
-
-    assert synced == [cfg, resolved]
+    assert set(git.cloned.values()) == {"https://github.com/owner/moved"}
 
 
 def _held_elsewhere(lock_path: Path) -> bool:
@@ -823,23 +780,14 @@ def test_direct_lock_order_inversion_refuses() -> None:
         pass
 
 
-def test_mutation_locks_acquire_multiple_profiles_in_sorted_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    acquired: list[str] = []
-
-    @contextmanager
-    def recording_profile(profile: str, timeout: float | None = None):
-        del timeout
-        acquired.append(profile)
-        yield
-
-    monkeypatch.setattr("setforge.locking.profile_lock", recording_profile)
-
+def test_mutation_locks_hold_every_requested_profile_once() -> None:
+    """Unordered and repeated profile names are accepted and each is locked."""
     with mutation_locks(profiles=("z", "a", "z")):
-        pass
+        assert _held_elsewhere(_profile_lock_path("a"))
+        assert _held_elsewhere(_profile_lock_path("z"))
 
-    assert acquired == ["a", "z"]
+    assert not _held_elsewhere(_profile_lock_path("a"))
+    assert not _held_elsewhere(_profile_lock_path("z"))
 
 
 def test_duplicate_rank_refuses_before_self_deadlock(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import uuid
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from setforge.ownership_history import (
     OwnershipHistoryStore,
     ownership_operation_profile,
 )
-from tests.shared_helpers import legacy_crash_log
+from tests.shared_helpers import at_record_write, crash, legacy_crash_log
 
 
 def _claim(store: OwnershipStore, owner_id: uuid.UUID) -> OwnershipClaim:
@@ -181,35 +182,36 @@ def test_authority_grant_is_revalidated_after_the_journal_is_published(
     assert operations.active(ownership_operation_profile(owner_id)) is None
 
 
-def test_failed_release_is_undone_and_can_be_repeated(
+def test_release_failing_at_any_write_is_undone_and_can_be_repeated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ledger = OwnershipStore(tmp_path / "ledger")
-    history = OwnershipHistoryStore(tmp_path / "history")
-    owner_id = uuid.uuid4()
-    claimed = _claim(ledger, owner_id)
-    claim_bytes = ledger.claim_path(claimed.resource_id).read_bytes()
-    original = OwnershipHistoryStore._commit_transition
+    for step in itertools.count(1):
+        ledger = OwnershipStore(tmp_path / f"ledger-{step}")
+        history = OwnershipHistoryStore(tmp_path / f"history-{step}")
+        owner_id = uuid.uuid4()
+        claimed = _claim(ledger, owner_id)
+        claim_id = ledger.claim_id(claimed.resource_id)
+        claim_bytes = ledger.claim_path(claimed.resource_id).read_bytes()
 
-    def _fail(self: OwnershipHistoryStore, transition: object) -> None:
-        raise RuntimeError("injected failure after tombstone")
+        try:
+            with (
+                at_record_write(monkeypatch, step, before=crash),
+                mutation_locks(resources=True),
+            ):
+                history.release_locked(ledger, owner_id, claim_id)
+        except OSError:
+            assert ledger.claim_path(claimed.resource_id).read_bytes() == claim_bytes
+            assert history.list(owner_id) == ()
+            assert history.pending(owner_id) == ()
+            assert not (history.root / str(owner_id) / "pending").exists()
+            assert operations.active(ownership_operation_profile(owner_id)) is None
 
-    monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", _fail)
-    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="injected"):
-        history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
-
-    assert ledger.claim_path(claimed.resource_id).read_bytes() == claim_bytes
-    assert history.list(owner_id) == ()
-    assert history.pending(owner_id) == ()
-    assert not (history.root / str(owner_id) / "pending").exists()
-    assert operations.active(ownership_operation_profile(owner_id)) is None
-
-    monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", original)
-    with mutation_locks(resources=True):
-        repeated = history.release_locked(
-            ledger, owner_id, ledger.claim_id(claimed.resource_id)
-        )
-    assert history.list(owner_id) == (repeated,)
+            with mutation_locks(resources=True):
+                repeated = history.release_locked(ledger, owner_id, claim_id)
+            assert history.list(owner_id) == (repeated,)
+        else:
+            assert step > 1, "the release made no write the test could interrupt"
+            return
 
 
 @pytest.mark.parametrize("claim_mutated", [True, False])
