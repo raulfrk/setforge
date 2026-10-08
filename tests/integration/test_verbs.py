@@ -236,8 +236,11 @@ class TestInstall:
     ) -> None:
         env = integration_env()
         assert env.run_verb(["install"]).exit_code == 0
+        live = env.live(".setforge_it/text/note.txt")
+        first_content = live.read_bytes()
         second = env.run_verb(["install"])
         assert second.exit_code == 0, second.output
+        assert live.read_bytes() == first_content
 
     def test_dirty_source_refuses(
         self,

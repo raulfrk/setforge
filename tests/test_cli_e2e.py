@@ -34,7 +34,9 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
+from setforge import paths
 from setforge.cli import app
+from setforge.transitions import transitions_root
 
 # Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
 # fixture can forward non-code, non-claude invocations (e.g. ``git``)
@@ -248,6 +250,11 @@ def _invoke(args: list[str]) -> Result:
     return CliRunner().invoke(app, args)
 
 
+def _transition_dirs() -> set[str]:
+    root = transitions_root()
+    return {p.name for p in root.iterdir() if p.is_dir()} if root.exists() else set()
+
+
 # ---------------------------------------------------------------------------
 # install — exercises one variant per major tracked_file mechanism
 # ---------------------------------------------------------------------------
@@ -301,6 +308,7 @@ class TestInstall:
         live = sandboxed_home / ".setforge_e2e" / "sections" / "marked.md"
         tracked = fixture_repo.parent / "tracked" / "sections" / "marked.md"
         assert live.read_text() == tracked.read_text()
+        assert "setforge:user-section" not in live.read_text()
 
     def test_json_byte_copy(
         self,
@@ -406,6 +414,44 @@ class TestInstall:
         assert (root / "bootstrap-grand.txt").exists()
         assert (root / "bootstrap-base.txt").exists()
         assert (root / "bootstrap-child.txt").exists()
+
+    @pytest.mark.parametrize("edit_live", [True, False], ids=["live-edit", "no-drift"])
+    @pytest.mark.parametrize("with_yes", [True, False], ids=["yes", "no-yes"])
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            "--auto-accept-tracked",
+            "--auto-accept-live",
+            "--auto=use-tracked",
+            "--auto=keep-live",
+        ],
+    )
+    def test_auto_flags_leave_a_live_only_edit_alone_without_a_prompt(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        no_code_bin: None,
+        no_claude_bin: None,
+        flag: str,
+        with_yes: bool,
+        edit_live: bool,
+    ) -> None:
+        """A live-only edit (or no drift) is a clean no-op under every
+        confirmation flag: exit 0 on a non-TTY with or without ``--yes``,
+        the live content survives, and no revert hint is printed."""
+        args = ["install", "--profile=test-jsonc-shallow", f"--config={fixture_repo}"]
+        assert _invoke(args).exit_code == 0
+        live = sandboxed_home / ".setforge_e2e" / "jsonc" / "shallow.json"
+        if edit_live:
+            live.write_text('{"unexpected_new_key": 1}\n')
+        expected = live.read_text()
+
+        result = _invoke([*args, flag, *(["--yes"] if with_yes else [])])
+
+        assert result.exit_code == 0, result.output
+        assert live.read_text() == expected
+        assert "noop" in result.output
+        assert "revert with" not in result.output
 
     def test_comprehensive_tracked_files_only(
         self,
@@ -544,6 +590,7 @@ class TestSync:
             ]
         )
         assert synced.exit_code == 0, synced.output
+        assert "revert with: setforge revert --profile=test-minimal" in synced.output
         tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
         assert "updated locally" in tracked.read_text()
 
@@ -691,6 +738,51 @@ class TestCompare:
         assert len(fc.calls) == claude_calls_after_install
         assert len(fk.calls) == code_calls_after_install
 
+    def test_compare_renders_local_overlay_provenance(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        no_code_bin: None,
+        no_claude_bin: None,
+    ) -> None:
+        """A host-local overlay shows up in ``compare`` with the
+        ``[from local.yaml]`` tag on adds, the U+2212 remove tag on removes,
+        and a footer carrying the per-axis counts."""
+        paths.local_config_path().write_text(
+            "plugins:\n"
+            "  add:\n"
+            "    - some-extra@claude-plugins-official\n"
+            "  remove:\n"
+            "    - superpowers\n"
+            "extensions:\n"
+            "  add:\n"
+            "    - ms-toolsai.jupyter\n"
+            "  remove:\n"
+            "    - editorconfig.editorconfig\n"
+            "marketplaces:\n"
+            "  add:\n"
+            "    work-internal:\n"
+            "      source: github\n"
+            "      repo: work-corp/claude-plugins\n",
+            encoding="utf-8",
+        )
+
+        result = _invoke(
+            ["compare", "--profile=test-comprehensive", f"--config={fixture_repo}"]
+        )
+
+        assert result.exit_code == 0, result.output
+        minus = chr(0x2212)
+        remove_tag = f"[{minus} removed via local.yaml]"
+        assert "some-extra@claude-plugins-official [from local.yaml]" in result.output
+        assert "ms-toolsai.jupyter [from local.yaml]" in result.output
+        assert f"{minus} superpowers {remove_tag}" in result.output
+        assert f"{minus} editorconfig.editorconfig {remove_tag}" in result.output
+        assert (
+            f"[Host overlay summary: plugins 1+/1{minus}; "
+            f"extensions 1+/1{minus}; marketplaces 1+/0{minus} via local.yaml]"
+        ) in result.output
+
 
 # ---------------------------------------------------------------------------
 # revert — undoes most recent install/sync
@@ -722,6 +814,11 @@ class TestRevert:
         assert reverted.exit_code == 0, reverted.output
         # Revert removes the file (it was created from absence on install).
         assert not live.exists()
+        # ... and records its own reverse transition.
+        assert any(
+            "revert-test-minimal" in entry.name
+            for entry in transitions_root().iterdir()
+        )
 
     def test_revert_uninstalls_extension_via_fake_code(
         self,
@@ -762,6 +859,73 @@ class TestRevert:
         # revert inverts that into an uninstall call.
         assert fk.uninstall_args() == ["editorconfig.editorconfig"]
         assert fk.installed_set() == set()
+
+    @pytest.mark.parametrize(
+        ("profile", "deployed"),
+        [
+            pytest.param(
+                "test-prose-reviewers",
+                [
+                    (".claude/agents/python-prose-reviewer.md", "claude/agents"),
+                    (".claude/agents/claude-md-prose-reviewer.md", "claude/agents"),
+                    (".claude/agents/markdown-prose-reviewer.md", "claude/agents"),
+                    (
+                        ".claude/skills/reviewing-markdown/SKILL.md",
+                        "claude/skills/reviewing-markdown",
+                    ),
+                ],
+                id="prose-reviewers",
+            ),
+            pytest.param(
+                "test-workflows",
+                [(".claude/workflows/example-impl.js", "claude/workflows")],
+                id="workflows",
+            ),
+        ],
+    )
+    def test_new_artifact_install_compare_revert_lifecycle(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        no_code_bin: None,
+        no_claude_bin: None,
+        profile: str,
+        deployed: list[tuple[str, str]],
+    ) -> None:
+        """Net-new ``~/.claude`` artifacts (agents, a skill, a workflow) deploy
+        byte-identical into parent directories that did not exist, compare
+        clean, survive a ``--auto=keep-tracked`` sync untouched, and are
+        removed again by ``revert``."""
+        tracked_root = fixture_repo.parent / "tracked"
+        pairs = [
+            (
+                sandboxed_home / live_rel,
+                tracked_root / tracked_dir / Path(live_rel).name,
+            )
+            for live_rel, tracked_dir in deployed
+        ]
+        tracked_before = {tracked: tracked.read_bytes() for _, tracked in pairs}
+        args = [f"--profile={profile}", f"--config={fixture_repo}"]
+
+        installed = _invoke(["install", *args])
+        assert installed.exit_code == 0, installed.output
+        for live, tracked in pairs:
+            assert live.read_bytes() == tracked_before[tracked], live
+
+        compared = _invoke(["compare", *args, "--check"])
+        assert compared.exit_code == 0, compared.output
+
+        transitions_before = _transition_dirs()
+        synced = _invoke(["sync", *args, "--auto=keep-tracked", "--yes"])
+        assert synced.exit_code == 0, synced.output
+        for tracked, before in tracked_before.items():
+            assert tracked.read_bytes() == before, tracked
+        assert _transition_dirs() == transitions_before
+
+        reverted = _invoke(["revert", *args, "--yes"])
+        assert reverted.exit_code == 0, reverted.output
+        for live, _ in pairs:
+            assert not live.exists(), live
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +975,43 @@ class TestValidate:
             ]
         )
         assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize(
+        ("local_body", "phrases"),
+        [
+            pytest.param(
+                "plugins:\n  add:\n    - superpowers\n  remove:\n    - superpowers\n",
+                ("in both add and remove", "'superpowers'"),
+                id="add-remove-collision",
+            ),
+            pytest.param(
+                "plugins:\n  remove:\n    - never-was-there\n",
+                ("not in profile-resolved set", "'never-was-there'"),
+                id="remove-not-in-profile",
+            ),
+            pytest.param(
+                "plugins:\n  add:\n    - leaked-tool@undefined-mp\n",
+                ("'leaked-tool'", "'undefined-mp'", "Available marketplaces"),
+                id="undefined-marketplace",
+            ),
+        ],
+    )
+    def test_validate_rejects_invalid_local_overlay(
+        self, fixture_repo: Path, local_body: str, phrases: tuple[str, ...]
+    ) -> None:
+        paths.local_config_path().write_text(local_body, encoding="utf-8")
+
+        result = _invoke(
+            [
+                "validate",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+
+        assert result.exit_code != 0, result.output
+        for phrase in phrases:
+            assert phrase in result.output, result.output
 
 
 # ---------------------------------------------------------------------------
