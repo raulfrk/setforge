@@ -59,7 +59,7 @@ from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fie
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.reconcile import file_id
 from setforge.reconcile import store as reconcile_store
-from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.host_local_view import host_local_headings_from_store
 from setforge.source import load_local_host_local_sections
 
 if TYPE_CHECKING:
@@ -444,8 +444,7 @@ def _fold_sections(fold: _SectionFold) -> None:
        with the install-time template seed so the two mint identically.
     """
     profile, fid = fold.profile, fold.fid
-    proj = host_local_sections_from_store(profile, fid)
-    already_headings = set(proj.get(str(fid), {}))
+    already_headings = host_local_headings_from_store(profile, fid)
 
     residual: list[tuple[str, str, Anchor]] = []
     for section in fold.sections.values():

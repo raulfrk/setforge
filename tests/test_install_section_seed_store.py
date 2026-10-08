@@ -11,7 +11,10 @@ These tests pin that behavior end-to-end through the ``install`` CLI:
 - fresh install records a LOCAL store unit carrying the template body and
   writes NOTHING to ``local.yaml``;
 - a second install does not reseed (gate reads the store) and deploys the
-  seeded host-local body into the live file.
+  seeded host-local body into the live file;
+- a section the user deleted from the live file is seeded again when the same
+  install also advances the merge base (the gate follows the recorded
+  base/local diff, so the stale store row no longer counts).
 """
 
 from __future__ import annotations
@@ -23,7 +26,8 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.host_local_view import host_local_headings_from_store
+from setforge.reconcile.types import file_id
 
 _PROFILE = "seed-test"
 
@@ -120,12 +124,9 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
     assert result.exit_code == 0, result.output
     assert "seeded host-local section template(s): python-conventions" in result.output
 
-    proj = host_local_sections_from_store(_PROFILE)
-    sections = proj.get("doc", {})
-    assert len(sections) == 1, proj
-    (section,) = sections.values()
-    assert section.body is not None
-    assert "SEEDED PYTHON CONVENTIONS" in section.body
+    assert host_local_headings_from_store(_PROFILE, file_id("doc")) == {
+        "## Python conventions"
+    }
 
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
     assert "SEEDED PYTHON CONVENTIONS" in deployed
@@ -174,8 +175,35 @@ def test_second_install_does_not_reseed_and_deploys_host_local(
     second = _invoke(config)
     assert second.exit_code == 0, second.output
     assert "seeded host-local section template(s)" not in second.output
-    proj = host_local_sections_from_store(_PROFILE)
-    assert len(proj.get("doc", {})) == 1, proj
+    assert host_local_headings_from_store(_PROFILE, file_id("doc")) == {
+        "## Python conventions"
+    }
 
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
+    assert "SEEDED PYTHON CONVENTIONS" in deployed
+
+
+def test_deleted_seeded_section_is_seeded_again_when_upstream_changes(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Pins today's seed-once rule for a stale store row: the user deletes the
+    seeded section from the live file and an unrelated tracked line changes, so
+    the install advances the merge base and keeps the old row. The gate re-diffs
+    the recorded base against the recorded local, finds no section there, and
+    seeds the template again."""
+    config = _write_config(repo)
+    first = _invoke(config)
+    assert first.exit_code == 0, first.output
+
+    _dst(tmp_path).write_text(_DOC, encoding="utf-8")
+    (repo / "tracked" / "doc.md").write_text(
+        _DOC.replace("upstream notes body", "upstream notes body v2"),
+        encoding="utf-8",
+    )
+
+    second = _invoke(config)
+    assert second.exit_code == 0, second.output
+    assert "seeded host-local section template(s): python-conventions" in second.output
+    deployed = _dst(tmp_path).read_text(encoding="utf-8")
+    assert "upstream notes body v2" in deployed
     assert "SEEDED PYTHON CONVENTIONS" in deployed

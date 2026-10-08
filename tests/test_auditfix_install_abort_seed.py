@@ -20,7 +20,8 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.host_local_view import host_local_headings_from_store
+from setforge.reconcile.types import file_id
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 
 _PROFILE = "seed-test"
@@ -75,8 +76,8 @@ def _write_config(repo: Path, *, src: str = "doc.md") -> Path:
 
 
 def _seeded_in_store() -> bool:
-    """True when the profile's reconcile store projects any host-local section."""
-    return bool(host_local_sections_from_store(_PROFILE))
+    """True when the reconcile store holds a host-local section for ``doc``."""
+    return bool(host_local_headings_from_store(_PROFILE, file_id("doc")))
 
 
 def _finding() -> SecretFinding:
