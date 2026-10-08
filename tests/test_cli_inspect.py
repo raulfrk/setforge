@@ -447,6 +447,26 @@ def test_inspect_header_keeps_long_path_unbroken_when_piped(
 
 
 _P = "p"
+_STRUCTURED = {
+    "json": (
+        "cfg.json",
+        b'{\n  "a": 1,\n  "b": 2\n}\n',
+        b'{\n  "a": 3,\n  "b": 2\n}\n',
+        b'{\n  "a": 1,\n  "b": 4\n}\n',
+    ),
+    "json-with-comments": (
+        "cfg.json",
+        b'{\n  // keep me\n  "a": 1,\n  "b": 2\n}\n',
+        b'{\n  // keep me\n  "a": 3,\n  "b": 2\n}\n',
+        b'{\n  // keep me\n  "a": 1,\n  "b": 4\n}\n',
+    ),
+    "yaml": (
+        "cfg.yaml",
+        b"a: 1\nb: 2\n",
+        b"a: 3\nb: 2\n",
+        b"a: 1\nb: 4\n",
+    ),
+}
 
 
 def _installed(
@@ -488,6 +508,49 @@ def _files(root: Path) -> dict[str, bytes]:
         for p in sorted(root.rglob("*"))
         if p.is_file()
     }
+
+
+@pytest.mark.parametrize("kind", sorted(_STRUCTURED))
+def test_inspect_previews_what_install_merges_for_independent_keys(
+    config_repo: ConfigRepo, tmp_path: Path, kind: str
+) -> None:
+    name, base, live_body, tracked_body = _STRUCTURED[kind]
+    config, live, tracked = _installed(config_repo, name, base)
+    live.write_bytes(live_body)
+    tracked.write_bytes(tracked_body)
+    before = _files(tmp_path)
+
+    data = _inspect(config)
+
+    assert _files(tmp_path) == before
+    assert data["index"]["conflict"] == []
+    assert data["errors"] == []
+    assert "<<<<<<<" not in data["panes"]["merge"]
+    install = _run("install", config)
+    assert install.exit_code == 0, install.output
+    assert live.read_bytes() == data["panes"]["merge"].encode()
+    merged = live.read_bytes()
+    assert b"3" in merged
+    assert b"4" in merged
+
+
+@pytest.mark.parametrize("kind", sorted(_STRUCTURED))
+def test_inspect_still_reports_a_real_same_key_conflict(
+    config_repo: ConfigRepo, tmp_path: Path, kind: str
+) -> None:
+    name, base, live_body, _ = _STRUCTURED[kind]
+    config, live, tracked = _installed(config_repo, name, base)
+    live.write_bytes(live_body)
+    tracked.write_bytes(live_body.replace(b"3", b"5"))
+    before = _files(tmp_path)
+
+    data = _inspect(config)
+
+    assert _files(tmp_path) == before
+    assert data["index"]["conflict"]
+    assert "<<<<<<<" in data["panes"]["merge"]
+    _run("install", config)
+    assert live.read_bytes() == live_body
 
 
 @pytest.mark.parametrize("live_after", [None, b""], ids=["deleted", "emptied"])

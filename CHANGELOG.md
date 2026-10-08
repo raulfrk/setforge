@@ -157,6 +157,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   live file as missing, in the header and as an empty live pane in the JSON
   output. It used to show the copy recorded at the last install as if it were
   still on disk, so it looked like the next `install` would restore the file.
+- `setforge inspect` no longer reports a conflict for a YAML or JSON file when
+  you changed one key and the tracked copy changed a different key. It now shows
+  the combined file that `install` writes, with comments kept, instead of
+  conflict markers for edits that `install` merges without asking. A real
+  conflict, where both sides changed the same key, is still shown.
 
 ### Removed
 
