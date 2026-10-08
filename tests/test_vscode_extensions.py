@@ -62,6 +62,28 @@ def test_list_installed_parses_lines(fake_code) -> None:
     assert list_installed() == {"a.x", "b.y", "c.z"}
 
 
+@pytest.mark.parametrize("argv", [["git", "status"], ["claude", "plugin", "list"]])
+def test_fake_code_rejects_non_code_argv_by_default(fake_code, argv: list[str]) -> None:
+    fake = fake_code([])
+
+    with pytest.raises(AssertionError, match="unexpected non-code invocation"):
+        subprocess.run(argv, check=False)
+
+    assert fake.calls == []
+
+
+def test_fake_code_runs_only_the_binaries_a_test_opts_into(fake_code) -> None:
+    fake = fake_code([], real_binaries=("git",))
+    forwarded: list[list[str]] = []
+    fake.real_run = lambda args, **kwargs: forwarded.append(list(args))
+
+    subprocess.run(["git", "status"], check=False)
+    with pytest.raises(AssertionError, match="unexpected non-code invocation"):
+        subprocess.run(["claude", "plugin", "list"], check=False)
+
+    assert forwarded == [["git", "status"]]
+
+
 def test_apply_plan_does_not_relist_or_replan(fake_code) -> None:
     fake = fake_code([])
     plan = vscode_extensions.plan_reconcile(

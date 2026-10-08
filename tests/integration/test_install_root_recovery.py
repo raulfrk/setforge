@@ -452,11 +452,21 @@ def _manifest(directory: Path) -> dict[str, tuple[int, int, bytes | str | None]]
 
 
 @pytest.mark.parametrize(
-    ("point", "replaced"),
-    [("after", False), ("bound", False), ("tree", False), ("tree", True)],
+    ("point", "replaced", "retargeted"),
+    [
+        ("after", False, False),
+        ("bound", False, False),
+        ("tree", False, False),
+        ("tree", True, False),
+        ("tree", False, True),
+    ],
 )
 def test_install_below_symlinked_home_recovers_only_its_absent_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: str, replaced: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    point: str,
+    replaced: bool,
+    retargeted: bool,
 ) -> None:
     config, _live, repo, env = _fixture(tmp_path, monkeypatch, symlinked_home=True)
     home = tmp_path / "home"
@@ -499,6 +509,24 @@ def test_install_below_symlinked_home_recovers_only_its_absent_destination(
         assert operations.active("p") is not None
         shutil.rmtree(real / ".claude")
         created.rename(real / ".claude")
+
+    if retargeted:
+        # The journal lives under $HOME/.cache, so carry it to the new target;
+        # otherwise recover reports no operation and never looks at the paths.
+        shutil.copytree(real / ".cache/setforge", outside / ".cache/setforge")
+        home.unlink()
+        home.symlink_to(outside, target_is_directory=True)
+        assert (home / ".claude/tree/item").read_bytes() == b"bystander\n"
+        assert operations.active("p") is not None
+        refused = _recover(repo, env)
+        assert refused.returncode == 1, (refused.stdout, refused.stderr)
+        assert "alias changed before recovery" in refused.stderr
+        assert "Traceback" not in refused.stderr
+        assert _manifest(outside) == before[1]
+        assert (real / ".claude/tree/item").read_bytes() == b"tree\n"
+        assert operations.active("p") is not None
+        home.unlink()
+        home.symlink_to(real, target_is_directory=True)
 
     recovered = _recover(repo, env)
 

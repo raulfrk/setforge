@@ -57,6 +57,19 @@ def test_suggest_close_match_half_similar_word_returns_none() -> None:
     assert suggest_close_match("abcdef", ["abcxyz"]) is None
 
 
+def test_suggest_close_match_just_under_the_cutoff_returns_none() -> None:
+    # 'abcde' vs 'abcxy' share three of five characters (ratio 0.6, cutoff 0.66).
+    assert suggest_close_match("abcde", ["abcxy"]) is None
+
+
+def test_suggest_close_match_long_key_several_edits_away_returns_candidate() -> None:
+    # 'trakd_flz' is four edits from 'tracked_files' yet still scores 0.727.
+    assert (
+        suggest_close_match("trakd_flz", ["tracked_files", "profiles", "version"])
+        == "tracked_files"
+    )
+
+
 def test_suggest_close_match_empty_candidates_returns_none() -> None:
     assert suggest_close_match("anything", []) is None
 

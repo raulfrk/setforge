@@ -129,18 +129,22 @@ def init_git_repo(git_template: Path) -> Callable[[Path], Path]:
 
 @pytest.fixture
 def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
-    """Return ``factory(installed=())`` that wires a :class:`FakeCode` in.
+    """Return ``factory(installed=(), *, real_binaries=())`` wiring a :class:`FakeCode`.
 
     ``code`` resolves to a fake path and ``subprocess.run`` in
-    ``setforge.vscode_extensions`` is the fake. ``claude`` argv goes to whatever
-    ``subprocess.run`` was bound when the factory ran (a co-resident
-    ``fake_claude``); other argv goes to the real ``subprocess.run``.
+    ``setforge.vscode_extensions`` is the fake. It fails closed: ``claude`` argv
+    reaches a co-resident ``fake_claude`` only when that fixture was built
+    first, and any other argv raises unless its binary name is in
+    ``real_binaries`` (for example ``("git",)``), which runs it for real.
     """
 
-    def factory(installed: Iterable[str] = ()) -> FakeCode:
+    def factory(
+        installed: Iterable[str] = (), *, real_binaries: Iterable[str] = ()
+    ) -> FakeCode:
         fake = FakeCode(installed)
-        fake.delegate = subprocess.run
-        fake.real_run = REAL_SUBPROCESS_RUN
+        if subprocess.run is not REAL_SUBPROCESS_RUN:
+            fake.delegate = subprocess.run
+        fake.real_binaries = frozenset(real_binaries)
         monkeypatch.setattr(
             "setforge.vscode_extensions.resolve_binary",
             lambda name: Path("/usr/bin/code") if name == "code" else None,

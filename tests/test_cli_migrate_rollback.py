@@ -429,6 +429,8 @@ class _FailAfterApply:
 
 
 def _state_files(state: Path) -> dict[str, bytes]:
+    # Migration steps leave ``<file>.pre-<to_version>.bak`` backups beside the
+    # state files they rewrite (``migrations/_fs_ops.py``); rollback keeps them.
     return {
         str(path.relative_to(state)): path.read_bytes()
         for path in sorted(state.rglob("*"))
