@@ -123,3 +123,31 @@ def test_plugin_reconcile_yes_flag_does_not_resolve_the_collision(
     _assert_error_tells_the_user_what_to_do(result.output, cache_dir)
     _assert_nothing_changed(fake, cache_dir)
     assert claude.mp_add_args() == []
+
+
+def test_plugin_reconcile_dry_run_reports_the_same_collision_as_a_live_run(
+    colliding_cache, fake_claude, tmp_path: Path
+) -> None:
+    """``--dry-run`` predicts the live failure and changes nothing."""
+    fake, cache_dir = colliding_cache
+    claude = fake_claude(marketplaces=[])
+    cfg = write_setforge_yaml(tmp_path, _CONFIG)
+    args = ["plugin", "reconcile", "--profile=myprofile", f"--config={cfg}"]
+
+    dry = CliRunner().invoke(app, [*args, "--dry-run"])
+
+    assert dry.exit_code == 1, dry.output
+    _assert_error_tells_the_user_what_to_do(dry.output, cache_dir)
+    _assert_nothing_changed(fake, cache_dir)
+    assert claude.mp_add_args() == []
+    assert claude.install_args() == []
+    assert claude.enable_args() == []
+
+    live = CliRunner().invoke(app, args)
+
+    assert live.exit_code == dry.exit_code, live.output
+    failed_line = "FAILED  bobs"
+    assert (
+        dry.output[dry.output.index(failed_line) :]
+        == (live.output[live.output.index(failed_line) :])
+    )

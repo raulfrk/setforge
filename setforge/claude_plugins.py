@@ -694,6 +694,8 @@ def _read_only_report(
     to_enable: list[str],
     to_disable: list[str],
     mps_to_add: list[str],
+    *,
+    failed: list[tuple[str, str]] | None = None,
 ) -> ReconcileReport:
     """Log the intended actions and build the read-only (``dry_run``) report."""
     LOGGER.info(
@@ -704,7 +706,9 @@ def _read_only_report(
         to_disable,
         mps_to_add,
     )
-    return _build_report(to_install, to_enable, to_disable, mps_to_add, dry_run=True)
+    return _build_report(
+        to_install, to_enable, to_disable, mps_to_add, dry_run=True, failed=failed
+    )
 
 
 def _plugin_checkout_targets(
@@ -776,7 +780,9 @@ def reconcile(
 
     ``dry_run=True`` logs intended actions and returns without running any
     write subprocess. ``REPORT`` policy behaves identically to
-    ``dry_run=True`` for write suppression.
+    ``dry_run=True`` for write suppression. Both also report, in ``failed``,
+    each marketplace whose cache directory holds a different repo, as a live
+    run would, without cloning or touching that directory.
 
     ``pins`` drives the strong install: a pinned plugin under LOCAL_CLONE gets
     its marketplace cache hard-reset to the pinned commit before ``claude
@@ -818,7 +824,22 @@ def reconcile(
         reconcile_plan = driver.plan_reconcile(PluginProvisioner(), items)
         to_install = [i.display for i in reconcile_plan.delta.installed]
         to_enable = [i.display for i in reconcile_plan.delta.activated]
-        return _read_only_report(to_install, to_enable, to_disable, mps_to_add)
+        # The cache check a live run makes before adding a marketplace, minus
+        # the clone: a colliding cache directory is reported as failed here too.
+        would_fail: list[tuple[str, str]] = []
+        for mp_name in mps_to_add:
+            try:
+                _mp_cache.plan_marketplace_source(
+                    cfg.marketplaces[mp_name],
+                    install_mode,
+                    cache_root=_mp_cache.marketplace_cache_root(),
+                    mp_name=mp_name,
+                )
+            except MarketplaceCacheMiss as exc:
+                would_fail.append((mp_name, str(exc)))
+        return _read_only_report(
+            to_install, to_enable, to_disable, mps_to_add, failed=would_fail
+        )
 
     failed: list[tuple[str, str]] = []
 

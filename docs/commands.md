@@ -115,8 +115,9 @@ names the marketplace, the directory and both repos. SetForge does not ask what
 to do and does not touch that directory. What the command does next differs:
 `install` stops before deploying anything; `plugin reconcile` reports that
 marketplace as failed, carries on with the other marketplaces and plugins and
-exits 1; `plugin sync-cache` stops at that marketplace and exits 1 (marketplaces
-that sort before it have already been refreshed). Either set the marketplace's
+exits 1, and `plugin reconcile --dry-run` reports the same failure without
+cloning anything; `plugin sync-cache` stops at that marketplace and exits 1
+(marketplaces that sort before it have already been refreshed). Either set the marketplace's
 `repo:` in `setforge.yaml` to the repo already cloned there (the error prints
 it as `owner/repo`), or run the `rm -rf` command the error prints and run the
 command again so the declared repo is cloned in its place. To use both repos, give one of them a `path` source or set
