@@ -393,6 +393,18 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
             _recover_migration_journal(operations.load(journal.profile))
         except BaseException as recovery_error:
             primary.add_note(f"automatic recovery failed: {recovery_error}")
+            typer.secho(
+                "automatic rollback did not complete; to finish it run: "
+                f"setforge recover --profile={journal.profile} --apply",
+                err=True,
+                fg=typer.colors.RED,
+            )
+        else:
+            typer.secho(
+                "rolled back to the pre-migration state.",
+                err=True,
+                fg=typer.colors.RED,
+            )
         raise
     # file_post AFTER the chain so the record covers the full forward
     # delta. (post-apply validate is read-only — it adds nothing to the delta;
@@ -1117,8 +1129,7 @@ def _execute_chain(
             # BaseException, not caught below; re-raise bare to keep exit 130.
             _rollback(snapshots)
             typer.secho(
-                f"migration interrupted during step {step}; "
-                f"rolled back to the pre-migration state.",
+                f"migration interrupted during step {step}.",
                 err=True,
                 fg=typer.colors.RED,
             )
@@ -1128,8 +1139,7 @@ def _execute_chain(
             typer.secho(
                 f"migration step {step} failed after "
                 f"{len(applied)} completed step(s) "
-                f"({', '.join(applied) or 'none'}); "
-                f"rolled back to the pre-migration state: {exc}",
+                f"({', '.join(applied) or 'none'}): {exc}",
                 err=True,
                 fg=typer.colors.RED,
             )

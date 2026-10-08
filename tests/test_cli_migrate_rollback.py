@@ -475,6 +475,41 @@ def test_real_cutover_chain_failure_restores_the_whole_state_tree(
     assert operations.active(transitions.MIGRATE_TRANSITION_PROFILE) is None
 
 
+def test_failed_automatic_rollback_points_at_recover_and_keeps_the_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, local_yaml = _write_chain_origin(tmp_path)
+    target = _fail_after(monkeypatch, "2.1")
+    files_before = {path: path.read_bytes() for path in (cfg, local_yaml)}
+    state = transitions.state_root()
+    state_before = _state_files(state)
+
+    def failing_recovery(journal: operations.OperationJournal) -> None:
+        raise OSError("disk went away")
+
+    with monkeypatch.context() as failing:
+        failing.setattr(
+            "setforge.cli.migrate._recover_migration_journal", failing_recovery
+        )
+        result = runner.invoke(
+            app,
+            ["migrate", "--config", str(cfg), "--to", target, "--apply", "--yes"],
+        )
+
+    assert result.exit_code == 1, result.output
+    assert "setforge recover --profile=migrate --apply" in result.output
+    assert "rolled back" not in result.output
+    assert operations.active(transitions.MIGRATE_TRANSITION_PROFILE) is not None
+    assert _state_files(state) != state_before
+
+    recovered = runner.invoke(app, ["recover", "--profile=migrate", "--apply", "--yes"])
+
+    assert recovered.exit_code == 0, recovered.output
+    assert operations.active(transitions.MIGRATE_TRANSITION_PROFILE) is None
+    assert {path: path.read_bytes() for path in files_before} == files_before
+    assert _state_files(state) == state_before
+
+
 def test_fold_failure_removes_the_format_sidecar_it_stamped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A `setforge migrate` whose automatic rollback cannot finish can now be undone
+  with `setforge recover`; before, recover stopped with "refusing to remove
+  non-empty recovery directory". `migrate` now says the rollback did not
+  complete and prints the `setforge recover` command to run, instead of
+  claiming it rolled back.
+- `setforge migrate` now stops before changing anything when its state
+  directory is not writable ("transition state dir not writable"), instead of
+  migrating the config and then failing.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed
