@@ -1247,8 +1247,8 @@ def test_e2e_docker_upgrade_check_mode(
     no network egress is attempted, and the exit code is 0.
 
     The fake-PyPI fixture body shape mirrors the real PyPI JSON API
-    (``info`` + ``releases`` dict) so the unit-tested filter logic in
-    :mod:`setforge._pypi_client` lights up identically.
+    (``info`` + ``releases`` dict) so the release filter in
+    :mod:`setforge.cli.upgrade` lights up identically.
     """
     c = docker_container()
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
@@ -1299,9 +1299,10 @@ def test_e2e_docker_upgrade_check_mode(
     assert "99.0.0" in result.stdout, (
         f"expected target version 99.0.0 in stdout; got: {result.stdout!r}"
     )
-    assert "=== schema impact ===" in result.stdout, (
-        f"expected always-on schema impact panel; got: {result.stdout!r}"
-    )
+    assert (
+        "https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md" in result.stdout
+    ), f"expected the changelog URL in the report; got: {result.stdout!r}"
+    assert "schema impact" not in result.stdout, result.stdout
     config_check = c.exec(["test", "-d", "/home/tester/.config/setforge"], check=False)
     assert config_check.returncode != 0, (
         "upgrade --check must NOT create the config directory"

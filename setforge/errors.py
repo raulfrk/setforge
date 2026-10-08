@@ -331,20 +331,21 @@ class MarketplaceCacheMiss(SetforgeError):
 
     Triggered by :func:`setforge.claude_plugins._clone_marketplace` in
     three cases: the ``git`` binary is missing from PATH, the on-demand
-    ``git clone`` failed (typically offline), or an existing cache's
-    ``origin`` remote no longer matches the configured source repo and
-    a re-clone failed. The message names the marketplace and the exact
-    remediation (``setforge plugin sync-cache --profile=<name>`` while
-    online, or fall back to ``claude.install_mode: regular``)."""
+    ``git clone`` failed (typically offline), or the cache directory already
+    holds a clone of a different repo than the one the marketplace declares
+    (two repos with the same final name). The message names the marketplace
+    and the exact remediation (``setforge plugin sync-cache --profile=<name>``
+    while online, the manual steps for a colliding cache directory, or
+    falling back to ``claude.install_mode: regular``)."""
 
 
 class PyPIFetchError(SetforgeError):
     """Raised when ``setforge upgrade`` cannot fetch latest-version metadata
     from the PyPI JSON API.
 
-    Triggered by :func:`setforge._pypi_client.fetch_latest_version` on
-    network failure, HTTP non-200/304 responses, JSON decode errors, or
-    on cache-disk failures when reading/writing the ETag sidecar.
+    Triggered by the PyPI lookup in :mod:`setforge.cli.upgrade` on network
+    failure, a timeout, a non-200 answer, a redirect to another host, a body
+    that is not the expected JSON, or a release that PyPI does not list.
     Message is suitable for direct surface to the user — the CLI top-
     level handler renders it as ``error: <message>`` and exits 1.
     """

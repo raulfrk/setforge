@@ -159,7 +159,6 @@ class PluginPlan:
     to_disable: tuple[str, ...]
     marketplaces_added: tuple[str, ...]
     marketplace_sources: tuple[tuple[str, _mp_cache.MarketplaceSourcePlan], ...]
-    auto: bool
     pre_plugins_json: str
     pre_marketplaces_json: str
 
@@ -187,7 +186,12 @@ def plan_reconcile(
     pins: dict[str, ResolvedPin] | None = None,
     auto: bool = False,
 ) -> PluginPlan:
-    """Probe plugin state once and retain the selected operations."""
+    """Probe plugin state once and retain the selected operations.
+
+    ``auto`` has no effect: a marketplace cache directory that holds a
+    different repo is always an error, never a prompt. It is still accepted so
+    existing callers keep working.
+    """
     from setforge.provision.plugin import PluginProvisioner
 
     install_mode = load_host_local_config().claude.install_mode
@@ -209,7 +213,6 @@ def plan_reconcile(
                 install_mode,
                 cache_root=_mp_cache.marketplace_cache_root(),
                 mp_name=name,
-                auto=auto,
             ),
         )
         for name in marketplaces
@@ -244,7 +247,6 @@ def plan_reconcile(
         ),
         marketplaces_added=marketplaces,
         marketplace_sources=marketplace_sources,
-        auto=auto,
         pre_plugins_json=json.dumps(pre_plugins, sort_keys=True),
         pre_marketplaces_json=json.dumps(pre_marketplaces, sort_keys=True),
     )
@@ -262,7 +264,6 @@ def apply_plan(plan: PluginPlan) -> ReconcileReport:
         plan.install_mode,
         _mp_cache.marketplace_cache_root(),
         failed,
-        auto=plan.auto,
         source_plans=dict(plan.marketplace_sources),
     )
     result = driver.apply_reconcile(plan.reconcile)
@@ -606,7 +607,6 @@ def _add_declared_marketplaces(
     cache_root: Path,
     failed: list[tuple[str, str]],
     *,
-    auto: bool = False,
     source_plans: dict[str, _mp_cache.MarketplaceSourcePlan] | None = None,
 ) -> None:
     """Run install-mode dispatch + ``marketplace_add`` for each name in ``mps_to_add``.
@@ -618,10 +618,9 @@ def _add_declared_marketplaces(
     w.r.t. anything outside ``failed`` — the caller still owns the
     surrounding state machine.
 
-    ``auto`` propagates to :func:`resolve_marketplace_source` and
-    governs the cache-collision wizard. Default is interactive (the
-    wizard fires on URL drift); pass ``auto=True`` from a non-
-    interactive CLI path to refuse silent auto-resolution.
+    A cache directory that holds a different repo than the declared one is
+    recorded in ``failed`` (the marketplace is not added and that cache
+    directory is left as it was); the other marketplaces are still processed.
     """
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)
@@ -633,7 +632,6 @@ def _add_declared_marketplaces(
                     install_mode,
                     cache_root=cache_root,
                     mp_name=mp_name,
-                    auto=auto,
                 )
                 if source_plan is None
                 else _mp_cache.apply_marketplace_source_plan(source_plan)
@@ -756,7 +754,6 @@ def reconcile(
     policy: ReconcilePolicy,
     dry_run: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
-    auto: bool = False,
     plan: PluginPlan | None = None,
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
@@ -785,18 +782,6 @@ def reconcile(
     its marketplace cache hard-reset to the pinned commit before ``claude
     plugin install`` (see :func:`_plugin_checkout_targets`); otherwise
     byte-identical to today.
-
-    ``auto`` threads into :func:`_add_declared_marketplaces` (and onward to
-    :func:`resolve_marketplace_source`), governing the cache-collision
-    wizard. Default ``False`` keeps the interactive behavior. ``auto`` is
-    an explicit opt-in seam: a programmatic or non-interactive caller may
-    pass ``auto=True`` to refuse silent auto-resolution. The CLI entry
-    points thread it from their ``--yes`` (non-interactive) flag —
-    ``setforge install --yes`` (via :func:`_reconcile_plugins`) and
-    ``setforge plugins reconcile --yes`` both pass ``auto=yes``, so an
-    interactive run (no ``--yes``) still leaves it ``False`` and relies on
-    the wizard's own non-TTY ``isatty()`` backstop (which raises rather
-    than prompting under automation) to never hang.
     """
     if plan is not None:
         return _report_plan(plan) if dry_run else apply_plan(plan)
@@ -844,7 +829,6 @@ def reconcile(
         install_mode,
         _mp_cache.marketplace_cache_root(),
         failed,
-        auto=auto,
     )
 
     checkouts = _plugin_checkout_targets(

@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- With `claude.install_mode: local-clone`, a marketplace whose cache directory
+  already holds a clone of a different repo (two repos with the same name, such
+  as `alice/tools` and `bob/tools`) no longer opens the keep/update/both/abort
+  prompt. `install`, `plugin reconcile` and `plugin sync-cache` now report an
+  error that names the marketplace, the directory and both repos and says what
+  to run, and they do not touch that directory. `install` stops before
+  deploying anything; `plugin reconcile` reports that marketplace as failed,
+  carries on with the others and exits 1; `plugin sync-cache` stops at that
+  marketplace and exits 1. The "keep the existing clone" step shows the repo
+  as `owner/repo`. A cache created by the old "both" choice keeps working.
+  `plugin reconcile --yes` is still accepted but no longer does anything.
+
+- `upgrade` no longer tries to show release notes or guess at schema changes
+  (it could not find the changelog in an installed copy anyway). It prints the
+  changelog link instead and offers "Upgrade" or "Upgrade + `migrate --check`".
+  `--no-prompt` runs the second one, as it already did for installed copies.
+  The yanked and pre-release warnings and the `migrate --check` after the
+  upgrade are unchanged.
+
+- `upgrade --check` and `--to` now look up the version list with a single plain
+  request to PyPI instead of a custom client. `--to` no longer makes a second
+  request, a version PyPI does not list is reported as such, and the small
+  cache file the old client kept in the cache directory is no longer used (it
+  can be deleted). Timeouts, certificate checks, the clear error and exit code 1
+  when PyPI is unreachable or answers with an error (nothing is changed) and the
+  way versions are compared are unchanged. A redirect to another host is now
+  refused instead of followed.
+
 ### Fixed
 
 - In the Claude-assisted merge, a draft you edit by hand is now checked like

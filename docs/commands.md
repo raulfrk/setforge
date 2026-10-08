@@ -105,6 +105,26 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 | `completion` | `install` | Install shell completion scripts. |
 | `project` | `inject`, `list`, `visibility`, `sync`, `remove` | Inspect, materialize, change per-file Git visibility, synchronize, and remove project profiles in Git worktrees or plain directories. |
 
+### Marketplace cache collisions
+
+With `claude.install_mode: local-clone` in `~/.config/setforge/local.yaml`, each
+GitHub marketplace is cloned into `$XDG_CACHE_HOME/setforge/marketplaces/<repo
+name>` (default `~/.cache/setforge/marketplaces`). Two repos with the same name,
+such as `alice/tools` and `bob/tools`, share one directory. When that directory
+already holds a clone of a different repo than the marketplace declares,
+`install`, `plugin reconcile` and `plugin sync-cache` report an error that
+names the marketplace, the directory and both repos. SetForge does not ask what
+to do and does not touch that directory. What the command does next differs:
+`install` stops before deploying anything; `plugin reconcile` reports that
+marketplace as failed, carries on with the other marketplaces and plugins and
+exits 1; `plugin sync-cache` stops at that marketplace and exits 1 (marketplaces
+that sort before it have already been refreshed). Either set the marketplace's
+`repo:` in `setforge.yaml` to the repo already cloned there (the error prints
+it as `owner/repo`), or run the `rm -rf` command the error prints and run the
+command again so the declared repo is cloned in its place. To use both repos, give one of them a `path` source or set
+`claude.install_mode: regular`. `plugin reconcile --yes` is still accepted and
+no longer changes anything.
+
 ### Project profile synchronization
 
 `setforge project list` inventories every recorded project injection, grouped
@@ -390,6 +410,29 @@ When `install` or `sync` runs with a **mutating** `--auto*` flag
 which direction, plus the exact `setforge revert` command to undo, then prompts
 arrow-key yes/no (default **No**). For CI/scripts, pass `--yes` (`-y`) to bypass
 the prompt; without `--yes` in a non-TTY context the command exits 1.
+
+## Upgrade
+
+`setforge upgrade` asks PyPI for the newest release, shows the version change
+and any yanked or pre-release warning, then runs `uv tool upgrade setforge`
+after you confirm. The prompt offers **Upgrade** or **Upgrade + run
+`setforge migrate --check`** (the default), or abort. It does not show release
+notes or guess at schema changes: the prompt and the success report print the
+changelog link (<https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md>),
+and `migrate --check` reports what your config actually needs.
+
+- `--check` reports current vs latest and changes nothing.
+- `--no-prompt` skips the prompt and runs "Upgrade + `migrate --check`"; it is
+  required without a terminal.
+- `--to=X.Y.Z` installs that exact version; `--prerelease` includes
+  pre-releases when picking the latest.
+- After an upgrade it prints the `uv tool install --reinstall` command that
+  rolls back to the previous version.
+
+The version list comes from one request to `https://pypi.org/pypi/setforge/json`
+(10-second timeout, certificates verified, redirects to another host refused).
+If PyPI cannot be reached or answers with an error, `upgrade` prints one
+`error:` line, exits 1 and changes nothing. Nothing is cached between runs.
 
 ## Revert
 

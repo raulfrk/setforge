@@ -2,9 +2,9 @@
 
 Owns the on-disk path resolution from a :class:`MarketplaceSource`
 to a usable ``cache_dir`` — clone-on-demand, refresh-by-source-shape,
-collision-handling. All git invocations honor the locked subprocess
-hygiene (list argv, ``check=True``, ``text=True``,
-``capture_output=True``, explicit ``timeout=``). Cache directory
+and refusal of a cache directory that holds a different repo. All git
+invocations honor the locked subprocess hygiene (list argv, ``check=True``,
+``text=True``, ``capture_output=True``, explicit ``timeout=``). Cache directory
 layout is rooted at :func:`marketplace_cache_root`; each marketplace
 mirrors into ``marketplace_cache_root() / <repo-basename>``.
 """
@@ -13,15 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import shlex
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from setforge import atomicio, marketplace_cache_wizard, paths, reconcile_adapter
+from setforge import paths, reconcile_adapter
 from setforge.binaries import stderr_of
 from setforge.config import (
     ClaudeInstallMode,
@@ -32,7 +33,6 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, MarketplaceCacheMiss
 from setforge.git_ops import is_git_object_id
-from setforge.marketplace_cache_wizard import CollisionAction
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -50,12 +50,12 @@ def marketplace_cache_root() -> Path:
 
 
 #: Sidecar filename (under the cache root) recording ``owner/repo -> cache
-#: subdir`` aliases. Written by the ``BOTH`` collision outcome when a repo
-#: is cloned into a non-basename subdir (e.g. ``plug-v2``); consulted by the
-#: declared-identity computation so the next reconcile resolves the
-#: marketplace to that subdir instead of recomputing ``cache_root/<basename>``.
-#: Keyed by the full ``owner/repo`` slug because the basename collides by
-#: definition. Absent/legacy sidecar degrades to plain basename behavior.
+#: subdir`` aliases. Earlier versions wrote it when a repo was cloned into a
+#: non-basename subdir (e.g. ``plug-v2``) to sidestep a basename collision;
+#: this version only reads it, so a host that already has one keeps resolving
+#: the marketplace to that subdir. Keyed by the full ``owner/repo`` slug because
+#: the basename collides by definition. Absent sidecar degrades to plain
+#: basename behavior.
 MARKETPLACE_ALIAS_SIDECAR: Final[str] = ".aliases.json"
 
 __all__ = [
@@ -77,8 +77,6 @@ class MarketplaceSourceAction(StrEnum):
 
     NONE = "none"
     CLONE = "clone"
-    UPDATE = "update"
-    BOTH = "both"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,8 +90,6 @@ class MarketplaceSourcePlan:
     cache_dir: Path | None = None
     expected_cache_exists: bool = False
     expected_origin: str | None = None
-    both_dir: Path | None = None
-    expected_both_exists: bool = False
 
     @property
     def source(self) -> MarketplaceSource:
@@ -220,7 +216,7 @@ def read_cache_aliases(cache_root: Path) -> dict[str, str]:
     degrade to plain ``cache_root/<basename>`` resolution. A malformed or
     unreadable sidecar is logged and treated as empty rather than raising —
     a corrupt alias file must not wedge every reconcile; the worst case is
-    one re-fired collision wizard, the same as no sidecar at all. Only
+    a cache-collision error, the same as no sidecar at all. Only
     ``str -> str`` entries are kept (defensive against hand-edited files),
     and the value is further validated as a safe single-segment subdir name
     (same predicate as :func:`_safe_cache_dir`) — a corrupt or hand-edited
@@ -257,26 +253,6 @@ def read_cache_aliases(cache_root: Path) -> dict[str, str]:
             continue
         aliases[k] = v
     return aliases
-
-
-def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
-    """Persist ``repo -> cache_dir.name`` into the cache-root alias sidecar.
-
-    Read-modify-write of the JSON map: each individual *write* is torn-free
-    (:func:`setforge.atomicio.atomic_write_text` swaps the whole file into
-    place). SetForge CLI writers hold :func:`setforge.locking.install_resources_lock`
-    across this read-modify-write and related cache mutations. Direct helper
-    callers must provide equivalent serialization. The subdir *name* (not the
-    absolute path) is stored so
-    the sidecar stays portable if the cache root moves; the declared-identity
-    computation rejoins it onto its own ``cache_root``.
-    """
-    aliases = read_cache_aliases(cache_root)
-    aliases[repo] = cache_dir.name
-    atomicio.atomic_write_text(
-        cache_root / MARKETPLACE_ALIAS_SIDECAR,
-        json.dumps(aliases, indent=2, sort_keys=True) + "\n",
-    )
 
 
 class _GitFailureKind(StrEnum):
@@ -478,8 +454,8 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 
     Preconditions: ``cache_dir`` already exists and contains a git repo
     whose ``origin`` matches ``source.repo``. The caller is responsible
-    for the URL-mismatch detect-and-reclone path; this helper assumes
-    the remote is correct and unconditionally fetches + resets to
+    for refusing a URL mismatch (see :func:`_cache_collision_error`); this
+    helper assumes the remote is correct and unconditionally fetches + resets to
     ``origin/HEAD``. Hard reset (not ``git pull``) is intentional: the
     cache must never carry local merges.
 
@@ -518,8 +494,8 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
     Used by :func:`resolve_marketplace_source` to detect a config-side
     repo URL change after the cache was first created. A best-effort
     probe — any git failure (no remote, dirty checkout, missing git
-    binary) yields ``None`` so the caller can fall through to a
-    re-clone instead of raising.
+    binary) yields ``None`` so the caller can reuse the cache as-is
+    instead of raising.
 
     Silent-on-failure for callers (returns ``None`` instead of
     raising), but emits the captured stdout/stderr at ``DEBUG`` level
@@ -553,13 +529,46 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
     return result.stdout.strip()
 
 
+def _cache_collision_error(
+    mp_name: str, cache_dir: Path, existing_origin: str, declared_repo: str
+) -> MarketplaceCacheMiss:
+    """Build the error for a cache directory that holds a different repo.
+
+    Two repos with the same final name (``alice/tools``, ``bob/tools``) share
+    one cache directory. SetForge never replaces or reuses that directory on
+    its own: the message names both repos and the directory and spells out the
+    manual steps. The cache directory is left as it was when this is raised;
+    what the calling command does with the other marketplaces is up to it.
+
+    The keep-the-clone step names the clone's repo as ``owner/repo`` when its
+    origin is a GitHub URL: the full URL as ``repo:`` would name a different
+    cache directory and clone again.
+    """
+    quoted = shlex.quote(str(cache_dir))
+    slug = _normalize_repo_url(existing_origin)
+    keep_repo = slug if re.fullmatch(r"[\w.-]+/[\w.-]+", slug) else existing_origin
+    return MarketplaceCacheMiss(
+        f"marketplace {mp_name!r}: cache directory {cache_dir} already holds a "
+        f"clone of {existing_origin!r}, but this marketplace declares repo "
+        f"{declared_repo!r}. Both repos use the folder name {cache_dir.name!r}, "
+        f"so they collide in the cache. This cache directory was not touched. "
+        f"Do one of:\n"
+        f"  - keep the existing clone: set this marketplace's repo in "
+        f"setforge.yaml to {keep_repo!r}\n"
+        f"  - use the declared repo: run `rm -rf {quoted}`, then run this "
+        f"command again (it clones {declared_repo!r} there)\n"
+        f"If you need both repos, give one of them a `path` source in "
+        f"setforge.yaml, or set `claude.install_mode: regular` in "
+        f"~/.config/setforge/local.yaml."
+    )
+
+
 def resolve_marketplace_source(
     source: MarketplaceSource,
     mode: ClaudeInstallMode,
     *,
     cache_root: Path | None = None,
     mp_name: str | None = None,
-    auto: bool = False,
 ) -> MarketplaceSource:
     """Return the :class:`MarketplaceSource` that ``marketplace_add`` will see.
 
@@ -569,9 +578,8 @@ def resolve_marketplace_source(
     returns a PATH-kind :class:`MarketplaceSource` pointing at the
     on-disk cache for the GitHub source (basename of ``source.repo``),
     lazily cloning if the cache is absent. PATH sources passthrough
-    regardless of mode. ``mp_name`` and ``auto`` thread through to the
-    cache-collision path — planning records the wizard choice before apply
-    and preserves the ``auto=True`` non-interactive contract.
+    regardless of mode. ``mp_name`` names the marketplace in the error raised
+    when the cache directory already holds a different repo.
     """
     if mode is ClaudeInstallMode.REGULAR or source.source is MarketplaceSourceKind.PATH:
         return source
@@ -580,7 +588,6 @@ def resolve_marketplace_source(
         mode,
         cache_root=cache_root,
         mp_name=mp_name,
-        auto=auto,
     )
     return apply_marketplace_source_plan(plan)
 
@@ -591,9 +598,12 @@ def plan_marketplace_source(
     *,
     cache_root: Path | None = None,
     mp_name: str | None = None,
-    auto: bool = False,
 ) -> MarketplaceSourcePlan:
-    """Select source/cache actions without mutating the marketplace cache."""
+    """Select source/cache actions without mutating the marketplace cache.
+
+    Raises :class:`MarketplaceCacheMiss` when the cache directory already holds
+    a clone of a different repo than the declared one.
+    """
     root = cache_root if cache_root is not None else marketplace_cache_root()
     frozen_source = source.model_copy(deep=True)
     if mode is ClaudeInstallMode.REGULAR or source.source is MarketplaceSourceKind.PATH:
@@ -632,43 +642,7 @@ def plan_marketplace_source(
             expected_origin=origin,
         )
 
-    resolution = marketplace_cache_wizard.resolve_collision(
-        mp_name=mp_name or source.repo,
-        cache_dir=cache_dir,
-        cache_root=root,
-        existing_origin=origin,
-        new_repo=source.repo,
-        auto=auto,
-    )
-    if resolution.action is CollisionAction.KEEP:
-        LOGGER.info(
-            "cache-collision: using existing cache %r for marketplace %r; "
-            "new source.repo %r NOT applied",
-            cache_dir,
-            mp_name or source.repo,
-            source.repo,
-        )
-        action = MarketplaceSourceAction.NONE
-        both_dir = None
-    elif resolution.action is CollisionAction.UPDATE:
-        action = MarketplaceSourceAction.UPDATE
-        both_dir = None
-    else:
-        action = MarketplaceSourceAction.BOTH
-        both_dir = resolution.new_cache_dir
-        assert both_dir is not None, "wizard contract: BOTH carries new_cache_dir"
-        effective = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=both_dir)
-    return MarketplaceSourcePlan(
-        source_json=frozen_source.model_dump_json(),
-        effective_source_json=effective.model_dump_json(),
-        action=action,
-        cache_root=root,
-        cache_dir=cache_dir,
-        expected_cache_exists=True,
-        expected_origin=origin,
-        both_dir=both_dir,
-        expected_both_exists=both_dir.exists() if both_dir is not None else False,
-    )
+    raise _cache_collision_error(mp_name or source.repo, cache_dir, origin, source.repo)
 
 
 def validate_marketplace_source_plan(plan: MarketplaceSourcePlan) -> None:
@@ -684,13 +658,6 @@ def validate_marketplace_source_plan(plan: MarketplaceSourcePlan) -> None:
         raise MarketplaceCacheMiss(
             "marketplace cache origin changed after planning; retry"
         )
-    if (
-        plan.both_dir is not None
-        and plan.both_dir.exists() is not plan.expected_both_exists
-    ):
-        raise MarketplaceCacheMiss(
-            "marketplace cache target changed after planning; retry"
-        )
 
 
 def apply_marketplace_source_plan(plan: MarketplaceSourcePlan) -> MarketplaceSource:
@@ -699,107 +666,24 @@ def apply_marketplace_source_plan(plan: MarketplaceSourcePlan) -> MarketplaceSou
     if plan.action is MarketplaceSourceAction.CLONE:
         assert plan.cache_dir is not None
         _clone_marketplace(plan.source, plan.cache_dir)
-    elif plan.action is MarketplaceSourceAction.UPDATE:
-        assert plan.cache_dir is not None
-        _collision_update(plan.source, plan.cache_dir)
-    elif plan.action is MarketplaceSourceAction.BOTH:
-        assert plan.cache_dir is not None
-        _collision_both(
-            plan.source,
-            plan.cache_dir,
-            plan.both_dir,
-            plan.cache_root,
-        )
     return plan.effective_source
 
 
-def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
-    """``UPDATE``: re-clone ``source`` over the existing cache, clone-safe.
+def _normalize_repo_url(url: str) -> str:
+    """Reduce a GitHub remote URL to ``owner/repo``; any other URL is left as is.
 
-    Stages the new clone in a UNIQUE temp dir created via
-    :func:`tempfile.mkdtemp` alongside ``cache_dir`` (same parent, hence
-    same filesystem, so the final swap stays a same-device atomic
-    rename), and only swaps it into place once the clone succeeds. The
-    unique name — rather than a deterministic ``<name>.tmp`` sibling —
-    means two concurrent UPDATEs resolving the same colliding repo
-    cannot stomp each other's in-flight staging dir. A failed clone
-    (offline, auth, bad repo) leaves the existing cache untouched —
-    critical because in LOCAL_CLONE mode that cache is the offline source
-    of truth and the UPDATE path is reached precisely when the network
-    may be down; the staging dir is always discarded via a ``finally``
-    cleanup on any failure or interruption, so a uniquely-named dir is
-    never orphaned. The final swap (``rmtree`` then ``rename``) is not crash-atomic
-    — an interruption between the two leaves the cache absent — but that
-    window is bounded and the clone-failure path above is the one that
-    matters for the offline-fallback guarantee.
+    Only a trailing ``.git`` and ``/`` are stripped from a URL that is not on
+    GitHub, and an already-short ``owner/repo`` is returned unchanged.
     """
-    LOGGER.info(
-        "cache-collision: re-cloning %r over existing %r",
-        source.repo,
-        cache_dir,
-    )
-    # A unique staging dir (vs a shared ``<name>.tmp``) so concurrent
-    # UPDATEs of the same colliding repo cannot delete each other's
-    # in-flight clone. Sited in ``cache_dir.parent`` to keep the final
-    # rename onto ``cache_dir`` on the same device (atomic).
-    staging = Path(
-        tempfile.mkdtemp(dir=cache_dir.parent, prefix=cache_dir.name + ".tmp.")
-    )
-    try:
-        # mkdtemp already created ``staging`` empty; ``_clone_marketplace``
-        # clones into it (git clones fine into an existing empty dir).
-        _clone_marketplace(source, staging)
-        # Reached only after a successful clone, so a failed clone leaves
-        # ``cache_dir`` intact — the offline-fallback guarantee.
-        shutil.rmtree(cache_dir)
-        staging.replace(cache_dir)
-    finally:
-        # Discard any leftover uniquely-named staging dir — clone failure,
-        # KeyboardInterrupt, or a swap that never completed. On success
-        # ``os.replace`` already moved it, so this is a no-op. Unlike the
-        # old deterministic ``<name>.tmp`` sibling, a unique staging dir is
-        # never reclaimed by a later run, so it must be cleaned here.
-        shutil.rmtree(staging, ignore_errors=True)
-    return MarketplaceSource(
-        source=MarketplaceSourceKind.PATH,
-        path=cache_dir,
-    )
-
-
-def _collision_both(
-    source: MarketplaceSource,
-    cache_dir: Path,
-    new_dir: Path | None,
-    cache_root: Path,
-) -> MarketplaceSource:
-    """``BOTH``: clone into the wizard-supplied ``new_dir`` and persist the alias.
-
-    Leaves the existing ``cache_dir`` untouched. Because the new repo is
-    cloned into a non-basename subdir (e.g. ``plug-v2``), the declared
-    identity computed by :func:`setforge.claude_plugins._source_identity`
-    would otherwise recompute as ``cache_root/<basename>`` (the ORIGINAL
-    colliding dir) on the next reconcile — making the marketplace look
-    unregistered and re-firing this wizard on every install. To keep the
-    outcome idempotent, record an ``owner/repo -> <new_dir name>`` alias in
-    the cache-root sidecar (:func:`_record_cache_alias`); the identity
-    computation consults it and resolves the declared marketplace to
-    ``new_dir`` thereafter. The alias is written only after the clone
-    succeeds, so a failed clone leaves no dangling mapping.
-    """
-    assert new_dir is not None, "wizard contract: BOTH carries new_cache_dir"
-    LOGGER.info(
-        "cache-collision: cloning %r into new cache %r (existing %r kept)",
-        source.repo,
-        new_dir,
-        cache_dir,
-    )
-    _clone_marketplace(source, new_dir)
-    if source.repo:
-        _record_cache_alias(cache_root, source.repo, new_dir)
-    return MarketplaceSource(
-        source=MarketplaceSourceKind.PATH,
-        path=new_dir,
-    )
+    stripped = url.removesuffix(".git").rstrip("/")
+    for prefix in (
+        "https://github.com/",
+        "git@github.com:",
+        "ssh://git@github.com/",
+    ):
+        if stripped.startswith(prefix):
+            return stripped[len(prefix) :]
+    return stripped
 
 
 def _urls_equivalent(observed: str, declared: str) -> bool:
@@ -816,25 +700,17 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
 
     Scope is intentionally github-only (YAGNI): every
     :class:`MarketplaceSourceKind` the project currently ships resolves
-    to a github.com URL, so the hardcoded prefix list below covers the
-    full clone-rewrite surface in practice.
+    to a github.com URL, so the hardcoded prefix list in
+    :func:`_normalize_repo_url` covers the full clone-rewrite surface in
+    practice.
     """
-
-    def _normalize(url: str) -> str:
-        stripped = url.removesuffix(".git").rstrip("/")
-        for prefix in (
-            "https://github.com/",
-            "git@github.com:",
-            "ssh://git@github.com/",
-        ):
-            if stripped.startswith(prefix):
-                return stripped[len(prefix) :]
-        return stripped
-
     # GitHub owner/repo identifiers are case-insensitive, so a case-variant
-    # slug must not read as URL-changed — that would re-fire the collision
-    # wizard / raise MarketplaceCacheMiss on every sync (INV-4 idempotency).
-    return _normalize(observed).casefold() == _normalize(declared).casefold()
+    # slug must not read as URL-changed — that would raise the cache-collision
+    # MarketplaceCacheMiss on every sync (INV-4 idempotency).
+    return (
+        _normalize_repo_url(observed).casefold()
+        == _normalize_repo_url(declared).casefold()
+    )
 
 
 def sync_marketplace_cache(
@@ -879,12 +755,12 @@ def sync_marketplace_cache(
             continue
         if not source.repo:
             raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
-        # Honor a BOTH-collision alias: if this repo was cloned into a
-        # non-basename subdir (recorded owner/repo -> subdir in the cache
-        # sidecar), refresh THAT dir. Mirrors _source_identity so an
+        # Honor an alias written by an earlier version: if this repo was
+        # cloned into a non-basename subdir (recorded owner/repo -> subdir in
+        # the cache sidecar), refresh THAT dir. Mirrors _source_identity so an
         # aliased marketplace stays refreshable instead of colliding on the
-        # basename dir and raising MarketplaceCacheMiss forever. Absent/
-        # legacy sidecar degrades to plain basename resolution.
+        # basename dir and raising MarketplaceCacheMiss forever. Absent
+        # sidecar degrades to plain basename resolution.
         alias = read_cache_aliases(root).get(source.repo)
         subdir = alias if alias is not None else source.repo.rsplit("/", 1)[-1]
         cache_dir = _safe_cache_dir(root, subdir)
@@ -905,14 +781,7 @@ def sync_marketplace_cache(
                 and origin != source.repo
                 and not _urls_equivalent(origin, source.repo)
             ):
-                raise MarketplaceCacheMiss(
-                    f"marketplace {mp_name!r}: cache dir {cache_dir} already "
-                    f"holds a clone of {origin!r}, but this marketplace "
-                    f"declares repo {source.repo!r}. These repos share a "
-                    f"basename and collide in the cache layout. Rename one "
-                    f"marketplace's repo basename or remove {cache_dir} and "
-                    f"re-run."
-                )
+                raise _cache_collision_error(mp_name, cache_dir, origin, source.repo)
             LOGGER.info("sync-cache: refreshing %s at %s", mp_name, cache_dir)
             _refresh_marketplace_cache(source, cache_dir)
         else:
