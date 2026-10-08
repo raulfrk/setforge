@@ -338,6 +338,103 @@ def test_lock_update_reresolves_only_named_package(tmp_path: Path) -> None:
     assert by_key["black"].version == "24.1.0", "other packages preserved verbatim"
 
 
+_SHARED_PIN_YAML = """\
+version: 1
+tracked_files:
+  d: {src: tracked_file.txt, dst: ~/.some-tracked_file}
+packages:
+  ripgrep: {type: cargo, crate: ripgrep}
+  black: {type: python, package: black}
+profiles:
+  a: {packages: [ripgrep, black]}
+  b: {packages: [ripgrep]}
+  c: {packages: [ripgrep]}
+"""
+
+
+def _lock_as(cfg: Path, profile: str, *extra: str, ripgrep: str = "14.0.0") -> None:
+    registry._REGISTRY.clear()
+    _register_stub(PackageType.CARGO, "ripgrep", ripgrep)
+    _register_stub(PackageType.PYTHON, "black", "24.1.0")
+    result = CliRunner().invoke(
+        app, ["lock", f"--profile={profile}", f"--config={cfg}", *extra]
+    )
+    assert result.exit_code == 0, result.output
+
+
+def _lock_memberships(tmp_path: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
+    lock = parse_lock((tmp_path / "setforge.lock").read_text(encoding="utf-8"))
+    return {pin.key: (pin.version, pin.profiles) for pin in lock.packages}
+
+
+def test_lock_update_keeps_updating_profile_on_existing_shared_pin(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_config(tmp_path, _SHARED_PIN_YAML)
+    _lock_as(cfg, "a")
+    unrelated_before = _lock_memberships(tmp_path)["black"]
+
+    _lock_as(cfg, "b", "--update=ripgrep")
+
+    after_update = _lock_memberships(tmp_path)
+    assert after_update["ripgrep"] == ("14.0.0", ("a", "b"))
+    assert after_update["black"] == unrelated_before
+
+    # Profile a stops selecting the package, then relocks: b still selects it.
+    cfg.write_text(
+        _SHARED_PIN_YAML.replace(
+            "a: {packages: [ripgrep, black]}", "a: {packages: [black]}"
+        ),
+        encoding="utf-8",
+    )
+    _lock_as(cfg, "a")
+
+    assert _lock_memberships(tmp_path)["ripgrep"] == ("14.0.0", ("b",))
+
+
+def test_lock_update_by_existing_member_keeps_other_members_on_new_version(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_config(tmp_path, _SHARED_PIN_YAML)
+    _lock_as(cfg, "a")
+    _lock_as(cfg, "b")
+    assert _lock_memberships(tmp_path)["ripgrep"] == ("14.0.0", ("a", "b"))
+
+    _lock_as(cfg, "a", "--update=ripgrep", ripgrep="15.0.0")
+
+    assert _lock_memberships(tmp_path)["ripgrep"] == ("15.0.0", ("a", "b"))
+
+
+def test_lock_update_of_package_missing_from_lock_adds_only_updating_profile(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_config(
+        tmp_path,
+        _SHARED_PIN_YAML.replace(
+            "a: {packages: [ripgrep, black]}", "a: {packages: [ripgrep]}"
+        ),
+    )
+    _lock_as(cfg, "a")
+    _lock_as(cfg, "b")
+    cfg.write_text(_SHARED_PIN_YAML, encoding="utf-8")
+
+    _lock_as(cfg, "a", "--update=black")
+
+    after = _lock_memberships(tmp_path)
+    assert after["black"] == ("24.1.0", ("a",))
+    assert after["ripgrep"] == ("14.0.0", ("a", "b"))
+
+
+def test_lock_update_by_every_profile_records_every_profile(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path, _SHARED_PIN_YAML)
+    _lock_as(cfg, "c")
+
+    _lock_as(cfg, "b", "--update=ripgrep")
+    _lock_as(cfg, "a", "--update=ripgrep")
+
+    assert _lock_memberships(tmp_path)["ripgrep"] == ("14.0.0", ("a", "b", "c"))
+
+
 @pytest.mark.parametrize("selector", ["Some__Tool", "some.tool", "some-tool"])
 def test_python_lock_update_accepts_normalized_aliases(
     tmp_path: Path, selector: str

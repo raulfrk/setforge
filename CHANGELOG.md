@@ -117,6 +117,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and rolled back left that file without its markers; it is now restored too.
   The preview now shows the change to that file correctly, and a confirmed
   migration writes the same result as before.
+- `lock --update <package>` now records the profile you ran it for on that
+  package's existing entry in `setforge.lock`. It used to leave the entry
+  listing only the profiles it had before, so once the profile that originally
+  locked the package stopped using it and re-ran `lock`, the entry was removed
+  even though the updated profile still needed it.
 - In the Claude-assisted merge, a draft you edit by hand is now checked like
   Claude's own drafts: an empty edit or one that still contains conflict markers
   is refused with a message, and you stay on the review screen to edit again or
