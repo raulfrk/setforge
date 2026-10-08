@@ -17,6 +17,7 @@ from setforge.provision import github_release as gh
 from setforge.provision.driver import reconcile
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.receipt import ReceiptStore
+from tests.fakes import FakeResponse
 
 
 def _sha256(data: bytes) -> str:
@@ -298,24 +299,6 @@ def test_download_url_shape(tmp_path: Path) -> None:
     assert url == "https://github.com/owner/tool/releases/download/v1.0.0/tool.tar.gz"
 
 
-class _FakeResponse:
-    def __init__(self, *, chunks: list[bytes], final_url: str) -> None:
-        self._chunks = list(chunks)
-        self._final_url = final_url
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-    def geturl(self) -> str:
-        return self._final_url
-
-    def read(self, _n: int) -> bytes:
-        return self._chunks.pop(0) if self._chunks else b""
-
-
 def _real_download_prov(tmp_path: Path) -> gh.GitHubReleaseProvisioner:
     return gh.GitHubReleaseProvisioner(receipts=ReceiptStore(tmp_path / "receipts"))
 
@@ -334,9 +317,9 @@ def test_download_rejects_non_http_scheme(tmp_path: Path) -> None:
 
 def test_download_rejects_http_redirect_downgrade(tmp_path: Path, monkeypatch) -> None:
     prov = _real_download_prov(tmp_path)
-    fake = _FakeResponse(chunks=[b"data"], final_url="http://evil.example/tool")
+    fake = FakeResponse(chunks=[b"data"], final_url="http://evil.example/tool")
 
-    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+    def _fake_urlopen(_request: object, timeout: float = 0) -> FakeResponse:
         return fake
 
     monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
@@ -348,11 +331,11 @@ def test_download_wire_cap_aborts_oversize_stream(tmp_path: Path, monkeypatch) -
     prov = _real_download_prov(tmp_path)
     monkeypatch.setattr(gh, "_MAX_WIRE_BYTES", 4)
     monkeypatch.setattr(gh, "_CHUNK", 4)
-    fake = _FakeResponse(
+    fake = FakeResponse(
         chunks=[b"aaaa", b"bbbb", b"cccc"], final_url="https://github.com/x"
     )
 
-    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+    def _fake_urlopen(_request: object, timeout: float = 0) -> FakeResponse:
         return fake
 
     monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
@@ -368,8 +351,8 @@ def test_download_deadline_aborts_slow_drip_stream(tmp_path: Path, monkeypatch) 
     clock = {"now": 0.0}
     monkeypatch.setattr(gh.time, "monotonic", lambda: clock["now"])
 
-    class _DripResponse(_FakeResponse):
-        def read(self, n: int) -> bytes:
+    class _DripResponse(FakeResponse):
+        def read(self, n: int = -1) -> bytes:
             clock["now"] += gh._DOWNLOAD_DEADLINE_S  # one drip blows the budget
             return super().read(n)
 
@@ -391,9 +374,9 @@ def test_download_fast_stream_completes_within_deadline(
     prov = _real_download_prov(tmp_path)
     # Clock never advances: a fast transfer stays well under the deadline.
     monkeypatch.setattr(gh.time, "monotonic", lambda: 0.0)
-    fake = _FakeResponse(chunks=[b"aa", b"bb", b"cc"], final_url="https://github.com/x")
+    fake = FakeResponse(chunks=[b"aa", b"bb", b"cc"], final_url="https://github.com/x")
 
-    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+    def _fake_urlopen(_request: object, timeout: float = 0) -> FakeResponse:
         return fake
 
     monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)

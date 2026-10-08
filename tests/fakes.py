@@ -87,7 +87,9 @@ class FakeResponse:
     """Context-managed stand-in for the object ``urllib.request.urlopen`` returns.
 
     ``read(n)`` returns the first ``n`` bytes of ``body`` (all of it without
-    ``n``) and records ``n`` in ``read_calls`` when given a list.
+    ``n``) and records ``n`` in ``read_calls`` when given a list. With
+    ``chunks``, each ``read`` instead returns the next chunk whatever ``n`` is,
+    then ``b""``, to model a streamed download.
     """
 
     def __init__(
@@ -98,16 +100,20 @@ class FakeResponse:
         headers: dict[str, str] | None = None,
         final_url: str = "",
         read_calls: list[int] | None = None,
+        chunks: list[bytes] | None = None,
     ) -> None:
         self.status = status
         self.headers = headers or {}
         self._body = body
+        self._chunks = None if chunks is None else list(chunks)
         self._final_url = final_url
         self._read_calls = read_calls
 
     def read(self, n: int = -1) -> bytes:
         if self._read_calls is not None:
             self._read_calls.append(n)
+        if self._chunks is not None:
+            return self._chunks.pop(0) if self._chunks else b""
         return self._body if n < 0 else self._body[:n]
 
     def geturl(self) -> str:
