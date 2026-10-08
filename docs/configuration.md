@@ -140,13 +140,20 @@ project files and Git state stay as they are. `project list` and every
 that names `setforge project sync <path>`. A record whose directory is gone or
 was replaced is not converted: the error names
 `setforge project remove <profile> <path>` instead, which drops it as usual.
+An unconverted record in one linked Git worktree can also stop `project inject`
+or `project visibility` in another worktree of the same repository with exit
+status 1; the error names `setforge project sync <path>` for the worktree that
+holds the record.
 
 The oldest format, which predates 1.2.0, kept only a digest of the injected
 content. Conversion takes
 the content from the project file, or from the profile source when the file
 was edited. When both have changed since injection, the record cannot be
 converted and is left untouched: run `setforge project sync` once with
-SetForge 1.3 or 1.4, which still read that format.
+SetForge 1.3 or 1.4, which still read that format, or put the injected content
+back in the project file or the profile source. Until then every `project
+inject`, `sync`, `visibility` and `remove` without `--dry-run` in that
+directory stops on that record, including one for a different profile.
 
 New profile members inherit their injection's visibility. A new member whose
 destination already contains differing local bytes or mode is a conflict, not
