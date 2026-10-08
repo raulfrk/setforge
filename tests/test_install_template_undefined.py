@@ -85,3 +85,37 @@ def test_install_defined_destination_variable_still_deploys(
     assert result.exit_code == 0, result.output
     deployed = Path.home() / ".setforge_template" / "ok.txt"
     assert deployed.read_text(encoding="utf-8") == _BODY
+
+
+def _break_destination(config: Path) -> None:
+    """Misspell the destination variable, as a hasty config edit would."""
+    text = config.read_text(encoding="utf-8")
+    assert "{{ home }}/out" in text
+    config.write_text(
+        text.replace("{{ home }}/out", "{{ home_typo }}/out"), encoding="utf-8"
+    )
+
+
+def test_revert_still_undoes_install_after_the_destination_is_misspelled(
+    config_repo: ConfigRepo,
+) -> None:
+    """A bad config edit must not trap the user: undo has to keep working."""
+    config = _write_config(config_repo, "{{ home }}/out/good.txt")
+    deployed = Path.home() / "out" / "good.txt"
+    assert _install(config).exit_code == 0
+    config_repo.write_tracked("wrong.txt", "second body\n")
+    assert _install(config).exit_code == 0
+    assert deployed.read_text(encoding="utf-8") == "second body\n"
+
+    _break_destination(config)
+    assert _run("validate", config).exit_code == 1
+
+    result = _run("revert", config, "--yes")
+
+    assert result.exit_code == 0, result.output
+    assert deployed.read_text(encoding="utf-8") == _BODY
+
+    redo = _run("revert", config, "--yes")
+
+    assert redo.exit_code == 0, redo.output
+    assert deployed.read_text(encoding="utf-8") == "second body\n"

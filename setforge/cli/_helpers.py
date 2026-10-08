@@ -119,7 +119,7 @@ def _parse_section_auto(
 
 
 def _iter_all_tracked_files(
-    ctx: ProfileContext,
+    ctx: ProfileContext, *, symlinks_only: bool = False
 ) -> Iterator[tuple[TrackedFile, str, Path, Path]]:
     """Yield ``(tracked_file, sub_name, sub_src, sub_dst)`` per resolved entry.
 
@@ -132,10 +132,15 @@ def _iter_all_tracked_files(
     because the install deploy caller needs per-tracked_file
     ``preserve_user_*`` attributes; callers that only need a path
     destructure as ``_, _, _, sub_dst`` or ``_, _, sub_src, _``.
+
+    ``symlinks_only`` skips every non-symlink entry before its destination is
+    resolved, for a caller that must not depend on those destinations rendering.
     """
     for name in ctx.file_profile.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         if tracked_file.tree is not None:
+            continue
+        if symlinks_only and tracked_file.symlink is None:
             continue
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)

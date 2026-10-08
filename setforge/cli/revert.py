@@ -744,7 +744,11 @@ def _refuse_legacy_symlink_record(
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    for tracked, _name, _source, destination in _iter_all_tracked_files(ctx):
+    # Only link entries are inspected, so a destination that cannot be rendered
+    # in any other entry must not block undoing a transition.
+    for tracked, _name, _source, destination in _iter_all_tracked_files(
+        ctx, symlinks_only=True
+    ):
         if tracked.symlink is None or destination in covered:
             continue
         target = resolve_symlink_target(destination, tracked.symlink)
