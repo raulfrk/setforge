@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.errors import SetforgeError
 from tests.conftest import redirect_local_config_path
+from tests.shared_fixtures import ConfigRepo
 
 
 @pytest.fixture
@@ -316,3 +317,123 @@ def test_add_tracked_rejects_unresolvable_extends(
     assert result.exit_code != 0
     assert message in str(result.exception)
     assert seed_tracked.read_bytes() == before
+
+
+_LOCAL_WITH_OVERLAY = """\
+# keep this comment
+binaries:
+  code: /usr/bin/code
+marketplaces:
+  # existing additions
+  add:
+    old-mp:
+      source: github
+      repo: owner/old
+  remove:
+    - team
+plugins:
+  remove:
+    - review
+"""
+
+
+@pytest.fixture
+def overlay_config(config_repo: ConfigRepo) -> Path:
+    """A valid setforge.yaml: profile ``base`` has plugin ``review`` from ``team``."""
+    config_repo.write_tracked("d.txt", "x\n")
+    return config_repo.write_config(
+        profile="base",
+        tracked_files={"d": {"src": "d.txt", "dst": "~/.d"}},
+        profile_extra={"packages": ["review"]},
+        extra={
+            "marketplaces": {"team": {"source": "github", "repo": "owner/team"}},
+            "claude_plugins": {"review": {"marketplace": "team"}},
+            "packages": {"review": {"type": "plugin", "plugin": "review"}},
+        },
+    )
+
+
+def _assert_profile_still_resolves(runner: CliRunner, cfg: Path) -> None:
+    for argv in (["validate", "--profile=base"], ["profile", "show", "base"]):
+        result = runner.invoke(app, [*argv, f"--config={cfg}"])
+        assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("source", "location", "entry"),
+    [
+        ("github", "owner/new", {"source": "github", "repo": "owner/new"}),
+        ("path", "/srv/new-mp", {"source": "path", "path": "/srv/new-mp"}),
+    ],
+)
+def test_add_marketplace_lands_under_the_overlay_add_block(
+    runner: CliRunner,
+    seed_local: Path,
+    overlay_config: Path,
+    source: str,
+    location: str,
+    entry: dict[str, str],
+) -> None:
+    """The new marketplace goes under ``marketplaces.add`` beside what is there.
+
+    The loader reads ``marketplaces.add.<name>``; a sibling of ``add`` and
+    ``remove`` is a schema error that blocks every profile command.
+    """
+    from setforge.migrations._yaml_ops import load_yaml_mapping
+
+    seed_local.write_text(_LOCAL_WITH_OVERLAY, encoding="utf-8")
+    seed_local.chmod(0o600)
+
+    argv = ["config", "add", "--local", "marketplaces.add", "new-mp"]
+    result = runner.invoke(
+        app, [*argv, "--source", source, "--repo", location, "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    overlay = load_yaml_mapping(seed_local)["marketplaces"]
+    assert overlay == {
+        "add": {"old-mp": {"source": "github", "repo": "owner/old"}, "new-mp": entry},
+        "remove": ["team"],
+    }
+    text = seed_local.read_text(encoding="utf-8")
+    assert "# keep this comment" in text
+    assert "# existing additions" in text
+    assert seed_local.stat().st_mode & 0o777 == 0o600
+    _assert_profile_still_resolves(runner, overlay_config)
+
+
+def test_add_marketplace_creates_the_overlay_blocks(
+    runner: CliRunner, seed_local: Path, overlay_config: Path
+) -> None:
+    """A local.yaml with no ``marketplaces`` block gets ``marketplaces.add.<name>``."""
+    from setforge.migrations._yaml_ops import load_yaml_mapping
+
+    argv = ["config", "add", "--local", "marketplaces.add", "new-mp"]
+    result = runner.invoke(
+        app, [*argv, "--source", "github", "--repo", "owner/new", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert load_yaml_mapping(seed_local)["marketplaces"] == {
+        "add": {"new-mp": {"source": "github", "repo": "owner/new"}}
+    }
+    _assert_profile_still_resolves(runner, overlay_config)
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [("old-mp", "already exists"), ("-bad", "must not begin with '-'")],
+    ids=["duplicate", "option-shaped-name"],
+)
+def test_add_marketplace_refused_leaves_local_yaml_unchanged(
+    runner: CliRunner, seed_local: Path, name: str, message: str
+) -> None:
+    seed_local.write_text(_LOCAL_WITH_OVERLAY, encoding="utf-8")
+    before = seed_local.read_bytes()
+
+    argv = ["config", "add", "--local", "marketplaces.add", "--source", "github"]
+    result = runner.invoke(app, [*argv, "--repo", "owner/new", "--yes", "--", name])
+
+    assert result.exit_code != 0
+    assert message in str(result.exception)
+    assert seed_local.read_bytes() == before

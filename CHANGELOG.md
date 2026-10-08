@@ -153,6 +153,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SetForge you are running. It used to start whichever `setforge` came first on
   your `PATH` and, if that failed, fall back to a bundled copy with a warning.
   The script it writes is unchanged.
+- `setforge config add --local marketplaces.add NAME` now writes the marketplace
+  under `marketplaces: add:` in `local.yaml`, beside any existing `add` and
+  `remove` entries, and refuses a name that is already there or that begins
+  with `-`. It used to write `NAME` directly under `marketplaces:`, which
+  `validate`, `profile show`, `compare` and `install` then rejected as an
+  unknown key until you fixed `local.yaml` by hand. A `local.yaml` already
+  written that way still has to be corrected by hand: move the entry under
+  `add:`.
 
 ### Removed
 

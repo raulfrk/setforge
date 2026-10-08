@@ -81,7 +81,11 @@ from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
 from setforge.locking import mutation_locks
 from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
-from setforge.source import get_resolved_source, validate_source_dir
+from setforge.source import (
+    MarketplaceOverlay,
+    get_resolved_source,
+    validate_source_dir,
+)
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -699,8 +703,8 @@ def _add_marketplace(
 
     Non-TTY: requires ``--source`` + (``--repo`` for github).
     Interactive: prompts via lazy-imported prompt_toolkit dialogs.
-    Validates the candidate MarketplaceSource, then diff-previews +
-    atomic-writes back through ``_mutate_and_write``.
+    Validates the candidate MarketplaceSource and the resulting
+    ``marketplaces`` overlay block, then diff-previews + atomic-writes.
     """
     if scope is not ConfigScope.LOCAL:
         raise SetforgeError("marketplaces.add only supported on --local for now")
@@ -721,9 +725,17 @@ def _add_marketplace(
     before_text = _read_raw(yaml_path)
     if "marketplaces" not in doc:
         doc["marketplaces"] = CommentedMap()
-    if name in doc["marketplaces"]:
-        raise SetforgeError(f"marketplaces.{name} already exists")
-    doc["marketplaces"][name] = _build_marketplace_entry(candidate)
+    if "add" not in doc["marketplaces"]:
+        doc["marketplaces"]["add"] = CommentedMap()
+    if name in doc["marketplaces"]["add"]:
+        raise SetforgeError(f"marketplaces.add.{name} already exists")
+    doc["marketplaces"]["add"][name] = _build_marketplace_entry(candidate)
+    # The loader reads this block through MarketplaceOverlay; LocalConfig only
+    # sees a free-form mapping, so check the overlay shape here.
+    try:
+        MarketplaceOverlay.model_validate(_to_plain(doc["marketplaces"]))
+    except ValidationError as exc:
+        raise SetforgeError(f"local.yaml candidate failed validation:\n{exc}") from exc
     _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
 
 
