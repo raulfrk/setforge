@@ -1296,3 +1296,56 @@ def test_stage_still_refuses_a_generated_file_by_its_own_id(
 
     assert staged.exit_code == 2
     assert "one-way output" in staged.output
+
+
+def _two_files_named_alike(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], dict[str, Path]]:
+    """Install ``first`` and ``second``, whose live files are both ``notes.txt``."""
+    live_root = tmp_path / "home" / "live"
+    live = {
+        "first": live_root / "x" / "notes.txt",
+        "second": live_root / "y" / "notes.txt",
+    }
+    return _installed_files(config_repo, tmp_path, monkeypatch, live), live
+
+
+def test_stage_by_a_live_file_name_shared_by_two_files_refuses_and_lists_them(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.reconcile.hunks import Hunk
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+    walked: list[str] = []
+
+    def choices(item: FileStage[Hunk]):
+        walked.append(item.sub_name)
+        return lambda _unit, _index, _total: None
+
+    monkeypatch.setattr(stage_mod, "_interactive_choice", choices)
+
+    staged = CliRunner().invoke(
+        app, ["stage", "notes.txt", *args], input=_TerminalInput()
+    )
+
+    assert staged.exit_code == 2
+    assert "notes.txt: matches 2 tracked files" in staged.output
+    assert f"first ({live['first']})" in staged.output
+    assert f"second ({live['second']})" in staged.output
+    assert walked == []
+    assert _classified(args) == {"first": (0, 1), "second": (0, 1)}
+
+
+def test_stage_by_an_id_still_works_when_two_files_share_a_live_file_name(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "second")
+
+    assert walked == ["second"]
+    assert _classified(args) == {"first": (0, 1), "second": (1, 0)}

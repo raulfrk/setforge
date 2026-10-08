@@ -216,22 +216,54 @@ class _PersistPlan:
     drafts: dict[UnitRef, bytes]
 
 
-def _declares_id(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, wanted: str
-) -> bool:
-    """Whether ``wanted`` is the name or a directory sub-name of a stageable file."""
+#: A stageable file: its tracked-file name, its sub-name, its live path.
+type _Row = tuple[str, str, Path]
+
+
+def _stageable_rows(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> list[_Row]:
+    """Every plain file the profile tracks, one row per file under a directory."""
+    rows: list[_Row] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
         if tracked_file.generated is not None or tracked_file.tree is not None:
             continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        if any(
-            wanted in (name, sub_name)
-            for sub_name, _sub_src, _sub_dst in expand_tracked_file(name, src, dst)
-        ):
-            return True
-    return False
+        rows.extend(
+            (name, sub_name, sub_dst)
+            for sub_name, _sub_src, sub_dst in expand_tracked_file(name, src, dst)
+        )
+    return rows
+
+
+def _select_rows(rows: list[_Row], arg: str) -> tuple[list[_Row], bool]:
+    """The rows ``arg`` names, and whether it named them by ID.
+
+    A tracked-file name or sub-name wins (a directory's name selects every file
+    under it); only when none has that ID do the live path and live file name
+    count.
+    """
+    by_id = [row for row in rows if arg in (row[0], row[1])]
+    if by_id:
+        return by_id, True
+    return [row for row in rows if arg in (str(row[2]), row[2].name)], False
+
+
+def _refuse_ambiguous_stage_target(rows: list[_Row], arg: str) -> None:
+    """Refuse a live path or file name that picks out more than one file."""
+    matches, by_id = _select_rows(rows, arg)
+    if by_id or len(matches) < 2:
+        return
+    listing = ", ".join(f"{sub_name} ({dst})" for _name, sub_name, dst in matches)
+    typer.secho(
+        f"error: {arg}: matches {len(matches)} tracked files ({listing}); "
+        "pass the tracked-file name or the full path",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=2)
 
 
 def _collect(
@@ -254,7 +286,16 @@ def _collect(
     ``only`` filters to a single file: by tracked-file name or sub-name when one
     declares it, otherwise by live path or live basename.
     """
-    by_id = only is not None and _declares_id(cfg, resolved, repo_root, only)
+    selected = (
+        None
+        if only is None
+        else {
+            sub_name
+            for _name, sub_name, _dst in _select_rows(
+                _stageable_rows(cfg, resolved, repo_root), only
+            )[0]
+        }
+    )
     stages: list[FileStage[Any]] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
@@ -265,9 +306,7 @@ def _collect(
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if kind is UnitKind.KEY and su_mod.structured_format(sub_dst) is None:
                 continue
-            if only is not None and only not in (
-                (name, sub_name) if by_id else (str(sub_dst), sub_dst.name)
-            ):
+            if selected is not None and sub_name not in selected:
                 continue
             if not sub_dst.exists():
                 continue
@@ -992,6 +1031,7 @@ def stage(
         raise typer.Exit(code=2)
 
     _refuse_generated_stage_target(cfg, resolved, file)
+    _refuse_ambiguous_stage_target(_stageable_rows(cfg, resolved, repo_root), file)
 
     staged: list[FileStage[Any]] = [
         *collect_stages(cfg, resolved, repo_root, profile, only=file),
