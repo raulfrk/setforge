@@ -620,6 +620,8 @@ repo on `sync`/`capture`) or **LOCAL** (stays on this host and survives
 re-installs). Unclassified units stay **PENDING** and are not published.
 JSON files are the exception: a `.json` file is staged as **one whole-document
 unit**, so Share / Keep-local applies to the entire document rather than per key.
+A YAML or JSON file whose copy recorded at the last install cannot be parsed is
+staged by text hunk instead, and keeps that mode once you have staged it.
 
 When live and tracked have both changed the same region, `install`
 (with `--reconcile-user-sections`, a historical flag name that now opens the

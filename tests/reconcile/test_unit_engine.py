@@ -10,6 +10,7 @@ import pytest
 
 from setforge.errors import InvariantViolation
 from setforge.reconcile.hunks import extract_hunks
+from setforge.reconcile.index_model import require_unit_kind
 from setforge.reconcile.structured_units import (
     StructuredFormat,
     extract_structured_units,
@@ -22,25 +23,76 @@ from setforge.reconcile.unit_engine import (
     structured_engine,
 )
 
+_PARSES = b"a: 1\n"
+_BROKEN = b"a: {broken\n"
+_LINE_ROW: dict[str, object] = {
+    "kind": "line",
+    "unit_id": "u",
+    "live_hash": "h",
+    "cls": "local",
+}
+_KEY_ROW: dict[str, object] = {
+    "kind": "key",
+    "path": "a",
+    "value_hash": "h",
+    "cls": "local",
+}
+
 
 @pytest.mark.parametrize(
-    ("name", "kind", "fmt"),
+    ("name", "base", "kind", "fmt"),
     [
-        ("notes.md", UnitKind.LINE, None),
-        ("settings.jsonc", UnitKind.LINE, None),
-        ("settings.yaml", UnitKind.KEY, StructuredFormat.YAML),
-        ("settings.yml", UnitKind.KEY, StructuredFormat.YAML),
-        ("settings.json", UnitKind.KEY, StructuredFormat.JSONC),
+        ("notes.md", _PARSES, UnitKind.LINE, None),
+        ("notes.md", _BROKEN, UnitKind.LINE, None),
+        ("settings.jsonc", b'{"a": 1}', UnitKind.LINE, None),
+        ("settings.yaml", _PARSES, UnitKind.KEY, StructuredFormat.YAML),
+        ("settings.yml", _PARSES, UnitKind.KEY, StructuredFormat.YAML),
+        ("settings.json", b'{"a": 1}', UnitKind.KEY, StructuredFormat.JSONC),
+        ("settings.yaml", _BROKEN, UnitKind.LINE, None),
+        ("settings.yml", _BROKEN, UnitKind.LINE, None),
+        ("settings.yaml", b"\xff\xfe", UnitKind.LINE, None),
+        ("settings.json", b'{"a": ', UnitKind.LINE, None),
+        ("settings.json", b'{"a": 1, "a": 2}', UnitKind.LINE, None),
     ],
 )
-def test_engine_for_routes_by_live_path_format(
-    name: str, kind: UnitKind, fmt: StructuredFormat | None
+def test_engine_for_a_file_without_rows_follows_its_format_and_base(
+    name: str, base: bytes, kind: UnitKind, fmt: StructuredFormat | None
 ) -> None:
-    engine = engine_for(Path("live") / name)
+    engine = engine_for(Path("live") / name, base, [])
 
     assert (engine.kind, engine.fmt) == (kind, fmt)
     assert engine.supports_adopt is (kind is UnitKind.LINE)
-    assert engine == engine_for(Path("elsewhere") / name)
+    assert engine == engine_for(Path("elsewhere") / name, base, [])
+
+
+@pytest.mark.parametrize("base", [_PARSES, _BROKEN], ids=["parses", "broken"])
+@pytest.mark.parametrize(
+    ("rows", "kind"),
+    [([_LINE_ROW], UnitKind.LINE), ([_KEY_ROW], UnitKind.KEY)],
+    ids=["line-rows", "key-rows"],
+)
+def test_engine_for_keeps_the_kind_of_the_stored_rows(
+    base: bytes, rows: list[dict[str, object]], kind: UnitKind
+) -> None:
+    assert engine_for(Path("settings.yaml"), base, rows).kind is kind
+
+
+@pytest.mark.parametrize("base", [_PARSES, _BROKEN], ids=["parses", "broken"])
+def test_engine_for_a_plain_file_ignores_key_rows(base: bytes) -> None:
+    engine = engine_for(Path("notes.md"), base, [_KEY_ROW])
+
+    assert engine is LINE
+    with pytest.raises(InvariantViolation, match="incompatible with current 'line'"):
+        require_unit_kind([_KEY_ROW], engine.kind)
+
+
+def test_engine_for_a_structured_file_rejects_rows_of_mixed_kinds() -> None:
+    rows = [_LINE_ROW, _KEY_ROW]
+    engine = engine_for(Path("settings.yaml"), _BROKEN, rows)
+
+    assert engine.kind is UnitKind.KEY
+    with pytest.raises(InvariantViolation, match="incompatible with current 'key'"):
+        require_unit_kind(rows, engine.kind)
 
 
 @pytest.mark.parametrize(

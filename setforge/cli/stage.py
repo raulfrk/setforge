@@ -229,9 +229,10 @@ def _collect(
     """Classified-unit view for each staged-eligible file of one unit kind.
 
     READ-ONLY — safe for ``--list``. Eligibility mirrors the install reconcile
-    gate: a tracked file whose format stages as ``kind``, present live, with a
-    recorded merge base, and UTF-8 text that its engine can read. A binary or
-    unparseable file gets no unit staging; capture writes it back verbatim.
+    gate: a tracked file whose engine (:func:`engine_for`) stages as ``kind``,
+    present live, with a recorded merge base, and UTF-8 text that its engine can
+    read. A binary file, or a live file its key engine cannot parse, gets no unit
+    staging; capture writes it back verbatim.
     ``only`` filters to a single file by tracked-file name, sub-name, live path,
     or live basename.
     """
@@ -243,8 +244,7 @@ def _collect(
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            engine = engine_for(sub_dst)
-            if engine.kind is not kind:
+            if kind is UnitKind.KEY and su_mod.structured_format(sub_dst) is None:
                 continue
             if only is not None and only not in (
                 name,
@@ -261,6 +261,9 @@ def _collect(
                 continue  # not reconcile-managed (run `setforge install` first)
             entry = reconcile_store.read_index(profile).files.get(str(fid))
             stored = entry.hunks if entry is not None else []
+            engine = engine_for(sub_dst, base, stored)
+            if engine.kind is not kind:
+                continue
             stored = index_model.require_unit_kind(stored, kind)
             live = sub_dst.read_bytes()
             try:
@@ -295,7 +298,7 @@ def collect_stages(
     only: str | None = None,
     include_ownership: bool = True,
 ) -> list[FileStage[Hunk]]:
-    """The line-hunk stages: each staged-eligible plain file (:func:`_collect`)."""
+    """The line-hunk stages: each staged-eligible file staged by line."""
     return _collect(
         cfg,
         resolved,
@@ -316,7 +319,7 @@ def collect_structured_stages(
     only: str | None = None,
     include_ownership: bool = True,
 ) -> list[FileStage[KeyUnit]]:
-    """The key-unit stages: each staged-eligible YAML/JSON file (:func:`_collect`)."""
+    """The key-unit stages: each staged-eligible file staged by key."""
     return _collect(
         cfg,
         resolved,

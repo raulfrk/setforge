@@ -20,8 +20,9 @@ from setforge.cli.stage import (
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import InvariantViolation, StructuredParseError
 from setforge.reconcile import share_draft
+from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
-from setforge.reconcile.types import HunkClass, UnitRef, file_id
+from setforge.reconcile.types import HunkClass, UnitKind, UnitRef, file_id
 from setforge.reconcile.unit_engine import structured_engine
 from setforge.ui.widgets import CANCEL
 
@@ -70,7 +71,7 @@ def test_collect_structured_yields_key_units(
     assert all(u.cls is HunkClass.PENDING for u in stage.units)
 
 
-def test_collect_structured_rejects_persisted_line_units(
+def test_collect_keeps_persisted_line_units_line_staged_for_a_structured_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from setforge import locking
@@ -93,12 +94,14 @@ def test_collect_structured_rejects_persisted_line_units(
                 }
             ],
         )
-    # Routing incompatibility wins even when the new structured representation
-    # is not parseable; it must not be silently treated as an unstaged fallback.
+    # The stored rows decide, even though the base parses and the live file does not.
     Path(cfg.tracked_files["settings.yaml"].dst).write_bytes(b"not: [valid")
+    resolved = resolve_profile(cfg, profile)
 
-    with pytest.raises(InvariantViolation, match="current 'key' routing"):
-        collect_structured_stages(cfg, resolve_profile(cfg, profile), repo, profile)
+    assert collect_structured_stages(cfg, resolved, repo, profile) == []
+    (stage,) = collect_stages(cfg, resolved, repo, profile)
+    assert stage.engine.kind is UnitKind.LINE
+    assert [u.cls for u in stage.units] == [HunkClass.PENDING]
 
 
 def test_collect_stages_skips_structured_file(
@@ -651,3 +654,164 @@ def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
         assert again.exit_code == 0, (again.output, again.exception)
         assert destination.read_bytes() == live
         assert source.read_bytes() == shared_only
+
+
+# The unparsable line, the host-only line and the shared line sit more than three
+# lines apart so a repair of the first and an edit of the last do not change the
+# context that identifies the host-only hunk.
+_BROKEN_YAML = (
+    b"top: {broken\n"
+    b"a1: same\na2: same\na3: same\na4: same\n"
+    b"host: base-host\n"
+    b"b1: same\nb2: same\nb3: same\nb4: same\n"
+    b"shared: 1\n"
+)
+_BROKEN_YAML_EDITED = _BROKEN_YAML.replace(b"base-host", b"my-laptop").replace(
+    b"shared: 1", b"shared: 2"
+)
+
+
+def _installed_broken_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], Path, Path]:
+    """Install ``conf.yaml``, whose tracked copy never parsed, then edit it locally."""
+    from ruamel.yaml import YAML
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_install_managed_tree import _mixed_config
+
+    name = "conf.yaml"
+    config, live_root = _mixed_config(tmp_path, monkeypatch, ("one", "two"))
+    yaml = YAML()
+    document = yaml.load(config.read_text())
+    tracked = document["tracked_files"].pop("one")
+    tracked["src"] = name
+    tracked["dst"] = str(live_root / name)
+    document["tracked_files"][name] = tracked
+    document["profiles"]["p"]["tracked_files"] = [name, "two"]
+    yaml.dump(document, config)
+    source = config.parent / "tracked" / name
+    source.write_bytes(_BROKEN_YAML)
+    args = ["--profile=p", f"--config={config}"]
+    installed = CliRunner().invoke(
+        app, ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    )
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    destination = live_root / name
+    assert destination.read_bytes() == _BROKEN_YAML
+    destination.write_bytes(_BROKEN_YAML_EDITED)
+    return args, source, destination
+
+
+def test_stage_lists_a_yaml_file_whose_base_never_parsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    args, _source, _destination = _installed_broken_yaml(tmp_path, monkeypatch)
+
+    listed = CliRunner().invoke(app, ["--format=json", "stage", "--list", *args])
+
+    assert listed.exit_code == 0, (listed.output, listed.exception)
+    rows = {row["name"]: row for row in json.loads(listed.stdout)["data"]}
+    assert rows["conf.yaml"]["pending"] == 2
+
+
+def _line_choices(_stage: FileStage[Hunk]):
+    def choose(_unit: Hunk, index: int, _total: int) -> Decision:
+        return Decision(HunkClass.LOCAL if index == 0 else HunkClass.SHARED)
+
+    return choose
+
+
+def _stage_conf_yaml(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+
+    monkeypatch.setattr(stage_mod, "_interactive_choice", _line_choices)
+    staged = CliRunner().invoke(
+        app, ["stage", "conf.yaml", *args], input=_TerminalInput()
+    )
+    assert staged.exit_code == 0, (staged.output, staged.exception)
+    assert "1 shared  1 local  0 pending" in staged.output
+
+
+def test_yaml_with_a_base_that_never_parsed_stages_by_line_and_syncs_shared_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.reconcile import store
+
+    args, source, destination = _installed_broken_yaml(tmp_path, monkeypatch)
+    runner = CliRunner()
+    install = ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    shared_only = _BROKEN_YAML.replace(b"shared: 1", b"shared: 2")
+
+    _stage_conf_yaml(monkeypatch, args)
+    synced = runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"])
+
+    assert synced.exit_code == 0, (synced.output, synced.exception)
+    assert source.read_bytes() == shared_only
+    assert destination.read_bytes() == _BROKEN_YAML_EDITED
+    entry = store.read_index("p").files[str(file_id("conf.yaml"))]
+    assert {row["kind"] for row in entry.hunks} == {"line"}
+    compared = runner.invoke(app, ["--format=json", "compare", *args])
+    assert compared.exit_code == 0, (compared.output, compared.exception)
+    (conf,) = [
+        e
+        for e in json.loads(compared.stdout)["data"]["entries"]
+        if e["name"] == "conf.yaml"
+    ]
+    assert conf["drift_class"] == "expected"
+    for _ in range(2):
+        again = runner.invoke(app, install)
+        assert again.exit_code == 0, (again.output, again.exception)
+        assert destination.read_bytes() == _BROKEN_YAML_EDITED
+        assert source.read_bytes() == shared_only
+
+
+def test_yaml_staged_by_line_stays_line_staged_once_its_base_parses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from setforge.reconcile import store
+
+    args, source, destination = _installed_broken_yaml(tmp_path, monkeypatch)
+    runner = CliRunner()
+    _stage_conf_yaml(monkeypatch, args)
+    assert (
+        runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"]).exit_code == 0
+    )
+    repaired = _BROKEN_YAML.replace(b"top: {broken", b"top: {fixed: 1}").replace(
+        b"shared: 1", b"shared: 2"
+    )
+    source.write_bytes(repaired)
+
+    installed = runner.invoke(
+        app, ["install", *args, "--yes", "--no-fetch", "--no-git-check"]
+    )
+
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    assert destination.read_bytes() == repaired.replace(b"base-host", b"my-laptop")
+    fid = file_id("conf.yaml")
+    assert store.read_base("p", fid) == repaired
+    listed = runner.invoke(app, ["--format=json", "stage", "--list", *args])
+    assert listed.exit_code == 0, (listed.output, listed.exception)
+    rows = {row["name"]: row for row in json.loads(listed.stdout)["data"]}
+    assert (rows["conf.yaml"]["local"], rows["conf.yaml"]["pending"]) == (1, 0)
+    synced = runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"])
+    assert synced.exit_code == 0, (synced.output, synced.exception)
+    assert source.read_bytes() == repaired
+    assert b"my-laptop" not in source.read_bytes()
+    assert b"my-laptop" in destination.read_bytes()
+    entry = store.read_index("p").files[str(fid)]
+    assert {row["kind"] for row in entry.hunks} == {"line"}

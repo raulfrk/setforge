@@ -23,6 +23,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge project remove` previews a file that injection created as
   `delete:` instead of `restore create:`, and says `leave absent:` for one that
   is already gone.
+- `setforge stage` now lists and stages a YAML or JSON file whose copy recorded at
+  the last install is not valid YAML or JSON. It used to be left out silently, so
+  its local changes could not be marked shared or local. Such a file is staged by
+  text hunk, like a plain file, and `sync` and `compare` follow suit; a file that
+  has already been staged keeps being staged the same way.
 
 ## [1.4.0] - 2026-10-05
 

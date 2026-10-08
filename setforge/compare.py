@@ -1155,7 +1155,6 @@ def _reconcile_staged_expected(
     from setforge.reconcile.types import file_id as make_file_id
     from setforge.reconcile.unit_engine import engine_for
 
-    engine = engine_for(dst)  # .jsonc is not a structured format: line hunks
     try:
         fid = make_file_id(file_id_str)
         base = reconcile_store.read_base(profile, fid)
@@ -1164,6 +1163,7 @@ def _reconcile_staged_expected(
         entry = reconcile_store.read_index(profile).files.get(file_id_str)
         if entry is None or not entry.staged:
             return False  # not A5-staged → not this slot's case
+        engine = engine_for(dst, base, entry.hunks)
         live = dst.read_bytes()
         tracked = src.read_bytes()
         base.decode("utf-8")
