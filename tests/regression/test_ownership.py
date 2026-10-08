@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from setforge import operations
+from setforge.locking import mutation_locks
 from setforge.ownership import read_owner_id
 from setforge.reconcile.types import check_profile_name
 
@@ -421,7 +423,8 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
     assert len(tuple(journals.glob("*.json"))) == 1
     changed = step not in ("journal-written", "checkpoint-begun")
     assert (_ownership_state(host) != before) is changed
-    assert len(_staged_files(host)) == step.endswith("-staged")
+    staged = sorted(_staged_files(host))
+    assert len(staged) == step.endswith("-staged")
     assert host.cli("ownership", "list", config=False, profile=False).exit_code == 0
     assert host.cli("status").exit_code == 0
     refusal = f"`setforge recover --profile={profile}`"
@@ -448,12 +451,62 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
 
     assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
     after = _ownership_state(host)
-    for staged in _staged_files(host):
-        del after[staged]
+    # Recovery keeps the one temporary file the kill left and adds none.
+    assert sorted(_staged_files(host)) == staged
+    for rel in staged:
+        del after[rel]
     assert after == before
     assert host.cli("ownership", "history", profile=False).exit_code == 0
     assert not tuple(journals.glob("*.json"))
     assert _states(host) == ["released" if action == "revert" else "claimed"]
     repeated = host.proc(*command, config=False, profile=False)
     assert repeated.returncode == 0, (repeated.stdout, repeated.stderr)
+    assert _states(host) == ["claimed" if action == "revert" else "released"]
+
+
+@pytest.mark.parametrize("action", ["release", "revert"])
+def test_release_or_revert_waits_for_a_running_operation_instead_of_refusing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    assert host.install().exit_code == 0
+    (claim,) = claim_ids_for(
+        host.cli("ownership", "list", config=False, profile=False).output, "note.txt"
+    )
+    command = ["ownership", "release", claim, "--yes", f"--config={host.config}"]
+    if action == "revert":
+        assert host.cli(*command[:-1], profile=False).exit_code == 0
+        transition = host.cli("ownership", "history", profile=False).output.split()[0]
+        command[1:3] = ["revert", transition]
+
+    # Another command is mid-operation: it holds the gate and its journal is
+    # on disk. That journal is healthy, not abandoned, so the command waits.
+    waiting: subprocess.Popen[str] | None = None
+    try:
+        with mutation_locks():
+            running = operations.prepare(
+                command="sync",
+                profile="p",
+                config_dir=None,
+                resources_lock=False,
+                paths=(),
+            )
+            waiting = subprocess.Popen(
+                [sys.executable, "-m", "setforge.cli", *command],
+                cwd=REPO_ROOT,
+                env=host.proc_env(),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            with pytest.raises(subprocess.TimeoutExpired):
+                waiting.wait(timeout=4)
+            operations.complete(running)
+        out, err = waiting.communicate(timeout=60)
+    finally:
+        if waiting is not None and waiting.poll() is None:
+            waiting.kill()
+            waiting.wait()
+
+    assert waiting.returncode == 0, (out, err)
     assert _states(host) == ["claimed" if action == "revert" else "released"]

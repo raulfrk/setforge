@@ -500,9 +500,7 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
     rollbacks: list[tuple[str, list[str]]] = []
     for path in sorted(Path(install.__file__).parent.glob("*.py")):
         source = path.read_text(encoding="utf-8")
-        # Release and revert refuse before previewing a claim that recovery
-        # will change; their journal still refuses again inside the locks.
-        assert source.count("refuse_pending(") == 2 * (path.name == "ownership.py")
+        assert "refuse_pending" not in source, path.name
         for _node, calls in _with_entries(source):
             names = _names(calls)
             if "operations.recover_on_error" in names:
