@@ -153,6 +153,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SetForge you are running. It used to start whichever `setforge` came first on
   your `PATH` and, if that failed, fall back to a bundled copy with a warning.
   The script it writes is unchanged.
+- `setforge plugin add` for Claude now checks that `--profile` exists before it
+  changes anything. A mistyped profile used to leave the new marketplace and
+  plugin in `setforge.yaml` and register the marketplace with Claude before the
+  command failed with "profile not found"; it now fails first and changes
+  nothing.
 
 ### Removed
 

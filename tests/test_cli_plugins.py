@@ -7,7 +7,7 @@ resolution and clean error handling for failing ``claude`` subprocesses.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +17,8 @@ from typer.testing import CliRunner
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import codex_plugins as codex_plugins_mod
 from setforge.cli import app
+from setforge.errors import ProfileNotFound
+from tests.conftest import FakeClaude
 from tests.shared_helpers import write_setforge_yaml
 
 
@@ -545,7 +547,9 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
     monkeypatch.setattr(
         plugins_mod, "_resolve_config_arg", lambda c: c or Path("setforge.yaml")
     )
-    monkeypatch.setattr(plugins_mod, "load_config", lambda c: object())
+    monkeypatch.setattr(
+        plugins_mod, "load_config", lambda c: SimpleNamespace(profiles={"x": object()})
+    )
     # New marketplace → the register path invokes `claude marketplace add`.
     monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod, "yaml_add_marketplace", lambda *a, **k: True
@@ -689,6 +693,96 @@ def test_plugin_add_rejects_option_shaped_name_before_mutation(
     assert "names must not begin" in result.output
     assert cfg.read_bytes() == before
     assert native_calls == []
+
+
+_PLUGIN_ADD_FIXTURE_YAML = """\
+version: 1
+schema_version: '6.4'
+minimum_version: '6.4'
+tracked_files:
+  d:
+    src: x
+    dst: y
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+@pytest.mark.parametrize("no_install", [False, True])
+def test_claude_plugin_add_unknown_profile_changes_nothing(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    no_install: bool,
+) -> None:
+    cfg = write_setforge_yaml(tmp_path, _PLUGIN_ADD_FIXTURE_YAML)
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    claude = fake_claude()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--from=github:o/newmp",
+            "--profile=typo",
+            f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, ProfileNotFound)
+    assert "typo" in str(result.exception)
+    assert "registered marketplace" not in result.output
+    assert "declared plugin" not in result.output
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert claude.calls == []
+
+
+def test_codex_plugin_add_unknown_profile_restores_config_and_native_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = write_setforge_yaml(tmp_path, _PLUGIN_ADD_FIXTURE_YAML)
+    cfg.chmod(0o640)
+    before = cfg.read_bytes()
+    mode_before = cfg.stat().st_mode
+    marketplaces: dict[str, codex_plugins_mod.InstalledMarketplace] = {}
+    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: {})
+    monkeypatch.setattr(
+        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
+    )
+    monkeypatch.setattr(
+        codex_plugins_mod,
+        "marketplace_add",
+        lambda _source: marketplaces.__setitem__(
+            "newmp", codex_plugins_mod.InstalledMarketplace("newmp", tmp_path / "mp")
+        ),
+    )
+    monkeypatch.setattr(codex_plugins_mod, "marketplace_remove", marketplaces.pop)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "add",
+            "review@newmp",
+            "--product=codex",
+            "--from=github:o/newmp",
+            "--profile=typo",
+            f"--config={cfg}",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "typo" in result.output
+    assert cfg.read_bytes() == before
+    assert cfg.stat().st_mode == mode_before
+    assert marketplaces == {}
 
 
 def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(

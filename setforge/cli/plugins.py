@@ -38,7 +38,12 @@ from setforge.config import (
     resolve_effective_profile,
     validate_registry_name,
 )
-from setforge.errors import MarketplaceCacheMiss, PluginToolMissing, SetforgeError
+from setforge.errors import (
+    MarketplaceCacheMiss,
+    PluginToolMissing,
+    ProfileNotFound,
+    SetforgeError,
+)
 from setforge.locking import mutation_locks
 
 # ---------------------------------------------------------------------------
@@ -172,7 +177,10 @@ def plugin_add(
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        load_config(config)
+        cfg = load_config(config)
+        if profile not in cfg.profiles:
+            # Reject before the marketplace/plugin writes and the native call.
+            raise ProfileNotFound(f"profile not found: {profile}")
         _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
         if not no_install:
             _execute_plugin_add(plugin_name, mp_name)
