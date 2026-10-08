@@ -30,7 +30,7 @@ Wired as its own CI step (see ``.github/workflows/ci.yml``) with no
 ``continue-on-error``, so a violation is a hard CI failure.
 
 Known seed-gate limitation: a brand-new Pydantic model absent from
-:data:`setforge.schema_manifest._MODELS` is invisible to the field-removal
+:data:`scripts.schema_manifest._MODELS` is invisible to the field-removal
 gate (the manifest can only compare models it enumerates). Fixing that
 is out of scope here (deferred).
 """
@@ -39,6 +39,11 @@ from __future__ import annotations
 
 import sys
 
+from scripts.schema_manifest import (
+    FROZEN_FIELD_MANIFEST,
+    additivity_violations,
+    live_field_manifest,
+)
 from setforge.errors import ConfigError
 from setforge.migrations import (
     _DEFAULT_SCHEMA_VERSION,
@@ -46,11 +51,6 @@ from setforge.migrations import (
     parse_schema_version,
 )
 from setforge.migrations.registry import _validate_registry, find_migration_path
-from setforge.schema_manifest import (
-    FROZEN_FIELD_MANIFEST,
-    additivity_violations,
-    live_field_manifest,
-)
 
 
 def gate_migration_coverage(

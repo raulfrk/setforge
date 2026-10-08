@@ -20,6 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge recover --apply` after an interrupted install no longer stops with
   "no unfinished operation" when the managed tree's inventory, written by a
   version before 1.4.0, still lists SetForge's own files.
+- `setforge project remove` previews a file that injection created as
+  `delete:` instead of `restore create:`, and says `leave absent:` for one that
+  is already gone.
 
 ## [1.4.0] - 2026-10-05
 

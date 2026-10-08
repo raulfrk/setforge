@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 
-from setforge.schema_manifest import (
+from scripts.schema_manifest import (
     FROZEN_FIELD_MANIFEST,
     additivity_violations,
     live_field_manifest,

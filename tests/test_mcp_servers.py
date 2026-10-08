@@ -134,6 +134,10 @@ def _resolved(names: list[str]) -> ResolvedProfile:
     return ResolvedProfile(mcp_servers=names)
 
 
+def _reconcile(cfg: Config, profile: ResolvedProfile) -> mcp.McpReconcileReport:
+    return mcp.apply_plan(mcp.plan_reconcile(cfg, profile))
+
+
 # ---------------------------------------------------------------------------
 # Schema + cross-ref validation
 # ---------------------------------------------------------------------------
@@ -238,7 +242,7 @@ def test_converge_does_not_remove_for_malformed_inventory(
     cfg = _cfg({"serena": McpServerRef(command=["new"])})
 
     with pytest.raises(SetforgeError, match="invalid"):
-        mcp.reconcile(cfg, _resolved(["serena"]))
+        _reconcile(cfg, _resolved(["serena"]))
     assert [call[2] for call in cli.calls].count("remove") == 0
     assert cli.registry["serena"] == (["old"], "user")
 
@@ -251,7 +255,7 @@ def test_converge_does_not_remove_for_malformed_inventory(
 def test_converge_adds_absent_server(fake_mcp) -> None:
     cli = fake_mcp(registry={})
     cfg = _cfg({"serena": McpServerRef(command=["serena", "start"])})
-    report = mcp.reconcile(cfg, _resolved(["serena"]))
+    report = _reconcile(cfg, _resolved(["serena"]))
     assert report.added == [("serena", ["serena", "start"], "user")]
     assert report.updated == []
     assert report.failed == []
@@ -346,7 +350,7 @@ def test_add_argv_has_flags_before_name_and_double_dash(fake_mcp) -> None:
     cfg = _cfg(
         {"serena": McpServerRef(command=["serena", "--port", "9"], scope=McpScope.USER)}
     )
-    mcp.reconcile(cfg, _resolved(["serena"]))
+    _reconcile(cfg, _resolved(["serena"]))
     add_call = next(c for c in cli.calls if c[2] == "add")
     assert add_call[:7] == [
         "/fake/claude",
@@ -363,7 +367,7 @@ def test_add_argv_has_flags_before_name_and_double_dash(fake_mcp) -> None:
 def test_converge_updates_on_command_change(fake_mcp) -> None:
     cli = fake_mcp(registry={"serena": (["serena", "OLD"], "user")})
     cfg = _cfg({"serena": McpServerRef(command=["serena", "NEW"])})
-    report = mcp.reconcile(cfg, _resolved(["serena"]))
+    report = _reconcile(cfg, _resolved(["serena"]))
     assert report.added == [("serena", ["serena", "NEW"], "user")]
     assert report.updated == [("serena", ["serena", "OLD"], "user")]
     assert cli.registry["serena"] == (["serena", "NEW"], "user")
@@ -376,7 +380,7 @@ def test_converge_updates_on_command_change(fake_mcp) -> None:
 def test_converge_noop_when_command_matches(fake_mcp) -> None:
     cli = fake_mcp(registry={"serena": (["serena", "start"], "user")})
     cfg = _cfg({"serena": McpServerRef(command=["serena", "start"])})
-    report = mcp.reconcile(cfg, _resolved(["serena"]))
+    report = _reconcile(cfg, _resolved(["serena"]))
     assert report.added == []
     assert report.updated == []
     assert report.failed == []
@@ -387,7 +391,7 @@ def test_converge_noop_when_command_matches(fake_mcp) -> None:
 def test_converge_ignores_undeclared_servers(fake_mcp) -> None:
     cli = fake_mcp(registry={"handmade": (["hand"], "user")})
     cfg = _cfg({"serena": McpServerRef(command=["serena"])})
-    mcp.reconcile(cfg, _resolved(["serena"]))
+    _reconcile(cfg, _resolved(["serena"]))
     # The undeclared server is left untouched.
     assert cli.registry["handmade"] == (["hand"], "user")
     assert "handmade" not in {c[5] for c in cli.calls if c[2] == "remove"}
@@ -405,7 +409,7 @@ def test_already_exists_without_known_command_is_unverifiable(fake_mcp) -> None:
         add_errors={"serena": "Error: server 'serena' already exists"},
     )
     cfg = _cfg({"serena": McpServerRef(command=["serena"])})
-    report = mcp.reconcile(cfg, _resolved(["serena"]))
+    report = _reconcile(cfg, _resolved(["serena"]))
     assert [name for name, _detail in report.failed] == ["serena"]
     assert "cannot verify" in report.failed[0][1]
     assert report.added == []  # not counted as a fresh add
@@ -499,7 +503,7 @@ def test_per_item_failure_does_not_abort_loop(fake_mcp) -> None:
             "good": McpServerRef(command=["good"]),
         }
     )
-    report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
+    report = _reconcile(cfg, _resolved(["bad", "good"]))
     assert ("bad", "boom: spawn ENOENT") in report.failed
     assert report.added == [("good", ["good"], "user")]
     assert cli.registry["good"] == (["good"], "user")
@@ -531,7 +535,7 @@ def test_os_error_during_add_is_reported_and_does_not_abort_loop(
         }
     )
 
-    report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
+    report = _reconcile(cfg, _resolved(["bad", "good"]))
 
     assert report.failed == [("bad", str(error))]
     assert report.added == [("good", ["good"], "user")]
@@ -557,7 +561,7 @@ def test_os_error_during_remove_is_reported_and_does_not_abort_loop(
         }
     )
 
-    report = mcp.reconcile(cfg, _resolved(["bad", "good"]))
+    report = _reconcile(cfg, _resolved(["bad", "good"]))
 
     assert report.updated == []
     assert report.failed == [("bad", str(error))]
@@ -570,7 +574,7 @@ def test_undeclared_profile_name_raises(fake_mcp) -> None:
     fake_mcp(registry={})
     cfg = _cfg({"serena": McpServerRef(command=["serena"])})
     with pytest.raises(ConfigError, match="undeclared MCP server"):
-        mcp.reconcile(cfg, _resolved(["ghost"]))
+        _reconcile(cfg, _resolved(["ghost"]))
 
 
 def test_missing_claude_binary_raises(monkeypatch: pytest.MonkeyPatch) -> None:

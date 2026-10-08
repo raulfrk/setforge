@@ -21,9 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-import platformdirs
-
-from setforge import atomicio, marketplace_cache_wizard, reconcile_adapter
+from setforge import atomicio, marketplace_cache_wizard, paths, reconcile_adapter
 from setforge.binaries import stderr_of
 from setforge.config import (
     ClaudeInstallMode,
@@ -48,7 +46,7 @@ def marketplace_cache_root() -> Path:
     Each marketplace clones into ``marketplace_cache_root() / <repo-basename>``
     (the segment after the final ``/`` of ``MarketplaceSource.repo``).
     """
-    return Path(platformdirs.user_cache_dir("setforge")) / "marketplaces"
+    return paths.xdg_cache_home() / "setforge" / "marketplaces"
 
 
 #: Sidecar filename (under the cache root) recording ``owner/repo -> cache

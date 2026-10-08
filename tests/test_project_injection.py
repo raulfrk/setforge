@@ -1775,6 +1775,11 @@ def test_remove_completes_when_git_directory_changed_and_a_member_is_missing(
 
     assert removed.exit_code == 0, removed.output
     assert "\nremoval complete\n" in removed.output
+    assert {
+        "absent": "  leave absent: AGENTS.md\n",
+        "user-file": "  restore replace-untracked: AGENTS.md\n",
+        "tracked-file": "  restore overlay-tracked: AGENTS.md\n",
+    }[before] in removed.output
     if before == "absent":
         assert not destination.exists()
     else:
@@ -2325,6 +2330,26 @@ def test_manifest_parent_escape_is_rejected_without_external_cleanup(
     assert (target / "AGENTS.md").exists()
 
 
+def test_remove_preview_says_a_created_file_will_be_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    target = _git_repo(tmp_path / "target")
+    arguments = ["demo", str(target), "--config", str(config), "--yes"]
+    injected = CliRunner().invoke(app, ["project", "inject", *arguments])
+    assert injected.exit_code == 0, injected.output
+
+    preview = CliRunner().invoke(
+        app, ["project", "remove", *arguments[:-1], "--dry-run"]
+    )
+
+    assert preview.exit_code == 0, preview.output
+    assert "  delete: AGENTS.md\n" in preview.output
+    assert "restore" not in preview.output
+    assert (target / "AGENTS.md").exists()
+
+
 @pytest.mark.parametrize("schema", [1, 2])
 def test_remove_reads_a_record_written_with_an_older_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema: int
@@ -2351,7 +2376,8 @@ def test_remove_reads_a_record_written_with_an_older_schema(
     removed = CliRunner().invoke(app, ["project", "remove", *arguments])
 
     assert removed.exit_code == 0, (removed.output, removed.exception)
-    assert "  restore create: AGENTS.md\n" in removed.output
+    assert "  delete: AGENTS.md\n" in removed.output
+    assert "restore" not in removed.output
     assert not (target / "AGENTS.md").exists()
     assert not state.exists()
     assert _claim_lifecycles() == [ClaimLifecycle.RELEASED]

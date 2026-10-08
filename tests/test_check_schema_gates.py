@@ -31,13 +31,13 @@ from scripts.check_schema_gates import (
     gate_reverse_required,
     run_all_gates,
 )
+from scripts.schema_manifest import FROZEN_FIELD_MANIFEST
 from setforge.errors import ConfigError
 from setforge.migrations import (
     ManifestEntry,
     ManifestType,
     MigrationRoots,
 )
-from setforge.schema_manifest import FROZEN_FIELD_MANIFEST
 
 # ---------------------------------------------------------------------------
 # gate 1: migration-coverage
@@ -244,7 +244,7 @@ def test_current_expected_is_six_five() -> None:
 
 def test_schema_major_is_six() -> None:
     """The frozen manifest now describes major 6."""
-    from setforge.schema_manifest import SCHEMA_MAJOR
+    from scripts.schema_manifest import SCHEMA_MAJOR
 
     assert SCHEMA_MAJOR == 6
 

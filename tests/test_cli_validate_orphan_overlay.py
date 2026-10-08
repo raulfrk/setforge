@@ -111,7 +111,7 @@ def test_unknown_far_from_any_id_no_suggestion_still_fails(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
     """An unknown id with no close match still fails, just without a
-    did-you-mean line (Levenshtein > 2 gate)."""
+    did-you-mean line."""
     cfg = _write_minimal_config(tmp_path)
     local_yaml_at.write_text(
         "tracked_files:\n  zzzzzzzz:\n    mode: 0o755\n",

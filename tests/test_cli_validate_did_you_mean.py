@@ -1,13 +1,11 @@
 """Tests for ``setforge validate`` local.yaml error UX.
 
-Covers three layers per SPEC 9 / mockup D:
+Covers two layers per SPEC 9 / mockup D:
 
-1. ``setforge._levenshtein.levenshtein`` — pure-function distance smoke
-   (boundary cases: equal, empty-side, substitution).
-2. ``setforge.cli._validate_errors`` — formatter + close-match helper
-   behavior, including the Levenshtein > 2 hard-gate that suppresses
-   "Did you mean".
-3. ``setforge.cli.validate`` integration — local.yaml schema errors
+1. ``setforge.cli._validate_errors`` — formatter + close-match helper
+   behavior, including the similarity cutoff that suppresses
+   "Did you mean" for unrelated names.
+2. ``setforge.cli.validate`` integration — local.yaml schema errors
    surface via ``format_schema_validation_error`` with file:line +
    snippet + pointer + "Fix:" + report-all (no abort-on-first); YAML
    parse errors surface via ``format_yaml_parse_error`` in the
@@ -24,7 +22,6 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from setforge._levenshtein import levenshtein
 from setforge.cli import app
 from setforge.cli._validate_errors import (
     format_schema_validation_error,
@@ -33,102 +30,38 @@ from setforge.cli._validate_errors import (
 )
 
 # ---------------------------------------------------------------------------
-# Levenshtein smoke (the same boundary cases captured in the acceptance
-# commands; duplicated here for clean pytest discovery + traceback).
+# suggest_close_match — the difflib similarity cutoff.
 # ---------------------------------------------------------------------------
 
 
-def test_levenshtein_equal_returns_zero() -> None:
-    """Identical strings → distance 0 (fast-path branch)."""
-    assert levenshtein("foo", "foo") == 0
-
-
-def test_levenshtein_empty_first_returns_len_other() -> None:
-    """Empty left side → distance is the right side's length."""
-    assert levenshtein("", "xyz") == 3
-
-
-def test_levenshtein_empty_second_returns_len_other() -> None:
-    """Empty right side → distance is the left side's length."""
-    assert levenshtein("xyz", "") == 3
-
-
-def test_levenshtein_single_substitution() -> None:
-    """One-character substitution → distance 1."""
-    assert levenshtein("abc", "abd") == 1
-
-
-def test_levenshtein_insertion() -> None:
-    """One-character insertion → distance 1."""
-    assert levenshtein("ab", "abc") == 1
-
-
-def test_levenshtein_swaps_to_shorter_first() -> None:
-    """Internal swap branch (``len(a) > len(b)``) returns the same distance
-    as the un-swapped call — symmetry sanity check."""
-    assert levenshtein("abcdef", "abc") == levenshtein("abc", "abcdef") == 3
-
-
-def test_levenshtein_unicode_codepoint_iteration() -> None:
-    """Distance counts code points, not bytes — non-ASCII is one unit."""
-    assert levenshtein("café", "cafe") == 1
-
-
-# ---------------------------------------------------------------------------
-# suggest_close_match — the explicit Levenshtein ≤ 2 hard-gate over the
-# difflib pre-filter.
-# ---------------------------------------------------------------------------
-
-
-def test_suggest_close_match_distance_one_returns_candidate() -> None:
-    """Distance-1 typo → suggestion returned."""
+def test_suggest_close_match_one_missing_letter_returns_candidate() -> None:
     assert (
         suggest_close_match("work-internl", ["work-internal", "unrelated"])
         == "work-internal"
     )
 
 
-def test_suggest_close_match_distance_two_returns_candidate() -> None:
-    """Distance-2 typo → suggestion returned (boundary inclusive)."""
-    # 'wrk-internal' → 'work-internal' is distance 2 (insert 'o' + 'r' moves
-    # — actually 1 insertion). Use a tighter example: drop two letters.
-    # 'wok-intenal' vs 'work-internal' is distance 2 (insert 'r' + 'r').
+def test_suggest_close_match_two_missing_letters_returns_candidate() -> None:
     assert (
         suggest_close_match("wok-intenal", ["work-internal", "unrelated"])
         == "work-internal"
     )
 
 
-def test_suggest_close_match_distance_three_returns_none() -> None:
-    """Distance-3 typo → no suggestion (anti-smell: must NOT surface as
-    "did you mean" when distance > 2; difflib's permissive cutoff is
-    hard-gated by Levenshtein)."""
-    # 'xyz' → 'work-internal' is distance 13; far above the gate.
+def test_suggest_close_match_unrelated_word_returns_none() -> None:
     assert suggest_close_match("xyz", ["work-internal"]) is None
 
 
-def test_suggest_close_match_difflib_pre_filter_distance_three_returns_none() -> None:
-    """Edge case: difflib MAY return a candidate (cutoff=0.5) at edit
-    distance 3 for short words. The explicit Levenshtein guard must
-    reject it.
-
-    'abcd' → 'abxx' has ratio ≥ 0.5 (difflib accepts) but edit distance
-    is 2 (substitute 2). Use a case where difflib accepts but Levenshtein
-    > 2: 'abcdef' → 'abcxyz' has ratio = 0.5 (accepted) and distance 3.
-    """
-    # SequenceMatcher ratio of 'abcdef' vs 'abcxyz' is 0.5; Levenshtein is 3.
+def test_suggest_close_match_half_similar_word_returns_none() -> None:
+    # 'abcdef' vs 'abcxyz' share three of six characters (ratio 0.5).
     assert suggest_close_match("abcdef", ["abcxyz"]) is None
 
 
 def test_suggest_close_match_empty_candidates_returns_none() -> None:
-    """No candidates → no suggestion (degenerate input)."""
     assert suggest_close_match("anything", []) is None
 
 
-def test_suggest_close_match_picks_closest_when_multiple_under_gate() -> None:
-    """When several candidates fall under the gate, the difflib pre-filter
-    orders by similarity ratio and we return the first one whose
-    Levenshtein ≤ max_distance — i.e. the closest match."""
+def test_suggest_close_match_picks_closest_of_several_candidates() -> None:
     got = suggest_close_match(
         "work-internl",
         ["work-internal", "work-external", "irrelevant"],
@@ -136,12 +69,19 @@ def test_suggest_close_match_picks_closest_when_multiple_under_gate() -> None:
     assert got == "work-internal"
 
 
-def test_suggest_close_match_custom_max_distance() -> None:
-    """``max_distance`` is configurable; the default is 2."""
-    # 'foobar' vs 'foobaz' is distance 1, accepted at default.
-    assert suggest_close_match("foobar", ["foobaz"]) == "foobaz"
-    # With max_distance=0, only exact matches survive.
-    assert suggest_close_match("foobar", ["foobaz"], max_distance=0) is None
+@pytest.mark.parametrize(
+    ("typo", "expected"),
+    [
+        ("foobar", "foobaz"),
+        ("det", "dst"),
+        ("aad", "add"),
+        ("patr", "path"),
+    ],
+)
+def test_suggest_close_match_one_wrong_letter_in_a_short_key(
+    typo: str, expected: str
+) -> None:
+    assert suggest_close_match(typo, [expected, "src", "kind", "mode"]) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -315,10 +255,10 @@ def test_validate_local_yaml_unknown_top_level_key_surfaces_schema_error(
 def test_validate_local_yaml_close_match_suggests_known_key(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
-    """Typo'd top-level key within Levenshtein ≤ 2 of a known key triggers
+    """Typo'd top-level key close to a known key triggers
     a "Did you mean" line."""
     cfg = _write_minimal_config(tmp_path)
-    # 'binares' is distance 2 from 'binaries' (insert 'i' + a swap).
+    # 'binares' is 'binaries' with two letters missing.
     local_yaml_at.write_text("binares:\n  uv: /usr/bin/uv\n", encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
@@ -339,7 +279,7 @@ def test_validate_local_yaml_plugins_typo_suggests_add(
     string with no ``✗ SCHEMA VALIDATION ERROR`` header or suggestion.
     """
     cfg = _write_minimal_config(tmp_path)
-    # 'ad' is distance 1 from 'add' — a PluginOverlay field.
+    # 'ad' is 'add' with a letter missing — a PluginOverlay field.
     local_yaml_at.write_text("plugins:\n  ad:\n    - foo@bar\n", encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
@@ -356,7 +296,7 @@ def test_validate_local_yaml_extensions_typo_suggests_add(
     """A typo'd sub-key inside the ``extensions:`` overlay block surfaces the
     mockup-D schema error with an ``ExtensionOverlay``-dispatched suggestion."""
     cfg = _write_minimal_config(tmp_path)
-    # 'adde' is distance 1 from 'add' (extra 'e').
+    # 'adde' is 'add' with an extra 'e'.
     local_yaml_at.write_text("extensions:\n  adde:\n    - some.ext\n", encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
@@ -371,7 +311,7 @@ def test_validate_local_yaml_marketplaces_typo_suggests_remove(
     """A typo'd sub-key inside the ``marketplaces:`` overlay block surfaces the
     mockup-D schema error with a ``MarketplaceOverlay``-dispatched suggestion."""
     cfg = _write_minimal_config(tmp_path)
-    # 'remov' is distance 1 from 'remove'.
+    # 'remov' is 'remove' with a letter missing.
     local_yaml_at.write_text("marketplaces:\n  remov:\n    - foo\n", encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
@@ -383,7 +323,7 @@ def test_validate_local_yaml_marketplaces_typo_suggests_remove(
 def test_validate_local_yaml_no_close_match_omits_did_you_mean(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
-    """Typo with no candidate inside the Levenshtein ≤ 2 gate must NOT
+    """Typo with no similar candidate must NOT
     show a "Did you mean" line (anti-smell: no false-positive
     suggestions)."""
     cfg = _write_minimal_config(tmp_path)
@@ -530,6 +470,5 @@ def test_validate_local_yaml_nested_extra_forbidden_resolves_real_line(
     # ``not_a_real_field`` row), NOT the legacy (1, 1) fallback.
     assert "local.yaml:5" in result.output
     # No misleading top-level-key close-match suggestion fires for a
-    # nested key whose siblings aren't close enough by Levenshtein
-    # distance.
+    # nested key whose siblings aren't similar enough.
     assert "Did you mean" not in result.output
