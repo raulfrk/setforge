@@ -401,6 +401,42 @@ def _spell_skip_under(root: Path, skip: frozenset[Path]) -> frozenset[Path]:
     return frozenset(spelled)
 
 
+def holds_only_state_trees(root: Path) -> bool:
+    """Whether ``root`` exists only as the way to SetForge's own state roots.
+
+    True when at least one state root is a real directory beneath ``root`` and
+    every other entry is a bare directory leading to one, so nothing here is
+    the user's.
+    """
+    return _leads_only_to(root.absolute(), state_trees_under(root))
+
+
+def state_trees_under(root: Path) -> frozenset[Path]:
+    """SetForge's own state roots, also under the spelling a walk of ``root`` meets."""
+    return _spell_skip_under(root.absolute(), _state_trees())
+
+
+def _leads_only_to(directory: Path, targets: frozenset[Path]) -> bool:
+    try:
+        children = [
+            (directory / child.name, child.is_dir(follow_symlinks=False))
+            for child in os.scandir(directory)
+        ]
+    except OSError:
+        return False
+    return bool(children) and all(
+        is_directory
+        and (
+            path in targets
+            or (
+                any(target.is_relative_to(path) for target in targets)
+                and _leads_only_to(path, targets)
+            )
+        )
+        for path, is_directory in children
+    )
+
+
 def _scan_tree_fd(
     root_fd: int,
     display: Path,

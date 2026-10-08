@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `setforge recover` after an interrupted install now also restores a file that
   install was updating through a symlink at its destination, along with that
   file's `.bak` copy; the symlink itself is left alone.
+- The first install of a managed tree whose destination holds nothing but
+  SetForge's own state, cache or data directory (for example `~/.local/state`,
+  `~/.local` or `~/.cache` on a new machine) now deploys the tree. It used to
+  ask to adopt the directory SetForge had just created and deploy nothing until
+  a second install. A destination holding anything else is still adopted only
+  with consent.
+- `setforge recover --apply` after an interrupted install no longer stops with
+  "no unfinished operation" when the managed tree's inventory, written by a
+  version before 1.4.0, still lists SetForge's own files.
 
 ## [1.4.0] - 2026-10-05
 

@@ -172,6 +172,24 @@ def test_present_unowned_file_requires_metadata_adoption(tmp_path: Path) -> None
     assert "unowned" in decision.detail
 
 
+def test_unoccupied_installs_only_where_nothing_is_claimed(tmp_path: Path) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("local\n")
+    owner = uuid.uuid4()
+    observed = observe_file(path)
+    current = _claim(path, owner=owner, fingerprint=observed.fingerprint)
+    foreign = _claim(path, owner=uuid.uuid4(), fingerprint=observed.fingerprint)
+
+    def action(claim: OwnershipClaim | None) -> FileAction:
+        return decide_file(observed, claim, owner_id=owner, unoccupied=True).action
+
+    assert action(None) is FileAction.INSTALL
+    assert action(current) is FileAction.MANAGE
+    assert action(replace(current, fingerprint="0" * 64)) is FileAction.REVIEW
+    assert action(foreign) is FileAction.TRANSFER
+    assert action(replace(foreign, fingerprint="0" * 64)) is FileAction.HOLD
+
+
 def test_current_claim_allows_managed_reconcile(tmp_path: Path) -> None:
     path = tmp_path / "settings.ini"
     path.write_text("local\n")
