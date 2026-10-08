@@ -273,10 +273,12 @@ the interval before a write-ahead journal can be published, including migrations
 that later lock multiple real profiles.
 An interrupted
 install/sync/revert/migration leaves a durable per-profile journal in the
-user-global recovery registry. Conflicting mutations refuse across profiles
-and across `SETFORGE_STATE_DIR` overrides until automatic recovery succeeds or
+user-global recovery registry. Every other mutating command, including
+`setforge config add` and `config remove`, then refuses across profiles and
+across `SETFORGE_STATE_DIR` overrides, naming the `setforge recover` command to
+run, until automatic recovery succeeds or
 the operator runs `setforge recover --profile=<name> --apply --yes` from the
-recorded transition-state root. A begun package checkpoint is intentionally
+recorded transition-state root. Read-only commands stay usable. A begun package checkpoint is intentionally
 reported as uncertain/manual even if it did not reach its completion marker.
 
 ## Package locks and Cargo

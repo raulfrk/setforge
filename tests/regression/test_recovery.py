@@ -170,6 +170,23 @@ def test_unfinished_operation_blocks_mutating_commands_until_recovered(
     for argv in (["compare"], ["status"], ["stage", "--list"], ["validate"]):
         assert host.proc(*argv).returncode == 0, argv
 
+    edit = ("config", "add", "--local", "binaries.code", "/opt/code", "--yes")
+    local_config = host.home / ".config/setforge/local.yaml"
+    before = local_config.read_bytes() if local_config.exists() else None
+    blocked = host.proc(*edit, config=False, profile=False)
+    assert blocked.returncode == 1, _said(blocked)
+    assert "unfinished install operation" in blocked.stderr
+    assert "setforge recover --profile=p" in blocked.stderr
+    after = local_config.read_bytes() if local_config.exists() else None
+    assert after == before
+
+    host.arm("")
+    recovered = host.proc("recover", "--apply", "--yes", config=False)
+    assert recovered.returncode == 0, _said(recovered)
+    edited = host.proc(*edit, config=False, profile=False)
+    assert edited.returncode == 0, _said(edited)
+    assert "/opt/code" in local_config.read_text(encoding="utf-8")
+
 
 def test_killed_revert_recovers_to_the_installed_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- An interrupted operation that still needs `setforge recover` now blocks every
+  command that changes something, not only the ones touching the same profile,
+  config repository or packages. This includes `setforge config add` and
+  `config remove`: they refuse and name the `setforge recover` command to run
+  first. Read-only commands such as `compare`, `status` and `validate` keep
+  working.
+
 ### Fixed
 
 - `setforge recover` after an interrupted install now also restores a file that

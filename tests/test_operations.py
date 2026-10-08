@@ -178,19 +178,21 @@ def test_prepare_refuses_to_shadow_active_operation(
         _prepare(tmp_path)
 
 
-def test_active_operation_blocks_same_config_but_not_other_repo(
+def test_active_operation_blocks_every_mutation_but_its_own_recovery(
     tmp_path: Path, operation_state: Path
 ) -> None:
-    _prepare(tmp_path)
+    journal = _prepare(tmp_path)
 
+    with pytest.raises(
+        SetforgeError, match=r"blocks this mutation; run `setforge recover --profile=p`"
+    ):
+        operations.refuse_pending()
     with pytest.raises(SetforgeError, match="blocks this mutation"):
-        operations.refuse_conflicting_mutation(
-            resources=False, config_dir=tmp_path, profile=None
-        )
+        operations.refuse_pending(allow_operation_id="another-operation")
 
-    operations.refuse_conflicting_mutation(
-        resources=False, config_dir=tmp_path / "other", profile=None
-    )
+    operations.refuse_pending(allow_operation_id=journal.operation_id)
+    operations.complete(journal)
+    operations.refuse_pending()
 
 
 def test_checkpoint_intent_is_durable_before_completion(
@@ -791,11 +793,6 @@ def test_prepare_round_trips_config_reservations_and_path_guards(
         sorted((tmp_path.resolve(), extra_config.resolve()), key=str)
     )
     assert loaded.path_guards == tuple(sorted(guards, key=lambda item: str(item.path)))
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=extra_config,
-        profile=None,
-    ) == (loaded,)
 
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
@@ -1893,7 +1890,7 @@ def test_unusable_journal_reports_the_file_and_how_to_get_past_it(
 
     for blocked in (
         lambda: operations.load("p"),
-        operations._refuse_active,
+        operations.refuse_pending,
     ):
         with pytest.raises(SetforgeError) as failure:
             blocked()
@@ -2156,11 +2153,6 @@ def test_cross_profile_state_snapshot_reserves_its_profile_namespace(
     )
 
     assert journal.reserved_profiles == ("actual", "migrate")
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=None,
-        profile="actual",
-    ) == (journal,)
 
 
 def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
@@ -2178,11 +2170,7 @@ def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
     loaded = operations.load("migrate")
 
     assert loaded.reserved_profiles == ("migrate", "team/dev")
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=None,
-        profile="team/dev",
-    ) == (journal,)
+    assert loaded == journal
 
 
 @pytest.mark.parametrize(
@@ -2385,13 +2373,8 @@ def test_journal_recovers_after_config_ancestor_became_a_symlink(
     (tmp_path / "real").rename(tmp_path / "moved")
     (tmp_path / "real").symlink_to("moved")
 
-    operations.refuse_conflicting_mutation(
-        resources=False, config_dir=None, profile="other"
-    )
     with pytest.raises(SetforgeError, match="unfinished sync operation"):
-        operations.refuse_conflicting_mutation(
-            resources=False, config_dir=config_dir, profile=None
-        )
+        operations.refuse_pending()
     assert operations.load("p") == journal
     assert operations.recover_automatically(journal)
 
@@ -2438,6 +2421,4 @@ def test_active_journal_is_visible_across_transition_state_roots(
 
     assert operations.load("p").operation_id == journal.operation_id
     with pytest.raises(SetforgeError, match="unfinished install"):
-        operations.refuse_conflicting_mutation(
-            resources=True, config_dir=None, profile="other"
-        )
+        operations.refuse_pending()

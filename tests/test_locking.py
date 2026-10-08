@@ -331,15 +331,19 @@ def test_global_mutation_gate_serializes_prepublication_across_scopes(
 
 
 @pytest.mark.parametrize(
-    ("lock_kwargs", "journal_resources"),
+    "lock_kwargs",
     [
-        ({"resources": True, "profile": "other"}, True),
-        ({"config_dir": Path("cfg")}, False),
+        {},
+        {"resources": True},
+        {"profile": "first"},
+        {"profile": "other"},
+        {"config_dir": Path("cfg")},
+        {"config_dir": Path("unrelated")},
+        {"target_roots": (Path("target"),)},
     ],
 )
-def test_mutation_locks_refuse_cross_profile_active_journal(
+def test_pending_journal_refuses_every_mutation_except_its_own_recovery(
     lock_kwargs: _MutationLockKwargs,
-    journal_resources: bool,
     tmp_path: Path,
 ) -> None:
     from setforge import operations
@@ -347,22 +351,30 @@ def test_mutation_locks_refuse_cross_profile_active_journal(
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
     if "config_dir" in lock_kwargs:
-        lock_kwargs["config_dir"] = config_dir
+        lock_kwargs["config_dir"] = tmp_path / lock_kwargs["config_dir"]
+    if "target_roots" in lock_kwargs:
+        lock_kwargs["target_roots"] = (tmp_path / "target",)
     journal = operations.prepare(
         command="install",
         profile="first",
         config_dir=config_dir,
-        resources_lock=journal_resources,
+        resources_lock=False,
         paths=(),
     )
 
     with (
-        pytest.raises(SetforgeError, match="unfinished install"),
+        pytest.raises(
+            SetforgeError,
+            match=r"unfinished install .* run `setforge recover --profile=first`",
+        ),
         mutation_locks(**lock_kwargs),
     ):
-        pass
+        pytest.fail("mutation ran beside an unfinished operation")
 
-    operations.complete(journal)
+    with mutation_locks(**lock_kwargs, allow_operation_id=journal.operation_id):
+        operations.complete(journal)
+    with mutation_locks(**lock_kwargs):
+        pass
 
 
 _LOCK_ENTRIES = {"mutation_locks", "operations.transaction"}
@@ -488,7 +500,7 @@ def test_mutating_cli_surfaces_use_ordered_lock_composition() -> None:
     rollbacks: list[tuple[str, list[str]]] = []
     for path in sorted(Path(install.__file__).parent.glob("*.py")):
         source = path.read_text(encoding="utf-8")
-        assert "_refuse_active" not in source, path.name
+        assert "refuse_pending" not in source, path.name
         for _node, calls in _with_entries(source):
             names = _names(calls)
             if "operations.recover_on_error" in names:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import stat
@@ -176,11 +177,11 @@ def test_membership_failure_restores_files_and_limits_directory_recovery_scope(
         assert (target / "added" / "deeper" / "FRESH.md").read_bytes() == (
             b"new member\n"
         )
-        journals.extend(
-            operations.conflicting_journals(
-                resources=True, config_dir=None, profile=None
-            )
+        active = operations.active(
+            "project-sync-" + hashlib.sha256(str(plan.target).encode()).hexdigest()[:24]
         )
+        assert active is not None
+        journals.append(active)
         raise OSError("injected parent cleanup failure")
 
     monkeypatch.setattr(

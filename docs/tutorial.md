@@ -594,7 +594,7 @@ The reversible branch records typed before/after images, preserving arbitrary
 file bytes or a symlink target plus mode and nanosecond mtime for undo/redo. An
 interrupted cleanup is recovered from its write-ahead journal. If recovery
 finds a replacement at a deleted path or a changed/symlinked parent, it keeps
-that user data, retains the recovery record, and blocks conflicting mutations;
+that user data, retains the recovery record, and blocks other mutating commands;
 move the replacement aside, retry `setforge recover --profile=default --apply
 --yes`.
 
@@ -819,8 +819,8 @@ when the restore is planned; restore and recovery stay bound to those resolved
 directories and refuse a parent that is replaced or re-pointed afterwards
 instead of being redirected outside the journaled path tree. A restore is journaled,
 so a partial failure rolls file type, bytes, mode, and mtime back automatically;
-an interrupted process reserves its profile, source repository, and captured
-host-local config namespaces until it is finished with `setforge recover`.
+an interrupted process blocks every other mutating command until it is finished
+with `setforge recover`.
 
 ```console
 $ setforge snapshot create before-experiment --profile=default

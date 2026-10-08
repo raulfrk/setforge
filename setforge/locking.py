@@ -481,10 +481,13 @@ def mutation_locks(
     The order is global mutation gate, optional verified Git common-directory
     identity, then profile state. The gate alone excludes every other mutation;
     ``resources``, config directories, and target roots take no lock of their
-    own. ``resources`` lets the body mutate ownership, config directories name
-    the journal namespaces to refuse on, and target roots yield descriptor
-    guards. Callers declare scopes instead of spelling nested context managers,
-    making the ordering contract structural and reviewable.
+    own. ``resources`` lets the body mutate ownership, target roots yield
+    descriptor guards, and ``config_dir``/``config_dirs`` are accepted but have
+    no effect. Callers declare scopes instead of spelling nested context
+    managers, making the ordering contract structural and reviewable.
+
+    An unfinished operation refuses every mutation, whatever its scopes; only
+    recovery passes that operation's ``allow_operation_id``.
     """
     with ExitStack() as stack:
         stack.enter_context(_mutation_gate_lock(timeout=timeout))
@@ -514,15 +517,6 @@ def mutation_locks(
                     identity_fd,
                 )
             )
-        requested_config_dirs = tuple(
-            sorted(
-                {
-                    *(path.resolve() for path in config_dirs),
-                    *((config_dir.resolve(),) if config_dir is not None else ()),
-                },
-                key=str,
-            )
-        )
         requested_targets = tuple(
             TargetLockRequest(path)
             for path in sorted({path.absolute() for path in target_roots}, key=str)
@@ -537,20 +531,7 @@ def mutation_locks(
             stack.enter_context(profile_lock(requested_profile, timeout=timeout))
         from setforge import operations
 
-        operations.refuse_conflicting_mutation(
-            resources=resources,
-            config_dir=None,
-            profile=profile,
-            profiles=requested_profiles,
-            allow_operation_id=allow_operation_id,
-        )
-        for requested_config_dir in requested_config_dirs:
-            operations.refuse_conflicting_mutation(
-                resources=False,
-                config_dir=requested_config_dir,
-                profile=None,
-                allow_operation_id=allow_operation_id,
-            )
+        operations.refuse_pending(allow_operation_id=allow_operation_id)
         yield MutationLockGuards(
             bound_targets,
             identity_guards[0] if len(identity_guards) == 1 else None,
