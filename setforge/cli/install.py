@@ -2584,7 +2584,10 @@ def install(
             mutation_guards.config_identity if mutation_guards is not None else None
         )
         fresh = is_fresh_host()
-        interactive = _want_interactive_reconcile(
+        # The reconcile screens open before the ownership questions. Without
+        # --yes those questions need a keyboard, so a run that has none must
+        # reach their refusal instead of a screen it cannot answer.
+        interactive = (yes or sys.stdin.isatty()) and _want_interactive_reconcile(
             reconcile_user_sections=reconcile_user_sections,
             section_auto=section_auto,
         )

@@ -7,10 +7,14 @@ own state for deletion."""
 
 from __future__ import annotations
 
+import os
+import pty
 import re
+import select
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -105,6 +109,83 @@ def test_declining_the_adoption_question_leaves_no_change_and_no_journal(
     assert transitions.list_transitions(profile_filter=[host.profile]) == []
     with pytest.raises(OwnershipError):
         read_owner_id(host.repo)
+    # The lock was released: the next command runs instead of waiting.
+    assert host.proc("install", *INSTALL_FLAGS).returncode == 0
+
+
+def _install_on_a_terminal_without_keyboard(
+    host: Host, *flags: str, stdin: int
+) -> tuple[int, str]:
+    """Run install with a terminal on stdout only; a run that blocks fails."""
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "setforge.cli",
+                "install",
+                *flags,
+                f"--config={host.config}",
+                f"--profile={host.profile}",
+            ],
+            cwd=REPO_ROOT,
+            env=host.proc_env(),
+            stdin=stdin,
+            stdout=slave,
+            stderr=slave,
+        )
+    finally:
+        os.close(slave)
+    shown = b""
+    deadline = time.monotonic() + 60
+    try:
+        while time.monotonic() < deadline:
+            if not select.select([master], [], [], 0.2)[0]:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # the terminal closed with the process
+                break
+            if not chunk:
+                break
+            shown += chunk
+        try:
+            code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"install waited for input it cannot get:\n{shown!r}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        os.close(master)
+        if proc.stdin is not None:
+            proc.stdin.close()
+    return code, shown.decode(errors="replace")
+
+
+@pytest.mark.parametrize(
+    "stdin", [subprocess.DEVNULL, subprocess.PIPE], ids=["closed", "open-pipe"]
+)
+def test_adoption_without_a_keyboard_is_refused_before_any_reconcile_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdin: int
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+
+    code, shown = _install_on_a_terminal_without_keyboard(
+        host, *_NO_PROMPT, "--reconcile-user-sections", stdin=stdin
+    )
+
+    assert code == 1, shown
+    assert "file adoption requires confirmation for" in shown
+    assert "rerun with --yes" in shown
+    assert "seed merge base" not in shown
+    assert "Input is not a terminal" not in shown
+    assert host.live("note.txt").read_bytes() == b"local\n"
     # The lock was released: the next command runs instead of waiting.
     assert host.proc("install", *INSTALL_FLAGS).returncode == 0
 
