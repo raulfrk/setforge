@@ -177,10 +177,7 @@ def plugin_add(
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        cfg = load_config(config)
-        if profile not in cfg.profiles:
-            # Reject before the marketplace/plugin writes and the native call.
-            raise ProfileNotFound(f"profile not found: {profile}")
+        _require_known_profile(config, profile)
         _register_plugin_in_yaml(
             config, profile, plugin_name, mp_name, source, no_install=no_install
         )
@@ -200,6 +197,7 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
+        _require_known_profile(config, profile)
         config_target = config.resolve()
         config_before = config_target.read_bytes()
         config_mode = config_target.stat().st_mode & 0o7777
@@ -266,6 +264,12 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
         typer.echo(f"declared Codex plugin: {plugin_name}@{marketplace}")
         if not no_install:
             typer.echo(f"installed Codex plugin: {plugin_name}@{marketplace}")
+
+
+def _require_known_profile(config: Path, profile: str) -> None:
+    """Reject an unknown ``profile`` before any config write or native call."""
+    if profile not in load_config(config).profiles:
+        raise ProfileNotFound(f"profile not found: {profile}")
 
 
 def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:

@@ -746,26 +746,32 @@ def test_claude_plugin_add_unknown_profile_changes_nothing(
     assert claude.calls == []
 
 
-def test_codex_plugin_add_unknown_profile_restores_config_and_native_inventory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("no_install", [False, True])
+def test_codex_plugin_add_unknown_profile_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_install: bool
 ) -> None:
     cfg = write_setforge_yaml(tmp_path, _PLUGIN_ADD_FIXTURE_YAML)
     cfg.chmod(0o640)
     before = cfg.read_bytes()
     mode_before = cfg.stat().st_mode
-    marketplaces: dict[str, codex_plugins_mod.InstalledMarketplace] = {}
-    monkeypatch.setattr(codex_plugins_mod, "list_installed", lambda: {})
-    monkeypatch.setattr(
-        codex_plugins_mod, "list_marketplaces", lambda: dict(marketplaces)
-    )
-    monkeypatch.setattr(
-        codex_plugins_mod,
+    native_calls: list[str] = []
+
+    def spy(name: str) -> Callable[..., dict[str, object]]:
+        def call(*_args: object) -> dict[str, object]:
+            native_calls.append(name)
+            return {}
+
+        return call
+
+    for name in (
+        "list_installed",
+        "list_marketplaces",
         "marketplace_add",
-        lambda _source: marketplaces.__setitem__(
-            "newmp", codex_plugins_mod.InstalledMarketplace("newmp", tmp_path / "mp")
-        ),
-    )
-    monkeypatch.setattr(codex_plugins_mod, "marketplace_remove", marketplaces.pop)
+        "marketplace_remove",
+        "plugin_install",
+        "plugin_remove",
+    ):
+        monkeypatch.setattr(codex_plugins_mod, name, spy(name))
 
     result = CliRunner().invoke(
         app,
@@ -777,14 +783,16 @@ def test_codex_plugin_add_unknown_profile_restores_config_and_native_inventory(
             "--from=github:o/newmp",
             "--profile=typo",
             f"--config={cfg}",
+            *(["--no-install"] if no_install else []),
         ],
     )
 
     assert result.exit_code == 1, result.output
-    assert "typo" in result.output
+    assert native_calls == []
     assert cfg.read_bytes() == before
     assert cfg.stat().st_mode == mode_before
-    assert marketplaces == {}
+    assert isinstance(result.exception, ProfileNotFound)
+    assert "profile not found: typo" in str(result.exception)
 
 
 @pytest.mark.parametrize("local_clone", [False, True])
