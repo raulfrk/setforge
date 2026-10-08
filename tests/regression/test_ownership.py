@@ -329,16 +329,22 @@ from setforge.cli import main
 from setforge.ownership import OwnershipStore
 from setforge.ownership_history import OwnershipHistoryStore
 
+step = os.environ["SETFORGE_KILL_AFTER"]
 holder, name = {
     "journal-written": (operations, "prepare"),
     "checkpoint-begun": (operations, "begin_checkpoint"),
+    "claim-staged": (OwnershipStore, "_write_claim"),
     "claim-written": (OwnershipStore, "_write_claim"),
+    "history-staged": (OwnershipHistoryStore, "_commit_transition"),
     "history-written": (OwnershipHistoryStore, "_commit_transition"),
     "checkpoint-finished": (operations, "finish_checkpoint"),
-}[os.environ["SETFORGE_KILL_AFTER"]]
+}[step]
 real = getattr(holder, name)
 
 def killed(*args, **kwargs):
+    if step.endswith("-staged"):
+        # The write dies with its temporary file staged but not yet renamed.
+        os.replace = lambda *args, **kwargs: os._exit(79)
     real(*args, **kwargs)
     os._exit(79)
 
@@ -347,12 +353,25 @@ main()
 """
 
 
+def _staged_files(host: Host) -> list[str]:
+    """Temporary files a killed atomic write left in SetForge state."""
+    return [rel for rel in tree(host.state) if rel.endswith(".tmp")]
+
+
 def _ownership_state(host: Host) -> dict[str, bytes | str]:
-    """Every byte of SetForge state except lock files, plus the live file."""
+    """Every byte of SetForge state except lock files, plus the live file.
+
+    An owner's history directory is made before the first release is
+    journaled and a killed write may leave its temporary file behind; recovery
+    keeps both, and neither holds a record, so they are left out.
+    """
+    root = "ownership-history"
+    owner = f"{root}/{read_owner_id(host.repo)}"
     state = {
         rel: content
         for rel, content in tree(host.state).items()
         if not rel.startswith("locks")
+        and not (content == "<dir>" and rel in (root, owner, f"{owner}/transitions"))
     }
     return {**state, "live": host.live("note.txt").read_bytes()}
 
@@ -363,7 +382,9 @@ def _ownership_state(host: Host) -> dict[str, bytes | str]:
     [
         "journal-written",
         "checkpoint-begun",
+        "claim-staged",
         "claim-written",
+        "history-staged",
         "history-written",
         "checkpoint-finished",
     ],
@@ -398,8 +419,9 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
 
     assert killed.returncode == 79, (killed.stdout, killed.stderr)
     assert len(tuple(journals.glob("*.json"))) == 1
-    changed = step in ("claim-written", "history-written", "checkpoint-finished")
+    changed = step not in ("journal-written", "checkpoint-begun")
     assert (_ownership_state(host) != before) is changed
+    assert len(_staged_files(host)) == step.endswith("-staged")
     assert host.cli("ownership", "list", config=False, profile=False).exit_code == 0
     assert host.cli("status").exit_code == 0
     refusal = f"`setforge recover --profile={profile}`"
@@ -410,9 +432,8 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
     assert again.exit_code == 1
     # A release repeated after its claim was written stops earlier, at its
     # preview of the already released claim.
-    assert ("already released" if action == "release" and changed else refusal) in str(
-        again.exception
-    )
+    released = action == "release" and changed and step != "claim-staged"
+    assert ("already released" if released else refusal) in str(again.exception)
     assert len(tuple(journals.glob("*.json"))) == 1
     legacy = host.cli("ownership", "recover", profile=False)
     assert legacy.exit_code == 0
@@ -429,7 +450,11 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
     )
 
     assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
-    assert _ownership_state(host) == before
+    after = _ownership_state(host)
+    for staged in _staged_files(host):
+        del after[staged]
+    assert after == before
+    assert host.cli("ownership", "history", profile=False).exit_code == 0
     assert not tuple(journals.glob("*.json"))
     assert _states(host) == ["released" if action == "revert" else "claimed"]
     repeated = host.proc(*command, config=False, profile=False)

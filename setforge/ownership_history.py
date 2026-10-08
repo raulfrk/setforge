@@ -282,6 +282,10 @@ class OwnershipHistoryStore:
         A failure inside the block rolls both back before the exception
         continues; a killed process leaves the journal for ``setforge recover``.
         """
+        # Made before the journal so recovery never has to remove it: a killed
+        # record write leaves a temporary file there that the journal cannot name.
+        with self._open_records(transition.owner_id, "transitions", create=True):
+            pass
         profile = ownership_operation_profile(transition.owner_id)
         command = f"ownership-{transition.action.value}"
         paths = (
