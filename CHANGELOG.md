@@ -178,6 +178,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rejected it, but these commands used to treat the unknown variable as empty
   and use the shortened path (`~/x.txt`). Destinations that `validate` accepts
   resolve exactly as before.
+- `setforge config add --local marketplaces.add NAME` now writes the marketplace
+  under `marketplaces: add:` in `local.yaml`, beside any existing `add` and
+  `remove` entries, and refuses a name that is already there or that begins
+  with `-`. It used to write `NAME` directly under `marketplaces:`, which
+  `validate`, `profile show`, `compare` and `install` then rejected as an
+  unknown key until you fixed `local.yaml` by hand. A `local.yaml` already
+  written that way still has to be corrected by hand: move the entry under
+  `add:`.
 
 ### Removed
 
