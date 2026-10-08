@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import typer
-from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
+from jinja2 import TemplateSyntaxError, UndefinedError
 from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
@@ -54,7 +54,7 @@ from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.locking import mutation_locks
 from setforge.migrations._local_yaml import guard_local_yaml_schema, strip_retired_keys
 from setforge.overlay_provenance import LocalOverlayError, LocalOverlayLoadError
-from setforge.paths import template_context
+from setforge.paths import render_dst_template
 from setforge.source import (
     ExtensionOverlay,
     MarketplaceOverlay,
@@ -258,9 +258,7 @@ def _check_jinja_templates(
     if not tracked_file.template:
         return True
     try:
-        Template(tracked_file.dst, undefined=StrictUndefined).render(
-            **template_context()
-        )
+        render_dst_template(tracked_file.dst)
     except (TemplateSyntaxError, UndefinedError) as exc:
         failures.append(f"{dot_ctx}: unrenderable dst template: {exc}")
         return False

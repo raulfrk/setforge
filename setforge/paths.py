@@ -98,3 +98,15 @@ def template_context() -> dict[str, str]:
         "vscode_user_dir": str(vscode_user_dir() / "User"),
         "home": str(Path.home()),
     }
+
+
+def render_dst_template(raw: str) -> str:
+    """Render a ``template: true`` dst against :func:`template_context`.
+
+    An unknown variable raises :class:`jinja2.UndefinedError` (and bad syntax
+    :class:`jinja2.TemplateSyntaxError`) instead of rendering as empty text, so
+    a misspelled variable can never silently pick a different destination.
+    """
+    from jinja2 import StrictUndefined, Template
+
+    return Template(raw, undefined=StrictUndefined).render(**template_context())

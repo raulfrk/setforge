@@ -171,6 +171,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SetForge you are running. It used to start whichever `setforge` came first on
   your `PATH` and, if that failed, fall back to a bundled copy with a warning.
   The script it writes is unchanged.
+- A misspelled variable in a `template: true` destination (for example
+  `{{ home_typo }}/x.txt`) now stops `install`, `install --dry-run`, `sync`,
+  `compare`, `status` and the other commands that locate your files with an
+  error naming the variable, before anything is written. `validate` already
+  rejected it, but these commands used to treat the unknown variable as empty
+  and use the shortened path (`~/x.txt`). Destinations that `validate` accepts
+  resolve exactly as before.
 
 ### Removed
 
