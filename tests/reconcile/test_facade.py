@@ -17,7 +17,6 @@ def test_facade_exports() -> None:
         "read_base",
         "read_index",
         "read_local",
-        "reconstruct",
         "record",
         "verify",
         "write_base",

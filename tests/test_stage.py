@@ -581,7 +581,7 @@ def test_apply_writes_classes_and_keeps_base(
     classes = {row["label"]: row["cls"] for row in entry.hunks}
     assert classes == {"## Shell": "shared", "## Host paths": "local"}
     assert store.read_base(profile, file_id("CLAUDE.md")) == _BASE  # base unchanged
-    assert store.reconstruct(profile, file_id("CLAUDE.md")) == _LIVE  # full live
+    assert store.read_local(profile, file_id("CLAUDE.md")) == _LIVE  # full live
 
 
 def test_apply_adopts_container_without_rewriting_live(
@@ -1082,8 +1082,8 @@ def test_walk_scales_to_many_hunks_no_whole_file_degrade(
 
     def tracked_promotion() -> bytes:
         # What `sync` would promote into tracked/: the hunk-granular reconstruct
-        # over the freshly-collected classes (NOT store.reconstruct, which is the
-        # storage identity = recorded local).
+        # over the freshly-collected classes (NOT store.read_local, which is the
+        # recorded local).
         (st,) = collect_stages(cfg, resolved, repo, "p")
         return hunks_mod.reconstruct(st.base, st.live, st.units, {})
 

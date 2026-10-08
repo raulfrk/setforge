@@ -1,4 +1,4 @@
-"""The reconcile store: resolver, local/base, index, reconstruct, verify."""
+"""The reconcile store: resolver, local/base, index, verify."""
 
 from __future__ import annotations
 
@@ -862,7 +862,7 @@ def test_read_index_corrupt_raises(tmp_state: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# reconstruct + verify (Task 7)
+# verify
 # --------------------------------------------------------------------------- #
 
 
@@ -879,12 +879,6 @@ def _record_locked(
 
     with locking.profile_lock(profile):
         store.record(profile, fid, base=base, local=local, staged=staged, hunks=hunks)
-
-
-def test_reconstruct_is_local(tmp_state: Path) -> None:
-    fid = file_id("f")
-    store.write_local("p", fid, b"hi")
-    assert store.reconstruct("p", fid) == b"hi"
 
 
 def test_verify_ok_after_record(tmp_state: Path) -> None:

@@ -66,7 +66,6 @@ __all__ = [
     "read_drafts",
     "read_index",
     "read_local",
-    "reconstruct",
     "record",
     "stored_file_ids",
     "verify",
@@ -465,19 +464,8 @@ def write_index(profile: str, index: Index) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# reconstruction + invariants
+# invariants
 # --------------------------------------------------------------------------- #
-
-
-def reconstruct(profile: str, fid: FileId) -> bytes | None | Absent:
-    """Reconstruct the live content for ``fid``.
-
-    In this storage layer the reconstruction operator is the identity:
-    ``base + recorded-local`` collapses to the recorded local bytes (the
-    hunk-granular ``+`` arrives with the future 3-way merge). Returns the same
-    trichotomy as :func:`read_local`.
-    """
-    return read_local(profile, fid)
 
 
 def verify(profile: str, fid: FileId | None = None) -> None:

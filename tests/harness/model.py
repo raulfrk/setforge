@@ -14,7 +14,6 @@ from setforge.reconcile import (
     read_base,
     read_index,
     read_local,
-    reconstruct,
     record,
     verify,
 )
@@ -142,7 +141,7 @@ class StubReconcileModel:
         return dict(self.live)
 
     def base_plus_local(self, file_id_str: str) -> bytes | None:
-        result = reconstruct(self.profile, file_id(file_id_str))
+        result = read_local(self.profile, file_id(file_id_str))
         if result is ABSENT or result is None:
             return None if result is None else b""
         return result
@@ -164,7 +163,7 @@ class StubReconcileModel:
     def _live_from_store(self) -> dict[str, str]:
         live: dict[str, str] = {}
         for fid_str in self.indexed_file_ids():
-            body = reconstruct(self.profile, file_id(fid_str))
+            body = read_local(self.profile, file_id(fid_str))
             if isinstance(body, bytes):
                 live[fid_str] = body.decode("utf-8", errors="surrogateescape")
         return live
