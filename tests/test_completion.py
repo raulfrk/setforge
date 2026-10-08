@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,6 @@ from setforge.cli import completion as completion_mod
 from setforge.cli.completion import (
     CompletionChoice,
     ShellKind,
-    _atomic_write_rc_file,
     _detect_wiring,
     _script_path,
     _wrap_sentinel,
@@ -514,64 +514,42 @@ def test_completion_module_lazy_unknown_attr_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_atomic_write_rc_file_preserves_mode(tmp_path: Path) -> None:
-    """``_atomic_write_rc_file`` mirrors original mode bits via copystat."""
-    rc = tmp_path / ".zshrc"
+def test_completion_install_keeps_the_rc_file_mode(home: Path) -> None:
+    rc = home / ".zshrc"
     rc.write_text("# original\n")
     rc.chmod(0o600)
-    _atomic_write_rc_file(rc, "# replaced\n")
-    assert rc.read_text() == "# replaced\n"
-    assert rc.stat().st_mode & 0o777 == 0o600
+
+    result = _RUNNER.invoke(app, ["completion", "install", "zsh", "--non-interactive"])
+
+    assert result.exit_code == 0, result.output
+    assert "# >>> setforge completion >>>" in rc.read_text()
+    assert stat.S_IMODE(rc.stat().st_mode) == 0o600
 
 
-def test_atomic_write_rc_file_no_tmp_residue(tmp_path: Path) -> None:
-    """After a successful atomic replace, no ``.setforge-tmp`` file remains."""
+def test_write_wiring_leaves_no_temp_file(tmp_path: Path) -> None:
     rc = tmp_path / ".bashrc"
     rc.write_text("# original\n")
-    _atomic_write_rc_file(rc, "# new content\n")
-    assert not (tmp_path / ".bashrc.setforge-tmp").exists()
+
+    _write_wiring(rc, "body\n")
+
     assert list(tmp_path.iterdir()) == [rc]
 
 
-def test_rc_file_write_is_atomic_under_sigint(tmp_path: Path) -> None:
-    """SIGINT mid-write must leave ``rc_path`` byte-identical to before.
-
-    Simulates SIGINT landing inside the tmp-file ``write_text`` call by
-    monkeypatching ``Path.write_text`` to raise ``KeyboardInterrupt`` when
-    the target's name ends with ``.setforge-tmp``. The invariants are:
-
-    1. ``KeyboardInterrupt`` propagates out of ``_atomic_write_rc_file``
-       (the caller's outer SIGINT handler is responsible for graceful
-       exit — we don't swallow it).
-    2. The original rc-file's content is byte-identical to before the
-       call (``os.replace`` never ran).
-    3. The original rc-file is non-empty (not zero-byte) — confirming we
-       did NOT truncate the original on the way to the failed replace.
-    """
+def test_write_wiring_interrupted_mid_write_leaves_rc_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SIGINT landing after the new bytes are staged must not touch the rc file."""
     rc = tmp_path / ".zshrc"
     original = "# user content\nexport FOO=1\nalias ls='ls --color=auto'\n"
     rc.write_text(original)
 
-    real_write_text = Path.write_text
-    write_text_calls: list[Path] = []
+    def interrupted(fd: int) -> None:
+        raise KeyboardInterrupt("simulated SIGINT mid-write")
 
-    def faulty_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
-        write_text_calls.append(self)
-        if self.name.endswith(".setforge-tmp"):
-            # Emulate SIGINT landing during the tmp-file write.
-            raise KeyboardInterrupt("simulated SIGINT mid-write")
-        return real_write_text(self, *args, **kwargs)
+    monkeypatch.setattr("setforge.atomicio.os.fsync", interrupted)
 
-    try:
-        Path.write_text = faulty_write_text  # type: ignore[method-assign]
-        with pytest.raises(KeyboardInterrupt):
-            _atomic_write_rc_file(rc, "# CORRUPTED — must not land\n")
-    finally:
-        Path.write_text = real_write_text  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        _write_wiring(rc, "body\n")
 
-    # The tmp file was the target of the raising write_text.
-    assert any(p.name.endswith(".setforge-tmp") for p in write_text_calls)
-    # The rc file content survived intact: os.replace never ran.
     assert rc.read_text() == original
-    # And the rc file is non-empty (zero-byte regression guard).
-    assert rc.stat().st_size == len(original.encode("utf-8"))
+    assert list(tmp_path.iterdir()) == [rc]

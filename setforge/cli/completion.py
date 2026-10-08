@@ -8,11 +8,9 @@ between the markers rather than appending a second copy.
 
 from __future__ import annotations
 
-import os
 import re
-import shutil
+import stat
 import sys
-import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, assert_never
@@ -21,6 +19,7 @@ import typer
 from rich.console import Console
 from typer.completion import get_completion_script
 
+from setforge.atomicio import atomic_write_text
 from setforge.cli import app
 from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
 from setforge.cli._output import make_console
@@ -167,40 +166,6 @@ def _detect_wiring(rc_path: Path) -> bool:
     return _SENTINEL_BEGIN in text and _SENTINEL_END in text
 
 
-def _atomic_write_rc_file(rc_path: Path, content: str) -> None:
-    """Atomically replace ``rc_path``'s content with ``content``.
-
-    Writes to a uniquely-named ``<rc_path.name>.<rand>.setforge-tmp``
-    file in the same directory (so concurrent invocations don't collide
-    on a fixed tmp name), mirrors the existing file's mode bits via
-    :func:`shutil.copystat`, then ``os.replace`` swaps the tmp file over
-    the target. The same-directory placement is load-bearing —
-    ``os.replace`` is only atomic when source and destination live on
-    the same filesystem, which the parent-dir placement guarantees. The
-    caller has already validated that ``rc_path`` exists. On any
-    exception after the tmp file is created, it is removed before
-    re-raising so a failed write never leaves a stray tmp file behind.
-    A symlinked ``rc_path`` (dotfile managers) is resolved first so the
-    link target is updated and the link itself is kept.
-    """
-    rc_path = rc_path.resolve()
-    fd, name = tempfile.mkstemp(
-        dir=rc_path.parent, prefix=f"{rc_path.name}.", suffix=".setforge-tmp"
-    )
-    os.close(fd)
-    tmp = Path(name)
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        # Copy mode bits (+ atime/mtime + flags where supported) from the
-        # original BEFORE the replace so the swapped-in file inherits the
-        # user's chmod choices (e.g. 0600 on a private rc file).
-        shutil.copystat(rc_path, tmp)
-        tmp.replace(rc_path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def _write_wiring(rc_path: Path, body: str) -> None:
     """Insert/replace the setforge sentinel block in ``rc_path``.
 
@@ -210,9 +175,11 @@ def _write_wiring(rc_path: Path, body: str) -> None:
     is appended to the end of the file. Refuses to create ``rc_path``
     if it doesn't exist — the user's shell-rc file is their territory.
 
-    The actual disk write goes through :func:`_atomic_write_rc_file` so
-    a SIGINT mid-write leaves the original rc file byte-identical (the
-    tmp file is the only victim).
+    The write goes through :func:`setforge.atomicio.atomic_write_text`
+    with the file's existing mode bits, so a SIGINT mid-write leaves the
+    original rc file byte-identical (the tmp file is the only victim). A
+    symlinked rc file (dotfile managers) is resolved first so the link
+    target is updated and the link itself is kept.
     """
     if not rc_path.exists():
         raise SetforgeError(
@@ -228,7 +195,8 @@ def _write_wiring(rc_path: Path, body: str) -> None:
         if existing and not existing.endswith("\n"):
             existing = f"{existing}\n"
         new_text = f"{existing}{block}"
-    _atomic_write_rc_file(rc_path, new_text)
+    target = rc_path.resolve()
+    atomic_write_text(target, new_text, mode=stat.S_IMODE(target.stat().st_mode))
 
 
 def _stdin_is_tty() -> bool:
