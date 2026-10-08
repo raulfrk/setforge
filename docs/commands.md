@@ -105,6 +105,22 @@ setforge ships ten subcommand groups for narrow inspections and edits. Run
 | `completion` | `install` | Install shell completion scripts. |
 | `project` | `inject`, `list`, `visibility`, `sync`, `remove` | Inspect, materialize, change per-file Git visibility, synchronize, and remove project profiles in Git worktrees or plain directories. |
 
+### Marketplace cache collisions
+
+With `claude.install_mode: local-clone` in `~/.config/setforge/local.yaml`, each
+GitHub marketplace is cloned into `$XDG_CACHE_HOME/setforge/marketplaces/<repo
+name>` (default `~/.cache/setforge/marketplaces`). Two repos with the same name,
+such as `alice/tools` and `bob/tools`, share one directory. When that directory
+already holds a clone of a different repo than the marketplace declares,
+`install`, `plugin reconcile` and `plugin sync-cache` stop with an error that
+names the marketplace, the directory and both repos. SetForge does not ask what
+to do and changes nothing. Either set the marketplace's `repo:` in
+`setforge.yaml` to the repo already cloned there, or run the `rm -rf` command
+the error prints and run the command again so the declared repo is cloned in
+its place. To use both repos, give one of them a `path` source or set
+`claude.install_mode: regular`. `plugin reconcile --yes` is still accepted and
+no longer changes anything.
+
 ### Project profile synchronization
 
 `setforge project list` inventories every recorded project injection, grouped

@@ -318,7 +318,6 @@ def _resolve_add_source(source: MarketplaceSource, mp_name: str) -> MarketplaceS
         host_local.claude.install_mode,
         cache_root=claude_mp_cache_mod.marketplace_cache_root(),
         mp_name=mp_name,
-        auto=True,
     )
 
 
@@ -540,10 +539,7 @@ def plugin_reconcile(
         False,
         "--yes",
         "-y",
-        help=(
-            "Non-interactive: refuse the marketplace-collision wizard's silent "
-            "auto-resolution rather than prompting."
-        ),
+        help="Accepted for existing scripts; it no longer changes anything.",
     ),
     product: ProductKind = typer.Option(
         ProductKind.CLAUDE, "--product", help="Plugin product: claude or codex."
@@ -660,14 +656,17 @@ def _run_plugin_reconcile(
     dry_run: bool,
     auto: bool,
 ) -> tuple[ReconcilePolicy, claude_plugins_mod.ReconcileReport]:
-    """Run read-only directly; reload live desired state inside serialization."""
+    """Run read-only directly; reload live desired state inside serialization.
+
+    ``auto`` has no effect (a colliding marketplace cache is always an error);
+    it is still accepted so existing callers keep working.
+    """
     if policy is ReconcilePolicy.REPORT or dry_run:
         report = claude_plugins_mod.reconcile(
             cfg,
             declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
             policy=policy,
             dry_run=dry_run,
-            auto=auto,
         )
         return policy, report
     with operations.transaction(
@@ -683,7 +682,6 @@ def _run_plugin_reconcile(
             declared_plugin_ids=reconcile_adapter.plugin_ids(current_cfg, current),
             policy=current_policy,
             dry_run=False,
-            auto=auto,
         )
         return current_policy, report
 

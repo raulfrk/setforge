@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- With `claude.install_mode: local-clone`, a marketplace whose cache directory
+  already holds a clone of a different repo (two repos with the same name, such
+  as `alice/tools` and `bob/tools`) no longer opens the keep/update/both/abort
+  prompt. `install`, `plugin reconcile` and `plugin sync-cache` now stop with an
+  error that names the marketplace, the directory and both repos and says what
+  to run, and they change nothing. A cache created by the old "both" choice
+  keeps working. `plugin reconcile --yes` is still accepted but no longer does
+  anything.
+
 ### Fixed
 
 - `setforge recover` after an interrupted install now also restores a file that

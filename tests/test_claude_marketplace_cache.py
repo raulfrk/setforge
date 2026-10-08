@@ -9,7 +9,6 @@ monkeypatch paths track the split.
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -27,12 +26,16 @@ from tests.conftest import _make_config, _make_resolved
 # ---------------------------------------------------------------------------
 
 
-def test_readd_after_failed_registration_uses_both_collision_alias(
+def test_readd_after_failed_registration_uses_legacy_alias_sidecar(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A cache-root alias sidecar written by an earlier version keeps steering a
+    colliding repo to its own subdir: no collision error, no new clone, and the
+    colliding basename directory is left alone."""
+    import json
+
     from setforge import claude_marketplace_cache as cache
     from setforge import claude_plugins
-    from setforge.marketplace_cache_wizard import CollisionAction, CollisionResolution
 
     fake = fake_git(known_repos={"alice/tools", "bob/tools"})
     root = tmp_path / "marketplaces"
@@ -41,37 +44,21 @@ def test_readd_after_failed_registration_uses_both_collision_alias(
     (original / "keep").write_text("unrelated cache")
     fake.cloned[original] = "alice/tools"
     alias = root / "tools-bob"
-    monkeypatch.setattr(
-        "setforge.marketplace_cache_wizard.resolve_collision",
-        lambda **kwargs: CollisionResolution(CollisionAction.BOTH, alias),
-    )
-    source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
-    first = cache.plan_marketplace_source(
-        source, ClaudeInstallMode.LOCAL_CLONE, cache_root=root
-    )
-    effective = cache.apply_marketplace_source_plan(first)
+    alias.mkdir()
+    fake.cloned[alias] = "bob/tools"
+    (root / ".aliases.json").write_text(json.dumps({"bob/tools": "tools-bob"}))
     monkeypatch.setattr(claude_plugins, "_get_claude_bin", lambda: Path("claude"))
+    source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
 
-    def fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(1, argv, stderr="registration failed")
-
-    monkeypatch.setattr(claude_plugins, "_run_claude", fail)
-    with pytest.raises(subprocess.CalledProcessError, match="non-zero"):
-        claude_plugins.marketplace_add("tools", effective)
-    assert cache.read_cache_aliases(root)["bob/tools"] == "tools-bob"
-    monkeypatch.setattr(
-        "setforge.marketplace_cache_wizard.resolve_collision",
-        lambda **kwargs: pytest.fail(
-            "recorded alias must prevent another collision prompt"
-        ),
-    )
-    retry = cache.plan_marketplace_source(
+    plan = cache.plan_marketplace_source(
         source, ClaudeInstallMode.LOCAL_CLONE, cache_root=root
     )
-    assert retry.cache_dir == alias
-    assert retry.action is cache.MarketplaceSourceAction.NONE
-    retried = cache.apply_marketplace_source_plan(retry)
-    assert retried.path == alias
+
+    assert cache.read_cache_aliases(root) == {"bob/tools": "tools-bob"}
+    assert plan.cache_dir == alias
+    assert plan.action is cache.MarketplaceSourceAction.NONE
+    effective = cache.apply_marketplace_source_plan(plan)
+    assert effective.path == alias
     registrations: list[list[str]] = []
 
     def register(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -79,9 +66,9 @@ def test_readd_after_failed_registration_uses_both_collision_alias(
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(claude_plugins, "_run_claude", register)
-    claude_plugins.marketplace_add("tools", retried)
+    claude_plugins.marketplace_add("tools", effective)
     assert registrations[0][-1] == str(alias)
-    assert fake.clone_count() == 1
+    assert fake.clone_count() == 0
     assert (original / "keep").read_text() == "unrelated cache"
     assert fake.cloned[original] == "alice/tools"
 
@@ -198,40 +185,6 @@ def test_marketplace_source_plan_refuses_origin_changed_after_planning(
         validate_marketplace_source_plan(plan)
 
 
-def test_marketplace_source_plan_refuses_both_target_created_after_choice(
-    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A BOTH collision choice cannot clone onto a later-created target."""
-    from setforge.claude_marketplace_cache import (
-        plan_marketplace_source,
-        validate_marketplace_source_plan,
-    )
-    from setforge.errors import MarketplaceCacheMiss
-    from setforge.marketplace_cache_wizard import (
-        CollisionAction,
-        CollisionResolution,
-    )
-
-    fake = fake_git(known_repos={"new/plug"})
-    cache_root = tmp_path / "cache"
-    cache_dir = cache_root / "plug"
-    cache_dir.mkdir(parents=True)
-    fake.cloned[cache_dir] = "old/plug"
-    both_dir = cache_root / "plug-new"
-    monkeypatch.setattr(
-        "setforge.marketplace_cache_wizard.resolve_collision",
-        lambda **_kwargs: CollisionResolution(CollisionAction.BOTH, both_dir),
-    )
-    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="new/plug")
-    plan = plan_marketplace_source(
-        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root, mp_name="new"
-    )
-    both_dir.mkdir()
-
-    with pytest.raises(MarketplaceCacheMiss, match="target changed"):
-        validate_marketplace_source_plan(plan)
-
-
 def test_marketplace_plan_source_snapshots_are_detached(tmp_path: Path) -> None:
     from setforge.claude_marketplace_cache import plan_marketplace_source
 
@@ -331,40 +284,15 @@ def testresolve_marketplace_source_origin_probe_failure_reuses_cache(
     assert fake.clone_count() == 0
 
 
-def testresolve_marketplace_source_url_drift_invokes_wizard(
-    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Cache-origin URL drift dispatches the wizard; [u]pdate re-clones."""
-    from setforge.claude_marketplace_cache import resolve_marketplace_source
-    from setforge.marketplace_cache_wizard import (
-        CollisionAction,
-        CollisionResolution,
-    )
-
-    fake = fake_git(known_repos={"anthropic/plug", "newowner/plug"})
-    cache_root = tmp_path / "cache"
-    cache_dir = cache_root / "plug"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / ".git").mkdir()
-    # Pre-populate cache with a stale origin URL.
-    fake.cloned[cache_dir] = "anthropic/plug"
-    # Source now declares a different owner.
-    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
-    # Wizard returns UPDATE — the pre-wizard silent behavior.
-    monkeypatch.setattr(
-        "setforge.marketplace_cache_wizard.resolve_collision",
-        lambda **_: CollisionResolution(action=CollisionAction.UPDATE),
-    )
-    resolve_marketplace_source(
-        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
-    )
-    assert fake.clone_count() == 1
-
-
-def testresolve_marketplace_source_url_drift_non_tty_no_auto_raises(
+def testresolve_marketplace_source_url_drift_raises_and_changes_nothing(
     fake_git, tmp_path: Path
 ) -> None:
-    """Cache collision under non-TTY + no --auto raises MarketplaceCacheMiss."""
+    """A cache dir holding another repo is refused with the manual steps.
+
+    The error names the marketplace, the cache directory, the clone's origin and
+    the declared repo, and gives both ways out; the cache is left as it was and
+    nothing is cloned.
+    """
     from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.errors import MarketplaceCacheMiss
 
@@ -373,16 +301,49 @@ def testresolve_marketplace_source_url_drift_non_tty_no_auto_raises(
     cache_dir = cache_root / "plug"
     cache_dir.mkdir(parents=True)
     (cache_dir / ".git").mkdir()
+    (cache_dir / "marker.txt").write_text("existing clone")
     fake.cloned[cache_dir] = "anthropic/plug"
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
-    # pytest has no TTY → wizard refuses to silently auto-pick.
-    with pytest.raises(MarketplaceCacheMiss, match="cache collision"):
+
+    with pytest.raises(MarketplaceCacheMiss) as raised:
         resolve_marketplace_source(
+            src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root, mp_name="mine"
+        )
+
+    message = str(raised.value)
+    assert "marketplace 'mine'" in message
+    assert str(cache_dir) in message
+    assert "'anthropic/plug'" in message
+    assert "'newowner/plug'" in message
+    assert "Nothing was changed" in message
+    assert "set this marketplace's repo in setforge.yaml to 'anthropic/plug'" in message
+    assert f"rm -rf {cache_dir}" in message
+    assert (cache_dir / "marker.txt").read_text() == "existing clone"
+    assert fake.cloned == {cache_dir: "anthropic/plug"}
+    assert fake.clone_count() == 0
+    assert not any("fetch" in c or "reset" in c for c in fake.calls)
+
+
+def test_url_drift_error_quotes_a_cache_path_with_spaces(
+    fake_git, tmp_path: Path
+) -> None:
+    """The ``rm -rf`` step in the error is safe to paste when the path has spaces."""
+    from setforge.claude_marketplace_cache import plan_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos=set())
+    cache_root = tmp_path / "my cache"
+    cache_dir = cache_root / "plug"
+    cache_dir.mkdir(parents=True)
+    fake.cloned[cache_dir] = "anthropic/plug"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
+
+    with pytest.raises(MarketplaceCacheMiss) as raised:
+        plan_marketplace_source(
             src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
         )
-    # No destructive action — existing cache untouched, no clone.
-    assert cache_dir.exists()
-    assert fake.clone_count() == 0
+
+    assert f"rm -rf '{cache_dir}'" in str(raised.value)
 
 
 # ---------------------------------------------------------------------------
@@ -542,21 +503,21 @@ def test_sync_marketplace_cache_refreshes_existing(fake_git, tmp_path: Path) -> 
     assert reset_calls
 
 
-def test_sync_marketplace_cache_honors_both_collision_alias(
+def test_sync_marketplace_cache_honors_legacy_alias_sidecar(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A marketplace resolved into a non-basename subdir (BOTH-collision
-    alias) must refresh THAT dir, not the colliding basename dir.
+    """A marketplace an earlier version cloned into a non-basename subdir
+    (recorded in the alias sidecar) must refresh THAT dir, not the colliding
+    basename dir.
 
     Fails against the old basename-only computation: the basename dir holds
     a different owner's clone, so the origin-mismatch guard raises
     MarketplaceCacheMiss and the aliased marketplace is never refreshable.
     """
+    import json
+
     from setforge import claude_marketplace_cache as mp_cache
-    from setforge.claude_marketplace_cache import (
-        _record_cache_alias,
-        sync_marketplace_cache,
-    )
+    from setforge.claude_marketplace_cache import sync_marketplace_cache
 
     fake = fake_git(known_repos={"bob/tools", "alice/tools"})
     cache_root = tmp_path / "marketplaces"
@@ -570,7 +531,7 @@ def test_sync_marketplace_cache_honors_both_collision_alias(
     aliased_dir.mkdir(parents=True)
     (aliased_dir / ".git").mkdir()
     fake.cloned[aliased_dir] = "bob/tools"
-    _record_cache_alias(cache_root, "bob/tools", aliased_dir)
+    (cache_root / ".aliases.json").write_text(json.dumps({"bob/tools": "tools-bob"}))
 
     refreshed_dirs: list[Path] = []
     real_refresh = mp_cache._refresh_marketplace_cache
@@ -651,51 +612,9 @@ def test_sync_marketplace_cache_clone_failure_raises_cache_miss(
         sync_marketplace_cache(cfg, profile)
 
 
-# ---------------------------------------------------------------------------
-# wizard import shape (module-level, no cycle)
-# ---------------------------------------------------------------------------
-
-
-def _run_fresh_interpreter(code: str) -> None:
-    """Run ``code`` in a fresh interpreter so sys.modules starts clean."""
-    subprocess.run(
-        [sys.executable, "-c", code],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
-
-
-def test_wizard_import_is_module_level() -> None:
-    """The cache module imports the wizard eagerly, not function-locally.
-
-    The historical lazy import guarded against a feared wizard <-> cache
-    circular dependency that never existed (the wizard only imports from
-    :mod:`setforge.errors`). Guards against the lazy import creeping back.
-    """
-    _run_fresh_interpreter(
-        "import sys\n"
-        "import setforge.claude_marketplace_cache\n"
-        "assert 'setforge.marketplace_cache_wizard' in sys.modules"
-    )
-
-
-@pytest.mark.parametrize(
-    ("first", "second"),
-    [
-        ("setforge.claude_marketplace_cache", "setforge.marketplace_cache_wizard"),
-        ("setforge.marketplace_cache_wizard", "setforge.claude_marketplace_cache"),
-    ],
-)
-def test_cache_and_wizard_import_in_either_order(first: str, second: str) -> None:
-    """Both import orders resolve cleanly — no circular dependency."""
-    _run_fresh_interpreter(f"import {first}\nimport {second}")
-
-
 def test_urls_equivalent_is_case_insensitive() -> None:
     """GitHub owner/repo is case-insensitive; a case variant must not read as
-    URL-changed (which would re-fire the collision wizard every sync)."""
+    URL-changed (which would raise the cache-collision error every sync)."""
     from setforge.claude_marketplace_cache import _urls_equivalent
 
     assert _urls_equivalent("https://github.com/Owner/Repo.git", "owner/repo")

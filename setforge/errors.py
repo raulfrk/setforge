@@ -331,11 +331,12 @@ class MarketplaceCacheMiss(SetforgeError):
 
     Triggered by :func:`setforge.claude_plugins._clone_marketplace` in
     three cases: the ``git`` binary is missing from PATH, the on-demand
-    ``git clone`` failed (typically offline), or an existing cache's
-    ``origin`` remote no longer matches the configured source repo and
-    a re-clone failed. The message names the marketplace and the exact
-    remediation (``setforge plugin sync-cache --profile=<name>`` while
-    online, or fall back to ``claude.install_mode: regular``)."""
+    ``git clone`` failed (typically offline), or the cache directory already
+    holds a clone of a different repo than the one the marketplace declares
+    (two repos with the same final name). The message names the marketplace
+    and the exact remediation (``setforge plugin sync-cache --profile=<name>``
+    while online, the manual steps for a colliding cache directory, or
+    falling back to ``claude.install_mode: regular``)."""
 
 
 class PyPIFetchError(SetforgeError):
