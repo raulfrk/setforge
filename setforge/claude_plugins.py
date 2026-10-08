@@ -619,8 +619,8 @@ def _add_declared_marketplaces(
     surrounding state machine.
 
     A cache directory that holds a different repo than the declared one is
-    recorded in ``failed`` (the marketplace is not added, nothing on disk is
-    changed).
+    recorded in ``failed`` (the marketplace is not added and that cache
+    directory is left as it was); the other marketplaces are still processed.
     """
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)

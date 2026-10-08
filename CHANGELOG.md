@@ -11,11 +11,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - With `claude.install_mode: local-clone`, a marketplace whose cache directory
   already holds a clone of a different repo (two repos with the same name, such
   as `alice/tools` and `bob/tools`) no longer opens the keep/update/both/abort
-  prompt. `install`, `plugin reconcile` and `plugin sync-cache` now stop with an
+  prompt. `install`, `plugin reconcile` and `plugin sync-cache` now report an
   error that names the marketplace, the directory and both repos and says what
-  to run, and they change nothing. A cache created by the old "both" choice
-  keeps working. `plugin reconcile --yes` is still accepted but no longer does
-  anything.
+  to run, and they do not touch that directory. `install` stops before
+  deploying anything; `plugin reconcile` reports that marketplace as failed,
+  carries on with the others and exits 1; `plugin sync-cache` stops at that
+  marketplace and exits 1. The "keep the existing clone" step shows the repo
+  as `owner/repo`. A cache created by the old "both" choice keeps working.
+  `plugin reconcile --yes` is still accepted but no longer does anything.
 
 - `upgrade` no longer tries to show release notes or guess at schema changes
   (it could not find the changelog in an installed copy anyway). It prints the

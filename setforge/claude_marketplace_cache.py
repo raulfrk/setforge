@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 import shutil
 import subprocess
@@ -536,16 +537,24 @@ def _cache_collision_error(
     Two repos with the same final name (``alice/tools``, ``bob/tools``) share
     one cache directory. SetForge never replaces or reuses that directory on
     its own: the message names both repos and the directory and spells out the
-    manual steps. Nothing has been changed when this is raised.
+    manual steps. The cache directory is left as it was when this is raised;
+    what the calling command does with the other marketplaces is up to it.
+
+    The keep-the-clone step names the clone's repo as ``owner/repo`` when its
+    origin is a GitHub URL: the full URL as ``repo:`` would name a different
+    cache directory and clone again.
     """
     quoted = shlex.quote(str(cache_dir))
+    slug = _normalize_repo_url(existing_origin)
+    keep_repo = slug if re.fullmatch(r"[\w.-]+/[\w.-]+", slug) else existing_origin
     return MarketplaceCacheMiss(
         f"marketplace {mp_name!r}: cache directory {cache_dir} already holds a "
         f"clone of {existing_origin!r}, but this marketplace declares repo "
         f"{declared_repo!r}. Both repos use the folder name {cache_dir.name!r}, "
-        f"so they collide in the cache. Nothing was changed. Do one of:\n"
+        f"so they collide in the cache. This cache directory was not touched. "
+        f"Do one of:\n"
         f"  - keep the existing clone: set this marketplace's repo in "
-        f"setforge.yaml to {existing_origin!r}\n"
+        f"setforge.yaml to {keep_repo!r}\n"
         f"  - use the declared repo: run `rm -rf {quoted}`, then run this "
         f"command again (it clones {declared_repo!r} there)\n"
         f"If you need both repos, give one of them a `path` source in "
@@ -660,6 +669,23 @@ def apply_marketplace_source_plan(plan: MarketplaceSourcePlan) -> MarketplaceSou
     return plan.effective_source
 
 
+def _normalize_repo_url(url: str) -> str:
+    """Reduce a GitHub remote URL to ``owner/repo``; any other URL is left as is.
+
+    Only a trailing ``.git`` and ``/`` are stripped from a URL that is not on
+    GitHub, and an already-short ``owner/repo`` is returned unchanged.
+    """
+    stripped = url.removesuffix(".git").rstrip("/")
+    for prefix in (
+        "https://github.com/",
+        "git@github.com:",
+        "ssh://git@github.com/",
+    ):
+        if stripped.startswith(prefix):
+            return stripped[len(prefix) :]
+    return stripped
+
+
 def _urls_equivalent(observed: str, declared: str) -> bool:
     """Compare a git remote URL to a declared ``owner/repo`` ref.
 
@@ -674,25 +700,17 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
 
     Scope is intentionally github-only (YAGNI): every
     :class:`MarketplaceSourceKind` the project currently ships resolves
-    to a github.com URL, so the hardcoded prefix list below covers the
-    full clone-rewrite surface in practice.
+    to a github.com URL, so the hardcoded prefix list in
+    :func:`_normalize_repo_url` covers the full clone-rewrite surface in
+    practice.
     """
-
-    def _normalize(url: str) -> str:
-        stripped = url.removesuffix(".git").rstrip("/")
-        for prefix in (
-            "https://github.com/",
-            "git@github.com:",
-            "ssh://git@github.com/",
-        ):
-            if stripped.startswith(prefix):
-                return stripped[len(prefix) :]
-        return stripped
-
     # GitHub owner/repo identifiers are case-insensitive, so a case-variant
     # slug must not read as URL-changed — that would raise the cache-collision
     # MarketplaceCacheMiss on every sync (INV-4 idempotency).
-    return _normalize(observed).casefold() == _normalize(declared).casefold()
+    return (
+        _normalize_repo_url(observed).casefold()
+        == _normalize_repo_url(declared).casefold()
+    )
 
 
 def sync_marketplace_cache(

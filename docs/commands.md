@@ -112,12 +112,16 @@ GitHub marketplace is cloned into `$XDG_CACHE_HOME/setforge/marketplaces/<repo
 name>` (default `~/.cache/setforge/marketplaces`). Two repos with the same name,
 such as `alice/tools` and `bob/tools`, share one directory. When that directory
 already holds a clone of a different repo than the marketplace declares,
-`install`, `plugin reconcile` and `plugin sync-cache` stop with an error that
+`install`, `plugin reconcile` and `plugin sync-cache` report an error that
 names the marketplace, the directory and both repos. SetForge does not ask what
-to do and changes nothing. Either set the marketplace's `repo:` in
-`setforge.yaml` to the repo already cloned there, or run the `rm -rf` command
-the error prints and run the command again so the declared repo is cloned in
-its place. To use both repos, give one of them a `path` source or set
+to do and does not touch that directory. What the command does next differs:
+`install` stops before deploying anything; `plugin reconcile` reports that
+marketplace as failed, carries on with the other marketplaces and plugins and
+exits 1; `plugin sync-cache` stops at that marketplace and exits 1 (marketplaces
+that sort before it have already been refreshed). Either set the marketplace's
+`repo:` in `setforge.yaml` to the repo already cloned there (the error prints
+it as `owner/repo`), or run the `rm -rf` command the error prints and run the
+command again so the declared repo is cloned in its place. To use both repos, give one of them a `path` source or set
 `claude.install_mode: regular`. `plugin reconcile --yes` is still accepted and
 no longer changes anything.
 

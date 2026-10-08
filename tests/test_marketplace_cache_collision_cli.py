@@ -4,7 +4,7 @@ Under ``claude.install_mode: local-clone`` two repos with the same final name
 (``alice/tools`` and ``bob/tools``) share one cache directory. SetForge never
 prompts, replaces or reuses that directory on its own: the command fails with an
 error that names the marketplace, the directory, both repos and the manual
-steps, and nothing is changed.
+steps, and the colliding cache directory is left as it was.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def _assert_error_tells_the_user_what_to_do(output: str, cache_dir: Path) -> Non
     assert str(cache_dir) in output
     assert "'alice/tools'" in output
     assert "'bob/tools'" in output
-    assert "Nothing was changed" in output
+    assert "This cache directory was not touched" in output
     assert "set this marketplace's repo in setforge.yaml to 'alice/tools'" in output
     assert f"rm -rf {cache_dir}" in output
 

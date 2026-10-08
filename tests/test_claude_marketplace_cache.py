@@ -315,13 +315,80 @@ def testresolve_marketplace_source_url_drift_raises_and_changes_nothing(
     assert str(cache_dir) in message
     assert "'anthropic/plug'" in message
     assert "'newowner/plug'" in message
-    assert "Nothing was changed" in message
+    assert "This cache directory was not touched" in message
+    assert "Nothing was changed" not in message
     assert "set this marketplace's repo in setforge.yaml to 'anthropic/plug'" in message
     assert f"rm -rf {cache_dir}" in message
     assert (cache_dir / "marker.txt").read_text() == "existing clone"
     assert fake.cloned == {cache_dir: "anthropic/plug"}
     assert fake.clone_count() == 0
     assert not any("fetch" in c or "reset" in c for c in fake.calls)
+
+
+def test_url_drift_error_suggests_the_owner_repo_form_of_a_full_url_origin(
+    fake_git, tmp_path: Path
+) -> None:
+    """A clone made from the full URL is suggested as ``owner/repo``.
+
+    ``repo:`` set to the full URL would name a different cache directory
+    (``tools.git``) and clone again, so the keep-the-clone step prints the short
+    form, which does resolve to the existing directory without cloning.
+    """
+    from setforge.claude_marketplace_cache import (
+        MarketplaceSourceAction,
+        plan_marketplace_source,
+    )
+    from setforge.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos={"alice/tools", "bob/tools"})
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "tools"
+    cache_dir.mkdir(parents=True)
+    fake.cloned[cache_dir] = "https://github.com/alice/tools.git"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
+
+    with pytest.raises(MarketplaceCacheMiss) as raised:
+        plan_marketplace_source(
+            src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+        )
+
+    message = str(raised.value)
+    assert "already holds a clone of 'https://github.com/alice/tools.git'" in message
+    assert "set this marketplace's repo in setforge.yaml to 'alice/tools'\n" in message
+
+    kept = plan_marketplace_source(
+        MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="alice/tools"),
+        ClaudeInstallMode.LOCAL_CLONE,
+        cache_root=cache_root,
+    )
+    assert kept.action is MarketplaceSourceAction.NONE
+    assert kept.cache_dir == cache_dir
+    assert fake.clone_count() == 0
+
+
+def test_url_drift_error_keeps_a_non_github_origin_as_is(
+    fake_git, tmp_path: Path
+) -> None:
+    """An origin that is not a GitHub URL cannot be shortened; it is printed as is."""
+    from setforge.claude_marketplace_cache import plan_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos=set())
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "tools"
+    cache_dir.mkdir(parents=True)
+    fake.cloned[cache_dir] = "https://gitlab.com/alice/tools.git"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
+
+    with pytest.raises(MarketplaceCacheMiss) as raised:
+        plan_marketplace_source(
+            src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+        )
+
+    assert (
+        "set this marketplace's repo in setforge.yaml to "
+        "'https://gitlab.com/alice/tools.git'\n"
+    ) in str(raised.value)
 
 
 def test_url_drift_error_quotes_a_cache_path_with_spaces(

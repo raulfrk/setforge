@@ -59,7 +59,8 @@ def test_install_refuses_a_colliding_cache_dir_and_deploys_nothing(
     assert str(cache_dir) in message
     assert "'https://github.com/alice/tools.git'" in message
     assert "'bob/tools'" in message
-    assert "Nothing was changed" in message
+    assert "This cache directory was not touched" in message
+    assert "set this marketplace's repo in setforge.yaml to 'alice/tools'\n" in message
     assert f"rm -rf {cache_dir}" in message
     assert (cache_dir / "marker.txt").read_text(encoding="utf-8") == "alice's clone"
     assert not env.live(".setforge_it").exists()
