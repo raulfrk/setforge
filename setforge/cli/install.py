@@ -159,7 +159,6 @@ from setforge.transitions import ReconcileStatus
 from setforge.tree_management import (
     TreeActionKind,
     TreeEntryKind,
-    TreeHoldResolution,
     TreePlan,
     apply_tree,
     holds_only_state_trees,
@@ -204,7 +203,7 @@ class InstallPlan:
     codex_configs: tuple[codex_resources_mod.CodexConfigPlan, ...]
     codex_trusted_projects: tuple[Path, ...] = ()
     preserved_store_ids: frozenset[FileId] = frozenset()
-    tree_held: TreeHoldResolution | None = None
+    tree_held: reconcile_apply.ReconcileAuto | None = None
     symlink_conflicts: tuple[str, ...] = ()
 
     def tree_paths(self) -> tuple[Path, ...]:
@@ -578,7 +577,6 @@ def _plan(
     file_selection: frozenset[str] | None,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
-    transition: bool,
     auto: bool,
     package_owner_id: UUID | None,
 ) -> tuple[InstallPlan, LockFile | None, LocalOverlayResolution]:
@@ -593,7 +591,6 @@ def _plan(
         ctx,
         section_auto=section_auto,
         interactive=interactive,
-        transition=transition,
         input_baseline=input_baseline,
         package_owner_id=package_owner_id,
     )
@@ -628,7 +625,6 @@ def _plan_files(
     *,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
-    transition: bool,
     input_baseline: tuple[tuple[Path, bytes | None], ...],
     package_owner_id: UUID | None,
 ) -> InstallPlan:
@@ -692,11 +688,8 @@ def _plan_files(
     source_map = dict(source_bytes)
     if any(source_map.get(path) != payload for path, payload in input_baseline):
         raise SetforgeError("install configuration changed before planning; retry")
-    tree_held = (
-        TreeHoldResolution(section_auto.value) if section_auto is not None else None
-    )
     trees = _plan_trees(
-        tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=tree_held
+        tree_entries, profile=ctx.profile, owner_id=package_owner_id, held=section_auto
     )
     content_paths = tuple(
         deploy.resolve_symlink_target(sub_dst, tf.symlink)
@@ -744,8 +737,7 @@ def _plan_files(
         )
     )
     deploy.validate_srcs_exist(ctx.cfg, ctx.file_profile, ctx.repo_root)
-    if transition:
-        transitions.validate_state_dir_writable()
+    transitions.validate_state_dir_writable()
     drift_report = compare_mod.compare_profile(
         ctx.cfg,
         ctx.profile,
@@ -795,7 +787,7 @@ def _plan_files(
         codex_configs=codex_configs,
         codex_trusted_projects=codex_trusted_projects,
         preserved_store_ids=preserved_store_ids,
-        tree_held=tree_held,
+        tree_held=section_auto,
         symlink_conflicts=_symlink_dst_conflicts(tracked_entries),
     )
 
@@ -953,7 +945,7 @@ def _plan_trees(
     *,
     profile: str,
     owner_id: UUID | None,
-    held: TreeHoldResolution | None = None,
+    held: reconcile_apply.ReconcileAuto | None = None,
 ) -> tuple[PlannedTree, ...]:
     """Freeze desired/live/prior inventories and root authority decisions."""
     store = OwnershipStore()
@@ -1549,7 +1541,6 @@ def _render_install_plan(
     plan: InstallPlan,
     scan_result: SecretsScanResult,
     *,
-    transition: bool = True,
     refusals: tuple[str, ...] = (),
 ) -> None:
     """Render the same immutable plan the real install path consumes."""
@@ -1564,7 +1555,7 @@ def _render_install_plan(
         plugins=plan.plugins,
         immutable_plan=True,
         secrets_scan=scan_result,
-        record_transition=transition and not _install_plan_recorded_nothing(plan),
+        record_transition=not _install_plan_recorded_nothing(plan),
         refusals=refusals,
     )
     changed_codex = [codex for codex in plan.codex_configs if codex.changed]
@@ -2359,7 +2350,6 @@ def _confirm_install(
     auto: str | None,
     yes: bool,
     no_secrets_scan: bool,
-    no_transition: bool,
 ) -> SecretPlan | None:
     """Ask every under-lock question; ``None`` means the welcome was declined."""
     ctx = plan.ctx
@@ -2376,7 +2366,6 @@ def _confirm_install(
             run_dry_run=lambda: _render_install_plan(
                 plan,
                 scan_result,
-                transition=not no_transition,
                 refusals=_plan_refusals(plan, yes=yes),
             ),
         )
@@ -2434,12 +2423,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         "--file",
         help="Update only this declared tracked-file ID in the profile. Repeat to "
         "select several already-managed files; other resources are retained.",
-    ),
-    no_transition: bool = typer.Option(
-        False,
-        "--no-transition",
-        hidden=True,
-        help="Skip writing a transition record (testing / debugging).",
     ),
     reconcile_user_sections: bool = typer.Option(
         False,
@@ -2542,7 +2525,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             file_selection=file_selection,
             section_auto=section_auto,
             interactive=False,
-            transition=not no_transition,
             auto=True,
             package_owner_id=_read_package_owner_id(repo_root),
         )
@@ -2553,7 +2535,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         _render_install_plan(
             plan,
             scan_result,
-            transition=not no_transition,
             refusals=_plan_refusals(plan, yes=yes),
         )
         return
@@ -2609,10 +2590,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     )
     if has_transfer and package_owner_id is None:
         raise SetforgeError("ownership transfer requires a Git-backed config")
-    if has_transfer and no_transition:
-        raise SetforgeError(
-            "ownership transfer requires transition recording; remove --no-transition"
-        )
 
     with operations.transaction(
         resources=True,
@@ -2646,7 +2623,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             file_selection=file_selection,
             section_auto=section_auto,
             interactive=interactive,
-            transition=not no_transition,
             auto=yes,
             package_owner_id=package_owner_id,
         )
@@ -2669,7 +2645,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             auto=auto,
             yes=yes,
             no_secrets_scan=no_secrets_scan,
-            no_transition=no_transition,
         )
         if secret_plan is None:
             return
@@ -2678,8 +2653,7 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         # above has completed, and apply consumes the frozen plan below.
         _assert_plan_inputs_unchanged(plan)
         _validate_external_plan(plan)
-        if not no_transition:
-            transitions.ensure_state_dir_writable()
+        transitions.ensure_state_dir_writable()
 
         deploy_state_pre = install_helpers_mod._capture_store_snapshots(
             profile, plan.deploys, preserved_ids=plan.preserved_store_ids
@@ -2822,7 +2796,6 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             plan,
             run,
             profile=profile,
-            no_transition=no_transition,
             ownership_transfers=applied.ownership_transfers,
             file_pre=applied.file_pre,
             files_applied=applied.files_applied,
@@ -2945,7 +2918,6 @@ def _record_install(
     run: _InstallRun,
     *,
     profile: str,
-    no_transition: bool,
     ownership_transfers: tuple[transitions.OwnershipTransferDelta, ...],
     file_pre: dict[Path, transitions.FilesystemImage],
     files_applied: bool,
@@ -2975,7 +2947,7 @@ def _record_install(
 
     _emit_reconcile_summary(run.plugin_outcomes, run.ext_outcomes)
 
-    if not no_transition and not _install_recorded_nothing(
+    if not _install_recorded_nothing(
         file_pre=file_pre,
         file_post=file_post,
         deploy_outcome=deploy_outcome,

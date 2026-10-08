@@ -34,7 +34,7 @@ def _live_dir() -> Path:
     return Path.home() / ".setforge_preflight"
 
 
-def _install(config: Path, *, transition: bool = False) -> Result:
+def _install(config: Path) -> Result:
     args = [
         "install",
         f"--profile={_PROFILE}",
@@ -43,8 +43,6 @@ def _install(config: Path, *, transition: bool = False) -> Result:
         "--no-git-check",
         "--yes",
     ]
-    if not transition:
-        args.append("--no-transition")
     return CliRunner().invoke(app, args)
 
 
@@ -105,7 +103,7 @@ def test_preflight_refuses_before_writing_earlier_regular_file(repo: Path) -> No
     a_live = _live_dir() / "a.md"
     assert not a_live.exists()
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code != 0
     # The earlier regular file was NOT deployed — refused before any write.
@@ -129,7 +127,7 @@ def test_preflight_refuses_when_directory_occupies_dst(repo: Path) -> None:
     z_dst = _live_dir() / "z-link"
     z_dst.mkdir(parents=True)
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code != 0
     assert not (_live_dir() / "a.md").exists()
@@ -148,7 +146,7 @@ def test_preflight_allows_pre_existing_symlink_at_dst(repo: Path) -> None:
     z_dst.parent.mkdir(parents=True, exist_ok=True)
     z_dst.symlink_to(_live_dir() / "some-old-target")
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code == 0, result.output
     # Both files deployed: a as a regular file, z as a refreshed symlink.
@@ -172,7 +170,7 @@ def test_source_change_after_plan_refuses_before_first_write(
         "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _mutate_after_plan
     )
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code != 0
     assert "inputs changed after planning" in str(result.exception)
@@ -201,7 +199,7 @@ def test_directory_entry_added_after_plan_refuses_before_first_write(
         "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _add_after_plan
     )
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code != 0
     assert "tracked file inventory changed after planning" in str(result.exception)
@@ -226,7 +224,7 @@ def test_live_change_after_plan_refuses_before_first_write(
         "setforge.cli.install.secrets_mod.run_pre_deploy_scan", _mutate_after_plan
     )
 
-    result = _install(config, transition=True)
+    result = _install(config)
 
     assert result.exit_code != 0
     assert "live install targets changed" in str(result.exception)

@@ -75,7 +75,7 @@ def _live_md() -> Path:
 
 
 def _install(config: Path) -> Result:
-    """Run a transition-RECORDING install (no --no-transition)."""
+    """Run a transition-recording install."""
     args = [
         "install",
         f"--profile={_PROFILE}",

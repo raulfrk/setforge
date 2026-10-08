@@ -42,7 +42,6 @@ def _seed_session(
             f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
             "--no-secrets-scan",
-            "--no-transition",
             "--no-git-check",
         ],
         cols=cols,

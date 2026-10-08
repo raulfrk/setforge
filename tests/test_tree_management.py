@@ -14,11 +14,11 @@ import setforge.tree_management as tree_management
 from setforge import atomicio
 from setforge.config import TreeOrphanPolicy, TreePolicy, TreeSymlinkPolicy
 from setforge.errors import InvariantViolation, SetforgeError
+from setforge.reconcile_apply import ReconcileAuto
 from setforge.tree_management import (
     TreeActionKind,
     TreeEntry,
     TreeEntryKind,
-    TreeHoldResolution,
     TreeInventory,
     TreePlan,
     dumps_inventory,
@@ -182,7 +182,7 @@ def test_keep_live_releases_drifted_owned_orphan(tmp_path: Path) -> None:
     current = scan_tree(live, policy).inventory
 
     held = plan_tree(desired, current, prior, policy)
-    plan = plan_tree(desired, current, prior, policy, TreeHoldResolution.KEEP_LIVE)
+    plan = plan_tree(desired, current, prior, policy, ReconcileAuto.KEEP_LIVE)
 
     assert held.blocked
     assert [(action.path, action.kind) for action in plan.actions] == [
@@ -205,7 +205,7 @@ def test_use_tracked_removes_drifted_owned_orphan(tmp_path: Path) -> None:
         scan_tree(live, policy).inventory,
         scan_tree(prior_root, policy).inventory,
         policy,
-        TreeHoldResolution.USE_TRACKED,
+        ReconcileAuto.USE_TRACKED,
     )
 
     assert [(action.path, action.kind) for action in plan.actions] == [
@@ -230,13 +230,13 @@ def test_keep_live_leaves_kind_conflict_and_its_tracked_children(
     desired = scan_tree(source, policy, capture_payloads=True)
     current = scan_tree(live, policy).inventory
 
-    for resolution in (None, TreeHoldResolution.USE_TRACKED):
+    for resolution in (None, ReconcileAuto.USE_TRACKED):
         held = plan_tree(desired, current, None, policy, resolution)
         assert held.blocked
         assert {a.path for a in held.actions if a.kind is TreeActionKind.HOLD} == {
             "entry"
         }
-    plan = plan_tree(desired, current, None, policy, TreeHoldResolution.KEEP_LIVE)
+    plan = plan_tree(desired, current, None, policy, ReconcileAuto.KEEP_LIVE)
 
     assert {action.path: action.kind for action in plan.actions} == {
         "entry": TreeActionKind.RELEASE,
@@ -263,7 +263,7 @@ def test_use_tracked_replaces_symlink_kind_conflict(tmp_path: Path) -> None:
         ).inventory,
         None,
         policy,
-        TreeHoldResolution.USE_TRACKED,
+        ReconcileAuto.USE_TRACKED,
     )
 
     assert [(action.path, action.kind) for action in plan.actions] == [

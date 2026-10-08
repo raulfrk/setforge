@@ -92,21 +92,6 @@ def test_install_writes_transition_dir(
     assert meta["profile"] == "vmh"
 
 
-def test_install_no_transition_flag_skips_recording(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    cfg, _dst = _setup_repo(tmp_path)
-    state = _state_root(tmp_path, monkeypatch)
-    _no_code(monkeypatch)
-
-    result = CliRunner().invoke(
-        app,
-        ["install", "--profile=vmh", f"--config={cfg}", "--no-transition"],
-    )
-    assert result.exit_code == 0, result.output
-    assert not (state / "transitions").exists()
-
-
 def test_install_transition_records_stub_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -135,9 +120,7 @@ def test_sync_writes_transition_dir(
     _no_code(monkeypatch)
 
     runner = CliRunner()
-    install_result = runner.invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}", "--no-transition"]
-    )
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_result.exit_code == 0, install_result.output
     dst.write_text("hello edited\n", encoding="utf-8")
 
@@ -153,11 +136,11 @@ def test_sync_writes_transition_dir(
     )
     assert result.exit_code == 0, result.output
 
-    children = list((state / "transitions").iterdir())
-    assert len(children) == 1
-    sync_transition = children[0]
-    meta = json.loads((sync_transition / "meta.json").read_text())
-    assert meta["command"] == "sync"
+    (sync_transition,) = (
+        child
+        for child in (state / "transitions").iterdir()
+        if json.loads((child / "meta.json").read_text())["command"] == "sync"
+    )
     recorded = load_filesystem_deltas(TransitionDir(sync_transition))
     # The src under tracked/ is what changed.
     assert [item.path.name for item in recorded] == ["greeting.md"]

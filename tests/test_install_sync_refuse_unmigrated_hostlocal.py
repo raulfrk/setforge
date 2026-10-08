@@ -98,7 +98,6 @@ def _install(config: Path) -> Result:
             f"--config={config}",
             "--no-git-check",
             "--no-secrets-scan",
-            "--no-transition",
             "--yes",
         ],
     )
@@ -112,7 +111,6 @@ def _sync(config: Path) -> Result:
             "--profile=default",
             f"--config={config}",
             "--auto=use-live",
-            "--no-transition",
             "--yes",
         ],
     )

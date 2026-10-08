@@ -629,7 +629,7 @@ class TestSync:
             ["sync", "--profile=test-comprehensive", f"--config={fixture_repo}"]
         )
         assert refused.exit_code == 1
-        assert "--auto=use-live --yes" in refused.output
+        assert "--yes to capture it" in refused.output
         assert fixture_repo.read_bytes() == before
         synced = _invoke(
             [

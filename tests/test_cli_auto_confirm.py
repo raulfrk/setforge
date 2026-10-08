@@ -512,7 +512,7 @@ def test_capture_commands_bare_drift_non_tty_give_auto_guidance(
         [command, "--profile=testp", f"--config={stubbed_install_env}"],
     )
     assert result.exit_code == 1
-    assert "--auto=use-live --yes" in result.output
+    assert "--yes to capture it" in result.output
     assert "--auto=keep-tracked" in result.output
     assert (stubbed_install_env.parent / "tracked" / "x").read_text() == "data\n"
 
@@ -575,7 +575,7 @@ def test_capture_confirmation_includes_auxiliary_source_writes(
     args = [command, "--profile=testp", f"--config={config}"]
     bare = runner.invoke(app, args)
     assert bare.exit_code == 1, bare.output
-    assert "--auto=use-live --yes" in bare.output
+    assert "--yes to capture it" in bare.output
     assert source.read_bytes() == before
     kept = runner.invoke(app, [*args, "--auto=keep-tracked"])
     assert kept.exit_code == 0, kept.output
@@ -639,16 +639,17 @@ def test_capture_does_not_erase_retired_codex_merge_base(
     assert store.read_base("testp", file_id(resource)) == base
 
 
-@pytest.mark.parametrize("command", ["sync"])
-def test_yes_without_auto_is_rejected_consistently(
-    command: str,
+def test_sync_yes_alone_captures_live_drift(
     runner: CliRunner,
     stubbed_install_env: Path,
 ) -> None:
-    args = [command, "--profile=testp", f"--config={stubbed_install_env}", "--yes"]
+    _write_live(stubbed_install_env, "edited live\n")
+    args = ["sync", "--profile=testp", f"--config={stubbed_install_env}", "--yes"]
     result = runner.invoke(app, args)
-    assert result.exit_code == 2
-    assert "--yes requires --auto" in result.output
+    assert result.exit_code == 0, result.output
+    assert (stubbed_install_env.parent / "tracked" / "x").read_text() == (
+        "edited live\n"
+    )
 
 
 @pytest.mark.parametrize("command", ["sync"])

@@ -327,33 +327,6 @@ def test_mutating_preview_emits_transition_path_without_mutating(
     assert not transitions_root().exists()
 
 
-def test_no_transition_option_suppresses_mutating_preview_without_mutating(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-) -> None:
-    """An explicit no-transition dry run neither previews nor creates one."""
-    live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "install",
-            "--profile=test-minimal",
-            f"--config={fixture_repo}",
-            "--dry-run",
-            "--no-transition",
-            "--no-git-check",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "no transition would be created" in result.output
-    assert "WOULD record" not in result.output
-    assert not live.exists()
-    assert not transitions_root().exists()
-
-
 def _empty_transition_plan() -> Any:
     return SimpleNamespace(
         drift_report=SimpleNamespace(entries=()),

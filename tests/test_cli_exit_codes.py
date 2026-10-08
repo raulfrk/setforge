@@ -68,7 +68,7 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state: dict[str, list[str]] = {"installed": []}
 
     def fake_run(args, **kwargs: Any):
-        if args[0] == "git":
+        if Path(args[0]).name == "git":
             # _git_check pre-deploy probes the source dir via git rev-parse;
             # tmp_path is not a git repo, so return "false" so the check skips.
             return subprocess.CompletedProcess(args, 0, "false\n", "")
@@ -154,7 +154,6 @@ def test_install_warns_and_exits_0_when_claude_absent(
             "install",
             "--profile=vmh",
             f"--config={cfg}",
-            "--no-transition",
         ],
         catch_exceptions=False,
     )
@@ -448,7 +447,7 @@ def test_install_secrets_abort_exits_1_with_message(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["install", "--profile=p", f"--config={cfg}", "--no-transition"],
+        ["install", "--profile=p", f"--config={cfg}"],
     )
     assert result.exit_code == 1, f"output: {result.output}"
     assert "install aborted by secrets scan" in result.stderr

@@ -101,7 +101,7 @@ def test_install_without_package_delta_does_not_begin_irreversible_checkpoint(
 
     monkeypatch.setattr(operations, "begin_checkpoint", record_begin)
 
-    result = _install(config, "--no-fetch", "--no-transition")
+    result = _install(config, "--no-fetch")
 
     assert result.exit_code == 0, result.output
     assert "packages" not in begun
@@ -120,7 +120,7 @@ def test_install_package_failure_retains_uncertain_manual_recovery(
 
     monkeypatch.setattr("setforge.cli.install.reconcile_packages", fail_after_effect)
 
-    result = _install(config, "--no-fetch", "--no-transition")
+    result = _install(config, "--no-fetch")
 
     assert result.exit_code == 1
     assert package_effect.exists(), (result.output, result.exception)

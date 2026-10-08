@@ -373,17 +373,17 @@ skipped by `stage`.
 
 ## Mutating `--auto=*` confirmation
 
-When a tracked_file carries drift, `sync` resolves it; pass `--auto=` for
-non-interactive contexts:
+When a tracked_file carries drift, `sync` resolves it; for non-interactive
+contexts pass one of:
 
-- `--auto=use-live` — absorb every drift item into tracked (today's
-  silent-absorb behavior).
+- `--yes` — absorb every drift item into tracked. `--auto=use-live --yes` is
+  the same and stays accepted.
 - `--auto=keep-tracked` — reject every drift item; tracked stays as-is (safer).
-- Without a TTY and without `--auto`, `sync` exits 1 with
-  `CaptureRequiresInteractive`.
+- Without a TTY and without `--yes` or `--auto=keep-tracked`, `sync` exits 1
+  and writes nothing.
 
-When `install` or `sync` runs with a **mutating** `--auto*` flag
-(`--auto=use-tracked`, `--auto=use-live`), setforge shows a risks panel
+When `install` runs with the **mutating** `--auto=use-tracked`, or `sync` has
+drift to capture, setforge shows a risks panel
 describing what changes in which direction, plus the exact `setforge revert`
 command to undo, then prompts arrow-key yes/no (default **No**). For
 CI/scripts, pass `--yes` (`-y`) to bypass the prompt; without `--yes` in a

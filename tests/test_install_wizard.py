@@ -85,7 +85,6 @@ def _install(config: Path, *, extra: list[str] | None = None) -> Result:
         "install",
         f"--profile={_PROFILE}",
         f"--config={config}",
-        "--no-transition",
         "--no-secrets-scan",
         "--no-git-check",
         "--yes",

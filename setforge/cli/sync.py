@@ -289,8 +289,7 @@ def _confirm_capture_plan(
         if auto_enum is None:
             raise ClickException(
                 f"setforge {command} found actionable live drift; use "
-                "--auto=use-live --yes to capture it or "
-                "--auto=keep-tracked to refuse it"
+                "--yes to capture it or --auto=keep-tracked to refuse it"
             )
         raise ClickException(
             f"setforge {command} --auto=use-live requires --yes when stdin is not a TTY"
@@ -341,37 +340,30 @@ def _require_same_preview(
 def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
-    no_transition: bool = typer.Option(
-        False,
-        "--no-transition",
-        hidden=True,
-        help="Skip writing a transition record (testing / debugging).",
-    ),
     auto: str | None = typer.Option(
         None,
         "--auto",
         help=(
-            "Non-interactive capture-time drift resolution: 'use-live' "
-            "absorbs all drift; 'keep-tracked' rejects all drift."
+            "Non-interactive capture-time drift resolution: 'keep-tracked' "
+            "rejects all drift and writes nothing; 'use-live' absorbs all "
+            "drift, the same as passing --yes alone."
         ),
     ),
     yes: bool = typer.Option(
         False,
         "--yes",
         "-y",
-        help="Skip the --auto=use-live confirmation prompt (for non-interactive use).",
+        help="Capture all drift without the confirmation prompt (for scripts).",
     ),
 ) -> None:
     """Capture live → tracked for tracked_files and extensions.
 
     Symmetric with ``setforge install``'s drift gate: drift is resolved
-    interactively, or pass ``--auto=use-live`` (absorb every drift item)
-    or ``--auto=keep-tracked`` (refuse) for scripted runs.
+    interactively, or pass ``--yes`` (absorb every drift item; ``--auto=use-live``
+    is the same) or ``--auto=keep-tracked`` (refuse) for scripted runs.
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
-    if yes and auto_enum is None:
-        raise typer.BadParameter("--yes requires --auto")
 
     repo_root = config.resolve().parent
     owner_id = _read_capture_owner_id(repo_root)
@@ -404,8 +396,7 @@ def sync(
             auto=auto_enum,
         )
         _require_same_preview(initial_snapshot, locked_snapshot)
-        if not no_transition:
-            transitions.ensure_state_dir_writable()
+        transitions.ensure_state_dir_writable()
 
         src_paths = _sync_snapshot_paths(ctx, config)
         file_pre = transitions.capture_files(src_paths)
@@ -475,13 +466,12 @@ def sync(
 
         journal = operations.finish_checkpoint(journal)
         file_post = transitions.capture_files(file_pre)
-        if not no_transition:
-            _write_sync_transition(
-                ctx,
-                file_pre=file_pre,
-                file_post=file_post,
-                state_snapshots=state_pre,
-            )
+        _write_sync_transition(
+            ctx,
+            file_pre=file_pre,
+            file_post=file_post,
+            state_snapshots=state_pre,
+        )
         operations.complete(journal)
 
 

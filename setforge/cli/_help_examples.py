@@ -74,8 +74,8 @@ Examples:
   setforge sync --profile=<profile>
 
 \b
-  # Non-interactive: absorb every drift (today's silent-absorb)
-  setforge sync --profile=<profile> --auto=use-live --yes
+  # Non-interactive: absorb every drift
+  setforge sync --profile=<profile> --yes
 
 \b
   # Non-interactive: reject every drift

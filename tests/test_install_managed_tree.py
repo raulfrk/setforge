@@ -916,7 +916,6 @@ def test_managed_tree_dry_run_renders_cleanly(
             "--no-fetch",
             "--no-git-check",
             "--no-secrets-scan",
-            "--no-transition",
         ],
     )
 

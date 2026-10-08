@@ -85,7 +85,6 @@ def _invoke(config: Path) -> Result:
             f"--config={config}",
             "--no-git-check",
             "--yes",
-            "--no-transition",
         ],
     )
 

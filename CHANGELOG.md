@@ -42,6 +42,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory is not writable ("transition state dir not writable"), instead of
   migrating the config and then failing.
 
+### Changed
+
+- `setforge sync --yes` now captures all live drift on its own; it used to stop
+  with "--yes requires --auto". `--auto=use-live --yes` still works and does
+  the same thing.
+
 ### Removed
 
 - The `setforge capture` command is gone; use `setforge sync`, which does the
@@ -53,6 +59,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaves everything already in place alone. Install also stops writing
   `reconcile_outcomes.json` into its undo records; files already there are
   left untouched and ignored.
+- The hidden `--no-transition` option of `setforge install` and `setforge sync`
+  is gone. Every install or sync that changes something records a transition,
+  so it can be undone with `setforge revert`.
 - `setforge install` no longer accepts `--auto-accept-tracked` or
   `--auto-accept-live`. Both did the same thing: let install reset a file's
   permission bits to its declared `mode:`. Install now asks for that in its
