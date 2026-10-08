@@ -133,8 +133,9 @@ directory without `--dry-run` converts each such record to the current format
 before it plans anything, and says so. Conversion rewrites the record only:
 project files and Git state stay as they are. `project list` and every
 `--dry-run` change nothing, so they report an unconverted record as an error
-that names `setforge project sync <path>`. A record whose directory is gone is
-not converted; `project remove` drops it as usual.
+that names `setforge project sync <path>`. A record whose directory is gone or
+was replaced is not converted: the error names
+`setforge project remove <profile> <path>` instead, which drops it as usual.
 
 The oldest format, which predates 1.2.0, kept only a digest of the injected
 content. Conversion takes

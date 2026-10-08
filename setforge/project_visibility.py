@@ -34,7 +34,6 @@ from setforge.paths import state_root
 from setforge.project_injection import (
     ProjectFileAction,
     _exclude_paths,
-    _load_manifest_payload,
     _overlay_git_paths,
     _project_transaction,
     _read_record_document,
@@ -272,9 +271,10 @@ def list_projects() -> tuple[ProjectListFile, ...]:
         target: Path | None = None
         profile: str | None = None
         try:
-            raw, payload = _load_manifest_payload(record)
+            raw, payload = _read_record_document(record)
             target = Path(str(raw["target"]))
             profile = str(raw["profile"])
+            _require_current_format(raw, record)
             injection, stored_files = _validated_record(record, raw, payload)
             target = injection.target
             profile = injection.profile

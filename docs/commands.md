@@ -122,7 +122,8 @@ record itself was lost. A stale record never blocks injecting other projects.
 A directory that is still the same one but gained, lost, or changed its Git
 directory is not stale: `project remove` restores it normally.
 A record in an older format is listed as an error until a `project inject`,
-`sync`, `visibility` or `remove` without `--dry-run` converts it; see
+`sync`, `visibility` or `remove` without `--dry-run` converts it; when its
+directory is gone or was replaced, the error names `project remove` instead. See
 [Configuration](configuration.md).
 
 `setforge project visibility <path> <file>` changes one normalized,

@@ -922,11 +922,30 @@ def _read_record_document(path: Path) -> tuple[dict[str, object], bytes]:
 
 
 def _require_current_format(raw: dict[str, object], path: Path) -> None:
-    if raw["schema"] != _MANIFEST_SCHEMA:
-        raise SetforgeError(
-            f"project injection record is in an older format: {path}; run "
-            f"`setforge project sync {raw['target']}` to convert it"
+    """Refuse an older record, naming the command that settles it.
+
+    Conversion skips a record whose directory is gone or was replaced, so
+    that record can only be dropped.
+    """
+    if raw["schema"] == _MANIFEST_SCHEMA:
+        return
+    target = Path(str(raw["target"]))
+    try:
+        stale = (
+            not target.is_dir()
+            or target.resolve() != target
+            or target.stat().st_ino != raw["target_inode"]
         )
+    except OSError:
+        stale = True
+    remedy = (
+        f"`setforge project remove {raw['profile']} {target}` to drop it"
+        if stale
+        else f"`setforge project sync {target}` to convert it"
+    )
+    raise SetforgeError(
+        f"project injection record is in an older format: {path}; run {remedy}"
+    )
 
 
 def _load_manifest_payload(path: Path) -> tuple[dict[str, object], bytes]:

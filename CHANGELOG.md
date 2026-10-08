@@ -13,7 +13,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `remove` runs against their directory without `--dry-run`; the command says
   which profiles it converted. Only the record is rewritten. `project list` and
   `--dry-run` no longer read such a record: they report it as an error naming
-  `setforge project sync <path>`. A record in the oldest format, from before
+  `setforge project sync <path>`, or `setforge project remove <profile> <path>`
+  when its directory is gone or was replaced. A record in the oldest format, from before
   1.2.0, behaves differently in two ways: its first sync now merges three ways
   instead of asking about every differing line, and a record whose file and
   profile source have both changed since injection is refused and needs one

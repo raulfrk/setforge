@@ -247,6 +247,59 @@ def test_remove_drops_an_older_record_whose_directory_is_gone(
     assert not record.exists()
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [("list",), ("sync", "{target}", "--yes"), ("inject", "demo", "{target}", "--yes")],
+)
+def test_older_record_of_a_replaced_directory_names_the_command_that_drops_it(
+    injected: tuple[Path, Path], tmp_path: Path, arguments: tuple[str, ...]
+) -> None:
+    config, target = injected
+    record = manifest_path(target, "demo")
+    before = _write_older_record(record, 2)
+    target.rename(tmp_path / "moved")
+    _git_repo(target)
+    command = [item.format(target=target) for item in arguments]
+    if command[0] == "inject":
+        command += ["--config", str(config)]
+
+    code, output = _run(*command)
+
+    assert code == 1, output
+    assert "project injection record is in an older format" in output
+    assert f"run `setforge project remove demo {target}` to drop it" in output
+    assert "project sync" not in output
+    assert record.read_bytes() == before
+    if command[0] == "list":
+        assert f"{target}  [demo]" in output
+    code, output = _run("remove", "demo", str(target), "--config", str(config), "--yes")
+    assert code == 0, output
+    assert "stale injection dropped" in output
+    assert not record.exists()
+
+
+def test_list_names_the_command_that_drops_an_older_record_of_a_missing_directory(
+    injected: tuple[Path, Path], tmp_path: Path
+) -> None:
+    config, target = injected
+    record = manifest_path(target, "demo")
+    _write_older_record(record, 2)
+    target.rename(tmp_path / "moved")
+
+    code, output = _run("list")
+
+    assert code == 1, output
+    assert f"{target}  [demo]" in output
+    assert "project injection record is in an older format" in output
+    assert f"run `setforge project remove demo {target}` to drop it" in output
+    assert "project sync" not in output
+    code, output = _run("remove", "demo", str(target), "--config", str(config), "--yes")
+    assert code == 0, output
+    assert "stale injection dropped" in output
+    assert not record.exists()
+    assert _run("list") == (0, "no project injections recorded\n")
+
+
 def test_conversion_leaves_records_of_other_directories_alone(
     injected: tuple[Path, Path], tmp_path: Path
 ) -> None:
