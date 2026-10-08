@@ -28,6 +28,7 @@ from setforge.cli._validate_errors import (
     format_yaml_parse_error,
     suggest_close_match,
 )
+from tests.shared_fixtures import ConfigRepo
 
 # ---------------------------------------------------------------------------
 # suggest_close_match — the difflib similarity cutoff.
@@ -185,25 +186,15 @@ def test_format_schema_validation_error_underline_aligns_with_value() -> None:
 # validate CLI integration — local.yaml errors flow through the formatters.
 # ---------------------------------------------------------------------------
 
-_CLEAN_YAML = """\
-version: 1
-tracked_files:
-  d:
-    src: tracked_file.txt
-    dst: ~/.some-tracked_file
-profiles:
-  p:
-    tracked_files: [d]
-"""
-
 
 def _write_minimal_config(tmp_path: Path) -> Path:
     """Write a minimal valid setforge.yaml + dummy tracked source."""
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(_CLEAN_YAML, encoding="utf-8")
-    (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "tracked_file.txt").write_text("x\n", encoding="utf-8")
-    return cfg
+    config_repo = ConfigRepo(tmp_path)
+    config_repo.write_tracked("tracked_file.txt", "x\n")
+    return config_repo.write_config(
+        profile="p",
+        tracked_files={"d": {"src": "tracked_file.txt", "dst": "~/.some-tracked_file"}},
+    )
 
 
 @pytest.fixture

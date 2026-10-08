@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 from setforge import transitions
 from setforge.cli import app
 from setforge.secrets import SecretsScanResult
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "test-preflight"
 
@@ -53,36 +54,24 @@ def _transition_count() -> int:
     return sum(1 for entry in root.iterdir() if entry.is_dir())
 
 
-def _write_tracked(repo: Path, name: str, body: str) -> None:
-    src = repo / "tracked" / f"{name}.md"
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(body, encoding="utf-8")
-
-
-def _write_config(repo: Path, *, link_target: Path) -> Path:
+def _write_config(config_repo: ConfigRepo, *, link_target: Path) -> Path:
     """Regular-file ``a`` (deploys first) before symlink ``z`` (refused)."""
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  a:\n"
-        "    src: a.md\n"
-        "    dst: ~/.setforge_preflight/a.md\n"
-        "  z:\n"
-        "    src: z.md\n"
-        "    dst: ~/.setforge_preflight/z-link\n"
-        f"    symlink: {link_target}\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - a\n"
-        "      - z\n",
-        encoding="utf-8",
+    return config_repo.write_config(
+        profile=_PROFILE,
+        tracked_files={
+            "a": {"src": "a.md", "dst": "~/.setforge_preflight/a.md"},
+            "z": {
+                "src": "z.md",
+                "dst": "~/.setforge_preflight/z-link",
+                "symlink": str(link_target),
+            },
+        },
     )
-    return config
 
 
-def test_preflight_refuses_before_writing_earlier_regular_file(repo: Path) -> None:
+def test_preflight_refuses_before_writing_earlier_regular_file(
+    config_repo: ConfigRepo,
+) -> None:
     """A regular file at the symlink dst aborts install BEFORE deploying ``a``.
 
     Pre-fix the regular file ``a`` (earlier in profile order) was written by
@@ -90,10 +79,10 @@ def test_preflight_refuses_before_writing_earlier_regular_file(repo: Path) -> No
     transition. The pre-flight gate now refuses before any write: ``a`` is
     never created and zero transitions land.
     """
-    _write_tracked(repo, "a", _DOC_A)
-    _write_tracked(repo, "z", _DOC_Z)
+    config_repo.write_tracked("a.md", _DOC_A)
+    config_repo.write_tracked("z.md", _DOC_Z)
     link_target = _live_dir() / "z-target"
-    config = _write_config(repo, link_target=link_target)
+    config = _write_config(config_repo, link_target=link_target)
 
     # A REGULAR FILE already sits where z's symlink dst would land.
     z_dst = _live_dir() / "z-link"
@@ -117,12 +106,12 @@ def test_preflight_refuses_before_writing_earlier_regular_file(repo: Path) -> No
     assert "refusing to deploy symlink" in str(result.exception)
 
 
-def test_preflight_refuses_when_directory_occupies_dst(repo: Path) -> None:
+def test_preflight_refuses_when_directory_occupies_dst(config_repo: ConfigRepo) -> None:
     """A directory at the symlink dst is refused with the directory wording."""
-    _write_tracked(repo, "a", _DOC_A)
-    _write_tracked(repo, "z", _DOC_Z)
+    config_repo.write_tracked("a.md", _DOC_A)
+    config_repo.write_tracked("z.md", _DOC_Z)
     link_target = _live_dir() / "z-target"
-    config = _write_config(repo, link_target=link_target)
+    config = _write_config(config_repo, link_target=link_target)
 
     z_dst = _live_dir() / "z-link"
     z_dst.mkdir(parents=True)
@@ -135,12 +124,12 @@ def test_preflight_refuses_when_directory_occupies_dst(repo: Path) -> None:
     assert "a directory is already present" in str(result.exception)
 
 
-def test_preflight_allows_pre_existing_symlink_at_dst(repo: Path) -> None:
+def test_preflight_allows_pre_existing_symlink_at_dst(config_repo: ConfigRepo) -> None:
     """A pre-existing SYMLINK at the dst is replaced, not refused."""
-    _write_tracked(repo, "a", _DOC_A)
-    _write_tracked(repo, "z", _DOC_Z)
+    config_repo.write_tracked("a.md", _DOC_A)
+    config_repo.write_tracked("z.md", _DOC_Z)
     link_target = _live_dir() / "z-target"
-    config = _write_config(repo, link_target=link_target)
+    config = _write_config(config_repo, link_target=link_target)
 
     z_dst = _live_dir() / "z-link"
     z_dst.parent.mkdir(parents=True, exist_ok=True)
@@ -156,14 +145,14 @@ def test_preflight_allows_pre_existing_symlink_at_dst(repo: Path) -> None:
 
 
 def test_source_change_after_plan_refuses_before_first_write(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_tracked(repo, "a", _DOC_A)
-    _write_tracked(repo, "z", _DOC_Z)
-    config = _write_config(repo, link_target=_live_dir() / "z-target")
+    config_repo.write_tracked("a.md", _DOC_A)
+    config_repo.write_tracked("z.md", _DOC_Z)
+    config = _write_config(config_repo, link_target=_live_dir() / "z-target")
 
     def _mutate_after_plan(**_kwargs: object) -> SecretsScanResult:
-        (repo / "tracked" / "a.md").write_text("changed after plan\n", encoding="utf-8")
+        config_repo.tracked("a.md").write_text("changed after plan\n", encoding="utf-8")
         return SecretsScanResult(findings=(), files_scanned=2)
 
     monkeypatch.setattr(
@@ -179,13 +168,13 @@ def test_source_change_after_plan_refuses_before_first_write(
 
 
 def test_directory_entry_added_after_plan_refuses_before_first_write(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_tracked(repo, "z", _DOC_Z)
-    docs = repo / "tracked" / "docs"
+    config_repo.write_tracked("z.md", _DOC_Z)
+    docs = config_repo.tracked("docs")
     docs.mkdir(parents=True)
     (docs / "existing.md").write_text("existing\n", encoding="utf-8")
-    config = _write_config(repo, link_target=_live_dir() / "z-target")
+    config = _write_config(config_repo, link_target=_live_dir() / "z-target")
     config.write_text(
         config.read_text(encoding="utf-8").replace("src: a.md", "src: docs"),
         encoding="utf-8",
@@ -208,11 +197,11 @@ def test_directory_entry_added_after_plan_refuses_before_first_write(
 
 
 def test_live_change_after_plan_refuses_before_first_write(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_tracked(repo, "a", _DOC_A)
-    _write_tracked(repo, "z", _DOC_Z)
-    config = _write_config(repo, link_target=_live_dir() / "z-target")
+    config_repo.write_tracked("a.md", _DOC_A)
+    config_repo.write_tracked("z.md", _DOC_Z)
+    config = _write_config(config_repo, link_target=_live_dir() / "z-target")
     a_live = _live_dir() / "a.md"
 
     def _mutate_after_plan(**_kwargs: object) -> SecretsScanResult:

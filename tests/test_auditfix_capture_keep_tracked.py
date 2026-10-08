@@ -15,59 +15,39 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge import base_store
 from setforge.cli import app
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "test-keep-tracked"
 _FILE_ID = "shared_text"
 
 
-def _write_disposition_config(repo: Path, *, disposition: str = "shared") -> Path:
+def _write_disposition_config(
+    config_repo: ConfigRepo, *, disposition: str = "shared"
+) -> Path:
     """Write a setforge.yaml whose ``shared_text`` file carries ``disposition``."""
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  shared_text:\n"
-        "    src: text/note.txt\n"
-        "    dst: ~/.setforge_kt/note.txt\n"
-        f"    disposition: {disposition}\n"
-        "  anchor:\n"
-        "    src: text/anchor.txt\n"
-        "    dst: ~/.setforge_kt/anchor.txt\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - shared_text\n"
-        "      - anchor\n",
-        encoding="utf-8",
+    return config_repo.write_config(
+        profile=_PROFILE,
+        tracked_files={
+            "shared_text": {
+                "src": "text/note.txt",
+                "dst": "~/.setforge_kt/note.txt",
+                "disposition": disposition,
+            },
+            "anchor": {"src": "text/anchor.txt", "dst": "~/.setforge_kt/anchor.txt"},
+        },
     )
-    return config
 
 
-def _write_tracked(repo: Path, body: str) -> Path:
+def _write_tracked(config_repo: ConfigRepo, body: str) -> Path:
     """Write tracked source bodies; return the ``shared_text`` src path."""
-    src = repo / "tracked" / "text" / "note.txt"
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(body, encoding="utf-8")
-    (src.parent / "anchor.txt").write_text("anchor\n", encoding="utf-8")
+    src = config_repo.write_tracked("text/note.txt", body)
+    config_repo.write_tracked("text/anchor.txt", "anchor\n")
     return src
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A temp config repo with sandboxed ``$HOME`` + ``$SETFORGE_STATE_DIR``."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
 
 
 def _live_path() -> Path:
@@ -104,11 +84,11 @@ def _sync_keep_tracked(config: Path) -> Result:
     )
 
 
-def test_shared_keep_tracked_refuses_and_leaves_base(repo: Path) -> None:
+def test_shared_keep_tracked_refuses_and_leaves_base(config_repo: ConfigRepo) -> None:
     """shared + keep-tracked: tracked src AND base untouched despite live drift."""
     tracked_body = "line1\nline2\n"
-    src = _write_tracked(repo, tracked_body)
-    config = _write_disposition_config(repo, disposition="shared")
+    src = _write_tracked(config_repo, tracked_body)
+    config = _write_disposition_config(config_repo, disposition="shared")
     assert _install(config).exit_code == 0
     base_before = base_store.read_base(_PROFILE, _FILE_ID)
     assert base_before == tracked_body.encode("utf-8")
