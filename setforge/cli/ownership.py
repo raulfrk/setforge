@@ -10,6 +10,7 @@ from typing import Any
 
 import typer
 
+from setforge import operations
 from setforge.cli import (
     _CONFIG_OPTION,
     _require_output_path,
@@ -131,6 +132,9 @@ def ownership_release(
     """Release authority for one claim without observing or changing the resource."""
     config_path = _resolved_config(config)
     owner_id = read_owner_id(config_path.parent)
+    # An unfinished operation is refused here, before any preview of state
+    # its recovery will change, so the refusal names `setforge recover`.
+    operations.refuse_pending()
     OwnershipHistoryStore().refuse_legacy_crash_log(owner_id)
     ledger = OwnershipStore()
     preview = ledger.read_claim_id(claim_id)
@@ -213,6 +217,7 @@ def ownership_revert(
     """Reverse one exact current ownership transition."""
     config_path = _resolved_config(config)
     owner_id = read_owner_id(config_path.parent)
+    operations.refuse_pending()
     history = OwnershipHistoryStore()
     history.refuse_legacy_crash_log(owner_id)
     preview = history.read(owner_id, transition_id)

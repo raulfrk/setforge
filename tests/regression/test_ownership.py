@@ -430,10 +430,7 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
     assert refusal in str(blocked.exception)
     again = host.cli(*command, profile=False)
     assert again.exit_code == 1
-    # A release repeated after its claim was written stops earlier, at its
-    # preview of the already released claim.
-    released = action == "release" and changed and step != "claim-staged"
-    assert ("already released" if released else refusal) in str(again.exception)
+    assert refusal in str(again.exception)
     assert len(tuple(journals.glob("*.json"))) == 1
     legacy = host.cli("ownership", "recover", profile=False)
     assert legacy.exit_code == 0
