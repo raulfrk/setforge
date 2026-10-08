@@ -268,6 +268,7 @@ def _detect_scan_live(
         repo_root,
         config_path=config_path.resolve(),
         transitions_dir=transitions.transitions_root(),
+        profile=profile,
     )
     if refuse_claims:
         refuse_active_file_claims(

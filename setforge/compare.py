@@ -314,7 +314,13 @@ def _managed_dst_roots(config: Config, repo_root: Path) -> set[Path]:
     roots: set[Path] = set()
     for name, tracked_file in config.tracked_files.items():
         src = resolve_src(tracked_file, repo_root)
-        dst = resolve_dst(tracked_file)
+        # A dst that won't render is skipped (not raised) here: this walks every
+        # profile's files, so a typo in one this profile does not use must not
+        # break it, and a dst that won't render deploys nothing to scope.
+        try:
+            dst = resolve_dst(tracked_file)
+        except ConfigError:
+            continue
         for _, _, sub_dst in expand_tracked_file(name, src, dst):
             for ancestor in _norm(sub_dst).parents:
                 if ancestor in GENERIC_DST_ROOTS or ancestor == ancestor.parent:

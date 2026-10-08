@@ -10,8 +10,8 @@ from pathlib import Path
 
 from setforge import codex_lifecycle, operations, paths
 from setforge import compare as compare_mod
-from setforge.config import Config, resolve_effective_profile
-from setforge.errors import SetforgeError
+from setforge.config import Config, ResolvedProfile, resolve_effective_profile
+from setforge.errors import ConfigError, SetforgeError
 from setforge.paths import journals_root, snapshots_root, state_root
 
 
@@ -84,18 +84,22 @@ def scan_unrecorded_managed_tree(
     *,
     config_path: Path,
     transitions_dir: Path,
+    profile: str | None = None,
 ) -> ScanResult:
     """Return unrecorded leaves below bounded, currently managed roots.
 
     Every configured profile is resolved independently so bundle expansion and
     host-local destination overrides contribute to the attribution set. The
     walker never follows symlinks and never crosses a filesystem boundary.
+    A destination template that will not render is an error only in ``profile``
+    (the selected one); in any other profile that file is left out.
     """
     inventory = _managed_inventory(
         config,
         repo_root,
         config_path=config_path,
         transitions_dir=transitions_dir,
+        profile=profile,
     )
     entries: list[ScanEntry] = []
     skipped_unsupported = 0
@@ -127,6 +131,7 @@ def _managed_inventory(
     *,
     config_path: Path,
     transitions_dir: Path,
+    profile: str | None = None,
 ) -> _ManagedInventory:
     roots: set[Path] = set()
     attributed: set[Path] = set()
@@ -135,6 +140,8 @@ def _managed_inventory(
         effective = resolve_effective_profile(
             effective_config, profile_name, repo_root
         ).resolved
+        if profile_name != profile:
+            effective = _without_unrenderable(effective, effective_config)
         attributed.update(
             _norm(path)
             for path in codex_lifecycle.config_destinations(
@@ -211,6 +218,25 @@ def _ignored_destinations(
     return compare_mod.resolve_ignored_orphan_paths(
         compare_mod.load_ignored_orphans(), config, repo_root, transitions_dir
     )
+
+
+def _without_unrenderable(
+    effective: ResolvedProfile, config: Config
+) -> ResolvedProfile:
+    """Drop entries whose dst will not render, as they deploy nothing to scope.
+
+    Applied to every profile but the selected one: a typo in a file only
+    another profile uses must not stop this scan, while the selected profile
+    keeps every entry and still raises on its own typo.
+    """
+    renderable: list[str] = []
+    for name in effective.tracked_files:
+        try:
+            compare_mod.resolve_dst(config.tracked_files[name])
+        except ConfigError:
+            continue
+        renderable.append(name)
+    return effective.model_copy(update={"tracked_files": renderable})
 
 
 def _individual_file_root(path: Path) -> Path | None:
