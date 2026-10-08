@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Project injection records written before SetForge 1.3.0 are converted to
+  the current format the first time `project inject`, `sync`, `visibility` or
+  `remove` runs against their directory without `--dry-run`; the command says
+  which profiles it converted. Only the record is rewritten. `project list` and
+  `--dry-run` no longer read such a record: they report it as an error naming
+  `setforge project sync <path>`. A record in the oldest format, from before
+  1.2.0, behaves differently in two ways: its first sync now merges three ways
+  instead of asking about every differing line, and a record whose file and
+  profile source have both changed since injection is refused and needs one
+  `project sync` with SetForge 1.3 or 1.4 first. A file overlaid on tracked
+  content by a build between 1.2.0 and 1.3.0 stays hidden from Git instead of
+  being exposed by its first sync. SetForge 1.3.0 and later keep reading a
+  converted record.
+
 ### Fixed
 
 - `setforge recover` after an interrupted install now also restores a file that

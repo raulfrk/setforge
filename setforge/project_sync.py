@@ -40,8 +40,6 @@ from setforge.ownership import (
 )
 from setforge.paths import state_root
 from setforge.project_injection import (
-    _MANIFEST_SCHEMA,
-    _PRIOR_MANIFEST_SCHEMA,
     ProjectFileAction,
     ProjectFilePlan,
     _claim_fingerprint,
@@ -53,8 +51,10 @@ from setforge.project_injection import (
     _overlay_git_paths,
     _plan_file,
     _project_transaction,
+    _read_record_document,
     _remove_created_parent,
     _require_compatible_visibility,
+    _require_current_format,
     _require_guards,
     _require_writable_parents,
     _resource_id,
@@ -103,7 +103,6 @@ class RecordedProjectInjection:
     config_path: Path
     manifest_path: Path
     manifest_payload: bytes
-    schema: int
 
 
 class SyncFileKind(StrEnum):
@@ -130,7 +129,6 @@ class ProjectSyncFilePlan:
     result_mode: int | None
     mode_conflict: bool
     result: MergeResult
-    legacy: bool
     stored: StoredProjectFile | None = None
     addition: ProjectFilePlan | None = None
     overlay_base: bytes | None = None
@@ -165,9 +163,10 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
     records: list[RecordedProjectInjection] = []
     profiles: set[str] = set()
     for path in sorted(records_dir.glob("*.json")):
-        raw, manifest_payload = _load_manifest_payload(path)
+        raw, manifest_payload = _read_record_document(path)
         if raw["target"] != str(root):
             continue
+        _require_current_format(raw, path)
         target_device = raw["target_device"]
         assert isinstance(target_device, int)
         remedy = identity_remedy(raw, root, target_stat.st_ino, git_dir)
@@ -183,19 +182,12 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
             )
         profiles.add(profile)
         config_root_raw = raw["config_root"]
-        config_path_raw = raw.get("config_path")
-        if not isinstance(config_root_raw, str) or (
-            raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}
-            and not isinstance(config_path_raw, str)
-        ):
+        config_path_raw = raw["config_path"]
+        if not isinstance(config_root_raw, str) or not isinstance(config_path_raw, str):
             raise SetforgeError(f"project injection config paths are invalid: {path}")
         try:
             config_root = Path(config_root_raw).resolve(strict=True)
-            if raw["schema"] in {_PRIOR_MANIFEST_SCHEMA, _MANIFEST_SCHEMA}:
-                assert isinstance(config_path_raw, str)
-                config_path = Path(config_path_raw).resolve(strict=True)
-            else:
-                config_path = (config_root / "setforge.yaml").resolve(strict=True)
+            config_path = Path(config_path_raw).resolve(strict=True)
             config_path.relative_to(config_root)
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             raise SetforgeError(
@@ -205,9 +197,6 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
             raise SetforgeError(
                 f"project injection config is not a regular file: {config_path}"
             )
-        schema = raw["schema"]
-        assert isinstance(schema, int)
-        assert not isinstance(schema, bool)
         records.append(
             RecordedProjectInjection(
                 profile=profile,
@@ -219,7 +208,6 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
                 config_path=config_path,
                 manifest_path=path,
                 manifest_payload=manifest_payload,
-                schema=schema,
             )
         )
     return tuple(sorted(records, key=lambda record: record.profile))
@@ -228,7 +216,6 @@ def discover_injections(target: Path) -> tuple[RecordedProjectInjection, ...]:
 def _stored_files(record: RecordedProjectInjection) -> tuple[StoredProjectFile, ...]:
     files = _record_files(
         _load_manifest(record.manifest_path),
-        schema=record.schema,
         target=record.target,
     )
     # Removal must still read a record whose file id is empty; sync refuses it.
@@ -262,26 +249,6 @@ def _clean_result(value: MergeInput) -> MergeResult:
         if value is ABSENT
         else MergeResult((Clean(value),))
     )
-
-
-def _legacy_result(
-    *,
-    live: MergeInput,
-    live_mode: int | None,
-    stored: StoredProjectFile,
-    desired: MergeInput,
-) -> MergeResult:
-    if live is ABSENT or desired is ABSENT:
-        return MergeResult(
-            (
-                Conflict(
-                    b"",
-                    b"" if live is ABSENT else live,
-                    b"" if desired is ABSENT else desired,
-                ),
-            )
-        )
-    return two_way_merge(live, desired)
 
 
 def _merge_mode(
@@ -382,7 +349,6 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                         result_mode=result_mode,
                         mode_conflict=mode_conflict,
                         result=result,
-                        legacy=False,
                         addition=addition,
                         overlay_base=(
                             addition.previous_payload
@@ -424,20 +390,9 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                     else merge_project_content(
                         relative, stored.upstream_payload, live, desired
                     )
-                    if stored.upstream_payload is not None
-                    else _legacy_result(
-                        live=live,
-                        live_mode=live_mode,
-                        stored=stored,
-                        desired=desired,
-                    )
                 )
                 result_mode, mode_conflict = _merge_mode(
-                    (
-                        stored.upstream_mode
-                        if stored.upstream_mode is not None
-                        else stored.applied_mode
-                    ),
+                    stored.upstream_mode,
                     live_mode,
                     stored.previous_mode,
                 )
@@ -455,7 +410,6 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                         result_mode=result_mode,
                         mode_conflict=mode_conflict,
                         result=result,
-                        legacy=injection.schema == 1,
                         stored=stored,
                     )
                 )
@@ -473,26 +427,14 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                 )
                 if (
                     stored.action is ProjectFileAction.OVERLAY
-                    and stored.upstream_payload is not None
                     and isinstance(live, bytes)
                 )
                 else merge_project_content(
                     relative, stored.upstream_payload, live, desired
                 )
-                if stored.upstream_payload is not None
-                else _legacy_result(
-                    live=live,
-                    live_mode=live_mode,
-                    stored=stored,
-                    desired=desired,
-                )
             )
             result_mode, mode_conflict = _merge_mode(
-                (
-                    stored.upstream_mode
-                    if stored.upstream_mode is not None
-                    else stored.applied_mode
-                ),
+                stored.upstream_mode,
                 live_mode,
                 addition.source_mode,
             )
@@ -510,7 +452,6 @@ def plan_sync(target: Path) -> ProjectSyncPlan:  # noqa: C901 - one no-write tar
                     result_mode=result_mode,
                     mode_conflict=mode_conflict,
                     result=result,
-                    legacy=injection.schema == 1,
                     stored=stored,
                     addition=addition,
                     overlay_base=overlay_base,
@@ -694,7 +635,7 @@ def _encode_payload(value: bytes | None) -> str | None:
 
 
 def render_sync_manifests(plan: ProjectSyncPlan) -> dict[Path, bytes]:
-    """Render strict schema-2 manifests for a fully resolved sync plan."""
+    """Render strict current-format manifests for a fully resolved sync plan."""
     if plan.conflicts:
         raise SetforgeError("cannot render unresolved project sync manifests")
     rendered: dict[Path, bytes] = {}
@@ -765,7 +706,6 @@ def render_sync_manifests(plan: ProjectSyncPlan) -> dict[Path, bytes]:
                     "visibility": visibility.value,
                 }
             )
-        raw["schema"] = _MANIFEST_SCHEMA
         raw["config_path"] = str(injection.config_path)
         raw["files"] = entries
         rendered[injection.manifest_path] = (
@@ -787,7 +727,6 @@ def _basis(item: ProjectSyncFilePlan) -> tuple[object, ...]:
         item.desired_mode,
         item.stored,
         item.addition,
-        item.legacy,
         item.overlay_base,
     )
 
@@ -797,7 +736,7 @@ def _ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFilePlan:
     addition = item.addition
     mode: int | None
     if item.desired_upstream is ABSENT or item.desired_mode is None:
-        if stored is None or stored.upstream_payload is None:
+        if stored is None:
             raise SetforgeError("project ownership state has no upstream payload")
         payload = stored.upstream_payload
         mode = stored.upstream_mode
@@ -849,28 +788,15 @@ def _prior_ownership_plan(item: ProjectSyncFilePlan, target: Path) -> ProjectFil
     stored = item.stored
     if stored is None:
         raise SetforgeError("project member has no prior ownership state")
-    payload = stored.upstream_payload
-    mode: int | None
-    if payload is None:
-        if stored.applied_digest is None or stored.applied_mode is None:
-            raise SetforgeError("legacy project ownership state is incomplete")
-        payload = item.live if isinstance(item.live, bytes) else b""
-        digest = stored.applied_digest
-        mode = stored.applied_mode
-    else:
-        digest = _sha256(payload)
-        mode = stored.upstream_mode
-    if mode is None:
-        raise SetforgeError("project ownership state has no prior mode")
     return ProjectFilePlan(
         file_id=stored.file_id,
         declaring_profile=stored.declaring_profile,
         source=stored.source,
         destination=target / stored.destination,
         relative_destination=stored.destination,
-        source_payload=payload,
-        source_mode=mode,
-        source_digest=digest,
+        source_payload=stored.upstream_payload,
+        source_mode=stored.upstream_mode,
+        source_digest=_sha256(stored.upstream_payload),
         applied_payload=(item.live if isinstance(item.live, bytes) else None),
         action=stored.action,
         previous_payload=stored.previous_payload,
@@ -1012,15 +938,13 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
                     ),
                     item.relative_destination.as_posix(),
                 )
-                if item.kind is SyncFileKind.REMOVE and (
-                    injection.schema < _MANIFEST_SCHEMA
-                    or file_visibility is ProjectVisibility.HIDDEN
+                if (
+                    item.kind is SyncFileKind.REMOVE
+                    and file_visibility is ProjectVisibility.HIDDEN
                 ):
                     overlay_remove.append(overlay_claim)
                 elif file_visibility is ProjectVisibility.HIDDEN:
                     overlay_add.append(overlay_claim)
-                elif item.stored is not None and injection.schema < _MANIFEST_SCHEMA:
-                    overlay_remove.append(overlay_claim)
                 continue
             if file_visibility is not ProjectVisibility.HIDDEN:
                 continue

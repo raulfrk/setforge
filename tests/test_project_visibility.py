@@ -261,7 +261,7 @@ def test_visibility_expands_schema_two_without_losing_other_file_defaults(
     } == {"AGENTS.md": "tracked", "guide.md": "hidden"}
 
 
-def test_schema_two_mixed_files_reconcile_all_visibility_plumbing(
+def test_format_two_mixed_files_keep_their_git_plumbing_when_converted(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, two_files=True)
@@ -291,12 +291,12 @@ def test_schema_two_mixed_files_reconcile_all_visibility_plumbing(
     migrated = json.loads(record.read_text())
     assert {
         entry["destination"]: entry["visibility"] for entry in migrated["files"]
-    } == {"AGENTS.md": "tracked", "guide.md": "tracked"}
-    assert not attributes.exists()
-    assert "+profile" in _git(target, "diff", "--", "AGENTS.md")
+    } == {"AGENTS.md": "hidden", "guide.md": "tracked"}
+    assert "/AGENTS.md filter=setforge-project" in attributes.read_text()
+    assert _git(target, "diff", "--", "AGENTS.md") == ""
     listed = CliRunner().invoke(app, ["project", "list"])
     assert listed.exit_code == 0, listed.output
-    assert "tracked: AGENTS.md" in listed.output
+    assert "tracked-overlay: AGENTS.md" in listed.output
     assert "tracked: guide.md" in listed.output
 
 

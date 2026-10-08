@@ -32,13 +32,14 @@ from setforge.git_visibility import (
 from setforge.locking import mutation_locks
 from setforge.paths import state_root
 from setforge.project_injection import (
-    _MANIFEST_SCHEMA,
     ProjectFileAction,
     _exclude_paths,
     _load_manifest_payload,
     _overlay_git_paths,
     _project_transaction,
+    _read_record_document,
     _require_compatible_visibility,
+    _require_current_format,
     _sha256,
     _verified_project_target,
     identity_remedy,
@@ -116,7 +117,7 @@ def _records() -> tuple[Path, ...]:
 def _file_visibility(
     raw: dict[str, object], entry: dict[str, object]
 ) -> ProjectVisibility:
-    value = entry.get("visibility", raw.get("visibility"))
+    value = entry.get("visibility")
     try:
         return ProjectVisibility(str(value))
     except ValueError as exc:
@@ -130,19 +131,10 @@ def _entry_action(entry: dict[str, object]) -> ProjectFileAction:
         raise SetforgeError("project injection state has invalid file action") from exc
 
 
-def _manifest_schema(raw: dict[str, object]) -> int:
-    value = raw.get("schema")
-    if not isinstance(value, int):
-        raise SetforgeError("project injection state has invalid schema")
-    return value
-
-
 def _record_config_paths(raw: dict[str, object]) -> tuple[Path, Path]:
     """Return the record's resolved config root and config manifest path."""
     config_root = Path(str(raw["config_root"])).resolve(strict=True)
-    if _manifest_schema(raw) >= 2:
-        return config_root, Path(str(raw["config_path"])).resolve(strict=True)
-    return config_root, (config_root / "setforge.yaml").resolve(strict=True)
+    return config_root, Path(str(raw["config_path"])).resolve(strict=True)
 
 
 def _ordinary_actual_visibility(
@@ -197,7 +189,6 @@ def _actual_visibility(
     profile: str,
     git_dir: Path | None,
     stored: StoredProjectFile | None = None,
-    validate_declared: bool = True,
 ) -> ProjectFileVisibility:
     relative = Path(str(entry["destination"]))
     if relative.is_absolute() or relative == Path() or ".." in relative.parts:
@@ -260,7 +251,7 @@ def _actual_visibility(
             relative=relative,
             declared=declared,
         )
-    if validate_declared and actual is not expected:
+    if actual is not expected:
         raise SetforgeError(
             f"recorded {declared.value} visibility does not match Git state "
             f"for {relative}"
@@ -299,7 +290,6 @@ def _validated_record(
         config_path=config_path,
         manifest_path=record,
         manifest_payload=payload,
-        schema=_manifest_schema(raw),
     )
     return injection, _stored_files(injection)
 
@@ -424,7 +414,6 @@ def _render_manifest(
             else _file_visibility(raw, entry).value
         )
         new_entries.append(entry)
-    rendered["schema"] = _MANIFEST_SCHEMA
     rendered["files"] = new_entries
     return (json.dumps(rendered, separators=(",", ":"), sort_keys=True) + "\n").encode()
 
@@ -434,46 +423,29 @@ def _plan_overlay_visibility(
     root: Path,
     git_dir: Path,
     profile: str,
-    raw: dict[str, object],
-    selected: dict[str, object],
     destination: Path,
     current: ProjectFileVisibility,
     requested: ProjectVisibility,
 ) -> OverlayGitPlan:
-    additions: list[OverlayClaim] = []
-    removals: list[OverlayClaim] = []
-    entries = raw["files"]
-    assert isinstance(entries, list)
-    candidates = (
-        [value for value in entries if isinstance(value, dict)]
-        if _manifest_schema(raw) < _MANIFEST_SCHEMA
-        else [selected]
+    claim = OverlayClaim(
+        overlay_claim_id(
+            git_dir=git_dir,
+            profile=profile,
+            relative_path=destination.as_posix(),
+        ),
+        destination.as_posix(),
     )
-    for candidate in candidates:
-        if _entry_action(candidate) is not ProjectFileAction.OVERLAY:
-            continue
-        relative = Path(str(candidate["destination"]))
-        claim = OverlayClaim(
-            overlay_claim_id(
-                git_dir=git_dir,
-                profile=profile,
-                relative_path=relative.as_posix(),
-            ),
-            relative.as_posix(),
-        )
-        desired = (
-            requested if relative == destination else _file_visibility(raw, candidate)
-        )
-        legacy = _manifest_schema(raw) < _MANIFEST_SCHEMA
-        if desired is ProjectVisibility.HIDDEN and (
-            legacy or current is ProjectFileVisibility.TRACKED
-        ):
-            additions.append(claim)
-        elif desired is ProjectVisibility.TRACKED and (
-            legacy or current is ProjectFileVisibility.TRACKED_OVERLAY
-        ):
-            removals.append(claim)
-    return plan_overlay_git(root, add=tuple(additions), remove=tuple(removals))
+    add = (
+        requested is ProjectVisibility.HIDDEN
+        and current is ProjectFileVisibility.TRACKED
+    )
+    remove = (
+        requested is ProjectVisibility.TRACKED
+        and current is ProjectFileVisibility.TRACKED_OVERLAY
+    )
+    return plan_overlay_git(
+        root, add=(claim,) if add else (), remove=(claim,) if remove else ()
+    )
 
 
 def _plan_ordinary_visibility(
@@ -535,9 +507,10 @@ def _find_record(
 ) -> tuple[Path, dict[str, object], bytes, dict[str, object]]:
     matches: list[tuple[Path, dict[str, object], bytes, dict[str, object]]] = []
     for record in _records():
-        raw, payload = _load_manifest_payload(record)
+        raw, payload = _read_record_document(record)
         if raw["target"] != str(root):
             continue
+        _require_current_format(raw, record)
         entries = raw["files"]
         assert isinstance(entries, list)
         for entry in entries:
@@ -589,7 +562,6 @@ def plan_project_visibility(
         target=root,
         profile=profile,
         git_dir=git_dir,
-        validate_declared=_manifest_schema(raw) == _MANIFEST_SCHEMA,
     )
     after = _render_manifest(raw, destination=destination, requested=requested)
     if git_dir is None:
@@ -626,16 +598,11 @@ def plan_project_visibility(
     overlay_git_plan: OverlayGitPlan | None = None
     remove_from_index = False
     index_path: Path | None = None
-    if (
-        _manifest_schema(raw) < _MANIFEST_SCHEMA
-        or _entry_action(entry) is ProjectFileAction.OVERLAY
-    ):
+    if _entry_action(entry) is ProjectFileAction.OVERLAY:
         overlay_git_plan = _plan_overlay_visibility(
             root=root,
             git_dir=git_dir,
             profile=profile,
-            raw=raw,
-            selected=entry,
             destination=destination,
             current=current,
             requested=requested,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -40,6 +41,21 @@ def _config(tmp_path: Path) -> Path:
     )
     subprocess.run(["git", "init", "-q", "-b", "main", str(config_root)], check=True)
     return config
+
+
+def _write_older_record(record: Path, schema: int) -> bytes:
+    """Rewrite a current record as format 1 or 2 wrote it; return its bytes."""
+    document = json.loads(record.read_text())
+    document["schema"] = schema
+    for entry in document["files"]:
+        del entry["visibility"]
+        if schema == 1:
+            for field in ("applied_payload", "upstream_payload", "upstream_mode"):
+                del entry[field]
+    if schema == 1:
+        del document["config_path"]
+    record.write_text(json.dumps(document))
+    return record.read_bytes()
 
 
 def _file_state(path: Path) -> tuple[bytes, int] | None:

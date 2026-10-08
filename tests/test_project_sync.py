@@ -80,31 +80,6 @@ def test_discover_injections_binds_schema_two_to_exact_config(
     assert discover_injections(target)[0].config_path == config
 
 
-def test_discover_injections_uses_canonical_config_for_legacy_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    result = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    assert result.exit_code == 0, result.exception
-    record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
-    payload = json.loads(record_path.read_text())
-    payload["schema"] = 1
-    del payload["config_path"]
-    for file_record in payload["files"]:
-        del file_record["visibility"]
-        del file_record["applied_payload"]
-        del file_record["upstream_mode"]
-        del file_record["upstream_payload"]
-    record_path.write_text(json.dumps(payload))
-
-    assert discover_injections(target)[0].config_path == config
-
-
 def _recorded_injection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, Path, Path, dict[str, Any]]:
@@ -167,7 +142,7 @@ def test_discover_injections_refuses_unusable_or_repeated_profile_names(
 
 
 @pytest.mark.parametrize(
-    "problem", ["root-through-missing-directory", "config-missing", "legacy-missing"]
+    "problem", ["root-through-missing-directory", "config-missing"]
 )
 def test_discover_injections_refuses_config_paths_that_do_not_resolve_strictly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
@@ -177,16 +152,8 @@ def test_discover_injections_refuses_config_paths_that_do_not_resolve_strictly(
         payload["config_root"] = str(
             config.parent.parent / "missing" / ".." / config.parent.name
         )
-    elif problem == "config-missing":
-        payload["config_path"] = str(config.parent / "gone.yaml")
     else:
-        payload["schema"] = 1
-        del payload["config_path"]
-        for file_record in payload["files"]:
-            for field in ("visibility", "applied_payload", "upstream_mode"):
-                del file_record[field]
-            del file_record["upstream_payload"]
-        config.rename(config.with_name("moved.yaml"))
+        payload["config_path"] = str(config.parent / "gone.yaml")
     record.write_text(json.dumps(payload))
 
     with pytest.raises(SetforgeError) as failure:
@@ -273,34 +240,6 @@ def test_plan_sync_rejects_out_of_range_persisted_modes(
     record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
     payload = json.loads(record_path.read_text())
     payload["files"][0][field] = value
-    record_path.write_text(json.dumps(payload))
-
-    with pytest.raises(SetforgeError, match="file record"):
-        plan_sync(target)
-
-
-@pytest.mark.parametrize("value", [-1, 0o10000])
-def test_plan_sync_rejects_out_of_range_legacy_applied_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: int
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    result = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    assert result.exit_code == 0, result.exception
-    record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
-    payload = json.loads(record_path.read_text())
-    payload["schema"] = 1
-    del payload["config_path"]
-    file_record = payload["files"][0]
-    del file_record["visibility"]
-    del file_record["applied_payload"]
-    del file_record["upstream_mode"]
-    del file_record["upstream_payload"]
-    file_record["applied_mode"] = value
     record_path.write_text(json.dumps(payload))
 
     with pytest.raises(SetforgeError, match="file record"):
@@ -499,126 +438,6 @@ def test_plan_sync_three_way_preserves_independent_local_edit(
     assert (target / "AGENTS.md").read_bytes() == (
         b"alpha-local\nbeta\ngamma-profile\n"
     )
-
-
-def test_plan_sync_legacy_drift_uses_multiple_hunks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    source = config.parent / "project" / "demo" / "AGENTS.md"
-    source.write_text("one\nshared-a\nshared-b\nthree\n")
-    target = _git_repo(tmp_path / "target")
-    injected = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    assert injected.exit_code == 0, injected.exception
-    record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
-    payload = json.loads(record_path.read_text())
-    payload["schema"] = 1
-    del payload["config_path"]
-    for file_record in payload["files"]:
-        del file_record["visibility"]
-        del file_record["applied_payload"]
-        del file_record["upstream_mode"]
-        del file_record["upstream_payload"]
-    record_path.write_text(json.dumps(payload))
-    (target / "AGENTS.md").write_text("one-local\nshared-a\nshared-b\nthree-local\n")
-    source.write_text("one-profile\nshared-a\nshared-b\nthree-profile\n")
-
-    plan = plan_sync(target)
-
-    assert plan.conflicts == 2
-    legacy_file = plan.files[0]
-    assert legacy_file.legacy
-    assert legacy_file.profile == "demo"
-    assert legacy_file.file_id == "agents"
-    assert legacy_file.declaring_profile == "demo"
-    assert legacy_file.relative_destination == Path("AGENTS.md")
-    assert legacy_file.live == (b"one-local\nshared-a\nshared-b\nthree-local\n")
-    assert legacy_file.desired_upstream == (
-        b"one-profile\nshared-a\nshared-b\nthree-profile\n"
-    )
-    assert legacy_file.live_mode == 0o644
-    assert legacy_file.desired_mode == 0o644
-    assert legacy_file.result_mode == 0o644
-    assert legacy_file.stored is not None
-    assert legacy_file.addition is not None
-    before_manifest = record_path.read_bytes()
-    refused = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
-    assert refused.exit_code == 1
-    assert refused.exception is not None
-    assert "unresolved conflicts" in str(refused.exception)
-    assert record_path.read_bytes() == before_manifest
-    assert (target / "AGENTS.md").read_bytes() == (
-        b"one-local\nshared-a\nshared-b\nthree-local\n"
-    )
-    with pytest.raises(SetforgeError, match="unresolved conflicts"):
-        resolve_sync_plan(plan)
-    kept = resolve_sync_plan(plan, auto=AutoResolution.KEEP_LIVE)
-    adopted = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
-    assert kept is not None
-    assert adopted is not None
-    assert kept.files[0].result.merged() == (
-        b"one-local\nshared-a\nshared-b\nthree-local\n"
-    )
-    assert adopted.files[0].result.merged() == (
-        b"one-profile\nshared-a\nshared-b\nthree-profile\n"
-    )
-    manifests = render_sync_manifests(kept)
-    migrated = json.loads(next(iter(manifests.values())))
-    assert migrated["schema"] == 3
-    assert migrated["files"][0]["visibility"] == "hidden"
-    assert base64.b64decode(migrated["files"][0]["applied_payload"]) == (
-        b"one-local\nshared-a\nshared-b\nthree-local\n"
-    )
-    assert base64.b64decode(migrated["files"][0]["upstream_payload"]) == (
-        b"one-profile\nshared-a\nshared-b\nthree-profile\n"
-    )
-    assert apply_sync(kept)
-    next_plan = plan_sync(target)
-    assert not next_plan.files[0].legacy
-    assert next_plan.conflicts == 0
-
-
-def test_legacy_sync_requires_explicit_resolution_when_live_matches_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    injected = CliRunner().invoke(
-        app,
-        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
-    )
-    assert injected.exit_code == 0, injected.exception
-    record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
-    payload = json.loads(record_path.read_text())
-    payload["schema"] = 1
-    del payload["config_path"]
-    for file_record in payload["files"]:
-        del file_record["visibility"]
-        del file_record["applied_payload"]
-        del file_record["upstream_mode"]
-        del file_record["upstream_payload"]
-    record_path.write_text(json.dumps(payload))
-    before = record_path.read_bytes()
-    (config.parent / "project" / "demo" / "AGENTS.md").write_text("profile-new\n")
-
-    plan = plan_sync(target)
-
-    assert plan.conflicts == 1
-    with pytest.raises(SetforgeError, match="unresolved conflicts"):
-        resolve_sync_plan(plan)
-    assert record_path.read_bytes() == before
-    adopted = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
-    assert adopted is not None
-    assert apply_sync(adopted)
-    assert (target / "AGENTS.md").read_text() == "profile-new\n"
-    migrated = json.loads(record_path.read_text())
-    assert migrated["schema"] == 3
-    assert migrated["files"][0]["visibility"] == "hidden"
 
 
 def test_sync_interactive_absence_empty_uses_recorded_wizard_side(
@@ -942,7 +761,6 @@ def test_apply_sync_adds_and_removes_profile_membership_atomically(
     assert removed_file.desired_mode is None
     assert removed_file.result_mode is None
     assert removed_file.result.absent
-    assert removed_file.legacy is False
     assert removed_file.stored is not None
     assert removed_file.addition is None
     assert apply_sync(remove_plan)
@@ -1109,78 +927,6 @@ def test_sync_preserves_overlay_visibility_and_reconciles_hidden_claims(
     assert "/EXTRA.md filter=setforge-project" not in attributes.read_text()
 
 
-@pytest.mark.parametrize("had_previous", [False, True])
-def test_plan_sync_legacy_membership_removal_preserves_explicit_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, had_previous: bool
-) -> None:
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    config = _config(tmp_path)
-    target = _git_repo(tmp_path / "target")
-    if had_previous:
-        (target / "AGENTS.md").write_text("prior\n")
-        (target / "AGENTS.md").chmod(0o600)
-    injected = CliRunner().invoke(
-        app,
-        [
-            "project",
-            "inject",
-            "demo",
-            str(target),
-            "--config",
-            str(config),
-            "--auto=use-profile",
-            "--yes",
-        ],
-    )
-    assert injected.exit_code == 0, injected.exception
-    record_path = next((tmp_path / "state" / "project-injections").glob("*.json"))
-    payload = json.loads(record_path.read_text())
-    payload["schema"] = 1
-    del payload["config_path"]
-    for file_record in payload["files"]:
-        del file_record["visibility"]
-        del file_record["applied_payload"]
-        del file_record["upstream_mode"]
-        del file_record["upstream_payload"]
-    record_path.write_text(json.dumps(payload))
-    config.write_text(
-        "tracked_files: {}\nprofiles: {}\nproject_profiles:\n  demo:\n    files: {}\n"
-    )
-
-    plan = plan_sync(target)
-
-    removed = plan.files[0]
-    assert removed.kind.value == "remove"
-    assert removed.live == b"managed\n"
-    assert removed.live_mode == 0o644
-    assert removed.desired_upstream == (b"prior\n" if had_previous else ABSENT)
-    assert removed.desired_mode == (0o600 if had_previous else None)
-    assert removed.result_mode == (0o600 if had_previous else None)
-    assert not removed.mode_conflict
-    assert removed.legacy is True
-    assert plan.conflicts == 1
-    kept = resolve_sync_plan(plan, auto=AutoResolution.KEEP_LIVE)
-    assert kept is not None
-    assert kept.files[0].result.merged() == b"managed\n"
-    adopted = resolve_sync_plan(plan, auto=AutoResolution.USE_PROFILE)
-    assert adopted is not None
-    if had_previous:
-        assert adopted.files[0].result.merged() == b"prior\n"
-        assert adopted.files[0].result_mode == 0o600
-    else:
-        assert adopted.files[0].result.absent
-        assert adopted.files[0].result_mode is None
-    synced = CliRunner().invoke(
-        app, ["project", "sync", str(target), "--auto=use-profile", "--yes"]
-    )
-    assert synced.exit_code == 0, synced.output
-    if had_previous:
-        assert (target / "AGENTS.md").read_bytes() == b"prior\n"
-        assert stat.S_IMODE((target / "AGENTS.md").stat().st_mode) == 0o600
-    else:
-        assert not (target / "AGENTS.md").exists()
-
-
 def test_sync_membership_add_collision_requires_resolution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1217,7 +963,6 @@ def test_sync_membership_add_collision_requires_resolution(
     assert added.desired_mode == 0o755
     assert added.result_mode == 0o644
     assert added.mode_conflict
-    assert added.legacy is False
     assert added.addition is not None
     assert not added.result.clean
     with pytest.raises(SetforgeError, match="unresolved conflicts"):

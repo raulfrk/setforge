@@ -111,6 +111,18 @@ records stop with an uncaught "path guards must be ancestors of journaled
 paths" error on a record whose files were written through a symlinked parent
 directory); nothing is changed in that case.
 
+### Project injection records
+
+Project injection records are private state, not config, and carry their own
+format number. A release may stop reading an older format once it converts it:
+records in formats 1 and 2 (written before 1.3.0) are rewritten as format
+3, under the same locks and journal as any other change to the record, by the
+first `project inject`, `sync`, `visibility` or `remove` that is not a dry
+run. Format 3 is unchanged, so every release that reads format 3 (1.3.0 and
+later) keeps reading a converted record. A record that cannot be converted is
+left untouched and still readable by 1.3 and 1.4. A record in a format newer
+than the engine knows is refused before anything changes.
+
 ## Auto-on-install file migration — a separate class
 
 The guarantees above govern **`setforge.yaml` schema migrations**: explicit,

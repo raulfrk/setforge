@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.errors import SetforgeError
-from setforge.project_injection import manifest_path
+from setforge.project_injection import convert_older_records, manifest_path
 from setforge.project_overlay import build_overlay, overlay_path, write_overlay
 from setforge.project_sync import apply_sync, plan_sync
 from tests.project_helpers import _config, _git, _git_repo
@@ -206,9 +206,13 @@ def test_sync_removes_overlay_state_and_preserves_unrelated_git_settings(
     assert apply_sync(plan_sync(target)) is False
 
 
-def test_sync_migrates_legacy_tracked_overlay_to_visible_git_content(
+def test_converting_a_format_two_overlay_records_the_filter_git_still_holds(
     tmp_path: Path,
 ) -> None:
+    """Format 2 filtered every tracked file, whatever visibility it recorded.
+
+    Conversion records that state instead of exposing the content to Git.
+    """
     _config_path, target = _inject_overlay(tmp_path)
     record = manifest_path(target, "demo")
     raw = json.loads(record.read_bytes())
@@ -219,15 +223,19 @@ def test_sync_migrates_legacy_tracked_overlay_to_visible_git_content(
     record.write_text(json.dumps(raw, separators=(",", ":"), sort_keys=True) + "\n")
     assert _git(target, "diff", "--", "AGENTS.md") == ""
 
-    assert apply_sync(plan_sync(target)) is True
+    attributes = (target / ".git/info/attributes").read_text()
+
+    assert convert_older_records(target) == ("demo",)
+    apply_sync(plan_sync(target))
 
     migrated = json.loads(record.read_bytes())
     assert migrated["schema"] == 3
-    assert migrated["files"][0]["visibility"] == "tracked"
+    assert migrated["visibility"] == "tracked"
+    assert migrated["files"][0]["visibility"] == "hidden"
     assert (target / "AGENTS.md").read_text() == "managed\n"
-    assert "+managed\n" in _git(target, "diff", "--", "AGENTS.md")
+    assert _git(target, "diff", "--", "AGENTS.md") == ""
     assert overlay_path(target, Path("AGENTS.md")).exists()
-    assert (target / ".git/info/attributes").read_text() == "*.keep -text\n"
+    assert (target / ".git/info/attributes").read_text() == attributes
     assert _git(target, "config", "--get", "test.membership") == "preserved\n"
 
 
