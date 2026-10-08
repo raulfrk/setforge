@@ -190,6 +190,30 @@ def test_adoption_without_a_keyboard_is_refused_before_any_reconcile_screen(
     assert host.proc("install", *INSTALL_FLAGS).returncode == 0
 
 
+def test_a_blocked_file_is_refused_before_any_reconcile_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch, tracked={"note.txt": "one\ntwo\nthree\n"})
+    assert host.install().exit_code == 0
+    (claim,) = claim_ids_for(
+        host.cli("ownership", "list", config=False, profile=False).output, "note.txt"
+    )
+    released = host.cli("ownership", "release", claim, "--yes", profile=False)
+    assert released.exit_code == 0, released.output
+    host.live("note.txt").write_bytes(b"one\ntwo-live\nthree\n")
+    host.tracked("note.txt").write_bytes(b"one\ntwo-tracked\nthree\n")
+
+    code, shown = _install_on_a_terminal_without_keyboard(
+        host, *INSTALL_FLAGS, "--reconcile-user-sections", stdin=subprocess.DEVNULL
+    )
+
+    assert code == 1, shown
+    assert "tracked file ownership blocks install for" in shown
+    assert "Input is not a terminal" not in shown
+    assert "\x1b[?1049h" not in shown  # no full-screen conflict screen opened
+    assert host.live("note.txt").read_bytes() == b"one\ntwo-live\nthree\n"
+
+
 def test_another_install_waits_while_the_adoption_question_is_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

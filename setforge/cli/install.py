@@ -592,6 +592,7 @@ def _plan(
     )
     plan = _plan_files(
         ctx,
+        config=config,
         section_auto=section_auto,
         interactive=interactive,
         input_baseline=input_baseline,
@@ -626,6 +627,7 @@ def _plan(
 def _plan_files(
     ctx: ProfileContext,
     *,
+    config: Path,
     section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
     input_baseline: tuple[tuple[Path, bytes | None], ...],
@@ -724,6 +726,11 @@ def _plan_files(
     if ctx.file_selection is not None:
         _require_managed_file_selection(file_ownership, package_owner_id)
     _refuse_held_tree_entries(trees)
+    if interactive and (config.parent / ".git").exists():
+        # Already decided: refuse before a reconcile screen asks for answers.
+        _refuse_blocked_files(
+            file_ownership, receiver_owner=package_owner_id, config=config
+        )
     preserved_store_ids = _preserved_file_store_ids(
         ctx,
         frozenset(
@@ -1769,6 +1776,24 @@ def _released_claim_remedy(claim: OwnershipClaim, owner_id: UUID, config: Path) 
     )
 
 
+def _refuse_blocked_files(
+    decisions: tuple[FileDecision, ...], *, receiver_owner: UUID | None, config: Path
+) -> None:
+    """Refuse an install whose file ownership is held, naming every file."""
+    blocked = tuple(
+        decision for decision in decisions if decision.action is FileAction.HOLD
+    )
+    if blocked:
+        raise SetforgeError(
+            "\n".join(
+                _blocked_install_message(
+                    decision, owner_id=receiver_owner, config=config
+                )
+                for decision in blocked
+            )
+        )
+
+
 def _confirm_file_adoptions(
     decisions: tuple[FileDecision, ...],
     *,
@@ -1782,18 +1807,7 @@ def _confirm_file_adoptions(
         for decision in decisions
         if decision.action in {FileAction.ADOPT, FileAction.TRANSFER}
     )
-    blocked = tuple(
-        decision for decision in decisions if decision.action is FileAction.HOLD
-    )
-    if blocked:
-        raise SetforgeError(
-            "\n".join(
-                _blocked_install_message(
-                    decision, owner_id=receiver_owner, config=config
-                )
-                for decision in blocked
-            )
-        )
+    _refuse_blocked_files(decisions, receiver_owner=receiver_owner, config=config)
     if not adopt:
         return
     for decision in adopt:
