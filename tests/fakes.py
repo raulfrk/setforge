@@ -15,25 +15,27 @@ class FakeCode:
     """In-memory ``code`` CLI: tracks installed extension ids, records calls.
 
     ``installed`` is a plain list so a test can seed or rewrite it (including
-    blank entries) between calls. Argv whose binary is not ``code`` goes to
-    ``delegate`` when it is ``claude`` and to ``real_run`` otherwise; with
-    neither set it raises.
+    blank entries) between calls. Fails closed: argv whose binary is not
+    ``code`` raises unless ``delegate`` is set and the binary is ``claude`` (a
+    co-resident ``fake_claude``), or the binary is named in ``real_binaries``,
+    which a test opts into to reach the real ``real_run``.
     """
 
     def __init__(self, installed: Iterable[str] = ()) -> None:
         self.installed: list[str] = list(installed)
         self.calls: list[list[str]] = []
         self.delegate: Callable[..., Any] | None = None
-        self.real_run: Callable[..., Any] | None = None
+        self.real_run: Callable[..., Any] = REAL_SUBPROCESS_RUN
+        self.real_binaries: frozenset[str] = frozenset()
 
     def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         binary = Path(args[0]).name if args else ""
         if binary != "code":
-            forward = self.delegate if binary == "claude" else None
-            forward = forward or self.real_run
-            if forward is None:
-                raise AssertionError(f"unexpected non-code invocation: {args!r}")
-            return forward(args, **kwargs)
+            if binary == "claude" and self.delegate is not None:
+                return self.delegate(args, **kwargs)
+            if binary in self.real_binaries:
+                return self.real_run(args, **kwargs)
+            raise AssertionError(f"unexpected non-code invocation: {args!r}")
 
         self.calls.append(list(args))
         flag = args[1]

@@ -42,6 +42,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory is not writable ("transition state dir not writable"), instead of
   migrating the config and then failing.
 
+### Changed
+
+- `setforge validate` suggests a "Did you mean" name in more cases, including
+  shortened names such as `plugins` for `claude_plugins`.
+
 ## [1.4.0] - 2026-10-05
 
 ### Fixed
