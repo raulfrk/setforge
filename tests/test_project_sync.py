@@ -2062,3 +2062,69 @@ def test_public_sync_merges_a_structured_member_to_the_bytes_install_gives(
     assert fmt is not None
     installed = reconcile_file("install", fid, live=local, tracked=profile, fmt=fmt)
     assert installed.content == expected
+
+
+def test_sync_keeps_recording_a_member_listed_after_a_removed_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    one_member = config.read_text().replace("dst: AGENTS.md", "dst: ZETA.md")
+    config.write_text(
+        config.read_text()
+        + "      zeta:\n        src: AGENTS.md\n        dst: ZETA.md\n"
+    )
+    target = _git_repo(tmp_path / "target")
+    runner = CliRunner()
+    injected = runner.invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    record = next((tmp_path / "state" / "project-injections").glob("*.json"))
+    config.write_text(one_member)
+
+    synced = runner.invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert synced.exit_code == 0, synced.output
+    assert not (target / "AGENTS.md").exists()
+    assert (target / "ZETA.md").read_text() == "managed\n"
+    assert [
+        entry["destination"] for entry in json.loads(record.read_text())["files"]
+    ] == ["ZETA.md"]
+
+
+def test_rendered_record_has_sorted_keys_whatever_order_the_stored_one_had(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    canonical = record.read_bytes()
+    record.write_text(json.dumps(dict(reversed(payload.items()))))
+    assert record.read_bytes() != canonical
+
+    assert render_sync_manifests(plan_sync(target)) == {record: canonical}
+
+
+def test_ordinary_member_with_adjacent_edits_on_both_sides_is_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a file overlaid on tracked content replays profile edits by line."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    config = _config(tmp_path)
+    source = config.parent / "project" / "demo" / "AGENTS.md"
+    source.write_text("one\ntwo\n")
+    target = _git_repo(tmp_path / "target")
+    injected = CliRunner().invoke(
+        app,
+        ["project", "inject", "demo", str(target), "--config", str(config), "--yes"],
+    )
+    assert injected.exit_code == 0, injected.output
+    (target / "AGENTS.md").write_text("ONE\ntwo\n")
+    source.write_text("one\nTWO\n")
+
+    plan = plan_sync(target)
+
+    assert plan.conflicts == 1
+    assert plan.files[0].result.segments == (
+        Conflict(base=b"one\ntwo\n", ours=b"ONE\ntwo\n", theirs=b"one\nTWO\n"),
+    )
