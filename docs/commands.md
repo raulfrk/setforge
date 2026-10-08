@@ -238,7 +238,8 @@ identity, such as `cargo:ripgrep`, rather than the manifest's package alias.
 Unknown, still-declared and ignored selections fail before removal. Apply keeps
 the interactive per-item wizard and requires matching current ownership and
 package evidence. It leaves other packages and lock pins untouched. Package
-removal is not reversed by a file transition; reinstall is a separate action.
+removal records no transition, so `revert` does not undo it and still targets
+your last install or sync; reinstall is a separate action.
 
 To update an already-managed instructions file belonging to another existing
 profile, edit its current tracked source and preview only that declared file:

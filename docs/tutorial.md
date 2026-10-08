@@ -409,7 +409,6 @@ transition: 20260615T083640Z-install-default
 setforge revert (install)
   ▸ no, abort (default — safe)
     yes, revert
-    yes + open editor before applying
 ```
 
 *(revert wizard rendered from `setforge/cli/_revert_confirm.py`)*

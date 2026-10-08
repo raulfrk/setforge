@@ -368,6 +368,95 @@ def test_install_revert_revert_restores_install_state(
     assert dst.read_text() == "hello\n"
 
 
+# What `setforge cleanup` wrote for each binary it deleted before it stopped
+# recording a transition: a directory holding only this meta.json, no file
+# images. It is dated far ahead so it is the newest record, whatever time the
+# test installs at.
+_OLD_CLEANUP_MARKER = "20990101T000000000000Z-cleanup-orphans-vmh"
+_OLD_CLEANUP_MARKER_META = {
+    "command": "cleanup-orphans",
+    "profile": "vmh",
+    "timestamp": "2099-01-01T00:00:00+00:00",
+    "host": "devbox-1",
+    "version": "1.4.0",
+    "paths": [],
+}
+
+
+def _install_then_plant_old_cleanup_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> tuple[Path, Path, Path, Path]:
+    """Install once, then add an old cleanup marker as the newest record.
+
+    Returns ``(cfg, dst, install_record, marker)``.
+    """
+    cfg, dst = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+    install = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install.exit_code == 0, install.output
+    (install_record,) = (state / "transitions").iterdir()
+    marker = state / "transitions" / _OLD_CLEANUP_MARKER
+    marker.mkdir()
+    (marker / "meta.json").write_text(
+        json.dumps(_OLD_CLEANUP_MARKER_META, indent=2), encoding="utf-8"
+    )
+    return cfg, dst, install_record, marker
+
+
+def test_revert_over_an_old_cleanup_marker_undoes_nothing_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    cfg, dst, _install_record, marker = _install_then_plant_old_cleanup_marker(
+        tmp_path, monkeypatch, runner
+    )
+
+    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert f"reverting: {marker}" in result.output
+    assert dst.read_text() == "hello\n", "a marker has no file images to restore"
+
+
+def test_revert_to_before_goes_past_an_old_cleanup_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    cfg, dst, install_record, _marker = _install_then_plant_old_cleanup_marker(
+        tmp_path, monkeypatch, runner
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={install_record.name}",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not dst.exists(), "the install before the marker is reverted too"
+
+
+def test_transitions_list_and_show_read_an_old_cleanup_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    _install_then_plant_old_cleanup_marker(tmp_path, monkeypatch, runner)
+
+    listed = runner.invoke(app, ["transitions", "list"])
+    shown = runner.invoke(app, ["transitions", "show", _OLD_CLEANUP_MARKER])
+
+    assert listed.exit_code == 0, listed.output
+    assert _OLD_CLEANUP_MARKER in listed.output
+    assert shown.exit_code == 0, shown.output
+    assert "type:    cleanup-orphans" in shown.output
+
+
 def test_revert_continues_after_extension_uninstall_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
