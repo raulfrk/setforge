@@ -402,7 +402,9 @@ values.
 Managed directory trees use schema 6.2 and remain one-way tracked-to-live
 resources. The first install over an existing directory adopts its current
 inventory without changing bytes; later installs manage entries under the
-declared policy:
+declared policy. A directory that holds nothing but SetForge's own state, cache
+or data directories is not treated as existing content: the first install
+deploys the tree there without an adoption step:
 
 ```yaml
 schema_version: "6.2"
