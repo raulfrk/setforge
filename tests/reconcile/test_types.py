@@ -71,3 +71,27 @@ def test_resolve_store_path_rejects_a_symlink_out_of_the_store(
         ReconcileStoreError, match=r"^file-id 'out/x' resolves outside store/vm/$"
     ):
         t.resolve_store_path(tmp_path / "store", "vm", "out/x")
+
+
+def test_resolve_store_path_rejects_a_symlink_into_a_sibling_profile(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "store" / "p1").mkdir(parents=True)
+    (tmp_path / "store" / "p2").mkdir()
+    (tmp_path / "store" / "p2" / "victim").write_bytes(b"p2 bytes")
+    (tmp_path / "store" / "p1" / "sib").symlink_to(tmp_path / "store" / "p2")
+    with pytest.raises(
+        ReconcileStoreError, match=r"^file-id 'sib/victim' resolves outside store/p1/$"
+    ):
+        t.resolve_store_path(tmp_path / "store", "p1", "sib/victim")
+
+
+def test_resolve_store_path_rejects_a_profile_directory_that_is_a_symlink(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "store" / "real").mkdir(parents=True)
+    (tmp_path / "store" / "vm").symlink_to(tmp_path / "store" / "real")
+    with pytest.raises(
+        ReconcileStoreError, match=r"^file-id 'x' resolves outside store/vm/$"
+    ):
+        t.resolve_store_path(tmp_path / "store", "vm", "x")

@@ -841,9 +841,9 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     subtree) and suffix convention live in one place. The ``SPANS`` store is the
     retired legacy sidecar, kept only so pre-existing ``store="spans"``
     transitions still restore byte-exact — its guarded manifest path is
-    computed by :func:`_spans_manifest_path` (which keeps the retired
-    ``spans_store`` traversal guard inline rather than reaching through the
-    retired module).
+    computed by :func:`_spans_manifest_path`, which applies the same store-wide
+    path guard (:func:`setforge.reconcile.types.resolve_store_path`) rather than
+    reaching through the retired module.
     """
     match store:
         case SnapshotStore.BASE:

@@ -11,7 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A profile name containing a path separator, `..` or a control character is
   now refused when SetForge saves, reads or prunes its merge baselines, as it
   already was for the rest of its per-host state. Such a name could previously
-  reach files outside the profile's own directory.
+  reach files outside the profile's own directory. A profile directory that is
+  itself a symlink is now refused too.
 
 ## [1.4.0] - 2026-10-05
 

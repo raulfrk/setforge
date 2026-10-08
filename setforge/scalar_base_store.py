@@ -11,7 +11,6 @@ from pathlib import Path
 
 from setforge.errors import BaseStoreError, ReconcileStoreError
 from setforge.paths import state_root
-from setforge.reconcile.types import resolve_store_path
 
 
 def scalar_base_root() -> Path:
@@ -27,6 +26,9 @@ def manifest_path(profile: str, file_id: str) -> Path:
     transition or unlinking a manifest during migration never touches a path
     outside ``scalar-base/<profile>/``.
     """
+    # Imported lazily: ``setforge.reconcile`` imports ``base_store`` at load time.
+    from setforge.reconcile.types import resolve_store_path
+
     try:
         return resolve_store_path(scalar_base_root(), profile, file_id, suffix=".json")
     except ReconcileStoreError as err:

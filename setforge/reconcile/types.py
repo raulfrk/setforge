@@ -67,17 +67,21 @@ def resolve_store_path(
     """Map ``(profile, fid)`` to ``<sub_root>/<profile>/<fid><suffix>``, guarding
     traversal.
 
-    Guards BOTH ``profile`` and ``fid`` and pins containment to a **constant**
-    ``sub_root`` rather than a profile-derived root, so a malicious profile can
-    never widen the allowed area. Raises :class:`~setforge.errors.UnsafeFileId`
-    for an unsafe segment and :class:`~setforge.errors.ReconcileStoreError` when
-    the resolved path (symlinks followed) leaves ``sub_root``.
+    Guards BOTH segments. ``profile`` and ``fid`` are validated (see
+    :func:`check_profile_name` and :func:`file_id`); then the resolved target
+    (symlinks followed) must still sit inside ``<sub_root>/<profile>``. The
+    profile directory is anchored to the resolved ``sub_root`` but is itself NOT
+    resolved, so a symlink that leads out of the profile's own directory is
+    refused — whether it points outside ``sub_root`` or into a sibling profile's
+    directory — and so is a profile directory that is itself a symlink.
+    Raises :class:`~setforge.errors.UnsafeFileId` for an unsafe segment and
+    :class:`~setforge.errors.ReconcileStoreError` when containment fails.
     """
     check_profile_name(profile)
     file_id(fid)
-    root = sub_root.resolve()
-    target = (root / profile / f"{fid}{suffix}").resolve()
-    if root not in target.parents:
+    profile_dir = sub_root.resolve() / profile
+    target = (profile_dir / f"{fid}{suffix}").resolve()
+    if profile_dir not in target.parents:
         raise ReconcileStoreError(
             f"file-id {fid!r} resolves outside {sub_root.name}/{profile}/"
         )

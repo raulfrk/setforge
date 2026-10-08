@@ -42,7 +42,6 @@ from pathlib import Path
 from setforge import atomicio, base_store_format
 from setforge.errors import BaseStoreError, BaseStoreIOError, ReconcileStoreError
 from setforge.paths import state_root
-from setforge.reconcile.types import check_profile_name, resolve_store_path
 
 
 def base_root() -> Path:
@@ -56,6 +55,9 @@ def _profile_root(profile: str) -> Path:
     Rejects a ``profile`` that is not a single safe directory name (a path
     separator, ``.``/``..``, empty, or a control character).
     """
+    # Imported lazily: ``setforge.reconcile`` imports this module at load time.
+    from setforge.reconcile.types import check_profile_name
+
     try:
         check_profile_name(profile)
     except ReconcileStoreError as err:
@@ -71,6 +73,9 @@ def _resolve_target(profile: str, file_id: str) -> Path:
     a malicious or buggy profile or file-id can never touch a base outside
     ``base/<profile>/``.
     """
+    # Imported lazily: ``setforge.reconcile`` imports this module at load time.
+    from setforge.reconcile.types import resolve_store_path
+
     try:
         return resolve_store_path(base_root(), profile, file_id)
     except ReconcileStoreError as err:

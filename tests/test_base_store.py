@@ -128,6 +128,27 @@ def test_file_id_through_a_symlink_out_of_the_store_is_refused(
         base_store.base_path("vm", "out/x")
 
 
+def test_file_id_through_a_symlink_into_another_profile_is_refused(
+    state_dir: Path,
+) -> None:
+    (state_dir / "base" / "p1").mkdir(parents=True)
+    base_store.write_base("p2", "victim", b"p2 bytes")
+    (state_dir / "base" / "p1" / "sib").symlink_to(state_dir / "base" / "p2")
+    with pytest.raises(
+        BaseStoreError, match=r"^file-id 'sib/victim' resolves outside base/p1/$"
+    ):
+        base_store.read_base("p1", "sib/victim")
+
+
+def test_profile_directory_that_is_a_symlink_is_refused(state_dir: Path) -> None:
+    base_store.write_base("real", "f", b"x")
+    (state_dir / "base" / "vm").symlink_to(state_dir / "base" / "real")
+    with pytest.raises(
+        BaseStoreError, match=r"^file-id 'f' resolves outside base/vm/$"
+    ):
+        base_store.base_path("vm", "f")
+
+
 def test_concurrent_forked_writers_no_torn_bytes(state_dir: Path) -> None:
     if not hasattr(os, "fork"):
         pytest.skip("os.fork unavailable on this platform")
