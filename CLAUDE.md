@@ -88,8 +88,11 @@ When an engine diff touches any of the mutmut core files (the
 `uv run python scripts/mutmut_diff_gate.py` before merge (Phase 6) as a local
 Tier-1 check. It runs mutation testing scoped to only the changed core lines
 (diff-scoped, so it stays fast) and blocks on any surviving mutant whose
-function overlaps the change. It is deliberately NOT in pre-commit or the
-always-on review fan (a mutmut run is too slow for either), so this is a
+function overlaps the change. An equivalent mutant is excused with
+`# pragma: no mutate` on its statement when every mutant of that line is
+equivalent, and otherwise by id in `tests/mutmut_allowlist.txt`, whose ids shift
+when the function is edited (see `docs/mutation-baseline.md`). The gate is
+deliberately NOT in pre-commit or the always-on review fan (a mutmut run is too slow for either), so this is a
 documented manual trigger; CI enforces it non-locally via the `pr-mutmut-diff`
 PR job (diff-scoped) and the `mutmut-full` nightly job (whole core).
 The nightly gate enforces the project-wide score strictly above 80%, calculated

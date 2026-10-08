@@ -63,9 +63,17 @@ Diff mode treats ``survived``, ``timeout``, and ``suspicious`` as unkilled.
 Full mode follows the project score contract: killed / (killed + survived),
 excluding no-test, timeout, and suspicious outcomes from the denominator.
 
+Excusing an equivalent mutant: put ``# pragma: no mutate`` on the statement,
+with the reason in a comment above it, when every mutant of that line is
+equivalent. mutmut 3.6 reads the pragma only as the trailing comment of a
+simple statement or of a compound-statement header, and then generates no
+mutant for any node that STARTS on that statement's first line — so it cannot
+single out one mutant of a line, nor one line inside a multi-line expression.
+
 Allowlist: :data:`ALLOWLIST_PATH` (``tests/mutmut_allowlist.txt``), one mutant
 id per line (``#`` comments allowed). Listed ids are subtracted before the
-gate decides — the route for equivalent / integration-only-covered survivors.
+gate decides — the route for an equivalent / integration-only-covered survivor
+whose line also carries killable mutants, which a pragma would hide.
 
 Invocation::
 
@@ -541,8 +549,10 @@ def _print_block(remaining: list[Survivor]) -> None:
     for s in sorted(remaining, key=lambda s: s.name):
         print(f"  {s.status:>10}  {s.name}", file=sys.stderr)
     print(
-        "\nKill each with a test, or (if equivalent / integration-only-covered) "
-        f"add its id + a reason to {ALLOWLIST_PATH.relative_to(REPO_ROOT)}.",
+        "\nKill each with a test. An equivalent mutant is excused with "
+        "`# pragma: no mutate` on its statement when every mutant of that line "
+        "is equivalent; otherwise (or if integration-only-covered) add its id "
+        f"+ a reason to {ALLOWLIST_PATH.relative_to(REPO_ROOT)}.",
         file=sys.stderr,
     )
 
