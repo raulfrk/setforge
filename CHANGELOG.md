@@ -22,6 +22,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same way. Only the profile's own servers, and destinations a previous
   install of it recorded, are planned now.
 
+### Deprecated
+
+- Announcement only, nothing changes in this release: the next major release
+  will set a minimum supported config schema of 4.0. A config older than 4.0
+  will first need upgrading with a 1.x engine (`setforge migrate`).
+
 ## [1.5.2] - 2026-10-10
 
 ### Fixed

@@ -163,6 +163,18 @@ later) keeps reading a converted record. A record that cannot be converted is
 left untouched and still readable by 1.3 and 1.4. A record in a format newer
 than the engine knows is refused before anything changes.
 
+## Announcement: minimum supported config schema in the next major release
+
+> **Announcement only. Nothing changes in any current release**, and every
+> guarantee in this document applies unchanged until the release described
+> here ships.
+
+The next **major** release of the engine will set a **minimum supported config
+`schema_version` of `4.0`**. A config older than `4.0` (schema `1.x`, `2.x` or
+`3.x`) will first need upgrading with a `1.x` engine. `setforge migrate --check`
+shows where a config stands, and `setforge migrate` brings it to the current
+schema. Configs already at `4.0` or newer are not affected.
+
 ## Auto-on-install file migration — a separate class
 
 The guarantees above govern **`setforge.yaml` schema migrations**: explicit,
