@@ -389,16 +389,30 @@ class SecretPlan:
     allowlist_path: Path
 
 
-def _journalable_backups(dst_paths: Iterable[Path]) -> Iterator[Path]:
-    """Yield each ``.bak`` sibling the journal can snapshot, skipping any other."""
-    for path in dst_paths:
-        backup = path.with_name(path.name + ".bak")
+def _snapshottable(paths: Iterable[Path]) -> Iterator[Path]:
+    """Yield each path the journal can snapshot, skipping any other."""
+    for path in paths:
         try:
-            image = transitions.capture_filesystem_image(backup)
+            image = transitions.capture_filesystem_image(path)
         except OSError:
             continue
         if image is not None:
-            yield backup
+            yield path
+
+
+def _journalable_backups(dst_paths: Iterable[Path]) -> Iterator[Path]:
+    """Yield each ``.bak`` sibling the journal can snapshot, skipping any other."""
+    return _snapshottable(path.with_name(path.name + ".bak") for path in dst_paths)
+
+
+def _symlink_write_targets(dst_paths: Iterable[Path]) -> tuple[Path, ...]:
+    """Return the snapshottable files deploy writes through a user symlink."""
+    resolved = {path: deploy._resolve_for_copy(path) for path in dst_paths}
+    return tuple(
+        _snapshottable(
+            dict.fromkeys(target for path, target in resolved.items() if target != path)
+        )
+    )
 
 
 def _snapshot_inputs(paths: set[Path]) -> tuple[tuple[Path, bytes | None], ...]:
@@ -2722,9 +2736,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             *((secret_plan.allowlist_path,) if secret_plan.hashes else ()),
         )
         tree_paths = plan.tree_paths()
+        write_targets = _symlink_write_targets(plan.dst_paths)
         tracked_paths = (
             *plan.dst_paths,
             *_journalable_backups(plan.dst_paths),
+            *write_targets,
+            *_journalable_backups(write_targets),
             *(sub_dst for _, _, _, sub_dst in plan.tracked_entries),
             *tree_paths,
         )
