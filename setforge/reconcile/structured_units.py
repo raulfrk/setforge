@@ -83,10 +83,10 @@ def structured_format(path: Path) -> StructuredFormat | None:
     :func:`setforge.jsonc.is_jsonc_file`, which matches ``.json`` only) → JSONC
     via the json5 backend. Any other suffix — including ``.jsonc``, which
     ``is_jsonc_file`` does NOT match — returns ``None`` so the caller keeps the
-    line-hunk path. The single source of truth for "is this a per-KEY-staged
-    file?", shared by the stage walk (:mod:`setforge.cli.stage`) and capture
-    (:mod:`setforge.capture`) so the two never disagree on which files stage
-    structurally.
+    line-hunk path. This answers only "does the suffix name a structured
+    format?"; whether a file is staged per key or per text hunk is chosen by
+    :func:`setforge.reconcile.unit_engine.engine_for`, which the stage walk
+    (:mod:`setforge.cli.stage`) and capture (:mod:`setforge.capture`) both use.
     """
     from setforge import jsonc
 

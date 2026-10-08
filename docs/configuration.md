@@ -572,7 +572,9 @@ the markerless `local.yaml` overlay. See
 To keep part of a file host-only, classify it with `setforge stage`: each text
 hunk or YAML key is SHARED (may flow back to the config repo) or LOCAL (stays on
 this host). A `.json` file is staged as one whole-document unit rather than per
-key.
+key. A YAML or JSON file whose copy recorded at the last install cannot be
+parsed is staged by text hunk instead, and keeps that mode once you have staged
+it.
 
 #### Seeding host-local bodies (optional)
 

@@ -656,7 +656,16 @@ def test_staged_yaml_sync_changes_only_the_shared_line_and_install_converges(
         assert source.read_bytes() == shared_only
 
 
-_BROKEN_YAML = b"top: {broken\nkeep: same\nhost: base-host\nmid: same\nshared: 1\n"
+# The unparsable line, the host-only line and the shared line sit more than three
+# lines apart so a repair of the first and an edit of the last do not change the
+# context that identifies the host-only hunk.
+_BROKEN_YAML = (
+    b"top: {broken\n"
+    b"a1: same\na2: same\na3: same\na4: same\n"
+    b"host: base-host\n"
+    b"b1: same\nb2: same\nb3: same\nb4: same\n"
+    b"shared: 1\n"
+)
 _BROKEN_YAML_EDITED = _BROKEN_YAML.replace(b"base-host", b"my-laptop").replace(
     b"shared: 1", b"shared: 2"
 )
@@ -782,7 +791,9 @@ def test_yaml_staged_by_line_stays_line_staged_once_its_base_parses(
     assert (
         runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"]).exit_code == 0
     )
-    repaired = b"top: {fixed: 1}\nkeep: same\nhost: base-host\nmid: same\nshared: 2\n"
+    repaired = _BROKEN_YAML.replace(b"top: {broken", b"top: {fixed: 1}").replace(
+        b"shared: 1", b"shared: 2"
+    )
     source.write_bytes(repaired)
 
     installed = runner.invoke(
@@ -796,9 +807,11 @@ def test_yaml_staged_by_line_stays_line_staged_once_its_base_parses(
     listed = runner.invoke(app, ["--format=json", "stage", "--list", *args])
     assert listed.exit_code == 0, (listed.output, listed.exception)
     rows = {row["name"]: row for row in json.loads(listed.stdout)["data"]}
-    assert rows["conf.yaml"]["local"] + rows["conf.yaml"]["pending"] == 1
+    assert (rows["conf.yaml"]["local"], rows["conf.yaml"]["pending"]) == (1, 0)
     synced = runner.invoke(app, ["sync", *args, "--auto=use-live", "--yes"])
     assert synced.exit_code == 0, (synced.output, synced.exception)
     assert source.read_bytes() == repaired
+    assert b"my-laptop" not in source.read_bytes()
+    assert b"my-laptop" in destination.read_bytes()
     entry = store.read_index("p").files[str(fid)]
     assert {row["kind"] for row in entry.hunks} == {"line"}

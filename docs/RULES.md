@@ -192,7 +192,10 @@ unit**, not per-key. VSCode's flat dotted keys
 **not** route through the KeyUnit engine today. The dotted-key fix is
 **forward-insurance** for when JSONC key-level walking + structured host-local
 keys land — the **STAGE B unification**, which is the follow-up that will
-exercise this path.
+exercise this path. Separately, `engine_for` stages a YAML/JSON file by line
+(hunk) when its recorded base does not parse, and a file whose stored rows are
+line rows stays line-staged after the base parses again; a file whose stored rows
+are key rows and whose base later stops parsing is still skipped.
 
 ---
 
