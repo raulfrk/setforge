@@ -29,7 +29,7 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from jinja2 import Template
+from jinja2 import TemplateError
 from rich.table import Table
 
 from setforge import (
@@ -59,9 +59,9 @@ from setforge.ownership import OwnershipError, OwnershipStore, read_owner_id
 from setforge.paths import (
     cache_root,
     journals_root,
+    render_dst_template,
     snapshots_root,
     state_root,
-    template_context,
 )
 from setforge.source import load_local_codex_overlay
 from setforge.transitions import committed_transition_dirs, load_meta_payload
@@ -631,10 +631,20 @@ def resolve_src(tracked_file: TrackedFile, repo_root: Path) -> Path:
 
 def resolve_dst(tracked_file: TrackedFile) -> Path:
     """Resolve a tracked_file's ``dst`` template (if any) to an absolute path
-    via Jinja2 + ``~`` expansion."""
+    via Jinja2 + ``~`` expansion.
+
+    Raises :class:`ConfigError` for a template ``validate`` also rejects (bad
+    syntax or an undefined variable), before any caller can act on a path the
+    config did not spell out.
+    """
     raw = tracked_file.dst
     if tracked_file.template:
-        raw = Template(raw).render(**template_context())
+        try:
+            raw = render_dst_template(raw)
+        except TemplateError as exc:
+            raise ConfigError(
+                f"unrenderable dst template {tracked_file.dst!r}: {exc}"
+            ) from exc
     return Path(raw).expanduser()
 
 

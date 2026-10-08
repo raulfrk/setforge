@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from setforge.config import (
     BundleComponent,
     BundleSpec,
@@ -15,6 +17,7 @@ from setforge.config import (
     expand_bundle_file_components,
     resolve_profile,
 )
+from setforge.errors import ConfigError
 
 _PROFILE = "expand-test"
 
@@ -66,6 +69,22 @@ def test_expansion_threads_mode_and_template() -> None:
     tf = cfg.tracked_files["revdiff.launcher"]
     assert tf.mode == 0o755
     assert tf.template is True
+
+
+def test_expansion_refuses_undefined_template_variable_in_dst() -> None:
+    cfg = _cfg_with_bundle(
+        BundleSpec(
+            components=[
+                _file_comp(
+                    "launcher", template=True, dst="{{ home }}/{{ home_typo }}/launch"
+                ),
+            ]
+        )
+    )
+    resolved = resolve_profile(cfg, _PROFILE)
+    with pytest.raises(ConfigError, match="home_typo"):
+        expand_bundle_file_components(cfg, resolved, Path("/repo"))
+    assert "revdiff.launcher" not in cfg.tracked_files
 
 
 def test_expansion_threads_symlink_and_template() -> None:

@@ -1748,13 +1748,9 @@ def _reject_bad_id(kind: str, value: str) -> None:
 def _resolve_confined_dst(dst: str, *, template: bool) -> Path:
     # .resolve() (not a string prefix) so it collapses ../ AND symlinked
     # parents, catching a ~/../etc or symlink-escape a startswith() would miss.
-    from setforge.paths import template_context
+    from setforge.paths import render_dst_template
 
-    raw = dst
-    if template:
-        from jinja2 import Template
-
-        raw = Template(raw).render(**template_context())
+    raw = render_dst_template(dst) if template else dst
     expanded = Path(raw).expanduser()
     if not expanded.is_absolute():
         raise ConfigError(
