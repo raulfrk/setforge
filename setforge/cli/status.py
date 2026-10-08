@@ -53,6 +53,7 @@ from setforge.cli._output import render
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_effective_profile
 from setforge.errors import InvalidTransitionRecord, SetforgeError
+from setforge.snapshots import format_age
 
 _GIT_TIMEOUT_SECONDS: int = 30
 _OVERLAY_KEYS: tuple[str, ...] = (
@@ -227,21 +228,8 @@ def _resolve_git_info(
 
 
 def _format_age(now: datetime, then: datetime) -> str:
-    """Format the age of a UTC timestamp as ``Nh ago`` / ``Nd ago``."""
-    delta = now - then
-    seconds = int(delta.total_seconds())
-    if seconds < 0:
-        seconds = 0
-    minutes, _ = divmod(seconds, 60)
-    hours, _ = divmod(minutes, 60)
-    days, _ = divmod(hours, 24)
-    if days >= 1:
-        return f"{days}d ago"
-    if hours >= 1:
-        return f"{hours}h ago"
-    if minutes >= 1:
-        return f"{minutes}m ago"
-    return f"{seconds}s ago"
+    """Format the age of a UTC timestamp, clamping a future ``then`` to zero."""
+    return format_age(now, min(then, now))
 
 
 def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
