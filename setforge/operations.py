@@ -404,14 +404,7 @@ def prepare(
 ) -> OperationJournal:
     """Durably publish a complete prepared journal or refuse an active one."""
     with _registry_lock():
-        existing = _load_all()
-        if existing:
-            active_journal = existing[0]
-            raise SetforgeError(
-                f"unfinished {active_journal.command} operation "
-                f"{active_journal.operation_id} blocks this mutation; run "
-                f"`setforge recover --profile={active_journal.profile}`"
-            )
+        refuse_pending()
         journal = OperationJournal(
             operation_id=uuid4().hex,
             command=command,
@@ -522,67 +515,20 @@ def active(profile: str) -> OperationJournal | None:
     return load(profile)
 
 
-def _refuse_active() -> None:
-    """Fail when any unfinished mutation still owns recovery baselines."""
-    journals = _load_all()
-    if not journals:
-        return
-    journal = journals[0]
-    raise SetforgeError(
-        f"unfinished {journal.command} operation {journal.operation_id} blocks "
-        "this mutation; run "
-        f"`setforge recover --profile={journal.profile}`"
-    )
+def refuse_pending(*, allow_operation_id: str | None = None) -> None:
+    """Refuse a mutation while any unfinished operation awaits recovery.
 
-
-def refuse_conflicting_mutation(
-    *,
-    resources: bool,
-    config_dir: Path | None,
-    profile: str | None,
-    profiles: tuple[str, ...] = (),
-    allow_operation_id: str | None = None,
-) -> None:
-    """Refuse a mutation whose locked namespaces overlap an active journal."""
-    conflicts = conflicting_journals(
-        resources=resources,
-        config_dir=config_dir,
-        profile=profile,
-        profiles=profiles,
-    )
-    blocked = tuple(
-        item for item in conflicts if item.operation_id != allow_operation_id
-    )
-    if blocked:
-        journal = blocked[0]
-        raise SetforgeError(
-            f"unfinished {journal.command} operation {journal.operation_id} "
-            "blocks this mutation; run "
-            f"`setforge recover --profile={journal.profile}`"
-        )
-
-
-def conflicting_journals(
-    *,
-    resources: bool,
-    config_dir: Path | None,
-    profile: str | None,
-    profiles: tuple[str, ...] = (),
-) -> tuple[OperationJournal, ...]:
-    """Return active journals overlapping the declared lock namespaces."""
-    expected_config = config_dir.resolve() if config_dir is not None else None
-    expected_profiles = {*profiles, *((profile,) if profile is not None else ())}
-    return tuple(
-        journal
-        for journal in _load_all()
-        if (resources and journal.resources_lock)
-        or (
-            expected_config is not None
-            and expected_config
-            in {path.resolve() for path in journal.reserved_config_dirs}
-        )
-        or bool(expected_profiles.intersection(journal.reserved_profiles))
-    )
+    At most one journal exists, and it blocks every mutation whatever that
+    mutation touches. Only the recovery of that journal passes its own
+    ``allow_operation_id``.
+    """
+    for journal in _load_all():
+        if journal.operation_id != allow_operation_id:
+            raise SetforgeError(
+                f"unfinished {journal.command} operation {journal.operation_id} "
+                "blocks this mutation; run "
+                f"`setforge recover --profile={journal.profile}`"
+            )
 
 
 def begin_checkpoint(
@@ -1172,7 +1118,7 @@ def recover_on_error(profile: str, command: str) -> Iterator[None]:
 def transaction(
     *, recover: tuple[str, str] | None = None, **scopes: Unpack[MutationScopes]
 ) -> Iterator[MutationLockGuards]:
-    """Hold the declared mutation locks, refuse any unfinished operation, then run.
+    """Hold the declared mutation locks, which refuse any unfinished operation.
 
     ``recover`` names the ``(profile, command)`` journal the block publishes; a
     failure rolls that journal back before the locks are released.
@@ -1183,7 +1129,6 @@ def transaction(
         mutation_locks(**scopes) as guards,
         recover_on_error(*recover) if recover is not None else nullcontext(),
     ):
-        _refuse_active()
         yield guards
 
 

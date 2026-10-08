@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -17,7 +18,7 @@ from hypothesis import strategies as st
 
 from setforge import codex_plugins, locking, operations, orphan_scan, transitions
 from setforge.errors import SetforgeError
-from setforge.locking import install_resources_lock, profile_lock
+from setforge.locking import mutation_locks, profile_lock
 from setforge.ownership import (
     OwnershipClaim,
     OwnershipStore,
@@ -35,6 +36,26 @@ def operation_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(transitions, "state_root", lambda: root)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     return root
+
+
+def _held_elsewhere(lock_path: Path) -> bool:
+    """Return whether another open file description holds ``lock_path``."""
+    with lock_path.open("a") as probe:
+        try:
+            fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+        return False
+
+
+def _writer_locks_held(profile: str) -> tuple[bool, bool]:
+    """Return whether the mutation gate and ``profile`` lock are held right now."""
+    locking.require_resources_lock()
+    return (
+        _held_elsewhere(Path.home() / ".cache/setforge/locks/mutation-gate.lock"),
+        _held_elsewhere(locking._profile_lock_path(profile)),
+    )
 
 
 def _prepare(
@@ -157,19 +178,21 @@ def test_prepare_refuses_to_shadow_active_operation(
         _prepare(tmp_path)
 
 
-def test_active_operation_blocks_same_config_but_not_other_repo(
+def test_active_operation_blocks_every_mutation_but_its_own_recovery(
     tmp_path: Path, operation_state: Path
 ) -> None:
-    _prepare(tmp_path)
+    journal = _prepare(tmp_path)
 
+    with pytest.raises(
+        SetforgeError, match=r"blocks this mutation; run `setforge recover --profile=p`"
+    ):
+        operations.refuse_pending()
     with pytest.raises(SetforgeError, match="blocks this mutation"):
-        operations.refuse_conflicting_mutation(
-            resources=False, config_dir=tmp_path, profile=None
-        )
+        operations.refuse_pending(allow_operation_id="another-operation")
 
-    operations.refuse_conflicting_mutation(
-        resources=False, config_dir=tmp_path / "other", profile=None
-    )
+    operations.refuse_pending(allow_operation_id=journal.operation_id)
+    operations.complete(journal)
+    operations.refuse_pending()
 
 
 def test_checkpoint_intent_is_durable_before_completion(
@@ -264,7 +287,7 @@ def test_recover_files_resolves_ownership_move_before_restoring_claims(
     scope = ResourceScope(ScopeKind.USER_HOST, "current-user")
     source = ResourceId("package", "cargo", "source", scope)
     destination = ResourceId("package", "cargo", "destination", scope)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         claim = store.claim_locked(
             resource_id=source,
             owner_id=owner,
@@ -292,7 +315,10 @@ def test_recover_files_resolves_ownership_move_before_restoring_claims(
         raise OSError("crash after move")
 
     monkeypatch.setattr(store, "_unlink_intent", crash_after_move)
-    with install_resources_lock(), pytest.raises(OSError, match="crash after move"):
+    with (
+        mutation_locks(resources=True, allow_operation_id=journal.operation_id),
+        pytest.raises(OSError, match="crash after move"),
+    ):
         store.move_locked(
             source,
             destination,
@@ -301,7 +327,7 @@ def test_recover_files_resolves_ownership_move_before_restoring_claims(
         )
     monkeypatch.setattr(store, "_unlink_intent", real_unlink)
 
-    with install_resources_lock():
+    with mutation_locks(resources=True, allow_operation_id=journal.operation_id):
         operations.recover_files(applying)
 
     restored = store.read(source)
@@ -767,11 +793,6 @@ def test_prepare_round_trips_config_reservations_and_path_guards(
         sorted((tmp_path.resolve(), extra_config.resolve()), key=str)
     )
     assert loaded.path_guards == tuple(sorted(guards, key=lambda item: str(item.path)))
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=extra_config,
-        profile=None,
-    ) == (loaded,)
 
     journal_path = operations.journal_path("p")
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
@@ -1590,11 +1611,11 @@ def test_transaction_rolls_back_a_failed_block_while_its_locks_are_held(
 ) -> None:
     path = tmp_path / "live"
     path.write_text("before", encoding="utf-8")
-    held_during_recovery: list[set[locking.LockRank]] = []
+    held_during_recovery: list[tuple[bool, bool]] = []
     real_recover = operations.recover_automatically
 
     def recording_recover(journal: operations.OperationJournal) -> bool:
-        held_during_recovery.append({rank for rank, _key in locking._HELD_RANKS.get()})
+        held_during_recovery.append(_writer_locks_held("p"))
         return real_recover(journal)
 
     monkeypatch.setattr(operations, "recover_automatically", recording_recover)
@@ -1616,17 +1637,13 @@ def test_transaction_rolls_back_a_failed_block_while_its_locks_are_held(
     with pytest.raises(RuntimeError, match="apply failed") as caught:
         fail_during_apply()
 
-    assert held_during_recovery == [
-        {
-            locking.LockRank.MUTATION,
-            locking.LockRank.RESOURCES,
-            locking.LockRank.PROFILE,
-        }
-    ]
+    assert held_during_recovery == [(True, True)]
     assert not getattr(caught.value, "__notes__", [])
     assert path.read_text(encoding="utf-8") == "before"
     assert operations.active("p") is None
-    assert locking._HELD_RANKS.get() == ()
+    with pytest.raises(SetforgeError, match="global resource lock"):
+        _writer_locks_held("p")
+    assert not _held_elsewhere(locking._profile_lock_path("p"))
 
 
 def test_transaction_refuses_an_unfinished_operation_outside_its_scopes(
@@ -1873,7 +1890,7 @@ def test_unusable_journal_reports_the_file_and_how_to_get_past_it(
 
     for blocked in (
         lambda: operations.load("p"),
-        operations._refuse_active,
+        operations.refuse_pending,
     ):
         with pytest.raises(SetforgeError) as failure:
             blocked()
@@ -2136,11 +2153,6 @@ def test_cross_profile_state_snapshot_reserves_its_profile_namespace(
     )
 
     assert journal.reserved_profiles == ("actual", "migrate")
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=None,
-        profile="actual",
-    ) == (journal,)
 
 
 def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
@@ -2158,11 +2170,7 @@ def test_extra_reserved_profile_survives_reload_and_blocks_mutation(
     loaded = operations.load("migrate")
 
     assert loaded.reserved_profiles == ("migrate", "team/dev")
-    assert operations.conflicting_journals(
-        resources=False,
-        config_dir=None,
-        profile="team/dev",
-    ) == (journal,)
+    assert loaded == journal
 
 
 @pytest.mark.parametrize(
@@ -2365,13 +2373,8 @@ def test_journal_recovers_after_config_ancestor_became_a_symlink(
     (tmp_path / "real").rename(tmp_path / "moved")
     (tmp_path / "real").symlink_to("moved")
 
-    operations.refuse_conflicting_mutation(
-        resources=False, config_dir=None, profile="other"
-    )
     with pytest.raises(SetforgeError, match="unfinished sync operation"):
-        operations.refuse_conflicting_mutation(
-            resources=False, config_dir=config_dir, profile=None
-        )
+        operations.refuse_pending()
     assert operations.load("p") == journal
     assert operations.recover_automatically(journal)
 
@@ -2418,6 +2421,4 @@ def test_active_journal_is_visible_across_transition_state_roots(
 
     assert operations.load("p").operation_id == journal.operation_id
     with pytest.raises(SetforgeError, match="unfinished install"):
-        operations.refuse_conflicting_mutation(
-            resources=True, config_dir=None, profile="other"
-        )
+        operations.refuse_pending()

@@ -1,8 +1,15 @@
 """Ordered advisory locks for SetForge reads and mutations.
 
-Commands declare the namespaces they touch and acquire them in the sole legal
-order: global mutation gate, user-global resources, canonical config repository,
-then profile state.
+Every command that changes SetForge state, a managed file, a package, an
+adapter or a config repository holds the user-global mutation gate for its
+whole run, so the gate is the one writer lock: no two such mutations overlap,
+whatever they touch. ``completion install`` is the one command that writes
+without it: it touches only the completion script and the shell rc file, takes
+no lock and is not refused by an unfinished operation. Two narrower locks
+remain because commands that do not take the gate also take them: the profile
+lock (``compare`` and ``inspect`` read under it)
+and the config-identity lock (checkout identity is created on read paths too).
+The sole legal order is gate, config identity, then profile state.
 The rank guard rejects in-process inversions, while POSIX ``flock`` serializes
 independent processes and releases automatically when a process exits.
 
@@ -42,15 +49,16 @@ class LockRank(IntEnum):
     """Canonical acquisition order for SetForge mutation locks."""
 
     MUTATION = 0
-    RESOURCES = 10
     CONFIG_IDENTITY = 15
-    CONFIG = 20
-    TARGET = 25
     PROFILE = 30
 
 
 _HELD_RANKS: ContextVar[tuple[tuple[LockRank, str], ...]] = ContextVar(
     "setforge_held_lock_ranks", default=()
+)
+# Set while ``mutation_locks(resources=True)`` holds the gate for its caller.
+_RESOURCES_DECLARED: ContextVar[bool] = ContextVar(
+    "setforge_resources_declared", default=False
 )
 
 
@@ -61,9 +69,8 @@ def _ranked(rank: LockRank, key: str) -> Iterator[None]:
     if held and (rank < held[-1][0] or (rank == held[-1][0] and key <= held[-1][1])):
         raise SetforgeError(
             f"duplicate or inverted lock order: requested {rank.name.lower()} after "
-            f"{held[-1][0].name.lower()}; acquire mutation -> resources -> "
-            "config-identity -> config -> target -> profile "
-            "and same-rank locks by sorted identity"
+            f"{held[-1][0].name.lower()}; acquire mutation -> config-identity -> "
+            "profile and same-rank locks by sorted identity"
         )
     token = _HELD_RANKS.set((*held, (rank, key)))
     try:
@@ -78,8 +85,8 @@ def _user_global_locks_dir() -> Path:
 
 
 def require_resources_lock() -> None:
-    """Refuse a resource mutation outside the canonical resource lock."""
-    if not any(rank is LockRank.RESOURCES for rank, _key in _HELD_RANKS.get()):
+    """Refuse a resource mutation outside ``mutation_locks(resources=True)``."""
+    if not _RESOURCES_DECLARED.get():
         raise SetforgeError("ownership mutation requires the global resource lock")
 
 
@@ -100,8 +107,6 @@ class TargetLockRequest:
 
 @dataclass(frozen=True, slots=True)
 class _TargetLockSnapshot:
-    coordinate_key: str
-    object_key: str | None
     parent: Path
     parent_identity: tuple[int, int]
     target: Path
@@ -201,7 +206,6 @@ def _target_snapshot(request: TargetLockRequest) -> _TargetLockSnapshot:
         raise SetforgeError("target lock requires a non-root path")
     parent = target.parent.resolve(strict=True)
     parent_identity = _filesystem_identity(parent)
-    coordinate = f"{parent_identity[0]}:{parent_identity[1]}:{target.name}"
     try:
         leaf_info = target.lstat()
     except FileNotFoundError:
@@ -214,13 +218,9 @@ def _target_snapshot(request: TargetLockRequest) -> _TargetLockSnapshot:
                 f"target root is a dangling symlink: {target}"
             ) from None
         target_identity = None
-        object_key = None
     else:
         target_identity = _filesystem_identity(resolved_target)
-        object_key = f"{target_identity[0]}:{target_identity[1]}"
     return _TargetLockSnapshot(
-        coordinate_key=f"coordinate:{coordinate}",
-        object_key=f"object:{object_key}" if object_key is not None else None,
         parent=parent,
         parent_identity=parent_identity,
         target=target,
@@ -289,26 +289,16 @@ def config_identity_lock(
 
 
 @contextmanager
-def target_locks(
-    requests: tuple[TargetLockRequest, ...], timeout: float | None = None
+def target_guards(
+    requests: tuple[TargetLockRequest, ...],
 ) -> Iterator[tuple[TargetLockGuard, ...]]:
-    """Acquire stable coordinate and existing-object locks for target roots."""
+    """Bind target roots to descriptors and re-verify them when the body ends.
+
+    This takes no lock: the mutation gate keeps other SetForge writers out. The
+    guards detect a root that anything else replaces during the operation.
+    """
     snapshots = tuple(_target_snapshot(request) for request in requests)
-    lock_keys = {"0:all-targets"} if snapshots else set()
-    for snapshot in snapshots:
-        for key in (snapshot.coordinate_key, snapshot.object_key):
-            if key is not None:
-                lock_keys.add(key)
     with ExitStack() as stack:
-        for key in sorted(lock_keys):
-            stack.enter_context(
-                _global_named_lock(
-                    rank=LockRank.TARGET,
-                    key=key,
-                    prefix="target",
-                    timeout=timeout,
-                )
-            )
         guards = _open_target_guards(snapshots, stack)
         yield tuple(guards)
         for guard in guards:
@@ -321,7 +311,7 @@ def _open_target_guards(
     guards: list[TargetLockGuard] = []
     for snapshot in snapshots:
         if _filesystem_identity(snapshot.parent) != snapshot.parent_identity:
-            raise SetforgeError("target parent changed while acquiring target locks")
+            raise SetforgeError("target parent changed while binding target roots")
         try:
             current_identity = _filesystem_identity(
                 snapshot.target.resolve(strict=True)
@@ -329,7 +319,7 @@ def _open_target_guards(
         except FileNotFoundError:
             current_identity = None
         if current_identity != snapshot.target_identity:
-            raise SetforgeError("target changed while acquiring target locks; retry")
+            raise SetforgeError("target changed while binding target roots; retry")
         parent_fd = os.open(
             snapshot.parent,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -396,12 +386,11 @@ def _profile_lock_path(profile: str) -> Path:
 
 @contextmanager
 def _mutation_gate_lock(timeout: float | None = None) -> Iterator[None]:
-    """Serialize the refusal check and publication boundary for all mutations.
+    """Hold the one writer lock every mutating command runs under.
 
-    A journal cannot protect the interval before it is durably published.  This
-    user-global gate makes that interval exclusive across profiles, config repos,
-    and transition-state overrides while still allowing an operation to acquire
-    its narrower resource/config/profile locks in canonical order.
+    The gate is user-global: it serializes mutations across profiles, config
+    repos, target roots, external inventories, and transition-state overrides,
+    including the interval before a journal is durably published.
     """
     with (
         _ranked(LockRank.MUTATION, "mutation-gate"),
@@ -453,76 +442,6 @@ def profile_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
         yield
 
 
-@contextmanager
-def install_resources_lock(timeout: float | None = None) -> Iterator[None]:
-    """Serialize global package and adapter planning/apply across commands.
-
-    When a command also needs a profile lock, acquire this global lock first.
-    Its path follows the user's global Claude/VSCode/cache namespace rather
-    than ``SETFORGE_STATE_DIR``; alternate transition roots must not split the
-    lock protecting the same external inventories.
-    """
-    with (
-        _ranked(LockRank.RESOURCES, "install-resources"),
-        _flock(
-            _user_global_locks_dir() / "install-resources.lock",
-            timeout=timeout,
-            timeout_message=(
-                "another setforge command holds the global resource lock; retry shortly"
-            ),
-        ),
-    ):
-        yield
-
-
-@contextmanager
-def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[None]:
-    """Acquire an exclusive advisory lock scoped to a config dir's ``setforge.lock``.
-
-    The committed ``setforge.lock`` is a single file shared across ALL profiles
-    (``lock_path`` has no profile component), so ``setforge lock --profile=A``
-    and ``--profile=B`` running concurrently both read the same baseline, merge
-    only their own profile's pins, then write — the second write clobbers the
-    first (silent lost update).  This lock serializes the whole
-    load -> merge -> write critical section on the config dir, so a second
-    writer observes the first writer's pins and ``merge_lock`` unions them.
-
-    Unlike :func:`profile_lock`, this lock is keyed on the config DIR, not the
-    profile name — a profile-scoped lock would not serialize A vs B against the
-    profile-independent lockfile.
-
-    Creates a path-keyed sidecar in the user-global lock namespace (never
-    inside the config repository, never under operator-variable transition
-    state, and never the lockfile itself, which is atomically replaced) and
-    calls ``fcntl.flock(LOCK_EX)`` on the open fd.
-
-    Args:
-        config_dir: Directory holding ``setforge.lock``; determines the sidecar
-            lockfile location.
-        timeout: If ``None`` (default), block indefinitely.  If set, poll every
-            ``_POLL_INTERVAL`` seconds up to ``timeout`` seconds and raise
-            :class:`SetforgeError` on contention.
-
-    Raises:
-        SetforgeError: When ``timeout`` is set and the lock cannot be acquired
-            within the deadline.
-    """
-    config_key = str(config_dir.resolve())
-    key = hashlib.sha256(config_key.encode()).hexdigest()[:24]
-    with (
-        _ranked(LockRank.CONFIG, config_key),
-        _flock(
-            _user_global_locks_dir() / f"config-{key}.lock",
-            timeout=timeout,
-            timeout_message=(
-                f"another setforge process holds the setforge.lock/config "
-                f"lock for {config_dir}; retry shortly"
-            ),
-        ),
-    ):
-        yield
-
-
 def _acquire_fd(fd: object, *, timeout: float | None, timeout_message: str) -> None:
     """Acquire one flock, optionally with the shared bounded-poll contract."""
     fileno = fd.fileno()  # type: ignore[attr-defined]
@@ -561,19 +480,23 @@ def mutation_locks(
     timeout: float | None = None,
     allow_operation_id: str | None = None,
 ) -> Iterator[MutationLockGuards]:
-    """Acquire requested mutation locks in canonical rank order.
+    """Acquire the mutation gate, then the narrower locks, in canonical order.
 
-    The order is global mutation gate, user-global resources, optional verified
-    Git common-directory identity, canonical config repository, target roots,
-    then profile state. Callers declare scopes instead of spelling nested
-    context managers, making the ordering contract structural and reviewable.
-    The gate also closes the pre-journal-publication race for migrations that
-    later acquire several concrete profile locks.
+    The order is global mutation gate, optional verified Git common-directory
+    identity, then profile state. The gate alone excludes every other mutation;
+    ``resources``, config directories, and target roots take no lock of their
+    own. ``resources`` lets the body mutate ownership, target roots yield
+    descriptor guards, and ``config_dir``/``config_dirs`` are accepted but have
+    no effect. Callers declare scopes instead of spelling nested context
+    managers, making the ordering contract structural and reviewable.
+
+    An unfinished operation refuses every mutation, whatever its scopes; only
+    recovery passes that operation's ``allow_operation_id``.
     """
     with ExitStack() as stack:
         stack.enter_context(_mutation_gate_lock(timeout=timeout))
         if resources:
-            stack.enter_context(install_resources_lock(timeout=timeout))
+            stack.callback(_RESOURCES_DECLARED.reset, _RESOURCES_DECLARED.set(True))
         requested_identity_dirs = tuple(
             sorted(
                 {
@@ -598,26 +521,13 @@ def mutation_locks(
                     identity_fd,
                 )
             )
-        requested_config_dirs = tuple(
-            sorted(
-                {
-                    *(path.resolve() for path in config_dirs),
-                    *((config_dir.resolve(),) if config_dir is not None else ()),
-                },
-                key=str,
-            )
-        )
-        for requested_config_dir in requested_config_dirs:
-            stack.enter_context(lockfile_lock(requested_config_dir, timeout=timeout))
         requested_targets = tuple(
             TargetLockRequest(path)
             for path in sorted({path.absolute() for path in target_roots}, key=str)
         )
-        target_guards: tuple[TargetLockGuard, ...] = ()
+        bound_targets: tuple[TargetLockGuard, ...] = ()
         if requested_targets:
-            target_guards = stack.enter_context(
-                target_locks(requested_targets, timeout=timeout)
-            )
+            bound_targets = stack.enter_context(target_guards(requested_targets))
         requested_profiles = tuple(
             sorted({*profiles, *((profile,) if profile is not None else ())})
         )
@@ -625,22 +535,9 @@ def mutation_locks(
             stack.enter_context(profile_lock(requested_profile, timeout=timeout))
         from setforge import operations
 
-        operations.refuse_conflicting_mutation(
-            resources=resources,
-            config_dir=None,
-            profile=profile,
-            profiles=requested_profiles,
-            allow_operation_id=allow_operation_id,
-        )
-        for requested_config_dir in requested_config_dirs:
-            operations.refuse_conflicting_mutation(
-                resources=False,
-                config_dir=requested_config_dir,
-                profile=None,
-                allow_operation_id=allow_operation_id,
-            )
+        operations.refuse_pending(allow_operation_id=allow_operation_id)
         yield MutationLockGuards(
-            target_guards,
+            bound_targets,
             identity_guards[0] if len(identity_guards) == 1 else None,
             tuple(identity_guards),
         )

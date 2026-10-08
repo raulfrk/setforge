@@ -638,7 +638,7 @@ def test_apply_transfers_container_and_records_reversible_transition(
     receiver_owner = load_or_create_owner_id(repo)
     store = OwnershipStore()
     initial = decide_file(observation, None, owner_id=foreign_owner)
-    with locking.install_resources_lock():
+    with locking.mutation_locks(resources=True):
         before = publish_file_claim_locked(
             store,
             initial,

@@ -199,8 +199,24 @@ resource, its tombstone, provenance, and immutable owner-scoped history. A
 normal clone has a different owner namespace; linked Git worktrees share one.
 Revert succeeds only while the recorded post-state is still current and, when
 it would restore authority, the current declaration, resource identity, and
-live fingerprint still match. Interrupted publication remains visible through
-`ownership recover`; `--apply` completes only unambiguous pending work.
+live fingerprint still match.
+
+An interrupted `ownership release` or `ownership revert` is undone, not
+completed: it blocks every other mutating command until you run the
+`setforge recover --profile=ownership-<owner-id> --apply` command that the
+refusal prints, which puts the claim and its history back exactly as they were
+before the interrupted command. Then repeat the release or revert. The
+`ownership-<owner-id>` name is not a profile in `setforge.yaml`; it only
+identifies the unfinished operation. `ownership list` and `status` keep
+working in the meantime.
+
+`ownership recover` remains for one case: a release or revert that SetForge
+1.4.0 or earlier left unfinished. Those versions completed an interrupted
+transition instead of undoing it, and `ownership recover --apply` still does
+exactly that for a record they left behind. While such a record exists,
+`ownership release` and `ownership revert` refuse and name
+`setforge ownership recover --apply`. With no such record the command changes
+nothing and prints the `setforge recover` command to use instead.
 Claims held by a project injection are refused here: `setforge project remove
 <profile> <path>` releases them together with the injection record.
 
@@ -286,16 +302,25 @@ Removing a declaration and running an ordinary `install` does not uninstall
 packages or rewrite resources outside the selected profile. Explicit retirement
 uses the scoped workflows above; history-only file edits are not supported.
 
-Mutating commands share one lock order: a user-global mutation gate, then
-user-global package/adapter resources, the canonical config repository, and
-finally profile state. The gate covers the interval before a write-ahead journal
-can be published, including migrations that later lock multiple real profiles.
+Mutating commands run one at a time per user: each command that changes
+SetForge's state, a managed file, a package, an extension or plugin, or a
+config repository holds a user-global mutation gate for its whole run, then
+locks the profile state it changes. `completion install` is the one exception:
+it only writes the completion script and the shell rc file, so it takes no
+gate and is not refused while an interrupted operation awaits recovery. The gate covers
+the interval before a write-ahead journal can be published, including migrations
+that later lock multiple real profiles.
 An interrupted
 install/sync/revert/migration leaves a durable per-profile journal in the
-user-global recovery registry. Conflicting mutations refuse across profiles
-and across `SETFORGE_STATE_DIR` overrides until automatic recovery succeeds or
+user-global recovery registry. An interrupted `project sync`,
+`ownership release` or `ownership revert` leaves one too, under a generated
+name such as `ownership-<owner-id>` that is not a profile in `setforge.yaml`;
+pass that name to `--profile` exactly as the refusal prints it. Every other mutating command, including
+`setforge config add` and `config remove`, then refuses across profiles and
+across `SETFORGE_STATE_DIR` overrides, naming the `setforge recover` command to
+run, until automatic recovery succeeds or
 the operator runs `setforge recover --profile=<name> --apply --yes` from the
-recorded transition-state root. A begun package checkpoint is intentionally
+recorded transition-state root. Read-only commands stay usable. A begun package checkpoint is intentionally
 reported as uncertain/manual even if it did not reach its completion marker.
 
 ## Package locks and Cargo
@@ -362,7 +387,7 @@ refused rather than traversed.
 Reversible deletion stores typed absent/file/symlink images, including
 arbitrary bytes or link target, mode, and nanosecond mtime. Crash recovery
 refuses to overwrite a replacement or traverse a changed/symlinked parent; the
-journal remains active and conflicting mutations remain blocked until the
+journal remains active and every other mutating command stays blocked until the
 operator moves the replacement aside and retries recovery.
 
 <!-- setforge-doc-flags: cleanup-orphans -->

@@ -585,7 +585,7 @@ The reversible branch records typed before/after images, preserving arbitrary
 file bytes or a symlink target plus mode and nanosecond mtime for undo/redo. An
 interrupted cleanup is recovered from its write-ahead journal. If recovery
 finds a replacement at a deleted path or a changed/symlinked parent, it keeps
-that user data, retains the recovery record, and blocks conflicting mutations;
+that user data, retains the recovery record, and blocks other mutating commands;
 move the replacement aside, retry `setforge recover --profile=default --apply
 --yes`.
 
@@ -810,8 +810,8 @@ when the restore is planned; restore and recovery stay bound to those resolved
 directories and refuse a parent that is replaced or re-pointed afterwards
 instead of being redirected outside the journaled path tree. A restore is journaled,
 so a partial failure rolls file type, bytes, mode, and mtime back automatically;
-an interrupted process reserves its profile, source repository, and captured
-host-local config namespaces until it is finished with `setforge recover`.
+an interrupted process blocks every other mutating command until it is finished
+with `setforge recover`.
 
 ```console
 $ setforge snapshot create before-experiment --profile=default
@@ -878,9 +878,9 @@ $ setforge ownership revert <transition-id> --config=setforge.yaml --yes
 Release preserves resource bytes and records an owner-scoped tombstone. A
 normal clone cannot see another clone's release history, while linked
 worktrees can. Reverting a release restores authority only if the current
-declaration, resource identity, and live fingerprint still match. Inspect an
-interrupted publication with `setforge ownership recover --config=setforge.yaml`
-and complete unambiguous work by adding `--apply --yes`.
+declaration, resource identity, and live fingerprint still match. An
+interrupted release or revert is undone with the `setforge recover` command
+that the next mutating command names; repeat the release or revert afterwards.
 
 Foreign active claims are resolved from the receiving workflow: rerun
 `setforge install --profile=default` and confirm the offered transfer (or use

@@ -162,11 +162,11 @@ OWNERSHIP_RECOVER_EXAMPLES: str = """\
 Examples:
 
 
-  # Inspect interrupted ownership publication
+  # Show a release or revert that SetForge 1.4.0 or earlier left unfinished
   setforge ownership recover --config=setforge.yaml
 
 
-  # Complete an unambiguous interrupted publication
+  # Complete it (an interruption by a newer version: setforge recover)
   setforge ownership recover --config=setforge.yaml --apply --yes
 """
 

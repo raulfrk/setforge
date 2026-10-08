@@ -8,6 +8,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from setforge.migrations import MigrationRoots
+from setforge.ownership_history import OwnershipHistoryStore, OwnershipTransition
 from setforge.transitions import (
     FilesystemImage,
     FilesystemKind,
@@ -59,3 +60,24 @@ def file_images(
         item.path: (item.pre.payload, item.post.payload)
         for item in load_filesystem_deltas(transition)
     }
+
+
+def legacy_crash_log(
+    history: OwnershipHistoryStore,
+    transition: OwnershipTransition,
+    claim_before: tuple[Path, bytes] | None = None,
+) -> Path:
+    """Turn a finished transition into one SetForge 1.4.0 or earlier left unfinished.
+
+    Those releases wrote ``pending/<id>.json`` first, then the claim, then the
+    history record. ``claim_before`` puts the claim file back as well, for a
+    crash before the claim was written.
+    """
+    owner_root = history.root / str(transition.owner_id)
+    (owner_root / "pending").mkdir(mode=0o700)
+    name = f"{transition.transition_id}.json"
+    log = owner_root / "pending" / name
+    (owner_root / "transitions" / name).rename(log)
+    if claim_before is not None:
+        claim_before[0].write_bytes(claim_before[1])
+    return log

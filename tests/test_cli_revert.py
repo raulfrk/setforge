@@ -344,7 +344,7 @@ def test_refused_revert_of_guarded_transition_leaves_no_operation(
     assert not getattr(result.exception, "__notes__", ())
     assert dst.read_text(encoding="utf-8") == "manually edited content\n"
     assert operations.active("vmh") is None
-    operations._refuse_active()
+    operations.refuse_pending()
 
 
 def test_install_revert_revert_restores_install_state(

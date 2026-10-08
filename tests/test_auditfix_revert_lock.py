@@ -17,7 +17,7 @@ so the recorded order never contains an ``enter`` event before ``apply``.
 
 import contextlib
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from typer.testing import CliRunner
@@ -217,18 +217,13 @@ def test_revert_locks_cross_profile_transition_state_before_apply(
     )
     captured: list[tuple[str, ...]] = []
 
-    @contextlib.contextmanager
-    def recording_lock(**scopes: object):
+    def recording_lock(**scopes: object) -> NoReturn:
         profiles = scopes["profiles"]
         assert isinstance(profiles, tuple)
         captured.append(profiles)
-        yield
+        raise RuntimeError("stop before apply")
 
     monkeypatch.setattr("setforge.locking.mutation_locks", recording_lock)
-    monkeypatch.setattr(
-        "setforge.cli.revert.operations._refuse_active",
-        lambda: (_ for _ in ()).throw(RuntimeError("stop before apply")),
-    )
     args = ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
     if multi_step:
         args.append(f"--to-before={latest.name}")
