@@ -11,18 +11,12 @@ callback.
 from __future__ import annotations
 
 import time
-from typing import Any, cast
+from typing import cast
 
 import typer
 
 from setforge.cli.config import _complete_path_local, _complete_path_tracked
-
-
-class _FakeCtx:
-    def __init__(self) -> None:
-        self.params: dict[str, Any] = {}
-        self.info_name: str | None = None
-
+from tests.fakes import FakeCtx
 
 _PER_CALL_BUDGET_MS: float = 100.0
 
@@ -37,7 +31,7 @@ def test_local_path_completion_under_100ms_timing() -> None:
     deltas_ms: list[float] = []
     for _ in range(10):
         t0 = time.perf_counter()
-        _complete_path_local(cast(typer.Context, _FakeCtx()), "")
+        _complete_path_local(cast(typer.Context, FakeCtx()), "")
         deltas_ms.append((time.perf_counter() - t0) * 1000.0)
     worst = max(deltas_ms)
     assert worst < _PER_CALL_BUDGET_MS, (
@@ -50,7 +44,7 @@ def test_tracked_path_completion_under_100ms_timing() -> None:
     deltas_ms: list[float] = []
     for _ in range(10):
         t0 = time.perf_counter()
-        _complete_path_tracked(cast(typer.Context, _FakeCtx()), "")
+        _complete_path_tracked(cast(typer.Context, FakeCtx()), "")
         deltas_ms.append((time.perf_counter() - t0) * 1000.0)
     worst = max(deltas_ms)
     assert worst < _PER_CALL_BUDGET_MS, (

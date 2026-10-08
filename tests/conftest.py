@@ -359,7 +359,7 @@ class FakeClaude:
     ``fake_claude`` is the only fixture wired in. The
     ``fake_claude`` fixture captures ``subprocess.run`` BEFORE
     monkeypatching it, mirroring the delegation pattern used by
-    :class:`tests.test_cli_e2e.FakeCode` for the co-resident fixture
+    :class:`tests.fakes.FakeCode` for the co-resident fixture
     case.
     """
 

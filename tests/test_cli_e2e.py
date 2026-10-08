@@ -17,8 +17,8 @@ extension + plugin reconcile legs (not just the warn-and-skip path).
 ``FakeClaude`` lives in ``tests.test_claude_plugins`` (its primary
 consumer); the ``fake_claude`` fixture is re-exported via
 ``tests/conftest.py`` so this module can request it as a test
-parameter. ``FakeCode`` is defined inline below since
-``test_cli_e2e.py`` is its only consumer today.
+parameter. ``fake_code`` is the shared fixture from
+``tests/shared_fixtures.py``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +36,6 @@ from typer.testing import CliRunner
 from setforge import paths
 from setforge.cli import app
 from setforge.transitions import transitions_root
-
-# Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
-# fixture can forward non-code, non-claude invocations (e.g. ``git``)
-# through to the real implementation, even when both fakes have monkey-
-# patched ``subprocess.run`` away.
-_REAL_SUBPROCESS_RUN = subprocess.run
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -105,144 +98,6 @@ def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
         "setforge.claude_plugins.resolve_binary",
         lambda name: None,
     )
-
-
-# ---------------------------------------------------------------------------
-# FakeCode — in-memory ``code`` driver for the extension reconcile leg.
-#
-# Mirrors the FakeClaude pattern from tests/test_claude_plugins.py but is
-# scoped to ``setforge.vscode_extensions``. ``vscode_extensions`` invokes
-# ``subprocess.run`` with separate argv tokens (``[code, "--install-extension",
-# id]``) and has no ``lru_cache``'d resolver, so the fixture only needs to
-# monkeypatch ``resolve_binary`` + ``subprocess.run`` — no cache to clear.
-# ---------------------------------------------------------------------------
-
-
-class FakeCode:
-    """In-memory simulation of the ``code`` CLI extension surface.
-
-    Tracks installed extension IDs in ``self._installed`` and records
-    every invocation in ``self.calls`` so tests can assert both the
-    end-state and the exact subprocess sequence.
-
-    Recognized commands (matched on ``args[1:]``):
-    - ``--list-extensions`` → newline-joined sorted installed set.
-    - ``--install-extension <id>`` → adds ``<id>`` to the installed set.
-    - ``--uninstall-extension <id>`` → removes ``<id>`` (no-op if absent).
-
-    ``FakeCode.run`` only handles invocations whose argv[1] starts with
-    ``--`` (the ``code`` flag style). Other invocations (e.g. ``claude
-    plugin list``) are forwarded to ``_delegate`` — set by the
-    ``fake_code`` fixture to the previously-installed ``subprocess.run``
-    so a co-resident ``fake_claude`` continues to handle its own calls.
-    This is required because monkeypatching ``setforge.foo.subprocess.run``
-    actually patches the global ``subprocess.run`` attribute (both
-    modules share the same ``subprocess`` module object), so the second
-    fixture would otherwise clobber the first.
-    """
-
-    def __init__(self, *, installed: set[str] | None = None) -> None:
-        self._installed: set[str] = set(installed or ())
-        self.calls: list[list[str]] = []
-        # Set by the fake_code fixture so non-code, non-claude invocations
-        # forward to the real subprocess.run (so transitions' patch /
-        # git calls still work). ``_delegate`` is the prior
-        # ``subprocess.run`` binding captured at fixture-setup time and
-        # is used only for ``claude`` argv.
-        self._delegate: Callable[..., subprocess.CompletedProcess[str]] | None = None
-        self._real_run: Callable[..., subprocess.CompletedProcess[str]] | None = None
-
-    def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        # Dispatch on the binary path basename: this fixture only owns
-        # invocations of the ``code`` binary. ``claude`` argv goes to
-        # the prior subprocess.run binding (the co-resident FakeClaude
-        # when fake_claude ran first); any other binary invocation
-        # (``patch`` / ``git`` etc. from the transitions layer) passes
-        # through to the real :func:`subprocess.run` via
-        # ``_real_run``.
-        if not args or Path(args[0]).name != "code":
-            basename = Path(args[0]).name if args else ""
-            if basename == "claude" and self._delegate is not None:
-                return self._delegate(args, **kwargs)
-            if self._real_run is not None:
-                return self._real_run(args, **kwargs)
-            raise AssertionError(f"unexpected code invocation: {args!r}")
-
-        self.calls.append(list(args))
-        cmd = args[1:]
-        if cmd == ["--list-extensions"]:
-            body = "\n".join(sorted(self._installed))
-            stdout = body + ("\n" if body else "")
-            return subprocess.CompletedProcess(args, 0, stdout, "")
-        if len(cmd) == 2 and cmd[0] == "--install-extension":
-            self._installed.add(cmd[1])
-            return subprocess.CompletedProcess(args, 0, "", "")
-        if len(cmd) == 2 and cmd[0] == "--uninstall-extension":
-            self._installed.discard(cmd[1])
-            return subprocess.CompletedProcess(args, 0, "", "")
-        raise AssertionError(f"unexpected code invocation: {args!r}")
-
-    # Convenience query helpers parallel to FakeClaude's install_args / etc.
-    def install_args(self) -> list[str]:
-        return [
-            c[2] for c in self.calls if len(c) >= 3 and c[1] == "--install-extension"
-        ]
-
-    def uninstall_args(self) -> list[str]:
-        return [
-            c[2] for c in self.calls if len(c) >= 3 and c[1] == "--uninstall-extension"
-        ]
-
-    def installed_set(self) -> set[str]:
-        return set(self._installed)
-
-
-@pytest.fixture
-def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
-    """Return a factory that wires :class:`FakeCode` into ``vscode_extensions``.
-
-    Parallel to ``fake_claude``: monkeypatches both
-    ``setforge.vscode_extensions.resolve_binary`` (so ``_ensure_code``
-    returns a non-None path) and ``subprocess.run`` (so reconcile
-    invokes the fake driver instead of the real ``code`` binary).
-
-    Captures the prior ``subprocess.run`` binding (whatever was active
-    before this factory ran — possibly ``fake_claude.run``) and stores
-    it on the FakeCode instance so non-code argv shapes forward through
-    instead of raising. Letting both fakes coexist requires this because
-    both ``setforge.vscode_extensions.subprocess`` and
-    ``setforge.claude_plugins.subprocess`` resolve to the same module
-    object — the second monkeypatch would otherwise clobber the first.
-
-    The fixture-order precondition (``fake_claude`` must be requested
-    before ``fake_code`` in the test signature so the delegate snapshot
-    captures ``FakeClaude.run``) is ENFORCED at factory-call time via
-    an assertion below — not merely documented.
-    """
-
-    def factory(*, installed: set[str] | None = None) -> FakeCode:
-        if subprocess.run is _REAL_SUBPROCESS_RUN:
-            raise AssertionError(
-                "fake_code requires fake_claude to be requested first; "
-                "request both fixtures in this order so the delegate "
-                "snapshot captures FakeClaude.run."
-            )
-        fake = FakeCode(installed=installed)
-        # Capture whatever subprocess.run is bound to right now BEFORE
-        # we overwrite it (will be the FakeClaude.run when fake_claude
-        # ran first, otherwise the real subprocess.run). Used only for
-        # ``claude`` argv; everything else (e.g. ``patch`` from
-        # transitions) flows through ``_REAL_SUBPROCESS_RUN``.
-        fake._delegate = subprocess.run
-        fake._real_run = _REAL_SUBPROCESS_RUN
-        monkeypatch.setattr(
-            "setforge.vscode_extensions.resolve_binary",
-            lambda name: Path("/usr/local/bin/code") if name == "code" else None,
-        )
-        monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake.run)
-        return fake
-
-    return factory
 
 
 def _invoke(args: list[str]) -> Result:
@@ -502,7 +357,7 @@ class TestInstall:
           profile's declared include list.
         """
         fc = fake_claude()
-        fk = fake_code()
+        fk = fake_code(real_binaries=("git",))
 
         result = _invoke(
             [
@@ -531,7 +386,7 @@ class TestInstall:
         }
 
         # Extension reconcile leg: declared include = {editorconfig.editorconfig}.
-        assert fk.install_args() == ["editorconfig.editorconfig"]
+        assert fk.install_args == ["editorconfig.editorconfig"]
         assert fk.installed_set() == {"editorconfig.editorconfig"}
 
         # TrackedFile leg still completed.
@@ -607,7 +462,10 @@ class TestSync:
         """
         # Pre-seed with a user-added extension plus the declared one.
         fake_claude()
-        fk = fake_code(installed={"editorconfig.editorconfig", "ms-python.python"})
+        fk = fake_code(
+            installed={"editorconfig.editorconfig", "ms-python.python"},
+            real_binaries=("git",),
+        )
 
         # Install lands the declared set without uninstalling the extra
         # (ADDITIVE policy by default).
@@ -711,7 +569,7 @@ class TestCompare:
         gate on ``--check`` exit code.)
         """
         fc = fake_claude()
-        fk = fake_code()
+        fk = fake_code(real_binaries=("git",))
 
         installed = _invoke(
             [
@@ -832,7 +690,9 @@ class TestRevert:
         through ``FakeCode`` (not warn-and-skipped).
         """
         fake_claude()
-        fk = fake_code()  # starts empty — install will add editorconfig.
+        fk = fake_code(
+            real_binaries=("git",)
+        )  # starts empty — install will add editorconfig.
 
         installed = _invoke(
             [
@@ -855,7 +715,7 @@ class TestRevert:
         assert reverted.exit_code == 0, reverted.output
         # The install delta recorded `added: [editorconfig.editorconfig]`;
         # revert inverts that into an uninstall call.
-        assert fk.uninstall_args() == ["editorconfig.editorconfig"]
+        assert fk.uninstall_args == ["editorconfig.editorconfig"]
         assert fk.installed_set() == set()
 
     def test_failed_extension_leaves_a_transition_and_a_rerun_repairs_it(
@@ -869,10 +729,10 @@ class TestRevert:
         """An install whose only event is a skipped extension still records
         a transition, and a plain re-run installs the extension."""
         fake_claude()
-        fk = fake_code(installed={"editorconfig.editorconfig"})
+        fk = fake_code(installed={"editorconfig.editorconfig"}, real_binaries=("git",))
         args = ["install", "--profile=test-comprehensive", f"--config={fixture_repo}"]
         assert _invoke([*args, "--yes"]).exit_code == 0
-        fk._installed.clear()
+        fk.installed.clear()
 
         def refuse_install(
             argv: list[str], **kwargs: Any

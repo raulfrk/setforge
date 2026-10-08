@@ -9,10 +9,8 @@ with a mocked ``claude mcp`` CLI.
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -20,6 +18,7 @@ from setforge import mcp_servers as mcp
 from setforge import transitions
 from setforge.cli import _mcp_helpers
 from setforge.errors import InvalidTransitionRecord
+from tests.fakes import FakeMcpCli
 
 # ---------------------------------------------------------------------------
 # Serialization round-trip
@@ -80,43 +79,6 @@ def test_write_transition_no_mcp_json_when_empty(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Reverse helper round-trip
 # ---------------------------------------------------------------------------
-
-
-class FakeMcpCli:
-    """Minimal ``claude mcp add/remove`` recorder for reverse tests."""
-
-    def __init__(self) -> None:
-        self.real_run = subprocess.run
-        self.registry: dict[str, tuple[list[str], str]] = {}
-        self.calls: list[list[str]] = []
-
-    def run(self, argv, **kwargs: Any) -> subprocess.CompletedProcess:
-        if argv[0] == "git":
-            return self.real_run(argv, **kwargs)
-        self.calls.append(list(argv))
-        verb = argv[2]
-        if verb == "get":
-            current = self.registry.get(argv[3])
-            if current is None:
-                raise subprocess.CalledProcessError(
-                    1, argv, stderr="No MCP server found"
-                )
-            command, scope = current
-            return subprocess.CompletedProcess(
-                argv,
-                0,
-                stdout=json.dumps(
-                    {"command": command[0], "args": command[1:], "scope": scope}
-                ),
-            )
-        if verb == "add":
-            scope, name = argv[4], argv[5]
-            self.registry[name] = (list(argv[7:]), scope)
-            return subprocess.CompletedProcess(argv, 0, stdout="")
-        if verb == "remove":
-            self.registry.pop(argv[5], None)
-            return subprocess.CompletedProcess(argv, 0, stdout="")
-        raise AssertionError(verb)
 
 
 @pytest.fixture
