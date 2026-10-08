@@ -29,13 +29,13 @@
 # `uv run mutmut show <id>`. The gate warns only about an id that no longer
 # exists.
 
-setforge.project_sync.x_apply_sync__mutmut_14  # equivalent: mutation_locks and operations.prepare independently canonicalize/sort config directories.
-setforge.project_sync.x_apply_sync__mutmut_16  # equivalent: mutation_locks and operations.prepare independently canonicalize/sort config directories.
+setforge.project_sync.x_apply_sync__mutmut_14  # equivalent: the config directories feed only a set that is re-sorted into identity directories and operations.prepare, which resolves and sorts them itself.
+setforge.project_sync.x_apply_sync__mutmut_16  # equivalent: the config directories feed only a set that is re-sorted into identity directories and operations.prepare, which resolves and sorts them itself.
 setforge.project_sync.x_apply_sync__mutmut_20  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
 setforge.project_sync.x_apply_sync__mutmut_22  # equivalent: mutation_locks canonicalizes and sorts identity directories before acquisition.
-setforge.project_sync.x_apply_sync__mutmut_249  # equivalent: initial None and False are only replaced with True or ORed with the boolean state_changed result.
-setforge.project_sync.x_apply_sync__mutmut_388  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
-setforge.project_sync.x_apply_sync__mutmut_391  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
+setforge.project_sync.x_apply_sync__mutmut_247  # equivalent: initial None and False are only replaced with True or ORed with the boolean state_changed result.
+setforge.project_sync.x_apply_sync__mutmut_386  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
+setforge.project_sync.x_apply_sync__mutmut_389  # equivalent: validated created_parents are one ancestor chain; reverse path order and descending depth both remove descendants first.
 setforge.project_sync.x_plan_sync__mutmut_30  # equivalent: addition destinations are disjoint from this injection's own recorded files, so rechecking its manifest cannot find a visibility conflict.
 setforge.project_sync.x_resolve_sync_plan__mutmut_3  # equivalent: the flag is read only as an operand of `or` under `merged == b"" and (...)`, where None and False select the same branch.
 setforge.project_sync.x__prior_ownership_plan__mutmut_4  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.

@@ -770,7 +770,6 @@ def apply_sync(plan: ProjectSyncPlan) -> bool:  # noqa: C901
     with mutation_locks(
         resources=True,
         config_identity_dirs=identity_dirs,
-        config_dirs=config_roots,
         target_roots=(plan.target,),
         profile=operation_profile,
     ) as guards:
