@@ -1,18 +1,16 @@
-"""``setforge upgrade`` — PyPI version check + CHANGELOG notes + uv wrapper.
+"""``setforge upgrade`` — PyPI version check + uv wrapper.
 
 Single-command surface that fetches the latest setforge release from
-PyPI, extracts the release notes from the local ``CHANGELOG.md`` (or
-the staged source-tree path), assesses schema-impact from the notes
-(``NONE`` / ``DETECTED`` / ``UNKNOWN``), and shells out to
-``uv tool upgrade setforge`` after an arrow-key radiolist confirm with
-three choices: abort (default), upgrade, upgrade + migrate-check.
+PyPI and shells out to ``uv tool upgrade setforge`` after an arrow-key
+confirm with three choices: abort, upgrade, upgrade + migrate-check
+(the default). Release notes are not shown: the installed wheel does not
+carry the changelog, so the command prints the changelog URL instead.
 
 Flags:
 
-* ``--check`` — read-only PyPI/notes/schema report; no mutation.
-* ``--no-prompt`` — accept the recommended choice for automation;
-  selects ``upgrade-and-migrate-check`` when schema impact is non-NONE,
-  ``upgrade`` otherwise.
+* ``--check`` — read-only PyPI report; no mutation.
+* ``--no-prompt`` — skip the confirm for automation; runs the default
+  ``upgrade-and-migrate-check`` choice.
 * ``--to=X.Y.Z`` — pin the target version (bypasses PyPI selection;
   PyPI is still hit for the version's yanked / prerelease status).
 * ``--prerelease`` — include pre-release versions when picking latest.
@@ -20,11 +18,6 @@ Flags:
 Output of the success path includes the explicit rollback command
 ``uv tool install --reinstall --reinstall-package setforge==<prev>``
 so the user can revert without leaving the terminal.
-
-The confirm panel ALWAYS surfaces a ``=== schema impact ===`` section
-above the radiolist (per user direction 2026-05-19): one of "No schema
-change", "SCHEMA CHANGE detected: ...", or "Could not parse schema
-impact from release notes" — even when impact is NONE.
 """
 
 from __future__ import annotations
@@ -44,7 +37,6 @@ from rich.console import Console
 from rich.panel import Panel
 
 from setforge import __version__ as _CURRENT_VERSION
-from setforge._changelog_parser import parse_changelog
 from setforge._pypi_client import (
     PyPIVersionInfo,
     fetch_latest_version,
@@ -62,29 +54,12 @@ from setforge.errors import (
 from setforge.locking import mutation_locks
 
 __all__ = [
-    "SchemaChangeAssessment",
-    "SchemaChangeKind",
     "UpgradeChoice",
     "UpgradePlan",
 ]
 
 _PACKAGE_NAME: str = "setforge"
-_DEFAULT_SCHEMA: str = "1.0"
-_SCHEMA_BUMP_RE: re.Pattern[str] = re.compile(
-    r"schema_version\s+bumped?\s+(?P<from>\d+\.\d+)\s*(?:→|->)\s*(?P<to>\d+\.\d+)",
-    re.IGNORECASE,
-)
-_BREAKING_SCHEMA_RE: re.Pattern[str] = re.compile(
-    r"^\s*[-*]?\s*BREAKING:\s*(?P<body>.*(?:schema|migrate|migration).*)$",
-    re.IGNORECASE | re.MULTILINE,
-)
-_MIGRATE_HINT: str = (
-    "   After upgrade, run `setforge migrate --apply` to update your local files."
-)
-_MANIFEST_LINE_RE: re.Pattern[str] = re.compile(
-    r"^\s*[-*]\s*(?:renames?|adds?|removes?|breaking):.*$",
-    re.IGNORECASE | re.MULTILINE,
-)
+_CHANGELOG_URL: str = "https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md"
 
 
 class UpgradeChoice(StrEnum):
@@ -95,170 +70,21 @@ class UpgradeChoice(StrEnum):
     UPGRADE_AND_MIGRATE_CHECK = "upgrade-and-migrate-check"
 
 
-class SchemaChangeKind(StrEnum):
-    """Schema-impact verdict assessed from release notes."""
-
-    NONE = "none"
-    DETECTED = "detected"
-    UNKNOWN = "unknown"
-
-
-@dataclass(slots=True, frozen=True)
-class SchemaChangeAssessment:
-    """Pre-upgrade assessment of schema impact, derived from release notes.
-
-    ``impact_summary`` is a human-readable, multiline string. For
-    ``NONE``, a fixed reassuring sentence. For ``DETECTED``, a bullet
-    list of renames / adds / removes / BREAKING entries extracted
-    from the notes. For ``UNKNOWN``, a fixed nudge to run
-    ``setforge migrate --check`` after upgrade.
-    """
-
-    kind: SchemaChangeKind
-    from_schema: str
-    to_schema: str | None
-    impact_summary: str
-
-
 @dataclass(slots=True, frozen=True)
 class UpgradePlan:
     """Fully-built input to the confirm panel + the wrap.
 
-    Carries the version pair, release notes (extracted from CHANGELOG),
-    a flag for major-version bumps, a flag for plain-text ``BREAKING``
-    occurrences in the notes, and the schema-impact assessment.
+    Carries the version pair, a flag for major-version bumps, and the
+    yanked / pre-release status PyPI reports for the target.
     """
 
     current_version: str
     target_version: str
-    release_notes: str | None
     is_major_bump: bool
-    breaking_changes_flagged: bool
-    schema_change: SchemaChangeAssessment
     yanked: bool = False
     yanked_reason: str | None = None
     is_prerelease: bool = False
     extra_warnings: tuple[str, ...] = field(default_factory=tuple)
-
-
-# ---------------------------------------------------------------------------
-# CHANGELOG resolution
-# ---------------------------------------------------------------------------
-
-
-def _find_changelog() -> Path | None:
-    """Locate ``CHANGELOG.md`` in the source tree.
-
-    Walks up from this module's file looking for a ``CHANGELOG.md`` at
-    each parent until found (or root). Returns ``None`` when the
-    changelog is not bundled — common in installed-wheel layouts where
-    the docs are excluded from the wheel.
-    """
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "CHANGELOG.md"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _load_release_notes(target_version: str) -> str | None:
-    """Load + parse release notes for ``target_version`` from CHANGELOG."""
-    changelog_path = _find_changelog()
-    if changelog_path is None:
-        return None
-    try:
-        text = changelog_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    return parse_changelog(text, target_version)
-
-
-# ---------------------------------------------------------------------------
-# Schema-change assessment
-# ---------------------------------------------------------------------------
-
-
-def _assess_schema_change(
-    release_notes: str | None,
-    current_schema: str,
-    *,
-    is_major_bump: bool,
-) -> SchemaChangeAssessment:
-    """Heuristic-classify schema impact from release notes.
-
-    Heuristic order (per SPEC 3):
-
-    1. Canonical ``schema_version bumped X.Y → A.B`` line → DETECTED
-       with from/to extracted.
-    2. ``BREAKING:`` line mentioning schema/migrate/migration →
-       DETECTED, with the BREAKING block as impact_summary.
-    3. No match AND target is the same major version AND notes are
-       non-empty → NONE.
-    4. No match AND target is a major bump → UNKNOWN (conservative).
-    5. Notes unavailable → UNKNOWN.
-    """
-    if release_notes is None or not release_notes.strip():
-        return SchemaChangeAssessment(
-            kind=SchemaChangeKind.UNKNOWN,
-            from_schema=current_schema,
-            to_schema=None,
-            impact_summary=(
-                "Could not parse schema impact from release notes.\n"
-                "   After upgrade, run `setforge migrate --check` to verify."
-            ),
-        )
-
-    bumped = _SCHEMA_BUMP_RE.search(release_notes)
-    if bumped is not None:
-        from_v = bumped.group("from")
-        to_v = bumped.group("to")
-        manifest = _MANIFEST_LINE_RE.findall(release_notes)
-        summary = f"SCHEMA CHANGE detected: {from_v} → {to_v}"
-        if manifest:
-            joined = "\n".join(
-                f"   • {line.strip().lstrip('-*').strip()}" for line in manifest
-            )
-            summary = f"{summary}\n{joined}"
-        summary = f"{summary}\n{_MIGRATE_HINT}"
-        return SchemaChangeAssessment(
-            kind=SchemaChangeKind.DETECTED,
-            from_schema=from_v,
-            to_schema=to_v,
-            impact_summary=summary,
-        )
-
-    breaking = _BREAKING_SCHEMA_RE.search(release_notes)
-    if breaking is not None:
-        body = breaking.group("body").strip()
-        summary = f"SCHEMA CHANGE detected (BREAKING):\n   • {body}\n{_MIGRATE_HINT}"
-        return SchemaChangeAssessment(
-            kind=SchemaChangeKind.DETECTED,
-            from_schema=current_schema,
-            to_schema=None,
-            impact_summary=summary,
-        )
-
-    if is_major_bump:
-        return SchemaChangeAssessment(
-            kind=SchemaChangeKind.UNKNOWN,
-            from_schema=current_schema,
-            to_schema=None,
-            impact_summary=(
-                "Major-version bump with no explicit schema signal in release notes.\n"
-                "   After upgrade, run `setforge migrate --check` to verify."
-            ),
-        )
-
-    return SchemaChangeAssessment(
-        kind=SchemaChangeKind.NONE,
-        from_schema=current_schema,
-        to_schema=None,
-        impact_summary=(
-            "No schema change. Fully backwards compatible "
-            "— no actions required after upgrade."
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +118,7 @@ def _canonical_version(to: str) -> str:
 
 
 def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
-    """Resolve target version + load notes + assess schema → UpgradePlan."""
+    """Resolve the target version and its PyPI status → UpgradePlan."""
     if to is not None:
         to = _canonical_version(to)
     info: PyPIVersionInfo = fetch_latest_version(
@@ -310,14 +136,6 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
         else info
     )
     target = target_info.version
-    notes = _load_release_notes(target)
-    is_major = _is_major_bump(_CURRENT_VERSION, target)
-    breaking_flag = notes is not None and "BREAKING" in notes
-    schema = _assess_schema_change(
-        notes,
-        current_schema=_DEFAULT_SCHEMA,
-        is_major_bump=is_major,
-    )
     warnings: list[str] = []
     if to is not None and to != info.version:
         warnings.append(
@@ -326,10 +144,7 @@ def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
     return UpgradePlan(
         current_version=_CURRENT_VERSION,
         target_version=target,
-        release_notes=notes,
-        is_major_bump=is_major,
-        breaking_changes_flagged=breaking_flag,
-        schema_change=schema,
+        is_major_bump=_is_major_bump(_CURRENT_VERSION, target),
         yanked=target_info.yanked,
         yanked_reason=target_info.yanked_reason,
         is_prerelease=target_info.is_prerelease,
@@ -350,19 +165,8 @@ def _looks_prerelease(version: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _format_schema_impact(assessment: SchemaChangeAssessment) -> str:
-    """Render the always-present schema-impact section for the panel."""
-    if assessment.kind is SchemaChangeKind.NONE:
-        symbol = "[green]✓[/green]"
-    elif assessment.kind is SchemaChangeKind.DETECTED:
-        symbol = "[yellow]⚠[/yellow]"
-    else:
-        symbol = "[cyan]?[/cyan]"
-    return f"=== schema impact ===\n{symbol} {assessment.impact_summary}"
-
-
 def _render_confirm_panel(plan: UpgradePlan, *, console: Console) -> None:
-    """Print the pre-confirm panel: header + notes + schema + warnings."""
+    """Print the pre-confirm panel: header, PyPI warnings and the changelog URL."""
     header = (
         f"[bold]setforge upgrade[/bold] "
         f"[cyan]{plan.current_version}[/cyan] → "
@@ -385,39 +189,19 @@ def _render_confirm_panel(plan: UpgradePlan, *, console: Console) -> None:
             f"[bold yellow]MAJOR BUMP:[/bold yellow] "
             f"{plan.current_version} → {plan.target_version}"
         )
-    if plan.breaking_changes_flagged:
-        console.print(
-            "[bold red]BREAKING:[/bold red] release notes contain a "
-            "BREAKING marker — review carefully."
-        )
     for warning in plan.extra_warnings:
         console.print(f"[yellow]warning:[/yellow] {warning}")
 
-    if plan.release_notes:
-        console.print("[bold]release notes:[/bold]")
-        console.print(plan.release_notes)
-    else:
-        console.print(
-            "[dim]no release notes found in CHANGELOG.md for "
-            f"{plan.target_version}.[/dim]"
-        )
-
-    console.print(_format_schema_impact(plan.schema_change))
+    console.print(f"changelog: {_CHANGELOG_URL}")
 
 
 def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     """Render the panel and prompt arrow-key choice; return the user's pick.
 
-    ``yes=True`` (``--no-prompt``) auto-picks the recommended choice:
-    ``UPGRADE_AND_MIGRATE_CHECK`` when schema impact is non-NONE,
-    ``UPGRADE`` otherwise. Esc / None from the dialog → ABORT.
+    ``yes=True`` (``--no-prompt``) auto-picks ``UPGRADE_AND_MIGRATE_CHECK``,
+    the default. Esc / None from the dialog → ABORT.
     """
-    recommend_migrate = plan.schema_change.kind is not SchemaChangeKind.NONE
-    default_choice = (
-        UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
-        if recommend_migrate
-        else UpgradeChoice.UPGRADE
-    )
+    default_choice = UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
     if yes:
         return default_choice
 
@@ -650,6 +434,7 @@ def _print_completion_report(plan: UpgradePlan) -> None:
         f"rollback: uv tool install --reinstall "
         f"--reinstall-package setforge setforge=={plan.current_version}"
     )
+    typer.echo(f"changelog: {_CHANGELOG_URL}")
 
 
 # ---------------------------------------------------------------------------
@@ -662,12 +447,12 @@ def upgrade(
     check: bool = typer.Option(
         False,
         "--check",
-        help="Read-only: report current vs latest + release notes; no mutation.",
+        help="Read-only: report current vs latest; no mutation.",
     ),
     no_prompt: bool = typer.Option(
         False,
         "--no-prompt",
-        help="Skip the radiolist confirm; pick the recommended choice.",
+        help="Skip the confirm; upgrade and run `migrate --check`.",
     ),
     to: str | None = typer.Option(
         None,
@@ -681,7 +466,7 @@ def upgrade(
     ),
     config: Path = _CONFIG_OPTION,
 ) -> None:
-    """Upgrade setforge: PyPI check + release notes + uv wrapper (mockup U)."""
+    """Upgrade setforge: PyPI check + uv wrapper (mockup U)."""
     try:
         plan = _build_upgrade_plan(to=to, prerelease=prerelease)
     except PyPIFetchError as exc:
@@ -699,7 +484,7 @@ def upgrade(
         return
 
     if no_prompt and not sys.stdin.isatty():
-        # Automation path: skip the panel render, take the recommended
+        # Automation path: skip the panel render, take the default
         # choice, run the wrap. Tests cover both branches.
         choice = _confirm_upgrade(plan, yes=True)
     elif not sys.stdin.isatty():

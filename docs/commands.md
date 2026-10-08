@@ -407,6 +407,24 @@ which direction, plus the exact `setforge revert` command to undo, then prompts
 arrow-key yes/no (default **No**). For CI/scripts, pass `--yes` (`-y`) to bypass
 the prompt; without `--yes` in a non-TTY context the command exits 1.
 
+## Upgrade
+
+`setforge upgrade` asks PyPI for the newest release, shows the version change
+and any yanked or pre-release warning, then runs `uv tool upgrade setforge`
+after you confirm. The prompt offers **Upgrade** or **Upgrade + run
+`setforge migrate --check`** (the default), or abort. It does not show release
+notes or guess at schema changes: the prompt and the success report print the
+changelog link (<https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md>),
+and `migrate --check` reports what your config actually needs.
+
+- `--check` reports current vs latest and changes nothing.
+- `--no-prompt` skips the prompt and runs "Upgrade + `migrate --check`"; it is
+  required without a terminal.
+- `--to=X.Y.Z` installs that exact version; `--prerelease` includes
+  pre-releases when picking the latest.
+- After an upgrade it prints the `uv tool install --reinstall` command that
+  rolls back to the previous version.
+
 ## Revert
 
 `revert` undoes the most recent `install` or `sync` for the named profile by

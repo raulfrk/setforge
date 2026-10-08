@@ -17,6 +17,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps working. `plugin reconcile --yes` is still accepted but no longer does
   anything.
 
+- `upgrade` no longer tries to show release notes or guess at schema changes
+  (it could not find the changelog in an installed copy anyway). It prints the
+  changelog link instead and offers "Upgrade" or "Upgrade + `migrate --check`".
+  `--no-prompt` runs the second one, as it already did for installed copies.
+  The yanked and pre-release warnings and the `migrate --check` after the
+  upgrade are unchanged.
+
 ### Fixed
 
 - `setforge recover` after an interrupted install now also restores a file that

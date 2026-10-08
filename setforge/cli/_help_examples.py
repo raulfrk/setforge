@@ -355,15 +355,15 @@ UPGRADE_EXAMPLES: str = """\
 Examples:
 
 \b
-  # Most common: interactive upgrade (PyPI check + release notes)
+  # Most common: interactive upgrade (PyPI check + changelog link)
   setforge upgrade
 
 \b
-  # Read-only: report current vs latest with release notes
+  # Read-only: report current vs latest
   setforge upgrade --check
 
 \b
-  # Non-interactive (cron / CI): pick the recommended choice
+  # Non-interactive (cron / CI): upgrade, then run `migrate --check`
   setforge upgrade --no-prompt
 """
 

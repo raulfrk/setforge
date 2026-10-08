@@ -519,19 +519,20 @@ quick index.
   === no migrations available ===
   ```
 
-- **`upgrade`** — check PyPI for a newer setforge, show release notes + schema
-  impact, and upgrade the `uv` tool wrapper. `--check`, `--to`, `--prerelease`,
-  `--no-prompt`. *When:* to move to a new engine release.
+- **`upgrade`** — check PyPI for a newer setforge, print the changelog link, and
+  upgrade the `uv` tool wrapper. The prompt offers "Upgrade" or "Upgrade + run
+  `setforge migrate --check`" (the default). `--check`, `--to`, `--prerelease`,
+  `--no-prompt` (upgrade, then run `migrate --check`). Release notes are not
+  shown in the terminal; read the changelog link it prints. *When:* to move to
+  a new engine release.
 
   ```
   setforge upgrade 0.2.2 → 0.3.0
-  release notes: ## [0.3.0] …
-  === schema impact ===
-  ⚠ SCHEMA CHANGE: after upgrade, run `setforge migrate --check`
+  changelog: https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md
   setforge upgrade
-    ▸ Abort — no changes
+      Abort — no changes
       Upgrade
-      Upgrade + run `setforge migrate --check`
+    ▸ Upgrade + run `setforge migrate --check`
   ```
   *(upgrade prompt rendered from `setforge/cli/upgrade.py`)*
 

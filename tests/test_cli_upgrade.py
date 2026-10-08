@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,11 +15,9 @@ from setforge._pypi_client import PyPIVersionInfo
 from setforge.cli import app
 from setforge.cli import upgrade as upgrade_mod
 from setforge.cli.upgrade import (
-    SchemaChangeAssessment,
-    SchemaChangeKind,
+    _CHANGELOG_URL,
     UpgradeChoice,
     UpgradePlan,
-    _assess_schema_change,
     _build_upgrade_plan,
     _confirm_upgrade,
 )
@@ -64,88 +63,20 @@ def test_unlaunchable_uv_is_reported_as_upgrade_error(
 
 
 # ---------------------------------------------------------------------------
-# Schema-change assessment
-# ---------------------------------------------------------------------------
-
-
-def test_assess_schema_change_none_when_minor_bump_with_clean_notes() -> None:
-    notes = "### Added\n- new flag --foo\n### Fixed\n- bug"
-    out = _assess_schema_change(notes, current_schema="1.0", is_major_bump=False)
-    assert out.kind is SchemaChangeKind.NONE
-    assert out.to_schema is None
-    assert "No schema change" in out.impact_summary
-
-
-def test_assess_schema_change_detected_from_schema_version_bumped_line() -> None:
-    notes = (
-        "### Changed\n"
-        "- schema_version bumped 1.0 → 1.1 (additive)\n"
-        "- adds: tracked_files.<id>.mode\n"
-    )
-    out = _assess_schema_change(notes, current_schema="1.0", is_major_bump=False)
-    assert out.kind is SchemaChangeKind.DETECTED
-    assert out.from_schema == "1.0"
-    assert out.to_schema == "1.1"
-    assert "1.0 → 1.1" in out.impact_summary
-    assert "tracked_files.<id>.mode" in out.impact_summary
-    assert "migrate --apply" in out.impact_summary
-
-
-def test_assess_schema_change_detected_from_breaking_block() -> None:
-    notes = "### Changed\n- BREAKING: schema field `bootstrap` renamed to `scaffold`.\n"
-    out = _assess_schema_change(notes, current_schema="1.0", is_major_bump=False)
-    assert out.kind is SchemaChangeKind.DETECTED
-    assert "BREAKING" in out.impact_summary
-    assert "scaffold" in out.impact_summary
-
-
-def test_assess_schema_change_unknown_on_major_bump_with_no_signal() -> None:
-    notes = "### Added\n- minor docs tweak"
-    out = _assess_schema_change(notes, current_schema="1.0", is_major_bump=True)
-    assert out.kind is SchemaChangeKind.UNKNOWN
-    assert "Major-version bump" in out.impact_summary
-
-
-def test_assess_schema_change_unknown_when_notes_absent() -> None:
-    out = _assess_schema_change(None, current_schema="1.0", is_major_bump=False)
-    assert out.kind is SchemaChangeKind.UNKNOWN
-    assert "migrate --check" in out.impact_summary
-
-
-# ---------------------------------------------------------------------------
 # Confirm panel rendering
 # ---------------------------------------------------------------------------
 
 
 def _make_plan(
     *,
-    schema_kind: SchemaChangeKind = SchemaChangeKind.NONE,
     target: str = "0.3.0",
     current: str = "0.2.0",
-    release_notes: str | None = "- body",
     is_major_bump: bool = False,
-    breaking_flag: bool = False,
 ) -> UpgradePlan:
-    summaries = {
-        SchemaChangeKind.NONE: "No schema change. Fully backwards compatible.",
-        SchemaChangeKind.DETECTED: (
-            "SCHEMA CHANGE detected: 1.0 → 1.1\n   • renames: bootstrap → scaffold"
-        ),
-        SchemaChangeKind.UNKNOWN: "Could not parse schema impact from release notes.",
-    }
-    assessment = SchemaChangeAssessment(
-        kind=schema_kind,
-        from_schema="1.0",
-        to_schema="1.1" if schema_kind is SchemaChangeKind.DETECTED else None,
-        impact_summary=summaries[schema_kind],
-    )
     return UpgradePlan(
         current_version=current,
         target_version=target,
-        release_notes=release_notes,
         is_major_bump=is_major_bump,
-        breaking_changes_flagged=breaking_flag,
-        schema_change=assessment,
     )
 
 
@@ -175,67 +106,59 @@ def _patch_button_bar(
     return recorder
 
 
-def test_confirm_panel_renders_schema_impact_for_all_kinds(
+def test_confirm_panel_prints_the_changelog_url_instead_of_release_notes(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Panel always shows ``=== schema impact ===`` regardless of kind."""
-    for kind in SchemaChangeKind:
-        plan = _make_plan(schema_kind=kind)
-        _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
-        _confirm_upgrade(plan, yes=False)
-        captured = capsys.readouterr().out
-        assert "=== schema impact ===" in captured, (
-            f"missing schema impact marker for kind={kind.value}"
-        )
+    _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+    _confirm_upgrade(_make_plan(), yes=False)
+    captured = capsys.readouterr().out
+    assert _CHANGELOG_URL in captured
+    assert "schema impact" not in captured
+    assert "release notes" not in captured
 
 
-def test_confirm_panel_no_prompt_picks_migrate_check_on_detected(
+def test_confirm_panel_offers_upgrade_and_upgrade_with_migrate_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _make_plan(schema_kind=SchemaChangeKind.DETECTED)
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+    _confirm_upgrade(_make_plan(), yes=False)
+    offered = {button.value for button in recorder.args[0][0]}
+    assert offered == set(UpgradeChoice)
+
+
+def test_confirm_panel_no_prompt_picks_upgrade_and_migrate_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
-    choice = _confirm_upgrade(plan, yes=True)
+    choice = _confirm_upgrade(_make_plan(), yes=True)
     assert choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
-    assert recorder.call_count == 0
-
-
-def test_confirm_panel_no_prompt_picks_upgrade_on_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
-    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
-    choice = _confirm_upgrade(plan, yes=True)
-    assert choice is UpgradeChoice.UPGRADE
     assert recorder.call_count == 0
 
 
 def test_confirm_panel_esc_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     from setforge.ui.widgets import CANCEL
 
-    plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
     _patch_button_bar(monkeypatch, return_value=CANCEL)
-    choice = _confirm_upgrade(plan, yes=False)
+    choice = _confirm_upgrade(_make_plan(), yes=False)
     assert choice is UpgradeChoice.ABORT
 
 
-def test_confirm_panel_default_biases_migrate_check_when_detected(
+def test_confirm_panel_preselects_upgrade_and_migrate_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _make_plan(schema_kind=SchemaChangeKind.DETECTED)
     recorder = _patch_button_bar(
         monkeypatch, return_value=UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
     )
-    _confirm_upgrade(plan, yes=False)
+    _confirm_upgrade(_make_plan(), yes=False)
     assert recorder.initial_value() is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
 
 
-def test_confirm_panel_default_biases_upgrade_when_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
-    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
-    _confirm_upgrade(plan, yes=False)
-    assert recorder.initial_value() is UpgradeChoice.UPGRADE
+def test_changelog_url_matches_the_package_metadata() -> None:
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    urls = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["urls"]
+    assert urls["Changelog"] == _CHANGELOG_URL
 
 
 # ---------------------------------------------------------------------------
@@ -296,26 +219,18 @@ def _newer_version() -> str:
 _NEXT_VERSION = _newer_version()
 
 
-def _patch_notes(monkeypatch: pytest.MonkeyPatch, *, notes: str | None) -> None:
-    monkeypatch.setattr("setforge.cli.upgrade._load_release_notes", lambda _v: notes)
-
-
 def test_build_upgrade_plan_passes_through_pypi_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version="0.5.0")
-    _patch_notes(monkeypatch, notes="### Added\n- something")
     plan = _build_upgrade_plan(to=None, prerelease=False)
     assert plan.target_version == "0.5.0"
-    assert plan.release_notes == "### Added\n- something"
-    assert plan.schema_change.kind is SchemaChangeKind.NONE
 
 
 def test_build_upgrade_plan_to_pins_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version="0.5.0")
-    _patch_notes(monkeypatch, notes=None)
     plan = _build_upgrade_plan(to="0.4.2", prerelease=False)
     assert plan.target_version == "0.4.2"
     assert any("--to=0.4.2 pins" in w for w in plan.extra_warnings)
@@ -325,7 +240,6 @@ def test_build_upgrade_plan_surfaces_pinned_yanked_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version="0.5.0")
-    _patch_notes(monkeypatch, notes=None)
     monkeypatch.setattr(
         "setforge.cli.upgrade.fetch_version_info",
         lambda **_kwargs: PyPIVersionInfo(
@@ -347,7 +261,6 @@ def test_build_upgrade_plan_surfaces_pinned_prerelease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version="9.9.9", is_prerelease=False)
-    _patch_notes(monkeypatch, notes=None)
     monkeypatch.setattr(
         "setforge.cli.upgrade.fetch_version_info",
         lambda **_kwargs: PyPIVersionInfo(
@@ -369,7 +282,6 @@ def test_build_upgrade_plan_rejects_invalid_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version="0.5.0")
-    _patch_notes(monkeypatch, notes=None)
     from setforge.errors import UpgradeError
 
     with pytest.raises(UpgradeError, match="not a valid version"):
@@ -381,7 +293,6 @@ def test_build_upgrade_plan_accepts_canonical_prerelease_spelling(
 ) -> None:
     """2.0.0rc1 is how pip and PyPI write a release candidate."""
     _patch_pypi(monkeypatch, version="2.0.0rc1")
-    _patch_notes(monkeypatch, notes=None)
 
     plan = _build_upgrade_plan(to="2.0.0rc1", prerelease=False)
 
@@ -393,7 +304,6 @@ def test_build_upgrade_plan_canonicalises_a_non_canonical_pin(
 ) -> None:
     """A non-canonical spelling resolves to what uv will install and report."""
     _patch_pypi(monkeypatch, version="1.3.2")
-    _patch_notes(monkeypatch, notes=None)
 
     plan = _build_upgrade_plan(to="1.3.2-1", prerelease=False)
 
@@ -439,7 +349,6 @@ def test_cli_upgrade_check_mode_does_not_mutate(
 ) -> None:
     """``--check`` neither shells out nor bootstraps host-local config."""
     _patch_pypi(monkeypatch, version="0.3.0")
-    _patch_notes(monkeypatch, notes="- body")
 
     def fail_run(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("--check must not invoke subprocess.run")
@@ -452,7 +361,8 @@ def test_cli_upgrade_check_mode_does_not_mutate(
     result = runner.invoke(app, ["upgrade", "--check"])
     assert result.exit_code == 0, result.output
     assert "0.3.0" in result.output
-    assert "=== schema impact ===" in result.output
+    assert _CHANGELOG_URL in result.output
+    assert "schema impact" not in result.output
     assert not local_config.exists()
 
 
@@ -462,7 +372,6 @@ def test_cli_upgrade_already_latest_short_circuits(
     from setforge import __version__ as current
 
     _patch_pypi(monkeypatch, version=current)
-    _patch_notes(monkeypatch, notes=None)
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     runner = CliRunner()
     result = runner.invoke(app, ["upgrade", "--no-prompt"])
@@ -470,12 +379,21 @@ def test_cli_upgrade_already_latest_short_circuits(
     assert "already on the latest version" in result.output
 
 
-def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """End-to-end with subprocess mocked: pypi → wrap → verify → rollback line."""
+class _FakeTty:
+    @staticmethod
+    def isatty() -> bool:
+        return True
+
+
+def test_cli_upgrade_plain_upgrade_choice_skips_migrate_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Choosing "Upgrade": pypi → wrap → verify → changelog URL + rollback line."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="### Added\n- shiny")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    # CliRunner swaps sys.stdin during invoke, so pretend a terminal is attached.
+    monkeypatch.setattr(upgrade_mod, "sys", SimpleNamespace(stdin=_FakeTty()))
+    _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
 
     responses = [
         subprocess.CompletedProcess(
@@ -495,24 +413,21 @@ def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
     ]
     calls = _patch_subprocess_run(monkeypatch, responses=responses)
     runner = CliRunner()
-    result = runner.invoke(app, ["upgrade", "--no-prompt"])
+    result = runner.invoke(app, ["upgrade"])
     assert result.exit_code == 0, result.output
     assert len(calls) == 2
     assert calls[0][1:] == ["tool", "upgrade", "setforge"]
     assert calls[1][1:] == ["tool", "list"]
     assert "rollback:" in result.output
     assert f"upgraded to {_NEXT_VERSION}" in result.output
+    assert _CHANGELOG_URL in result.output
 
 
 def test_cli_upgrade_full_flow_with_migrate_check(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """When schema is DETECTED, --no-prompt auto-runs migrate --check."""
+    """``--no-prompt`` runs the default choice: upgrade, then migrate --check."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(
-        monkeypatch,
-        notes="### Changed\n- schema_version bumped 1.0 → 1.1 (additive)\n",
-    )
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
@@ -566,10 +481,6 @@ def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(
-        monkeypatch,
-        notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
-    )
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text("version: 1\ntracked_files: {}\n", encoding="utf-8")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
@@ -625,10 +536,6 @@ def test_cli_upgrade_skips_migrate_check_when_no_manifest_resolves(
 ) -> None:
     """An unresolvable manifest must not fail an upgrade that succeeded."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(
-        monkeypatch,
-        notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
-    )
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     monkeypatch.chdir(tmp_path)  # no setforge.yaml in any source layer
@@ -658,10 +565,6 @@ def test_cli_upgrade_skips_migrate_check_when_host_config_is_broken(
 ) -> None:
     """A pydantic ValidationError must not fail an upgrade that succeeded."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(
-        monkeypatch,
-        notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
-    )
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     broken = tmp_path / "local.yaml"
@@ -692,7 +595,6 @@ def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
 ) -> None:
     """Per research brief §2: STDOUT 'Nothing to upgrade' = no-op, exit 0."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -718,7 +620,6 @@ def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -743,7 +644,6 @@ def test_cli_upgrade_post_verify_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -875,7 +775,6 @@ def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
     from setforge.errors import ConfirmRequiresInteractive
 
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
@@ -899,7 +798,6 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
 ) -> None:
     """``--no-prompt`` on a non-TTY auto-applies (``yes=True``) and proceeds."""
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
-    _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
