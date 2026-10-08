@@ -1349,3 +1349,57 @@ def test_stage_by_an_id_still_works_when_two_files_share_a_live_file_name(
 
     assert walked == ["second"]
     assert _classified(args) == {"first": (0, 1), "second": (1, 0)}
+
+
+@pytest.mark.parametrize(
+    ("selector", "cwd"),
+    [("~/live/first.txt", ""), ("live/first.txt", ""), ("./first.txt", "live")],
+    ids=["tilde", "relative", "dot-relative"],
+)
+def test_stage_accepts_a_tilde_or_relative_live_path(
+    config_repo: ConfigRepo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+    cwd: str,
+) -> None:
+    args, _live = _two_installed_files(config_repo, tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path / "home" / cwd)
+
+    walked = _stage_recording_files(monkeypatch, args, selector)
+
+    assert walked == ["target"]
+
+
+def test_stage_by_a_tilde_path_picks_one_of_two_files_with_the_same_live_name(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _live = _two_files_named_alike(config_repo, tmp_path, monkeypatch)
+
+    walked = _stage_recording_files(monkeypatch, args, "~/live/y/notes.txt")
+
+    assert walked == ["second"]
+    assert _classified(args) == {"first": (0, 1), "second": (1, 0)}
+
+
+def test_stage_refuses_a_generated_file_given_by_a_tilde_path(
+    config_repo: ConfigRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, _live = _two_installed_files(
+        config_repo,
+        tmp_path,
+        monkeypatch,
+        {"other": {"generated": {"inputs": {"home": "home"}}}},
+    )
+
+    staged = CliRunner().invoke(
+        app, ["stage", "~/live/target", *args], input=_TerminalInput()
+    )
+
+    assert staged.exit_code == 2
+    assert "one-way output" in staged.output

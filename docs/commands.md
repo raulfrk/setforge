@@ -421,6 +421,12 @@ is staged by text hunk instead, and keeps that mode once you have staged it. A
 file already staged by key whose recorded copy later stops parsing is still
 skipped by `stage`.
 
+`setforge stage FILE` takes a tracked-file ID; a directory's ID selects every
+file under it. Only when no tracked file has that ID does it read `FILE` as a
+live path (absolute, `~` or relative) or a live file name. A live file name that
+several tracked files share is refused with the matching IDs and paths listed;
+pass the ID or the path instead.
+
 ## Mutating `--auto=*` confirmation
 
 When a tracked_file carries drift, `sync` resolves it; for non-interactive

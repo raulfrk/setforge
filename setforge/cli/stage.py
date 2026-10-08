@@ -242,13 +242,15 @@ def _select_rows(rows: list[_Row], arg: str) -> tuple[list[_Row], bool]:
     """The rows ``arg`` names, and whether it named them by ID.
 
     A tracked-file name or sub-name wins (a directory's name selects every file
-    under it); only when none has that ID do the live path and live file name
-    count.
+    under it); only when none has that ID do the live path (``~`` and relative
+    forms resolved) and then the live file name count.
     """
     by_id = [row for row in rows if arg in (row[0], row[1])]
     if by_id:
         return by_id, True
-    return [row for row in rows if arg in (str(row[2]), row[2].name)], False
+    candidate = Path(arg).expanduser().resolve()
+    by_path = [row for row in rows if candidate == row[2].resolve()]
+    return by_path or [row for row in rows if arg == row[2].name], False
 
 
 def _refuse_ambiguous_stage_target(rows: list[_Row], arg: str) -> None:
@@ -968,17 +970,16 @@ def _refuse_generated_stage_target(
         for name in resolved.tracked_files
     ):
         return
+    candidate = Path(file).expanduser().resolve()
     matched = any(
         (
             cfg.tracked_files[name].generated is not None
             or cfg.tracked_files[name].tree is not None
         )
-        and file
-        in {
-            name,
-            str(resolve_dst(cfg.tracked_files[name])),
-            resolve_dst(cfg.tracked_files[name]).name,
-        }
+        and (
+            file in {name, resolve_dst(cfg.tracked_files[name]).name}
+            or candidate == resolve_dst(cfg.tracked_files[name]).resolve()
+        )
         for name in resolved.tracked_files
     )
     if matched:

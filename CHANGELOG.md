@@ -115,7 +115,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   output when a generated file's live file was called `NAME`. The live file name
   or path is still used when no tracked file has that ID. A live file name that
   several tracked files share is now refused with the matching IDs and paths
-  listed, instead of staging all of them; pass the ID or the full path.
+  listed, instead of staging all of them; pass the ID or the full path. A live
+  path given as `~/...` or relative to the current directory now works too.
 - In the Claude-assisted merge, a draft you edit by hand is now checked like
   Claude's own drafts: an empty edit or one that still contains conflict markers
   is refused with a message, and you stay on the review screen to edit again or
