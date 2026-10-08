@@ -12,12 +12,14 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from setforge import operations
+import setforge.cli.install as install_mod
+from setforge import operations, paths, transitions
 from setforge.locking import mutation_locks
-from setforge.ownership import read_owner_id
+from setforge.ownership import OwnershipError, read_owner_id
 from setforge.reconcile.types import check_profile_name
 
 from .support import INSTALL_FLAGS, REPO_ROOT, Host, claim_ids_for, tree
@@ -64,6 +66,101 @@ def test_adopting_an_existing_unowned_file_needs_consent(
     assert host.live("note.txt").read_bytes() == b"one\n"
     assert _states(host) == ["claimed"]
     assert host.cli("compare", "--check").exit_code == 0
+
+
+class _Tty:
+    stdin = SimpleNamespace(isatty=lambda: True)
+
+
+def _journals() -> list[Path]:
+    root = paths.journals_root()
+    return sorted(root.glob("*.json")) if root.exists() else []
+
+
+def test_declining_the_adoption_question_leaves_no_change_and_no_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+    asked: list[str] = []
+
+    def decline(text: str, **_kwargs: object) -> bool:
+        asked.append(text)
+        return False
+
+    monkeypatch.setattr(install_mod, "sys", _Tty)
+    monkeypatch.setattr(install_mod.typer, "confirm", decline)
+
+    declined = host.cli("install", *_NO_PROMPT)
+
+    assert declined.exit_code == 1
+    assert ["note.txt" in text for text in asked] == [True]
+    assert "file ownership change declined" in str(declined.exception)
+    assert tree(host.live_dir) == {"note.txt": b"local\n"}
+    assert host.cli("ownership", "list", config=False, profile=False).output == (
+        "(no ownership claims)\n"
+    )
+    assert _journals() == []
+    assert transitions.list_transitions(profile_filter=[host.profile]) == []
+    with pytest.raises(OwnershipError):
+        read_owner_id(host.repo)
+    # The lock was released: the next command runs instead of waiting.
+    assert host.proc("install", *INSTALL_FLAGS).returncode == 0
+
+
+def test_another_install_waits_while_the_adoption_question_is_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(tmp_path, monkeypatch)
+    host.live_dir.mkdir()
+    host.live("note.txt").write_bytes(b"local\n")
+    waiting: list[subprocess.Popen[str]] = []
+    journals_while_asked: list[list[Path]] = []
+
+    def answer_after_another_install_waited(*_args: object, **_kwargs: object) -> bool:
+        other = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "setforge.cli",
+                "install",
+                *INSTALL_FLAGS,
+                f"--config={host.config}",
+                f"--profile={host.profile}",
+            ],
+            cwd=REPO_ROOT,
+            env=host.proc_env(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        waiting.append(other)
+        with pytest.raises(subprocess.TimeoutExpired):
+            other.wait(timeout=4)
+        # Nothing is journalled before the answer.
+        journals_while_asked.append(_journals())
+        return True
+
+    monkeypatch.setattr(install_mod, "sys", _Tty)
+    monkeypatch.setattr(
+        install_mod.typer, "confirm", answer_after_another_install_waited
+    )
+    try:
+        accepted = host.cli("install", *_NO_PROMPT)
+        assert len(waiting) == 1, accepted.output
+        out, err = waiting[0].communicate(timeout=60)
+    finally:
+        for other in waiting:
+            if other.poll() is None:
+                other.kill()
+                other.wait()
+
+    assert accepted.exit_code == 0, accepted.output
+    assert journals_while_asked == [[]]
+    assert waiting[0].returncode == 0, (out, err)
+    assert host.live("note.txt").read_bytes() == b"local\n"
+    assert _states(host) == ["claimed"]
 
 
 def test_a_file_claimed_by_another_configuration_is_transferred_only_with_consent(

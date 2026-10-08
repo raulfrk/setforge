@@ -331,7 +331,7 @@ def test_install_refuses_declaration_change_after_transfer_confirmation(
     result = _install(config_b, yes=True)
 
     assert result.exit_code != 0
-    assert "configuration changed after confirmation" in str(result.exception)
+    assert "install inputs changed after planning" in str(result.exception)
     assert store.read(file_resource_id(live)) == before
     assert live.read_text(encoding="utf-8") == "host local\n"
     with pytest.raises(OwnershipError):

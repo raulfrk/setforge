@@ -461,6 +461,9 @@ def _snapshot_live_paths(
                 effective_bytes = (
                     path.read_bytes() if stat.S_ISREG(effective.st_mode) else None
                 )
+            except PermissionError:
+                # An unreadable target is a refusal the user must fix, not a race.
+                raise
             except OSError as exc:
                 raise SetforgeError(
                     f"live install path changed while snapshotting {path}; retry"
@@ -1823,14 +1826,9 @@ def _confirm_file_adoptions(
         raise SetforgeError("file ownership change declined; no file changes applied")
 
 
-def _prepare_package_owner_id(
-    repo_root: Path,
-    decisions: tuple[PackageDecision, ...],
-    *,
-    required: bool = False,
-) -> UUID | None:
+def _prepare_package_owner_id(repo_root: Path, *, required: bool) -> UUID | None:
     """Mint the checkout owner before the lower-ranked install lock scope."""
-    if not decisions and not required:
+    if not required:
         return None
     try:
         return read_owner_id(repo_root)
@@ -1847,14 +1845,10 @@ def _preview_file_ownership(
     profile: str,
     *,
     owner_id_override: UUID | None = None,
-    file_selection: frozenset[str] | None = None,
-    discard_protected_units: bool = False,
 ) -> tuple[FileDecision, ...]:
-    """Build the file consent surface without holding mutation locks."""
+    """Decide current file ownership for revert's claim reconciliation."""
     cfg = load_config(config)
-    ctx, _overlay = _resolve_install_profile(
-        cfg, profile, config.parent, file_selection
-    )
+    ctx, _overlay = _resolve_install_profile(cfg, profile, config.parent, None)
     owner_id = owner_id_override
     if owner_id is None:
         try:
@@ -1862,10 +1856,7 @@ def _preview_file_ownership(
         except OwnershipError:
             owner_id = None
     regular = _plan_file_ownership(
-        tuple(_iter_all_tracked_files(ctx)),
-        profile=profile,
-        owner_id=owner_id,
-        discard_protected_units=discard_protected_units,
+        tuple(_iter_all_tracked_files(ctx)), profile=profile, owner_id=owner_id
     )
     trees = _plan_trees(tuple(_iter_all_trees(ctx)), profile=profile, owner_id=owner_id)
     return regular + tuple(tree.decision for tree in trees)
@@ -1894,19 +1885,36 @@ def _preview_file_declaration_refs(
     }
 
 
-def _preview_tree_targets(
-    config: Path, profile: str, *, file_selection: frozenset[str] | None = None
-) -> tuple[Path, ...]:
-    """Resolve explicit filesystem roots for mutation-lock acquisition."""
+def _install_scope(
+    config: Path, profile: str, *, file_selection: frozenset[str] | None
+) -> tuple[bool, tuple[Path, ...]]:
+    """Resolve what lock acquisition needs before the plan exists.
+
+    Returns whether the plan will carry an ownership decision (so the checkout
+    owner must exist) and the filesystem roots to guard. It reads declarations
+    only; the plan built under the lock is checked against both.
+    """
     cfg = load_config(config)
     ctx, _overlay = _resolve_install_profile(
         cfg, profile, config.parent, file_selection
     )
+    trees = tuple(_iter_all_trees(ctx))
+    owned = (
+        bool(trees)
+        or any(True for _entry in _iter_all_tracked_files(ctx))
+        or (
+            file_selection is None
+            and (
+                bool(resolve_provision_items(cfg, ctx.resolved))
+                or any(
+                    resolve_bundle_items(cfg.bundles[name], cfg)
+                    for name in ctx.resolved.bundles
+                )
+            )
+        )
+    )
     roots = {
-        *(
-            _tree_lock_target(destination)
-            for *_prefix, destination in _iter_all_trees(ctx)
-        ),
+        *(_tree_lock_target(destination) for *_prefix, destination in trees),
         *(
             ()
             if file_selection is not None
@@ -1919,7 +1927,7 @@ def _preview_tree_targets(
             )
         ),
     }
-    return tuple(sorted(roots, key=str))
+    return owned, tuple(sorted(roots, key=str))
 
 
 def _read_package_owner_id(repo_root: Path) -> UUID | None:
@@ -2298,7 +2306,7 @@ def _preview_package_ownership(
     locked: bool,
     owner_id_override: UUID | None = None,
 ) -> tuple[PackageDecision, ...]:
-    """Build the consent surface without holding mutation locks."""
+    """Decide current package ownership for revert's claim reconciliation."""
     cfg = load_config(config)
     resolved = resolve_effective_profile(cfg, profile, config.parent).resolved
     direct_items = resolve_provision_items(cfg, resolved)
@@ -2343,16 +2351,35 @@ def _confirm_install(
     *,
     config: Path,
     local_overlay: LocalOverlayResolution,
-    ownership_preview: tuple[PackageDecision, ...],
-    file_ownership_preview: tuple[FileDecision, ...],
     section_auto: reconcile_apply.ReconcileAuto | None,
     fresh: bool,
     auto: str | None,
     yes: bool,
     no_secrets_scan: bool,
 ) -> SecretPlan | None:
-    """Ask every under-lock question; ``None`` means the welcome was declined."""
+    """Ask every question on the frozen plan; ``None`` means the welcome was declined.
+
+    The writer lock is held, so another command waits while a prompt is open.
+    Nothing has been written and no operation journal exists yet: a refusal or
+    a declined prompt leaves the host unchanged.
+    """
     ctx = plan.ctx
+    _confirm_package_adoptions(
+        plan.provisioning.ownership, yes=yes, receiver_owner=plan.package_owner_id
+    )
+    if (config.parent / ".git").exists():
+        _confirm_file_adoptions(
+            plan.file_ownership,
+            yes=yes,
+            receiver_owner=plan.package_owner_id,
+            config=config,
+        )
+    has_transfer = any(
+        decision.action is PackageAction.TRANSFER
+        for decision in plan.provisioning.ownership
+    ) or any(decision.action is FileAction.TRANSFER for decision in plan.file_ownership)
+    if has_transfer and plan.package_owner_id is None:
+        raise SetforgeError("ownership transfer requires a Git-backed config")
     scan_result = secrets_mod.run_pre_deploy_scan(
         tracked_root=config.parent / "tracked",
         skip=no_secrets_scan,
@@ -2384,23 +2411,6 @@ def _confirm_install(
         section_auto=section_auto,
         yes=yes,
     )
-    if plan.provisioning.ownership != ownership_preview:
-        raise SetforgeError(
-            "package ownership inputs changed after confirmation; retry"
-        )
-    if plan.file_ownership != file_ownership_preview:
-        confirmation_actions = {
-            FileAction.ADOPT,
-            FileAction.TRANSFER,
-            FileAction.HOLD,
-        }
-        if any(
-            decision.action in confirmation_actions
-            for decision in (*file_ownership_preview, *plan.file_ownership)
-        ):
-            raise SetforgeError(
-                "file ownership inputs changed after confirmation; retry"
-            )
 
     # Refuse-before-write: deploy_symlinked_file() raises on an occupied
     # symlink dst only at write time, after earlier files have landed.
@@ -2415,7 +2425,7 @@ def _confirm_install(
 
 
 @app.command(epilog=INSTALL_EXAMPLES)
-def install(  # noqa: C901 - confirmation and frozen-plan orchestration
+def install(
     profile: str = _PROFILE_OPTION,
     config: Path | None = _CONFIG_OPTION,
     file: list[str] | None = typer.Option(
@@ -2549,52 +2559,13 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
     # The run creates the state root after planning; a managed tree holding it
     # or its absent parent would otherwise scan differently at confirmation.
     transitions.state_root().mkdir(parents=True, exist_ok=True)
-    ownership_config = config.read_bytes()
-    ownership_preview = (
-        _preview_package_ownership(config, profile, locked=locked)
+    scope_config = config.read_bytes()
+    owned, target_roots = _install_scope(config, profile, file_selection=file_selection)
+    package_owner_id = (
+        _prepare_package_owner_id(repo_root, required=owned)
         if file_selection is None
-        else ()
+        else _read_package_owner_id(repo_root)
     )
-    file_ownership_preview = _preview_file_ownership(
-        config,
-        profile,
-        file_selection=file_selection,
-        discard_protected_units=(
-            section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED
-        ),
-    )
-    tree_target_preview = _preview_tree_targets(
-        config, profile, file_selection=file_selection
-    )
-    if config.read_bytes() != ownership_config:
-        raise SetforgeError("install configuration changed while loading; retry")
-    if file_selection is not None:
-        package_owner_id = _read_package_owner_id(repo_root)
-        _require_managed_file_selection(file_ownership_preview, package_owner_id)
-    else:
-        package_owner_id = _prepare_package_owner_id(
-            repo_root,
-            ownership_preview,
-            required=bool(file_ownership_preview),
-        )
-    _confirm_package_adoptions(
-        ownership_preview, yes=yes, receiver_owner=package_owner_id
-    )
-    if (repo_root / ".git").exists():
-        _confirm_file_adoptions(
-            file_ownership_preview,
-            yes=yes,
-            receiver_owner=package_owner_id,
-            config=config,
-        )
-    has_transfer = any(
-        decision.action is PackageAction.TRANSFER for decision in ownership_preview
-    ) or any(
-        decision.action is FileAction.TRANSFER for decision in file_ownership_preview
-    )
-    if has_transfer and package_owner_id is None:
-        raise SetforgeError("ownership transfer requires a Git-backed config")
-
     with operations.transaction(
         resources=True,
         config_identity_dir=(
@@ -2603,14 +2574,12 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             else None
         ),
         config_dir=config.parent,
-        target_roots=tree_target_preview,
+        target_roots=target_roots,
         profile=profile,
         recover=(profile, "install"),
     ) as mutation_guards:
-        if config.read_bytes() != ownership_config:
-            raise SetforgeError(
-                "install configuration changed after confirmation; retry"
-            )
+        if config.read_bytes() != scope_config:
+            raise SetforgeError("install configuration changed while loading; retry")
         identity_guard = (
             mutation_guards.config_identity if mutation_guards is not None else None
         )
@@ -2634,16 +2603,16 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
             *(_tree_lock_target(tree.destination) for tree in plan.trees),
             *(codex.destination.parent for codex in plan.codex_configs),
         }
-        if tuple(sorted(planned_target_roots, key=str)) != tree_target_preview:
-            raise SetforgeError(
-                "managed tree targets changed after confirmation; retry"
-            )
+        # The locks were sized before planning: refuse a plan they do not cover.
+        if tuple(sorted(planned_target_roots, key=str)) != target_roots or (
+            file_selection is None
+            and bool(plan.provisioning.ownership or plan.file_ownership) != owned
+        ):
+            raise SetforgeError("install configuration changed while loading; retry")
         secret_plan = _confirm_install(
             plan,
             config=config,
             local_overlay=local_overlay,
-            ownership_preview=ownership_preview,
-            file_ownership_preview=file_ownership_preview,
             section_auto=section_auto,
             fresh=fresh,
             auto=auto,
