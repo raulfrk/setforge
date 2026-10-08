@@ -20,6 +20,7 @@ from setforge.cli._confirm import (
 )
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.ui.widgets import CANCEL
+from tests.shared_fixtures import ConfigRepo
 
 
 class _DialogRecorder:
@@ -373,21 +374,12 @@ def runner() -> CliRunner:
 
 def _setup_minimal_profile(tmp_path: Path) -> Path:
     """Minimal valid setforge.yaml + tracked tree for CliRunner integration."""
-    yaml_path = tmp_path / "setforge.yaml"
-    (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "x").write_text("data\n", encoding="utf-8")
-    yaml_path.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  d:\n"
-        "    src: x\n"
-        f"    dst: {tmp_path}/live/x\n"
-        "profiles:\n"
-        "  testp:\n"
-        "    tracked_files: [d]\n",
-        encoding="utf-8",
+    config_repo = ConfigRepo(tmp_path)
+    config_repo.write_tracked("x", "data\n")
+    return config_repo.write_config(
+        profile="testp",
+        tracked_files={"d": {"src": "x", "dst": f"{tmp_path}/live/x"}},
     )
-    return yaml_path
 
 
 def _write_live(yaml_path: Path, text: str) -> Path:

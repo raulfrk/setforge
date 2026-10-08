@@ -18,12 +18,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge import base_store
 from setforge.cli import app
+from tests.shared_fixtures import ConfigRepo
 
 _PROFILE = "test-sync-base"
 _MD_ID = "doc"
@@ -38,42 +38,11 @@ Shared body original.
 _DOC_LIVE_EDIT = _DOC.replace("Shared body original.", "MY LIVE EDIT.")
 
 
-def _write_config(repo: Path) -> Path:
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.setforge_syncbase/doc.md\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - doc\n",
-        encoding="utf-8",
+def _write_config(config_repo: ConfigRepo) -> Path:
+    return config_repo.write_config(
+        profile=_PROFILE,
+        tracked_files={"doc": {"src": "doc.md", "dst": "~/.setforge_syncbase/doc.md"}},
     )
-    return config
-
-
-def _write_tracked(repo: Path, md_body: str) -> None:
-    tracked = repo / "tracked"
-    tracked.mkdir(parents=True, exist_ok=True)
-    (tracked / "doc.md").write_text(md_body, encoding="utf-8")
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    target = tmp_path / "repo"
-    target.mkdir()
-    return target
-
-
-def _tracked_src(repo: Path) -> Path:
-    return repo / "tracked" / "doc.md"
 
 
 def _live_md() -> Path:
@@ -108,19 +77,21 @@ def _revert(config: Path) -> Result:
     return CliRunner().invoke(app, args)
 
 
-def test_sync_revert_restores_tracked_and_base_in_lockstep(repo: Path) -> None:
+def test_sync_revert_restores_tracked_and_base_in_lockstep(
+    config_repo: ConfigRepo,
+) -> None:
     """sync absorbs a live edit into tracked; revert restores the tracked src.
 
     The byte base is untouched by BOTH sync and revert (it advances only on
     install), and the sync transition still records the reconcile store's
     pre-sync state so revert round-trips it in lockstep with the tracked src.
     """
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
+    config_repo.write_tracked("doc.md", _DOC)
+    config = _write_config(config_repo)
 
     # Install seeds live + the reconcile byte base from tracked.
     assert _install(config).exit_code == 0
-    pre_sync_tracked = _tracked_src(repo).read_bytes()
+    pre_sync_tracked = config_repo.tracked("doc.md").read_bytes()
     pre_sync_base = base_store.read_base(_PROFILE, _MD_ID)
     assert pre_sync_base is not None
 
@@ -129,11 +100,11 @@ def test_sync_revert_restores_tracked_and_base_in_lockstep(repo: Path) -> None:
     _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
     result = _sync(config)
     assert result.exit_code == 0, result.output
-    assert _tracked_src(repo).read_bytes() != pre_sync_tracked
+    assert config_repo.tracked("doc.md").read_bytes() != pre_sync_tracked
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base  # base unchanged
 
     # Revert must restore the tracked src; the base stays put (round-trip no-op).
     result = _revert(config)
     assert result.exit_code == 0, result.output
-    assert _tracked_src(repo).read_bytes() == pre_sync_tracked
+    assert config_repo.tracked("doc.md").read_bytes() == pre_sync_tracked
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base

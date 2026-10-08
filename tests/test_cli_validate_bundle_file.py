@@ -9,6 +9,7 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from tests.shared_helpers import write_setforge_yaml
 
 _PROFILE = "vbf"
 
@@ -25,12 +26,6 @@ def _repo_with_launcher(tmp_path: Path) -> Path:
     (repo / "tracked").mkdir(parents=True)
     (repo / "tracked" / "launch.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     return repo
-
-
-def _write(repo: Path, body: str) -> Path:
-    cfg = repo / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
 
 
 def _validate(cfg: Path) -> Result:
@@ -58,7 +53,7 @@ def _profile_block() -> str:
 
 def test_validate_passes_valid_file_component(tmp_path: Path) -> None:
     repo = _repo_with_launcher(tmp_path)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "version: 1\ntracked_files: {}\n" + _good_bundle_block() + _profile_block(),
     )
@@ -71,7 +66,7 @@ def test_validate_all_keeps_inherited_bundle_overlays_isolated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, override: str
 ) -> None:
     repo = _repo_with_launcher(tmp_path)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "schema_version: '6.5'\ntracked_files: {}\n"
         + _good_bundle_block()
@@ -95,7 +90,7 @@ def test_validate_all_keeps_inherited_bundle_overlays_isolated(
 
 def test_validate_rejects_name_collision(tmp_path: Path) -> None:
     repo = _repo_with_launcher(tmp_path)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "version: 1\n"
         "tracked_files:\n"
@@ -113,7 +108,7 @@ def test_validate_rejects_name_collision(tmp_path: Path) -> None:
 
 def test_validate_rejects_dst_collision(tmp_path: Path) -> None:
     repo = _repo_with_launcher(tmp_path)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "version: 1\ntracked_files: {}\n"
         "bundles:\n"
@@ -136,7 +131,7 @@ def test_validate_warns_out_of_home_dst(tmp_path: Path) -> None:
     # An out-of-$HOME bundle dst now WARNS and validates (parity with the plain
     # tracked_files warn-on-out-of-$HOME behavior), rather than refusing.
     repo = _repo_with_launcher(tmp_path)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "version: 1\ntracked_files: {}\n"
         + _good_bundle_block(dst="~/../etc/evil")
@@ -150,7 +145,7 @@ def test_validate_warns_out_of_home_dst(tmp_path: Path) -> None:
 def test_validate_sees_synthetic_entry_and_lints_missing_src(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
-    cfg = _write(
+    cfg = write_setforge_yaml(
         repo,
         "version: 1\ntracked_files: {}\n" + _good_bundle_block() + _profile_block(),
     )

@@ -20,6 +20,7 @@ from typer.testing import CliRunner, Result
 from setforge.cli import app
 from setforge.cli import status as status_mod
 from tests.conftest import redirect_local_config_path
+from tests.shared_fixtures import ConfigRepo
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -28,22 +29,14 @@ from tests.conftest import redirect_local_config_path
 
 def _write_minimal_config(tmp_path: Path, *, profile: str = "vm-headless") -> Path:
     """Build a minimal setforge.yaml under ``tmp_path``; return its path."""
-    tracked = tmp_path / "tracked" / "doc.md"
-    tracked.parent.mkdir(parents=True, exist_ok=True)
-    tracked.write_text("hello\n", encoding="utf-8")
-    yaml_path = tmp_path / "setforge.yaml"
-    yaml_path.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.local/share/setforge-test/doc.md\n"
-        "profiles:\n"
-        f"  {profile}:\n"
-        "    tracked_files: [doc]\n",
-        encoding="utf-8",
+    config_repo = ConfigRepo(tmp_path)
+    config_repo.write_tracked("doc.md", "hello\n")
+    return config_repo.write_config(
+        profile=profile,
+        tracked_files={
+            "doc": {"src": "doc.md", "dst": "~/.local/share/setforge-test/doc.md"}
+        },
     )
-    return yaml_path
 
 
 def _write_codex_instruction_config(tmp_path: Path) -> Path:

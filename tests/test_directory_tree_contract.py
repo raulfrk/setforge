@@ -6,17 +6,12 @@ import typer
 from setforge.cli.stage import _refuse_generated_stage_target
 from setforge.config import load_config, resolve_and_expand
 from setforge.errors import ConfigError, InvariantViolation
+from tests.shared_helpers import write_setforge_yaml
 from tests.verb_calls import preview_capture_profile
 
 
-def _write_config(repo: Path, body: str) -> Path:
-    path = repo / "setforge.yaml"
-    path.write_text(body, encoding="utf-8")
-    return path
-
-
 def test_tree_intent_requires_schema_six_two_floor(tmp_path: Path) -> None:
-    config = _write_config(
+    config = write_setforge_yaml(
         tmp_path,
         "schema_version: '6.1'\n"
         "minimum_version: '6.1'\n"
@@ -30,7 +25,7 @@ def test_tree_intent_requires_schema_six_two_floor(tmp_path: Path) -> None:
 
 def test_tree_destination_overlap_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "tracked").mkdir()
-    config_path = _write_config(
+    config_path = write_setforge_yaml(
         tmp_path,
         "schema_version: '6.2'\n"
         "minimum_version: '6.2'\n"
@@ -48,7 +43,7 @@ def test_plain_file_destination_nested_under_another_is_rejected(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "tracked").mkdir()
-    config_path = _write_config(
+    config_path = write_setforge_yaml(
         tmp_path,
         "tracked_files:\n"
         "  outer: {src: outer, dst: /tmp/root/dir}\n"
@@ -64,7 +59,7 @@ def test_tree_capture_and_named_stage_refuse_one_way_output(tmp_path: Path) -> N
     source = tmp_path / "tracked" / "tools"
     source.mkdir(parents=True)
     live = tmp_path / "live"
-    config_path = _write_config(
+    config_path = write_setforge_yaml(
         tmp_path,
         "schema_version: '6.2'\n"
         "minimum_version: '6.2'\n"

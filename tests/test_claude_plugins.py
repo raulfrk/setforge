@@ -39,6 +39,7 @@ from tests.conftest import (
     _make_resolved,
     _regular_yaml,
 )
+from tests.shared_helpers import write_setforge_yaml
 
 
 @pytest.mark.parametrize(
@@ -947,12 +948,6 @@ profiles:
 """
 
 
-def _write_yaml_fixture(tmp_path: Path) -> Path:
-    p = tmp_path / "setforge.yaml"
-    p.write_text(_YAML_FIXTURE, encoding="utf-8")
-    return p
-
-
 def test_claude_bin_override_flows_through_set_cli_overrides(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1052,7 +1047,7 @@ def test_plugin_add_calls_enable_after_install(fake_claude, tmp_path: Path) -> N
 
     from setforge.cli import app
 
-    p = _write_yaml_fixture(tmp_path)
+    p = write_setforge_yaml(tmp_path, _YAML_FIXTURE)
     fake = fake_claude()  # marketplace + plugin lists start empty
 
     runner = CliRunner()
@@ -1087,7 +1082,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
 
     from setforge.cli import app
 
-    p = _write_yaml_fixture(tmp_path)
+    p = write_setforge_yaml(tmp_path, _YAML_FIXTURE)
     fake = fake_claude()
     real_run = fake.run
 
@@ -1138,7 +1133,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
 
     from setforge.cli import app
 
-    p = _write_yaml_fixture(tmp_path)
+    p = write_setforge_yaml(tmp_path, _YAML_FIXTURE)
     fake = fake_claude()
     real_run = fake.run
 
@@ -1183,7 +1178,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
 
     from setforge.cli import app
 
-    p = _write_yaml_fixture(tmp_path)
+    p = write_setforge_yaml(tmp_path, _YAML_FIXTURE)
     fake = fake_claude()
     real_run = fake.run
 
@@ -1228,7 +1223,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     from setforge.cli import app
     from setforge.errors import PluginToolMissing
 
-    p = _write_yaml_fixture(tmp_path)
+    p = write_setforge_yaml(tmp_path, _YAML_FIXTURE)
 
     # Directly raise PluginToolMissing from plugin_install to test the handler
     # in cli.py's plugin_add in isolation, independent of binary-resolution internals.
