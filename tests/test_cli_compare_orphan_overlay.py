@@ -68,10 +68,8 @@ def test_compare_human_lists_skipped_overlay_entries(
     result = CliRunner().invoke(app, ["compare", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "Skipped overlay entries" in result.output
-    assert "other_file" in result.output
-    assert "off_profile" in result.output
-    assert "bogus_id" in result.output
-    assert "unknown" in result.output
+    assert "other_file [off_profile]" in result.output
+    assert "bogus_id [unknown]" in result.output
 
 
 def test_compare_human_no_block_when_no_orphans(

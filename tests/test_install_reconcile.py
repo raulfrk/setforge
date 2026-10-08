@@ -373,6 +373,27 @@ def test_converged_dry_run_previews_no_transition_and_mutates_nothing(
     assert _live().stat().st_mtime_ns == live_mtime_before
 
 
+def test_dry_run_previews_a_kept_local_edit_as_noop_and_mutates_nothing(
+    repo: Path,
+) -> None:
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    _live().write_text("drifted by hand\n", encoding="utf-8")
+    transitions_before = _transition_dirs()
+    base_before = _base()
+
+    result = _install(config, "--dry-run")
+
+    assert result.exit_code == 0, result.output
+    assert "unexpected drift in 0 file(s)" in result.output
+    assert f"WOULD noop      {_live()}" in result.output
+    assert "WOULD update" not in result.output
+    assert _live().read_text(encoding="utf-8") == "drifted by hand\n"
+    assert _transition_dirs() == transitions_before
+    assert _base() == base_before
+
+
 def test_toml_comment_staged_local_keeps_compare_and_dry_run_usable(repo: Path) -> None:
     config = repo / "setforge.yaml"
     config.write_text(
@@ -536,6 +557,17 @@ def _revert(config: Path) -> Result:
     return CliRunner().invoke(
         app, ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"]
     )
+
+
+def test_revert_undoes_an_auto_use_tracked_conflict_resolution(repo: Path) -> None:
+    config = _setup_conflict(repo)
+    result = _install(config, "--auto=use-tracked")
+    assert result.exit_code == 0, result.output
+    assert f"revert with: setforge revert --profile={_PROFILE}" in result.output
+    assert _live().read_text(encoding="utf-8") == "l1\nUPSTREAM\nl3\n"
+
+    assert _revert(config).exit_code == 0
+    assert _live().read_text(encoding="utf-8") == "l1\nLOCAL\nl3\n"
 
 
 def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:

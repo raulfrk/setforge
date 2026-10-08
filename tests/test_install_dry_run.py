@@ -592,8 +592,10 @@ def test_no_ensure_state_dir(
     sandboxed_home: Path,
     no_external_bins: None,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """``--dry-run`` never calls :func:`transitions.ensure_state_dir_writable`."""
+    """``--dry-run`` never calls :func:`transitions.ensure_state_dir_writable`
+    and leaves a fresh host without a state directory."""
     calls: list[None] = []
 
     def tripwire() -> None:
@@ -603,6 +605,7 @@ def test_no_ensure_state_dir(
     monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", tripwire)
     _invoke_dry_run(fixture_repo)
     assert calls == []
+    assert not (tmp_path / "state").exists()
 
 
 def test_auto_use_tracked_no_confirm_under_dry_run(
@@ -742,7 +745,58 @@ def test_profile_summary_emits_renamed_provisioning_labels(
         ],
     )
     assert result.exit_code == 0, result.output
+    assert "profile test-minimal" in result.output
     assert "  plugins:        0" in result.output
     assert "  cargo:          0" in result.output
     assert "claude_plugins:" not in result.output
     assert "cargo_binaries:" not in result.output
+
+
+def test_dry_run_output_ends_with_the_rerun_marker(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-git-check",
+            "--auto=use-tracked",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.rstrip("\n").splitlines()[-1] == (
+        "=== rerun without --dry-run to apply for real ==="
+    )
+
+
+def test_dry_run_renders_the_selected_profile(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    def preview(profile: str) -> str:
+        result = CliRunner().invoke(
+            app,
+            [
+                "install",
+                f"--profile={profile}",
+                f"--config={fixture_repo}",
+                "--dry-run",
+                "--no-git-check",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        return result.stdout
+
+    minimal = preview("test-minimal")
+    comprehensive = preview("test-comprehensive")
+
+    assert "profile test-minimal" in minimal
+    assert "profile test-comprehensive" in comprehensive
+    assert minimal != comprehensive

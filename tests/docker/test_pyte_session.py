@@ -3,7 +3,7 @@
 These are NOT marked ``e2e_docker`` — they exercise the byte-stream
 to pyte-screen plumbing in isolation (no docker daemon, no real PTY).
 The integration cases that drive a real ``docker exec -it`` live in
-:mod:`tests.docker.test_e2e_docker_auto_confirm` under the
+:mod:`tests.docker.test_e2e_docker_button_bar` under the
 ``e2e_docker`` marker.
 """
 

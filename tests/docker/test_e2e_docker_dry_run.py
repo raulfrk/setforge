@@ -1,14 +1,16 @@
 """Docker E2E tests for ``setforge install --dry-run``.
 
-Thirteen named cases per SPEC 4. The single highest-value gate is
+Six named cases per SPEC 4. The single highest-value gate is
 :func:`test_dry_run_zero_filesystem_diff` — a fresh container's defined
 install mutation roots are snapshotted as typed path/mode/mtime/payload
 records BEFORE the dry-run invocation and immediately AFTER, with the
 assertion that the two snapshots are byte-identical. This is the load-bearing
-acceptance for the spec; the remaining twelve cases anchor individual contract
-points (output shape, no-confirm-substring, final-line marker,
-plugin/extension reconcile coverage, profile flag wiring, cross-check
-against the real pipeline).
+acceptance for the spec; the remaining five cases anchor individual contract
+points (output shape, plugin/extension reconcile coverage against the real
+``claude`` and ``code`` binaries, cross-check against the real pipeline).
+The confirm-wizard, state-directory, drift-preview, final-line and profile-flag
+contracts run in-process in ``tests/test_install_dry_run.py`` and
+``tests/test_install_reconcile.py``.
 
 Every test spins a fresh ``setforge-e2e:test-*`` container per
 ``tests.docker.conftest`` and runs ``setforge install --dry-run``
@@ -32,14 +34,10 @@ pytestmark = pytest.mark.e2e_docker
 # variant exercises a distinct surface the dry-run pipeline must
 # render:
 #
-# - ``test-minimal`` — plain text byte-copy, no extensions / plugins.
 # - ``test-comprehensive`` — extensions + plugins + multi-file + bootstrap.
 # - ``test-text-sections`` — markerless markdown tracked_file (byte-copy).
-# - ``test-reconcile-sections`` — shared user-section 3-way reconcile surface.
-_PROFILE_MINIMAL: str = "test-minimal"
 _PROFILE_COMPREHENSIVE: str = "test-comprehensive"
 _PROFILE_TEXT_SECTIONS: str = "test-text-sections"
-_PROFILE_SHARED_SECTIONS: str = "test-reconcile-sections"
 
 # Final-line marker the spec mandates as exact-match. Mirrored from
 # ``setforge.cli._install_helpers._DRY_RUN_FINAL_LINE``; keep the two
@@ -62,14 +60,6 @@ _EXPECTED_HEADERS: tuple[str, ...] = (
     "=== would-be package provision ===",
     "=== would-be transition record ===",
     _FINAL_LINE,
-)
-
-# Confirm-wizard substrings the auto-confirm flow emits. The dry-run path MUST
-# NOT produce either of these under ``--auto=*`` + ``--dry-run`` per
-# spec anti-pattern #5.
-_CONFIRM_SUBSTRINGS: tuple[str, ...] = (
-    "Apply [y/N]?",
-    "type 'apply' to proceed",
 )
 
 
@@ -263,196 +253,7 @@ def test_dry_run_covers_all_phases(
 
 
 # ---------------------------------------------------------------------------
-# E2E #4 — --auto=use-tracked + --yes + --dry-run: no prompt, exits 0.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_auto_use_tracked_no_prompt(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """``--auto=use-tracked --yes --dry-run`` exits 0; emits zero confirm substrings."""
-    c = docker_container()
-    pre = _snapshot_home(c)
-    result = _dry_run_install(
-        c, _PROFILE_SHARED_SECTIONS, extra=["--auto=use-tracked", "--yes"]
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
-    for needle in _CONFIRM_SUBSTRINGS:
-        assert needle not in result.stdout, (
-            f"confirm substring {needle!r} present under --dry-run + --auto"
-        )
-    post = _snapshot_home(c)
-    assert pre == post, "filesystem mutated under --auto=use-tracked --dry-run"
-
-
-# ---------------------------------------------------------------------------
-# E2E #5 — --auto-accept-live + --yes + --dry-run: no prompt, exits 0.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_auto_use_live_no_prompt(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """``--auto-accept-live --yes --dry-run`` exits 0; emits zero confirm substrings.
-
-    Per spec: ``--auto=use-live`` is the legacy unexpected-drift
-    direction now spelled ``--auto-accept-live`` (the
-    ``_confirm_legacy_drift_or_exit`` call site). Same shape as the
-    section-reconcile variant; runs against the minimal profile so
-    there is no unexpected drift to confirm in the first place.
-    """
-    c = docker_container()
-    pre = _snapshot_home(c)
-    result = _dry_run_install(
-        c, _PROFILE_MINIMAL, extra=["--auto-accept-live", "--yes"]
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
-    for needle in _CONFIRM_SUBSTRINGS:
-        assert needle not in result.stdout, (
-            f"confirm substring {needle!r} present under --dry-run + --auto-accept-live"
-        )
-    post = _snapshot_home(c)
-    assert pre == post, "filesystem mutated under --auto-accept-live --dry-run"
-
-
-# ---------------------------------------------------------------------------
-# E2E #6 — fresh container, no ~/.local/state/setforge: state dir not created.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_fresh_host_no_state_dir_created(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """``--dry-run`` on a fresh container does NOT create ``~/.local/state/setforge/``.
-
-    The real install pipeline opens the state dir via
-    ``transitions.ensure_state_dir_writable`` (which ``mkdir -p``'s
-    the path). The dry-run pipeline MUST NOT — verified by checking
-    that the directory remains absent post-invocation.
-    """
-    c = docker_container()
-    # Ensure the directory does not pre-exist (fresh container should
-    # not, but assert explicitly so a future image change surfaces).
-    pre_check = c.exec(
-        ["test", "-d", "/home/tester/.local/state/setforge"], check=False
-    )
-    assert pre_check.returncode != 0, (
-        "state dir pre-exists in fresh container; test premise broken"
-    )
-    result = _dry_run_install(c, _PROFILE_MINIMAL)
-    assert result.returncode == 0, result.stderr or result.stdout
-    post_check = c.exec(
-        ["test", "-d", "/home/tester/.local/state/setforge"], check=False
-    )
-    assert post_check.returncode != 0, "state dir was created under --dry-run"
-
-
-# ---------------------------------------------------------------------------
-# E2E #7 — dry-run reports drift WITHOUT applying.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_drift_gate_reports_no_apply(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """Live file drifted from tracked; dry-run previews the outcome; ZERO mutation.
-
-    Pre-installs the minimal profile (real install) so the live file
-    exists, then mutates the live file in-place to introduce drift,
-    then runs the dry-run. Content drift is reconciled, not gated, so the
-    gate line counts no file (it counts only what a real install refuses);
-    the preview then reports the already-planned reconcile outcome (bare
-    install keeps the live edit → ``WOULD noop``), and leaves the mutated
-    live file byte-identical post-dry-run.
-    """
-    c = docker_container()
-    live = "/home/tester/.setforge_e2e/minimal/text.txt"
-    # Real install first so the live file is present (state mtime +
-    # transition record will be created here; only the post-dry-run
-    # delta matters for this case).
-    real = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "install",
-            f"--profile={_PROFILE_MINIMAL}",
-            f"--config={CONFIG_FIXTURE}",
-            "--no-git-check",
-        ],
-        check=False,
-    )
-    assert real.returncode == 0, real.stderr or real.stdout
-    # Mutate live to introduce drift.
-    c.write_text(live, "drifted by hand\n")
-    pre = _snapshot_home(c)
-    result = _dry_run_install(c, _PROFILE_MINIMAL)
-    assert result.returncode == 0, result.stderr or result.stdout
-    post = _snapshot_home(c)
-    assert pre == post, "filesystem mutated under --dry-run with drifted live file"
-    assert "unexpected drift in 0 file(s)" in result.stdout
-    # Preview renders the immutable reconcile decision, not a second action
-    # guessed from the raw compare status.
-    assert "WOULD noop" in result.stdout, (
-        f"keep-live plan not reported as WOULD noop:\n{result.stdout}"
-    )
-    assert "WOULD update" not in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# E2E #8 — final-line marker exact match.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_final_line_marker(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """``tail -1`` of dry-run stdout matches the exact final-line marker.
-
-    Anti-pattern check #6 + acceptance command. The marker is the
-    public contract; ``tail -1 | rg -q '...'`` is the spec's
-    standalone sanity check.
-    """
-    c = docker_container()
-    result = _dry_run_install(
-        c, _PROFILE_MINIMAL, extra=["--auto=use-tracked", "--yes"]
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
-    lines = result.stdout.rstrip("\n").splitlines()
-    assert lines, f"dry-run stdout is empty: {result.stdout!r}"
-    assert lines[-1] == _FINAL_LINE, (
-        f"final line mismatch: {lines[-1]!r} != {_FINAL_LINE!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# E2E #9 — no confirm-wizard substring under --auto + --dry-run.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_no_confirm_substring(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """Anti-pattern #5: zero ``Apply [y/N]?`` / ``type 'apply' to proceed`` matches.
-
-    The auto-confirm confirm wizard MUST NOT fire under ``--auto=*`` +
-    ``--dry-run``. Mirrors the unit-test tripwire pattern at the
-    Docker layer so a future regression in the real auto-confirm flow
-    surfaces here too.
-    """
-    c = docker_container()
-    result = _dry_run_install(
-        c, _PROFILE_SHARED_SECTIONS, extra=["--auto=use-tracked", "--yes"]
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
-    for needle in _CONFIRM_SUBSTRINGS:
-        assert needle not in result.stdout, (
-            f"confirm substring {needle!r} present under --dry-run"
-        )
-
-
-# ---------------------------------------------------------------------------
-# E2E #10 — dry-run reports plugin reconcile.
+# E2E #4 — dry-run reports plugin reconcile.
 # ---------------------------------------------------------------------------
 
 
@@ -497,7 +298,7 @@ def test_dry_run_reports_plugin_reconcile(
 
 
 # ---------------------------------------------------------------------------
-# E2E #11 — dry-run reports extension reconcile.
+# E2E #5 — dry-run reports extension reconcile.
 # ---------------------------------------------------------------------------
 
 
@@ -536,7 +337,7 @@ def test_dry_run_reports_ext_reconcile(
 
 
 # ---------------------------------------------------------------------------
-# E2E #12 — cross-check: dry-run output predicts real install state.
+# E2E #6 — cross-check: dry-run output predicts real install state.
 # ---------------------------------------------------------------------------
 
 
@@ -585,34 +386,6 @@ def test_dry_run_predicts_real_install(
             f"dry-run predicted install of {path!r} but the real "
             f"install did not produce it"
         )
-
-
-# ---------------------------------------------------------------------------
-# E2E #13 — dry-run honors --profile=X.
-# ---------------------------------------------------------------------------
-
-
-def test_dry_run_respects_profile_flag(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """Different ``--profile=X`` values produce profile-distinct dry-run output.
-
-    Runs dry-run against two profiles in sequence, asserting the
-    rendered ``profile <name>`` line differs and the tracked_files
-    count differs (the test fixture's minimal profile declares 1
-    tracked_file; the comprehensive profile declares 4).
-    """
-    c = docker_container()
-    minimal_out = _dry_run_install(c, _PROFILE_MINIMAL).stdout
-    comprehensive_out = _dry_run_install(c, _PROFILE_COMPREHENSIVE).stdout
-    assert f"profile {_PROFILE_MINIMAL}" in minimal_out
-    assert f"profile {_PROFILE_COMPREHENSIVE}" in comprehensive_out
-    # The two outputs MUST differ — at minimum the profile name line
-    # and the tracked_files count differ between fixture profiles.
-    assert minimal_out != comprehensive_out, (
-        "dry-run output identical across profiles; --profile flag "
-        "may not be wired through"
-    )
 
 
 # ---------------------------------------------------------------------------

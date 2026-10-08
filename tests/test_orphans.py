@@ -875,6 +875,7 @@ def test_apply_default_is_dry_run(
     assert live_orphan.exists()  # CRITICAL: not deleted under dry-run.
     # Human command output rides stderr (stdout stays machine-readable).
     plain = _strip_ansi_and_newlines(result.stderr)
+    assert "DRY-RUN" in plain
     assert "WOULD delete" in plain
     assert live_orphan.name in plain
 
