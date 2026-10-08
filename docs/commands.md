@@ -267,10 +267,10 @@ Removing a declaration and running an ordinary `install` does not uninstall
 packages or rewrite resources outside the selected profile. Explicit retirement
 uses the scoped workflows above; history-only file edits are not supported.
 
-Mutating commands share one lock order: a user-global mutation gate, then
-user-global package/adapter resources, the canonical config repository, and
-finally profile state. The gate covers the interval before a write-ahead journal
-can be published, including migrations that later lock multiple real profiles.
+Mutating commands run one at a time per user: each holds a user-global mutation
+gate for its whole run, then locks the profile state it changes. The gate covers
+the interval before a write-ahead journal can be published, including migrations
+that later lock multiple real profiles.
 An interrupted
 install/sync/revert/migration leaves a durable per-profile journal in the
 user-global recovery registry. Conflicting mutations refuse across profiles

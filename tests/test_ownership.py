@@ -22,7 +22,7 @@ from setforge.errors import (
     OwnershipError,
     SetforgeError,
 )
-from setforge.locking import install_resources_lock, mutation_locks
+from setforge.locking import mutation_locks
 from setforge.ownership import (
     Authority,
     ClaimEvent,
@@ -59,7 +59,7 @@ def _claim(
     *,
     expected_generation: int | None = None,
 ) -> OwnershipClaim:
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         return store.claim_locked(
             resource_id=resource or _resource(),
             owner_id=owner,
@@ -179,7 +179,7 @@ def test_target_scope_aliases_share_one_durable_claim_identity(tmp_path: Path) -
     store = OwnershipStore(tmp_path / "ownership")
     first = uuid.uuid4()
     second = uuid.uuid4()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         store.claim_locked(
             resource_id=real_resource,
             owner_id=first,
@@ -232,7 +232,7 @@ def test_missing_target_claim_moves_to_created_object_scope_and_blocks_alias(
     )
     assert alias_resource == destination
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(OwnershipCollisionError, match="another config owner"),
     ):
         store.claim_locked(
@@ -299,14 +299,14 @@ def test_claim_cas_idempotency_transfer_release_and_collision(tmp_path: Path) ->
     with pytest.raises(OwnershipCollisionError, match="another config owner"):
         _claim(store, second_owner, expected_generation=1)
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(OwnershipError, match="stale ownership generation"),
     ):
         store.release_locked(
             _resource(), expected_owner=first_owner, expected_generation=2
         )
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         transferred = store.transfer_locked(
             _resource(),
             expected_owner=first_owner,
@@ -317,14 +317,14 @@ def test_claim_cas_idempotency_transfer_release_and_collision(tmp_path: Path) ->
     assert transferred.owner_id == second_owner
     assert transferred.generation == 2
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         released = store.release_locked(
             _resource(), expected_owner=second_owner, expected_generation=2
         )
     assert released.generation == 3
     assert released.authority is Authority.NONE
     assert released.lifecycle is ClaimLifecycle.RELEASED
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         assert (
             store.release_locked(
                 _resource(), expected_owner=second_owner, expected_generation=3
@@ -336,7 +336,7 @@ def test_claim_cas_idempotency_transfer_release_and_collision(tmp_path: Path) ->
 def test_claim_refresh_preserves_acquisition_provenance(tmp_path: Path) -> None:
     store = OwnershipStore(tmp_path)
     owner = uuid.uuid4()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         first = store.claim_locked(
             resource_id=_resource(),
             owner_id=owner,
@@ -452,7 +452,7 @@ def test_move_intent_blocks_reads_and_recovers_before_destination(
         real_write(claim, directory_fd=directory_fd)
 
     monkeypatch.setattr(store, "_write_claim", fail_destination)
-    with install_resources_lock(), pytest.raises(OSError, match="injected crash"):
+    with mutation_locks(resources=True), pytest.raises(OSError, match="injected crash"):
         store.move_locked(
             source.resource_id,
             destination,
@@ -463,7 +463,7 @@ def test_move_intent_blocks_reads_and_recovers_before_destination(
 
     with pytest.raises(OwnershipError, match="unfinished ownership move"):
         store.read(source.resource_id)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         store.recover_moves_locked()
     assert store.read(source.resource_id) is None
     moved = store.read(destination)
@@ -479,7 +479,7 @@ def test_move_destination_collision_refuses_without_intent(tmp_path: Path) -> No
     _claim(store, owner, destination)
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(OwnershipCollisionError, match="destination"),
     ):
         store.move_locked(
@@ -517,7 +517,7 @@ def test_move_recovery_completes_later_crash_checkpoints(
             raise OSError("crash after source")
 
         monkeypatch.setattr(store, "_unlink_intent", fail_intent_unlink)
-    with install_resources_lock(), pytest.raises(OSError, match="crash after"):
+    with mutation_locks(resources=True), pytest.raises(OSError, match="crash after"):
         store.move_locked(
             source.resource_id,
             destination,
@@ -529,7 +529,7 @@ def test_move_recovery_completes_later_crash_checkpoints(
     else:
         monkeypatch.setattr(store, "_unlink_intent", real_intent_unlink)
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         store.recover_moves_locked()
     assert store.read(source.resource_id) is None
     assert store.read(destination) is not None
@@ -586,7 +586,7 @@ def test_move_recovery_retains_conflicting_destination(tmp_path: Path) -> None:
         store._write_claim(destination, directory_fd=claims_fd)
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="conflicts with live claims"),
     ):
         store.recover_moves_locked()
@@ -609,7 +609,10 @@ def test_move_recovery_rejects_semantically_tampered_intent(
         real_write(claim, directory_fd=directory_fd)
 
     monkeypatch.setattr(store, "_write_claim", fail_destination)
-    with install_resources_lock(), pytest.raises(OSError, match="stop after intent"):
+    with (
+        mutation_locks(resources=True),
+        pytest.raises(OSError, match="stop after intent"),
+    ):
         store.move_locked(
             source.resource_id,
             destination,
@@ -623,7 +626,7 @@ def test_move_recovery_rejects_semantically_tampered_intent(
     intent.write_text(json.dumps(raw), encoding="utf-8")
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="invalid ownership move intent"),
     ):
         store.recover_moves_locked()
@@ -784,7 +787,7 @@ def test_store_follows_symlinks_leading_to_ownership_root(
     owner = uuid.uuid4()
 
     claim = _claim(store, owner)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         moved = store.move_locked(
             claim.resource_id,
             _resource("rg"),
@@ -830,7 +833,7 @@ def test_claim_publication_is_anchored_and_detects_directory_swap(
 
     monkeypatch.setattr(ownership_module, "_atomic_write_at", swap_after_write)
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="binding changed"),
     ):
         store.claim_locked(
@@ -855,7 +858,7 @@ def test_move_refuses_symlinked_intents_directory(tmp_path: Path) -> None:
     store.intents_root.symlink_to(outside, target_is_directory=True)
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="not trusted"),
     ):
         store.move_locked(
@@ -889,7 +892,7 @@ def test_move_refuses_ownership_root_swap_before_publication(
 
     monkeypatch.setattr(ownership_module, "_open_bound_child", swap_before_intents)
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="binding changed"),
     ):
         store.move_locked(
@@ -922,7 +925,7 @@ def test_move_refuses_intents_child_swap_before_claim_publication(
 
     monkeypatch.setattr(store, "_write_intent", swap_then_write)
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(CorruptOwnershipState, match="binding changed"),
     ):
         store.move_locked(

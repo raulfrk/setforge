@@ -1445,9 +1445,6 @@ def test_apply_sync_locks_and_updates_multiple_config_repositories(
     def check_claims(destinations: Iterable[Path]) -> None:
         held = locking._HELD_RANKS.get()
         locking.require_resources_lock()
-        assert {key for rank, key in held if rank is locking.LockRank.CONFIG} == {
-            str(path) for path in expected_configs
-        }
         assert (locking.LockRank.PROFILE, expected_profile) in held
         checked_claims.append(True)
         return original_refuse(destinations)

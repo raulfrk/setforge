@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.errors import OwnershipError
 from setforge.file_ownership import file_resource_id, observe_file, observe_tree
-from setforge.locking import install_resources_lock
+from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipStore,
     ProvenanceFact,
@@ -69,7 +69,7 @@ def test_snapshot_restore_respects_current_owner(
         else observe_file(claimed).fingerprint
     )
     store = OwnershipStore()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         claim = store.claim_locked(
             resource_id=file_resource_id(claimed),
             owner_id=uuid.uuid4() if foreign else owner,

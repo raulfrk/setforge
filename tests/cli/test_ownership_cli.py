@@ -18,7 +18,7 @@ from setforge.cli import ownership as ownership_cli
 from setforge.config import load_config
 from setforge.errors import OwnershipError
 from setforge.file_ownership import observe_file, observe_tree
-from setforge.locking import MutationLockGuards, install_resources_lock
+from setforge.locking import MutationLockGuards, mutation_locks
 from setforge.ownership import OwnershipStore, ResourceId, load_or_create_owner_id
 from setforge.ownership_history import OwnershipHistoryStore
 from setforge.provision.ownership import observation_fingerprint
@@ -73,7 +73,7 @@ def _owned_file(
     owner_id = load_or_create_owner_id(repo)
     observation = observe_file(live)
     ledger = OwnershipStore()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         ledger.claim_locked(
             resource_id=observation.resource_id,
             owner_id=owner_id,
@@ -117,7 +117,7 @@ def _owned_package(
     )
     ledger = OwnershipStore()
     resource_id = ResourceId.package("cargo", "ripgrep")
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         ledger.claim_locked(
             resource_id=resource_id,
             owner_id=owner_id,
@@ -165,7 +165,7 @@ def _owned_tree(
     ).inventory
     observation = observe_tree(live, inventory.fingerprint)
     ledger = OwnershipStore()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         ledger.claim_locked(
             resource_id=observation.resource_id,
             owner_id=owner_id,
@@ -458,7 +458,7 @@ def test_granting_recovery_rechecks_owner_inside_lock_envelope(
             raise OwnershipError("injected grant interruption")
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(OwnershipError, match="grant interruption"),
     ):
         history.revert_locked(
@@ -557,7 +557,7 @@ def test_ownership_recover_inspects_then_applies_pending_release(
         "_commit_transition",
         lambda _self, _transition: (_ for _ in ()).throw(RuntimeError("crash")),
     )
-    with install_resources_lock(), pytest.raises(RuntimeError, match="crash"):
+    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="crash"):
         history.release_locked(OwnershipStore(), owner_id, claim_id)
     monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", original)
     transition_id = str(history.pending(owner_id)[0].transition_id)
@@ -656,7 +656,7 @@ def test_package_revert_revalidates_provider_inventory(
     )
     assert reverted.exit_code == 0, reverted.output
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         latest = OwnershipStore().read_claim_id(claim_id)
     assert latest is not None
     assert latest.owner_id == load_or_create_owner_id(config.parent)

@@ -286,7 +286,7 @@ def test_project_inject_and_remove_in_plain_directory(
 def test_project_inject_refuses_tracked_file_ownership_collision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from setforge.locking import install_resources_lock
+    from setforge.locking import mutation_locks
 
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     config = _config(tmp_path)
@@ -297,7 +297,7 @@ def test_project_inject_refuses_tracked_file_ownership_collision(
     store = OwnershipStore()
     observation = observe_file(destination)
     owner_id = uuid.uuid4()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         publish_file_claim_locked(
             store,
             decide_file(observation, None, owner_id=owner_id),

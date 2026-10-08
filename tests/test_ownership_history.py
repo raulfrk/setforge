@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from setforge.errors import CorruptOwnershipState, OwnershipError
-from setforge.locking import install_resources_lock
+from setforge.locking import mutation_locks
 from setforge.ownership import (
     Authority,
     ClaimLifecycle,
@@ -23,7 +23,7 @@ from setforge.ownership_history import OwnershipHistoryStore
 
 
 def _claim(store: OwnershipStore, owner_id: uuid.UUID) -> OwnershipClaim:
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         return store.claim_locked(
             resource_id=ResourceId.package("cargo", "ripgrep"),
             owner_id=owner_id,
@@ -64,7 +64,7 @@ def test_release_is_owner_scoped_preserves_metadata_and_records_transition(
     claimed = _claim(ledger, owner_id)
     claim_id = ledger.claim_id(claimed.resource_id)
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         with pytest.raises(OwnershipError, match="current config owner"):
             history.release_locked(ledger, foreign_owner, claim_id)
         transition = history.release_locked(ledger, owner_id, claim_id)
@@ -94,13 +94,13 @@ def test_revert_requires_exact_post_state_and_authority_validation(
     history = OwnershipHistoryStore(tmp_path / "history")
     owner_id = uuid.uuid4()
     claimed = _claim(ledger, owner_id)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         released = history.release_locked(
             ledger, owner_id, ledger.claim_id(claimed.resource_id)
         )
 
     validated: list[OwnershipClaim] = []
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         reverted = history.revert_locked(
             ledger,
             owner_id,
@@ -117,7 +117,7 @@ def test_revert_requires_exact_post_state_and_authority_validation(
     assert reverted.after == restored
     assert reverted.reverts_transition_id == released.transition_id
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         with pytest.raises(OwnershipError, match="no longer current"):
             history.revert_locked(
                 ledger,
@@ -145,7 +145,7 @@ def test_authority_grant_is_revalidated_after_pending_publication(
     history = OwnershipHistoryStore(tmp_path / "history")
     owner_id = uuid.uuid4()
     claimed = _claim(ledger, owner_id)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         released = history.release_locked(
             ledger, owner_id, ledger.claim_id(claimed.resource_id)
         )
@@ -159,7 +159,7 @@ def test_authority_grant_is_revalidated_after_pending_publication(
             raise OwnershipError("live authority inputs raced")
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(OwnershipError, match="authority inputs raced"),
     ):
         history.revert_locked(
@@ -191,17 +191,20 @@ def test_interrupted_release_is_visible_and_recoverable(
         raise RuntimeError("injected crash after tombstone")
 
     monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", _crash)
-    with install_resources_lock(), pytest.raises(RuntimeError, match="injected"):
+    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="injected"):
         history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
 
     pending = history.pending(owner_id)
     assert len(pending) == 1
     assert ledger.read(claimed.resource_id) == pending[0].after
-    with install_resources_lock(), pytest.raises(OwnershipError, match="unfinished"):
+    with (
+        mutation_locks(resources=True),
+        pytest.raises(OwnershipError, match="unfinished"),
+    ):
         history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
 
     monkeypatch.setattr(OwnershipHistoryStore, "_commit_transition", original)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         recovered = history.recover_locked(
             ledger, owner_id, validate_authority=lambda _claim: None
         )
@@ -229,7 +232,10 @@ def test_release_interrupted_before_claim_mutation_recovers_from_before_state(
         raise RuntimeError("injected crash before claim mutation")
 
     monkeypatch.setattr(OwnershipStore, "release_locked", _crash_before_mutation)
-    with install_resources_lock(), pytest.raises(RuntimeError, match="before claim"):
+    with (
+        mutation_locks(resources=True),
+        pytest.raises(RuntimeError, match="before claim"),
+    ):
         history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
 
     pending = history.pending(owner_id)
@@ -239,7 +245,7 @@ def test_release_interrupted_before_claim_mutation_recovers_from_before_state(
     monkeypatch.setattr(OwnershipStore, "release_locked", original)
     restarted_history = OwnershipHistoryStore(tmp_path / "history")
     restarted_ledger = OwnershipStore(tmp_path / "ledger")
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         recovered = restarted_history.recover_locked(
             restarted_ledger,
             owner_id,
@@ -267,16 +273,16 @@ def test_recovery_fails_closed_when_claim_conflicts_with_pending_intent(
         "_commit_transition",
         lambda _self, _transition: (_ for _ in ()).throw(RuntimeError("crash")),
     )
-    with install_resources_lock(), pytest.raises(RuntimeError, match="crash"):
+    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="crash"):
         history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         current = ledger.read(claimed.resource_id)
         assert current is not None
         ledger.restore_locked(current)
 
     with (
-        install_resources_lock(),
+        mutation_locks(resources=True),
         pytest.raises(
             CorruptOwnershipState, match="conflicts with the ownership claim"
         ),
@@ -296,7 +302,7 @@ def test_multiple_pending_transitions_are_ambiguous_and_fail_closed(
         "_commit_transition",
         lambda _self, _transition: (_ for _ in ()).throw(RuntimeError("crash")),
     )
-    with install_resources_lock(), pytest.raises(RuntimeError, match="crash"):
+    with mutation_locks(resources=True), pytest.raises(RuntimeError, match="crash"):
         history.release_locked(ledger, owner_id, ledger.claim_id(claimed.resource_id))
     first = history.pending(owner_id)[0]
     history._write_pending(replace(first, transition_id=uuid.uuid4()))
@@ -310,7 +316,7 @@ def test_history_rejects_corrupt_and_cross_owner_state(tmp_path: Path) -> None:
     history = OwnershipHistoryStore(tmp_path / "history")
     owner_id = uuid.uuid4()
     claimed = _claim(ledger, owner_id)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         transition = history.release_locked(
             ledger, owner_id, ledger.claim_id(claimed.resource_id)
         )
@@ -333,7 +339,7 @@ def test_history_ignores_interrupted_atomic_write_temporary_files(
     history = OwnershipHistoryStore(tmp_path / "history")
     owner_id = uuid.uuid4()
     claimed = _claim(ledger, owner_id)
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         transition = history.release_locked(
             ledger, owner_id, ledger.claim_id(claimed.resource_id)
         )

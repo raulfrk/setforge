@@ -1,4 +1,4 @@
-"""Fresh-process ownership and target-lock integration boundaries."""
+"""Fresh-process ownership and mutation-gate integration boundaries."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from setforge.errors import SetforgeError
-from setforge.locking import TargetLockRequest, mutation_locks, target_locks
+from setforge.locking import mutation_locks
 from setforge.ownership import (
     OwnershipStore,
     ProvenanceFact,
@@ -52,15 +52,15 @@ def _claim_worker(store_root: str, home: str, owner: str) -> str:
 _HOLDER = """
 import sys
 from pathlib import Path
-from setforge.locking import TargetLockRequest, target_locks
+from setforge.locking import mutation_locks
 
 target = Path(sys.argv[1])
 ready = Path(sys.argv[2])
 release = Path(sys.argv[3])
 create = sys.argv[4] == "create"
-with target_locks((TargetLockRequest(target),), timeout=5) as guards:
+with mutation_locks(target_roots=(target,), timeout=5) as guards:
     if create:
-        guards[0].mkdir()
+        guards.targets[0].mkdir()
     ready.write_text("ready", encoding="ascii")
     while not release.exists():
         release.parent.stat()
@@ -99,10 +99,15 @@ def test_two_process_claim_collision_has_one_owner(tmp_path: Path) -> None:
     assert str(claim.owner_id) in {str(first), str(second)}
 
 
-def test_missing_target_creation_keeps_one_lock_namespace(tmp_path: Path) -> None:
+@pytest.mark.parametrize("contender", ["same", "alias", "unrelated"])
+def test_second_process_cannot_mutate_while_one_writer_creates_a_target(
+    tmp_path: Path, contender: str
+) -> None:
+    """One writer at a time: the same root, an alias of it, or any other root."""
     parent = tmp_path / "projects"
     parent.mkdir()
     target = parent / "demo"
+    alias = tmp_path / "alias"
     ready = tmp_path / "ready"
     release = tmp_path / "release"
     process = subprocess.Popen(
@@ -120,66 +125,15 @@ def test_missing_target_creation_keeps_one_lock_namespace(tmp_path: Path) -> Non
     try:
         _wait_for(ready, process)
         assert target.is_dir()
-        with (
-            pytest.raises(SetforgeError, match="target lock"),
-            target_locks((TargetLockRequest(target),), timeout=0.1),
-        ):
-            pass
-    finally:
-        release.write_text("release", encoding="ascii")
-        assert process.wait(timeout=10) == 0
-
-
-def test_missing_target_creation_blocks_post_creation_alias(tmp_path: Path) -> None:
-    parent = tmp_path / "projects"
-    parent.mkdir()
-    target = parent / "demo"
-    alias = tmp_path / "alias"
-    ready = tmp_path / "ready"
-    release = tmp_path / "release"
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            _HOLDER,
-            str(target),
-            str(ready),
-            str(release),
-            "create",
-        ],
-        cwd=Path(__file__).parents[2],
-    )
-    try:
-        _wait_for(ready, process)
         alias.symlink_to(target, target_is_directory=True)
+        root = {"same": target, "alias": alias, "unrelated": tmp_path / "other"}
         with (
-            pytest.raises(SetforgeError, match="target lock"),
-            target_locks((TargetLockRequest(alias),), timeout=0.1),
+            pytest.raises(SetforgeError, match="global mutation gate"),
+            mutation_locks(target_roots=(root[contender],), timeout=0.1),
         ):
-            pass
+            pytest.fail("a second writer ran beside the first")
     finally:
         release.write_text("release", encoding="ascii")
         assert process.wait(timeout=10) == 0
-
-
-def test_symlink_alias_contends_on_object_lock(tmp_path: Path) -> None:
-    target = tmp_path / "target"
-    target.mkdir()
-    alias = tmp_path / "alias"
-    alias.symlink_to(target, target_is_directory=True)
-    ready = tmp_path / "ready"
-    release = tmp_path / "release"
-    process = subprocess.Popen(
-        [sys.executable, "-c", _HOLDER, str(target), str(ready), str(release), "keep"],
-        cwd=Path(__file__).parents[2],
-    )
-    try:
-        _wait_for(ready, process)
-        with (
-            pytest.raises(SetforgeError, match="target lock"),
-            target_locks((TargetLockRequest(alias),), timeout=0.1),
-        ):
-            pass
-    finally:
-        release.write_text("release", encoding="ascii")
-        assert process.wait(timeout=10) == 0
+    with mutation_locks(target_roots=(root[contender],), timeout=5):
+        pass

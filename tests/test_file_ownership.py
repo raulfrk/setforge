@@ -81,7 +81,7 @@ def test_file_identity_refuses_root_destination(tmp_path: Path) -> None:
 def test_active_file_claims_ignore_other_providers_at_same_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from setforge.locking import install_resources_lock
+    from setforge.locking import mutation_locks
 
     state = tmp_path / "state"
     path = tmp_path / "managed" / "settings.ini"
@@ -94,7 +94,7 @@ def test_active_file_claims_ignore_other_providers_at_same_destination(
     project = replace(tracked, provider="project-profile")
     store = OwnershipStore()
     owner = uuid.uuid4()
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         store.claim_locked(
             resource_id=project,
             owner_id=owner,
@@ -108,7 +108,7 @@ def test_active_file_claims_ignore_other_providers_at_same_destination(
     assert active_file_claims((path,)) == ()
     refuse_active_file_claims((path,))
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         tracked_claim = store.claim_locked(
             resource_id=tracked,
             owner_id=owner,
@@ -310,7 +310,7 @@ def test_absent_observation_cannot_be_published(
 def test_present_observation_publishes_exact_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from setforge.locking import install_resources_lock
+    from setforge.locking import mutation_locks
 
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     path = tmp_path / "settings.ini"
@@ -319,7 +319,7 @@ def test_present_observation_publishes_exact_claim(
     decision = decide_file(observe_file(path), None, owner_id=owner)
     store = OwnershipStore()
 
-    with install_resources_lock():
+    with mutation_locks(resources=True):
         claim = publish_file_claim_locked(
             store,
             decision,

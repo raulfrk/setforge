@@ -264,7 +264,8 @@ def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
 
     Read-modify-write of the JSON map: each individual *write* is torn-free
     (:func:`setforge.atomicio.atomic_write_text` swaps the whole file into
-    place). SetForge CLI writers hold :func:`setforge.locking.install_resources_lock`
+    place). SetForge CLI writers hold
+    ``setforge.locking.mutation_locks(resources=True)``
     across this read-modify-write and related cache mutations. Direct helper
     callers must provide equivalent serialization. The subdir *name* (not the
     absolute path) is stored so

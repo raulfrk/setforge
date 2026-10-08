@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from setforge import locking, operations
+from setforge import operations
 from setforge.cli import stage as stage_mod
 from setforge.cli.stage import (
     Decision,
@@ -20,6 +20,7 @@ from setforge.config import resolve_profile
 from setforge.ownership import OwnershipStore
 from setforge.reconcile import store
 from setforge.reconcile.types import HunkClass
+from tests.test_operations import _writer_locks_held
 from tests.test_stage import _setup
 from tests.test_stage_structured import _setup_structured
 
@@ -60,11 +61,11 @@ def test_failed_stage_recovers_under_its_mutation_locks(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     apply = prepare_stage(tmp_path, monkeypatch)
-    held_during_recovery: list[set[locking.LockRank]] = []
+    held_during_recovery: list[tuple[bool, bool]] = []
     real_recover = operations.recover_automatically
 
     def recording_recover(journal: operations.OperationJournal) -> bool:
-        held_during_recovery.append({rank for rank, _key in locking._HELD_RANKS.get()})
+        held_during_recovery.append(_writer_locks_held("p"))
         return real_recover(journal)
 
     monkeypatch.setattr(operations, "recover_automatically", recording_recover)
@@ -73,12 +74,7 @@ def test_failed_stage_recovers_under_its_mutation_locks(
     with pytest.raises(OSError, match="injected post-record failure"):
         apply()
 
-    (held,) = held_during_recovery
-    assert {
-        locking.LockRank.MUTATION,
-        locking.LockRank.RESOURCES,
-        locking.LockRank.PROFILE,
-    } <= held
+    assert held_during_recovery == [(True, True)]
     assert operations.active("p") is None
 
 
