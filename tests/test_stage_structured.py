@@ -815,3 +815,95 @@ def test_yaml_staged_by_line_stays_line_staged_once_its_base_parses(
     assert b"my-laptop" in destination.read_bytes()
     entry = store.read_index("p").files[str(fid)]
     assert {row["kind"] for row in entry.hunks} == {"line"}
+
+
+def _repaired_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stage: str | None,
+    upstream_host: bytes,
+    flags: list[str],
+) -> tuple[bytes, bytes]:
+    """Install a repaired ``conf.yaml`` over its unparsable, locally edited copy.
+
+    Returns the repaired tracked bytes and the resulting live bytes. ``stage``
+    first marks the ``host`` line keep-local (``"local"``) or marks both edited
+    lines shared (``"shared"``); ``None`` leaves the file unstaged.
+    """
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+    from tests.test_cli_cleanup import _TerminalInput
+
+    args, source, destination = _installed_broken_yaml(tmp_path, monkeypatch)
+    if stage == "local":
+        _stage_conf_yaml(monkeypatch, args)
+    elif stage == "shared":
+        monkeypatch.setattr(
+            stage_mod,
+            "_interactive_choice",
+            lambda _stage: lambda _unit, _index, _total: Decision(HunkClass.SHARED),
+        )
+        staged = CliRunner().invoke(
+            app, ["stage", "conf.yaml", *args], input=_TerminalInput()
+        )
+        assert "2 shared  0 local  0 pending" in staged.output, staged.output
+    repaired = (
+        _BROKEN_YAML.replace(b"top: {broken", b"top: {fixed: 1}")
+        .replace(b"shared: 1", b"shared: 2")
+        .replace(b"base-host", upstream_host)
+    )
+    source.write_bytes(repaired)
+
+    installed = CliRunner().invoke(
+        app, ["install", *args, *flags, "--yes", "--no-fetch", "--no-git-check"]
+    )
+
+    assert installed.exit_code == 0, (installed.output, installed.exception)
+    return repaired, destination.read_bytes()
+
+
+@pytest.mark.parametrize("flags", [["--auto=use-tracked"], ["--auto=keep-live"], []])
+def test_install_of_a_repaired_yaml_keeps_a_kept_local_line_upstream_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str]
+) -> None:
+    repaired, live = _repaired_install(
+        tmp_path, monkeypatch, stage="local", upstream_host=b"base-host", flags=flags
+    )
+
+    assert live == repaired.replace(b"base-host", b"my-laptop")
+
+
+def test_use_tracked_still_takes_tracked_for_a_kept_local_line_upstream_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Current behaviour: ``--auto=use-tracked`` resolves a conflict to tracked.
+
+    A keep-local mark does not win when upstream changed the same lines.
+    """
+    repaired, live = _repaired_install(
+        tmp_path,
+        monkeypatch,
+        stage="local",
+        upstream_host=b"upstream-host",
+        flags=["--auto=use-tracked"],
+    )
+
+    assert live == repaired
+
+
+@pytest.mark.parametrize("stage", [None, "shared"])
+def test_use_tracked_restores_an_unparsable_yaml_with_no_kept_local_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str | None
+) -> None:
+    """Without a keep-local decision the whole tracked file replaces live."""
+    repaired, live = _repaired_install(
+        tmp_path,
+        monkeypatch,
+        stage=stage,
+        upstream_host=b"base-host",
+        flags=["--auto=use-tracked"],
+    )
+
+    assert live == repaired

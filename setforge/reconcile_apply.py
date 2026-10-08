@@ -50,6 +50,7 @@ from setforge.reconcile import (
     MergeResult,
     merge,
     read_base,
+    read_index,
     read_local,
 )
 from setforge.reconcile.conflict_choices import (
@@ -65,7 +66,7 @@ from setforge.reconcile.structured_units import (
     models_equal,
     uses_aliases,
 )
-from setforge.reconcile.types import Absent
+from setforge.reconcile.types import Absent, HunkClass
 from setforge.structural_merge import get_at_path, merge_structural
 from setforge.ui.primitives import CANCEL, Cancelled
 
@@ -571,7 +572,17 @@ def _key_merge(
         return None
 
 
+def _keeps_local_units(profile: str, fid: FileId) -> bool:
+    """Whether ``stage`` recorded a keep-local decision for the file."""
+    entry = read_index(profile).files.get(str(fid))
+    return entry is not None and any(
+        row.get("cls") == HunkClass.LOCAL for row in entry.hunks
+    )
+
+
 def _structured_outcome(
+    profile: str,
+    fid: FileId,
     base: bytes | None,
     live: bytes | Absent,
     tracked: bytes,
@@ -582,12 +593,15 @@ def _structured_outcome(
     if fmt is None or base is None or not isinstance(live, bytes):
         return None
     # A live file the format cannot parse (truncated write, editor crash)
-    # has no keys to merge; --auto=use-tracked restores the tracked file.
+    # has no keys to merge; --auto=use-tracked restores the tracked file. A file
+    # with a keep-local decision is merged instead: replacing it whole would
+    # drop a kept part that upstream did not touch.
     if (
         auto is AutoSide.THEIRS
         and live != tracked
         and not _parses(live, fmt)
         and _parses(tracked, fmt)
+        and not _keeps_local_units(profile, fid)
     ):
         return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
 
@@ -666,7 +680,7 @@ def reconcile_file(
             seed_prompt=seed_prompt,
         )
 
-    structured = _structured_outcome(base_raw, live, tracked, fmt, auto)
+    structured = _structured_outcome(profile, fid, base_raw, live, tracked, fmt, auto)
     if structured is not None:
         return structured
 
