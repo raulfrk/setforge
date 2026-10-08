@@ -205,6 +205,13 @@ def test_recovery_refuses_replacement_of_recorded_directory(
         parent.symlink_to(outside, target_is_directory=True)
     else:
         parent.mkdir(mode=0o751)
+        recorded = next(g.inode for g in journal.path_guards if g.path == parent)
+        if parent.lstat().st_ino == recorded:
+            # The filesystem handed the freed inode number straight back, and a
+            # guard keyed on inode number cannot tell that from the original.
+            # Park this directory so its number stays taken, then replace again.
+            parent.rename(tmp_path / "parked")
+            parent.mkdir(mode=0o751)
 
     with pytest.raises(SetforgeError, match="parent changed before recovery"):
         operations.recover_files(journal)
