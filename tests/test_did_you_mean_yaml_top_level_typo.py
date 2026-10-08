@@ -36,7 +36,7 @@ def test_validate_setforge_yaml_top_level_typo_suggests_known_key(
     _write_tracked_src(tmp_path)
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
-        # ``proffiles`` is Levenshtein distance 1 from the known
+        # ``proffiles`` is one extra letter away from the known
         # ``profiles`` top-level key on Config.
         "version: 1\n"
         "tracked_files:\n"
@@ -60,7 +60,7 @@ def test_validate_setforge_yaml_top_level_typo_suggests_known_key(
 def test_validate_setforge_yaml_top_level_typo_no_close_match_omits_suggestion(
     tmp_path: Path,
 ) -> None:
-    """A top-level typo with no candidate inside the Levenshtein <= 2 gate
+    """A top-level typo with no similar candidate
     surfaces a schema error WITHOUT a "Did you mean" line (anti-smell:
     no false-positive suggestions)."""
     _write_tracked_src(tmp_path)

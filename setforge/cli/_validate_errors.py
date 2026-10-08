@@ -9,17 +9,13 @@ Two error categories with distinct UX:
 - **SCHEMA VALIDATION ERROR** — multi-line shape per mockup D:
   ``✗ SCHEMA VALIDATION ERROR`` header, indented snippet, ``←─── line N``
   marker on the offending line, ``^^^^`` underline beneath the offending
-  value, optional ``Did you mean '<close-match>'`` suggestion gated by
-  Levenshtein ≤ ``max_distance`` over a stdlib ``difflib`` pre-filter,
-  and a ``Fix: ...`` action hint.
+  value, optional ``Did you mean '<close-match>'`` suggestion from
+  :func:`suggest_close_match`, and a ``Fix: ...`` action hint.
 
-The close-match suggester deliberately combines a permissive ``difflib``
-pre-filter (cheap, character-level ratio) with a strict
-:func:`setforge._levenshtein.levenshtein` distance gate. ``difflib``
-alone is too noisy for one-token typos (cutoff=0.5 surfaces 50%-similar
-strings as "matches"); Levenshtein alone over a long candidate list is
-slower than the difflib-first pipeline. The combination is fast AND
-free of false-positive "Did you mean" suggestions.
+The close-match suggester is a single stdlib :func:`difflib.get_close_matches`
+call. Its cutoff sits just under 2/3, the similarity of a one-character slip
+in a three-letter key, so short keys such as ``dst`` or ``add`` still get a
+suggestion while unrelated names do not.
 
 The formatters emit plain text only — no ANSI codes. The unicode
 glyphs (``✗``, ``←───``) are literal characters, not escape
@@ -32,26 +28,15 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from setforge._levenshtein import levenshtein
+_CLOSE_MATCH_CUTOFF = 0.66
 
 
-def suggest_close_match(
-    word: str, candidates: list[str], max_distance: int = 2
-) -> str | None:
-    """Return the single best close-match candidate or ``None``.
-
-    Two-stage pipeline: stdlib :func:`difflib.get_close_matches` produces
-    up to 3 candidates ordered by descending similarity ratio (cutoff
-    0.5); the first whose :func:`setforge._levenshtein.levenshtein`
-    distance is ``<= max_distance`` wins. The hard Levenshtein gate
-    prevents "Did you mean" false-positives that difflib's ratio would
-    let through (anti-smell from SPEC 9).
-    """
-    pre = difflib.get_close_matches(word, candidates, n=3, cutoff=0.5)
-    for c in pre:
-        if levenshtein(word, c) <= max_distance:
-            return c
-    return None
+def suggest_close_match(word: str, candidates: list[str]) -> str | None:
+    """Return the closest candidate to ``word``, or ``None`` when none is near."""
+    matches = difflib.get_close_matches(
+        word, candidates, n=1, cutoff=_CLOSE_MATCH_CUTOFF
+    )
+    return matches[0] if matches else None
 
 
 def format_yaml_parse_error(path: Path, line: int, col: int, msg: str) -> str:
