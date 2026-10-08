@@ -25,6 +25,7 @@ from setforge.reconcile import (
     record,
     write_base,
 )
+from setforge.reconcile.structured_units import StructuredFormat
 from setforge.reconcile.wizard import CANCEL
 from setforge.reconcile_apply import (
     AutoSide,
@@ -374,3 +375,111 @@ class TestAuto:
         assert out.content == b"local\n"
         assert out.new_base == b"up\n"
         assert out.seeded is False
+
+
+def test_wizard_receives_the_file_its_conflict_path_and_claude_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fid = _fid()
+    write_base(_PROFILE, fid, b"base\n")
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _capture(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        return CANCEL
+
+    def _claude_merge(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(reconcile_apply, "resolve_conflicts", _capture)
+
+    reconcile_file(
+        _PROFILE,
+        fid,
+        live=b"ours\n",
+        tracked=b"theirs\n",
+        interactive=True,
+        display_path="~/doc",
+        claude_merge=_claude_merge,  # type: ignore[arg-type]
+    )
+
+    ((args, kwargs),) = calls
+    got_fid, result = args
+    assert got_fid == fid
+    assert isinstance(result, MergeResult)
+    assert not result.clean
+    assert kwargs == {"display_path": "~/doc", "claude_merge": _claude_merge}
+
+
+def test_seed_prompt_names_the_file_id_when_no_display_path_is_given() -> None:
+    seen: list[str] = []
+
+    def _capture(display_path: str, _live: bytes, _tracked: bytes) -> SeedChoice:
+        seen.append(display_path)
+        return SeedChoice.KEEP_LIVE
+
+    reconcile_file(
+        _PROFILE,
+        _fid(),
+        live=b"local\n",
+        tracked=b"upstream\n",
+        interactive=True,
+        seed_prompt=_capture,
+    )
+
+    assert seen == [str(_fid())]
+
+
+def test_auto_theirs_restores_a_locally_deleted_unchanged_file() -> None:
+    fid = _fid()
+    write_base(_PROFILE, fid, b"same\n")
+
+    out = reconcile_file(
+        _PROFILE, fid, live=ABSENT, tracked=b"same\n", auto=AutoSide.THEIRS
+    )
+
+    assert out.kind is ReconcileKind.WRITE
+    assert out.content == b"same\n"
+
+
+def test_structured_file_deleted_locally_is_removed_not_a_noop() -> None:
+    fid = _fid("conf.yaml")
+    write_base(_PROFILE, fid, b"a: 1\n")
+
+    out = reconcile_file(
+        _PROFILE, fid, live=ABSENT, tracked=b"a: 1\n", fmt=StructuredFormat.YAML
+    )
+
+    assert out.kind is ReconcileKind.REMOVE
+
+
+def test_auto_theirs_key_merges_a_parsable_yaml_instead_of_replacing_it() -> None:
+    fid = _fid("conf.yaml")
+    write_base(_PROFILE, fid, b"a: 1\nb: 1\n")
+
+    out = reconcile_file(
+        _PROFILE,
+        fid,
+        live=b"a: 2\nb: 1\n",
+        tracked=b"a: 1\nb: 2\n",
+        fmt=StructuredFormat.YAML,
+        auto=AutoSide.THEIRS,
+    )
+
+    assert out.content == b"a: 2\nb: 2\n"
+
+
+def test_auto_theirs_line_merges_a_plain_file_even_when_tracked_reads_as_json() -> None:
+    fid = _fid()
+    base = b"[\n1,\n2,\n3,\n4,\n5,\n6\n]\n"
+    write_base(_PROFILE, fid, base)
+
+    out = reconcile_file(
+        _PROFILE,
+        fid,
+        live=base.replace(b"1,", b"x y,"),
+        tracked=base.replace(b"6", b"7"),
+        auto=AutoSide.THEIRS,
+    )
+
+    assert out.content == b"[\nx y,\n2,\n3,\n4,\n5,\n7\n]\n"
