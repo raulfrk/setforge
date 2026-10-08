@@ -170,13 +170,36 @@ def test_typo_in_a_file_another_profile_uses_does_not_break_this_profile(
     assert cleaned.exit_code == 0, cleaned.output
 
 
-@pytest.mark.parametrize("verb", ["compare", "cleanup-orphans"])
+def test_scan_lists_the_same_files_when_another_profile_has_a_typo(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_two_profile_config(config_repo, with_typo=False)
+    install_args = ("--no-secrets-scan", "--no-git-check", "--yes")
+    assert _run_as("p", "install", config, *install_args).exit_code == 0
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+    baseline = _run_as("p", "cleanup-orphans", config, "--scan")
+    assert baseline.exit_code == 0, baseline.output
+    assert str(stray) in baseline.output
+
+    _write_two_profile_config(config_repo, with_typo=True)
+    result = _run_as("p", "cleanup-orphans", config, "--scan")
+
+    assert result.exit_code == 0, result.output
+    assert result.output == baseline.output
+
+
+@pytest.mark.parametrize(
+    ("verb", "extra"),
+    [("compare", ()), ("cleanup-orphans", ()), ("cleanup-orphans", ("--scan",))],
+    ids=["compare", "cleanup-orphans", "cleanup-orphans-scan"],
+)
 def test_typo_in_this_profiles_own_file_is_still_refused(
-    config_repo: ConfigRepo, verb: str
+    config_repo: ConfigRepo, verb: str, extra: tuple[str, ...]
 ) -> None:
     config = _write_two_profile_config(config_repo, with_typo=True)
 
-    result = _run_as("q", verb, config)
+    result = _run_as("q", verb, config, *extra)
 
     assert result.exit_code != 0, result.output
     assert isinstance(result.exception, ConfigError)

@@ -162,8 +162,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shortened path (`~/x.txt`). Destinations that `validate` accepts resolve
   exactly as before. `revert` still undoes an earlier install after such a
   typo, and a typo in a file that only another profile uses does not stop
-  `install`, `compare`, `cleanup-orphans` or `ownership revert` for the
-  profile you selected.
+  `install`, `compare`, `cleanup-orphans` (including `--scan`) or
+  `ownership revert` for the profile you selected.
 
 ### Removed
 
