@@ -477,7 +477,7 @@ def _apply_cleanup(
                     )
                 mark_orphan(item.identity, provider=item.provider, console=console)
             continue
-        # Serialize each delete (transition write + unlink) under
+        # Serialize each package removal under
         # profile_lock, like every other mutating verb, so a concurrent
         # install/sync writing the same profile's state cannot interleave.
         # Per-item (not whole-loop): _pick_action above is interactive and

@@ -392,9 +392,11 @@ non-TTY context the command exits 1.
 
 `install` asks the same way when a file with a declared `mode:` has different
 permission bits on the host: the panel lists each file and the reset to the
-declared mode (the live mode cannot be kept). With `--yes` the reset is printed
-and applied; without `--yes` in a non-TTY context `install` exits 1 and changes
-nothing.
+declared mode (the live mode cannot be kept). To keep a deliberately different
+mode, change the file's `mode:` in `setforge.yaml`, or, for this host only, set
+`tracked_files.<id>.mode` (for example `0o600`) in
+`~/.config/setforge/local.yaml`. With `--yes` the reset is printed and applied;
+without `--yes` in a non-TTY context `install` exits 1 and changes nothing.
 
 ## Revert
 

@@ -2449,7 +2449,11 @@ def install(  # noqa: C901 - confirmation and frozen-plan orchestration
         False,
         "--yes",
         "-y",
-        help="Skip the --auto* confirmation prompt (for non-interactive use).",
+        help=(
+            "Skip the --auto* confirmation prompt and reset drifted file "
+            "permission modes to the tracked mode without asking "
+            "(for non-interactive use)."
+        ),
     ),
     no_secrets_scan: bool = typer.Option(
         False,

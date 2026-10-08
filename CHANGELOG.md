@@ -59,6 +59,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same capture and can be undone with `setforge revert`. Unlike `capture`,
   `sync` also brings the profile's extension list in `setforge.yaml` in line
   with the extensions installed on the host, and records a transition.
+  Two things `capture` did not need, `sync` does: `code --list-extensions`
+  must not fail or time out (if it does, `sync` stops before writing anything;
+  a missing `code` command only skips the extension step with a warning), and
+  the SetForge state directory must be writable, to record the transition.
 - `setforge install --retry-failed` is gone. Run `setforge install` again
   instead: it retries the plugins and extensions that failed last time and
   leaves everything already in place alone. Install also stops writing
