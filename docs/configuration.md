@@ -553,6 +553,108 @@ artifact without contacting GitHub or silently resolving a different asset.
 Legacy lock v1 files and scalar declarations remain readable as universal
 assets.
 
+### Local binaries from the config repo
+
+A `local` package installs a file that lives in your config repo, such as a
+script or a prebuilt binary you commit yourself:
+
+```yaml
+packages:
+  mytool:
+    type: local
+    path: bin/mytool        # relative to <config-repo>/tracked/
+    binary: mytool
+    install: ~/.local/bin
+    extract: false          # a plain file, not an archive
+profiles:
+  default:
+    packages: [mytool]
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `path` | yes | The source file, relative to `<config-repo>/tracked/`. |
+| `binary` | yes | A bare file name (no `/` or `..`). It names the package, and with `extract: true` it is the archive member to install. |
+| `install` | yes | The directory to install into; `~` is expanded. |
+| `extract` | no, default `true` | Treat `path` as an archive (`.tar.gz`, `.tgz`, `.tar`, `.tar.bz2`, `.tar.xz` or `.zip`) and install its `binary` member. Set `false` for a plain file. |
+| `rename` | no | A bare file name to install under instead of `binary`. |
+| `checksum` | no | `sha256:` followed by 64 hex digits, checked against the source file before anything is written. |
+| `chmod` | no, default `+x` | `+x` installs mode `0755`; an octal string such as `"750"` sets that mode. setuid and setgid bits are rejected. |
+
+To install a member of an archive, point `path` at the archive and leave
+`extract` at its default:
+
+```yaml
+packages:
+  mytool:
+    type: local
+    path: dist/mytool.tar.gz
+    binary: mytool
+    install: ~/.local/bin
+    checksum: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+Limits:
+
+- The source must be a regular file inside `tracked/`. An absolute `path`, a
+  `..` that leaves `tracked/`, a symlink that resolves outside it, and a
+  missing file are all hard failures; nothing is installed.
+- A `checksum` is optional here, unlike `github_release`. A mismatch is a hard
+  failure.
+- Install replaces the destination only when SetForge installed it earlier. A
+  different file already at the destination is left alone and reported as a
+  hard failure, unless its bytes are identical to the source. Move it aside to
+  let SetForge install over it.
+- A later `install` copies the file again when the source bytes changed or the
+  installed file is missing, and does nothing otherwise.
+- A package is identified by its `binary` name, so declare each binary name
+  once.
+- `setforge lock` does not pin `local` packages.
+- A bundle component can declare the same fields inline under `local:`.
+
+### Go modules
+
+A `go` package installs a Go program with `go install`:
+
+```yaml
+packages:
+  goimports:
+    type: go
+    module: golang.org/x/tools/cmd/goimports
+    version: v0.30.0
+profiles:
+  default:
+    packages: [goimports]
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `module` | yes | The module path of the program, as `go install` takes it. |
+| `version` | no, default `latest` | The version to install: whatever `go install` accepts after the `@`. |
+
+Install runs `go install -- <module>@<version>` and puts the program in the
+first of these that is set: the directory `go env GOBIN` reports, the first
+`GOPATH` entry's `bin/`, or `~/go/bin`. SetForge names the program after the
+last segment of the module path, ignoring a trailing major-version segment such
+as `/v2` (`github.com/owner/mod/v2` installs `mod`).
+
+Limits:
+
+- It needs a Go toolchain. SetForge looks for `go` on `PATH`, or at the path in
+  `SETFORGE_GO_BIN` or the `binaries:` block of `local.yaml`. Without one, or
+  when `go install` fails, the module is skipped with a warning and the
+  install does not fail because of it.
+- A module that is already installed (SetForge has a receipt for it and the
+  program is in place) is not installed again. With no `version`, `latest` is
+  requested only when the module is not installed yet.
+- Two modules that would install the same program name are refused before
+  anything is installed.
+- `go install` is given up on after 30 minutes.
+- `setforge lock` resolves the module in a scratch directory (your own
+  `go.mod` is never touched) and pins its exact version and Go module
+  checksum; `setforge install --locked` then installs the pinned version.
+- A bundle component can declare the same fields inline under `go:`.
+
 ## Per-host preservation
 
 Some live state is host-specific and must survive a re-`install`. Classify it
@@ -585,7 +687,8 @@ config repo's `templates/` directory), then map a host-local section NAME to it
 in a profile's `section_slots:`. On `install`, an empty or missing host-local
 section named there is seeded **once** from the template body; a section that
 already has content is left untouched (the host owns it), so later template
-edits do not propagate to a host that has already adopted the section.
+edits do not propagate to a host that has already adopted the section. A seeded
+section you delete stays deleted: a later `install` does not seed it again.
 
 ## Host-local, never-tracked files
 

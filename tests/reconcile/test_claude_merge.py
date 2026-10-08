@@ -24,6 +24,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from setforge.reconcile import WizardResult, resolve_conflicts
+from setforge.reconcile import claude_merge as cm
 from setforge.reconcile.claude_merge import (
     _build_prompt,
     _fenced,
@@ -182,6 +183,52 @@ def test_edit_returns_edited_bytes(
     assert isinstance(out, WizardResult)
     assert out.merged.merged() == b"EDITED\n"
     assert seen == ["DRAFT\n"]  # editor was seeded with the accepted draft
+
+
+def test_edit_with_leftover_markers_is_refused_and_nothing_is_folded(
+    claude_stub: ClaudeStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude_stub.set(STUB_STDOUT="DRAFT\n")
+    edits: list[str] = []
+
+    def _fake_editor(target: Path) -> None:
+        edits.append(target.read_text(encoding="utf-8"))
+        target.write_text("<<<<<<< x\nA\n=======\nB\n>>>>>>> y\n", encoding="utf-8")
+
+    monkeypatch.setattr("setforge.reconcile._claude_ui.run_editor", _fake_editor)
+    bodies: list[str] = []
+    real_bar = cm.button_bar
+
+    def _spy_bar(*args: object, **kwargs: object) -> object:
+        bodies.append(str(kwargs.get("body")))
+        return real_bar(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cm, "button_bar", _spy_bar)
+
+    # Claude-merge → draft → Edit (refused) → the prior draft is reviewed again
+    # → ← Back → region menu → Ours.
+    out = _run(b"c\rebo")
+    assert isinstance(out, WizardResult)
+    assert out.merged.merged() == b"A\n"
+    assert edits == ["DRAFT\n"]
+    assert "couldn't use that edit" not in bodies[0]
+    assert "couldn't use that edit" in bodies[1]
+    assert "DRAFT" in bodies[1]  # the prior draft stays under review
+
+
+def test_refused_blank_edit_can_be_edited_again(
+    claude_stub: ClaudeStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude_stub.set(STUB_STDOUT="DRAFT\n")
+    written = iter(["   \n", "FIXED\n"])
+
+    def _fake_editor(target: Path) -> None:
+        target.write_text(next(written), encoding="utf-8")
+
+    monkeypatch.setattr("setforge.reconcile._claude_ui.run_editor", _fake_editor)
+    out = _run(b"c\ree")  # Claude-merge → draft → Edit (blank, refused) → Edit
+    assert isinstance(out, WizardResult)
+    assert out.merged.merged() == b"FIXED\n"
 
 
 # --------------------------------------------------------------------------- #
