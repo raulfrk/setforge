@@ -216,6 +216,24 @@ class _PersistPlan:
     drafts: dict[UnitRef, bytes]
 
 
+def _declares_id(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path, wanted: str
+) -> bool:
+    """Whether ``wanted`` is the name or a directory sub-name of a stageable file."""
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        if tracked_file.generated is not None or tracked_file.tree is not None:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        if any(
+            wanted in (name, sub_name)
+            for sub_name, _sub_src, _sub_dst in expand_tracked_file(name, src, dst)
+        ):
+            return True
+    return False
+
+
 def _collect(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -233,9 +251,10 @@ def _collect(
     present live, with a recorded merge base, and UTF-8 text that its engine can
     read. A binary file, or a live file its key engine cannot parse, gets no unit
     staging; capture writes it back verbatim.
-    ``only`` filters to a single file by tracked-file name, sub-name, live path,
-    or live basename.
+    ``only`` filters to a single file: by tracked-file name or sub-name when one
+    declares it, otherwise by live path or live basename.
     """
+    by_id = only is not None and _declares_id(cfg, resolved, repo_root, only)
     stages: list[FileStage[Any]] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
@@ -247,10 +266,7 @@ def _collect(
             if kind is UnitKind.KEY and su_mod.structured_format(sub_dst) is None:
                 continue
             if only is not None and only not in (
-                name,
-                sub_name,
-                str(sub_dst),
-                sub_dst.name,
+                (name, sub_name) if by_id else (str(sub_dst), sub_dst.name)
             ):
                 continue
             if not sub_dst.exists():
