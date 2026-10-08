@@ -109,6 +109,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Answering "no" to `setforge migrate --apply` now really changes nothing. When
+  the migration included the step that retires user-section markers (schema 2.0
+  to 2.1), merely showing the preview stripped the markers from the deployed
+  file (for example `~/.claude/CLAUDE.md`) before you had answered, and
+  declining did not put them back. For the same reason a migration that failed
+  and rolled back left that file without its markers; it is now restored too.
+  The preview now shows the change to that file correctly, and a confirmed
+  migration writes the same result as before.
 - In the Claude-assisted merge, a draft you edit by hand is now checked like
   Claude's own drafts: an empty edit or one that still contains conflict markers
   is refused with a message, and you stay on the review screen to edit again or

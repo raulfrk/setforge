@@ -386,7 +386,7 @@ def _file_plans(roots: MigrationRoots) -> list[_FilePlan]:
     for name, profiles in file_profiles.items():
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, roots.repo_root)
-        dst = resolve_dst(tracked_file)
+        dst = roots.live_path(resolve_dst(tracked_file))
         tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
         live_text = dst.read_text(encoding="utf-8") if dst.exists() else ""
         has_markers = _has_markers(tracked_text) or _has_markers(live_text)
