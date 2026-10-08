@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -117,3 +118,74 @@ class FakeResponse:
 
     def __exit__(self, *exc: object) -> None:
         return None
+
+
+class FakeMcpCli:
+    """Scripted ``claude mcp`` driver recording argv lists.
+
+    ``registry`` maps name -> (command_tokens, scope) and models the live
+    server state. ``add``/``remove`` mutate it; ``get --json`` reads it.
+    ``get_payloads`` overrides the generated JSON response for a server.
+    ``add_errors`` / ``remove_errors`` map a name -> stderr string to raise
+    a :class:`subprocess.CalledProcessError` for that op.
+    """
+
+    def __init__(
+        self,
+        *,
+        registry: dict[str, tuple[list[str], str]] | None = None,
+        get_payloads: dict[str, object] | None = None,
+        add_errors: dict[str, str] | None = None,
+        remove_errors: dict[str, str] | None = None,
+    ) -> None:
+        self.real_run = subprocess.run
+        self.registry = registry or {}
+        self.get_payloads = get_payloads or {}
+        self.add_errors = add_errors or {}
+        self.remove_errors = remove_errors or {}
+        self.calls: list[list[str]] = []
+
+    def run(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "git":
+            return self.real_run(argv, **kwargs)
+        self.calls.append(list(argv))
+        # argv[0] is the claude binary; argv[1] == "mcp".
+        verb = argv[2]
+        if verb == "get":
+            name = argv[3]
+            if name not in self.registry:
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr="No MCP server found"
+                )
+            if name in self.get_payloads:
+                payload = self.get_payloads[name]
+            else:
+                command, scope = self.registry[name]
+                payload = {
+                    "command": command[0],
+                    "args": command[1:],
+                    "scope": scope,
+                }
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload))
+        if verb == "add":
+            # [claude, mcp, add, --scope, <scope>, <name>, --, *tokens]
+            scope = argv[4]
+            name = argv[5]
+            assert argv[6] == "--", f"expected literal -- separator, got {argv[6]!r}"
+            tokens = list(argv[7:])
+            if name in self.add_errors:
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=self.add_errors[name]
+                )
+            self.registry[name] = (tokens, scope)
+            return subprocess.CompletedProcess(argv, 0, stdout="")
+        if verb == "remove":
+            # [claude, mcp, remove, --scope, <scope>, <name>]
+            name = argv[5]
+            if name in self.remove_errors:
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=self.remove_errors[name]
+                )
+            self.registry.pop(name, None)
+            return subprocess.CompletedProcess(argv, 0, stdout="")
+        raise AssertionError(f"unexpected mcp verb {verb!r}")
