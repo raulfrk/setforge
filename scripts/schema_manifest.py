@@ -134,7 +134,7 @@ def live_field_manifest() -> dict[str, dict[str, str]]:
 
 
 # Regenerate after an intentional ADDITION with:
-#   uv run python -c "from setforge.schema_manifest import live_field_manifest; \
+#   uv run python -c "from scripts.schema_manifest import live_field_manifest; \
 #     import pprint; pprint.pp(live_field_manifest())"
 # A REMOVAL or RETYPE within major 1 is forbidden — bump the major instead.
 FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {

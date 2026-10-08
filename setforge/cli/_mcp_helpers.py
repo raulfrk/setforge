@@ -4,7 +4,8 @@ Sibling to :mod:`setforge.cli._plugin_helpers`. No ``app`` import and no
 ``@app.command()`` registrations; the helpers drive ``claude mcp``
 subprocesses and write progress / warnings via ``typer.secho``. The
 install side runs :func:`reconcile_mcp_servers` (a thin wrapper over
-:func:`setforge.mcp_servers.reconcile` that maps its report into an
+:func:`setforge.mcp_servers.plan_reconcile` and
+:func:`setforge.mcp_servers.apply_plan` that maps the report into an
 :class:`~setforge.transitions.MCPDelta`); the revert side runs
 :func:`_reverse_mcp`, the inverse of an ``mcp.json`` delta.
 """

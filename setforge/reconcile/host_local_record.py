@@ -124,8 +124,7 @@ def resolve_template_src(ref: SectionTemplateRef, repo_root: Path) -> Path:
 def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str | None:
     """Return the first resolved tracked_file id whose ``src`` is markdown.
 
-    Host-local sections are supported only on markdown tracked_files (see
-    :func:`setforge.source.validate_host_local_sections_file_type`), so the
+    Host-local sections are supported only on markdown tracked_files, so the
     seed target must be one. ``None`` when the profile has no markdown
     tracked_file to host the seeded section.
     """

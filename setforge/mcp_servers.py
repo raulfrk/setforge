@@ -4,11 +4,11 @@ setforge tracks MCP servers the same way it tracks plugins: a top-level
 ``mcp_servers:`` registry in ``setforge.yaml`` maps a bare name to a
 :class:`~setforge.config.McpServerRef` (a command token list + a scope),
 and each profile lists the bare names it wants registered. On install the
-:func:`reconcile` pass here CONVERGES the declared set: a declared server
-that is absent is added, one whose declared command differs from the live
-registration is updated (remove + re-add), and undeclared servers are
-never touched — setforge will not evict an MCP server the user registered
-by hand.
+:func:`plan_reconcile` / :func:`apply_plan` pair here CONVERGES the declared
+set: a declared server that is absent is added, one whose declared command
+differs from the live registration is updated (remove + re-add), and
+undeclared servers are never touched — setforge will not evict an MCP server
+the user registered by hand.
 
 Subprocess hygiene mirrors :mod:`setforge.claude_plugins`: the ``claude``
 binary is resolved via :func:`setforge.binaries.resolve_binary` (a HARD
@@ -51,7 +51,6 @@ __all__ = [
     "mcp_add",
     "mcp_get_command",
     "mcp_remove",
-    "reconcile",
 ]
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -444,35 +443,6 @@ def _declared_refs(
             )
         refs.append((bare_name, ref))
     return refs
-
-
-def reconcile(
-    cfg: Config,
-    profile: ResolvedProfile,
-) -> McpReconcileReport:
-    """Converge the declared MCP-server set (add-absent / update-on-change).
-
-    For each declared server:
-
-    - read the live command best-effort via :func:`mcp_get_command`;
-    - if it matches the declared command + scope, do nothing;
-    - if it differs, record the removed PRIOR endpoint under ``updated``
-      and a successfully registered replacement under ``added``;
-    - if it is absent, attempt :func:`mcp_add`; an "already exists"
-      response is a failure because it cannot prove convergence;
-    - unreadable or ambiguous inventory refuses planning before effects.
-
-    Undeclared live servers are NEVER removed. Per-server subprocess
-    failures are caught and appended to the report's ``failed`` list so
-    one bad server does not abort the pass.
-
-    Raises:
-        ConfigError: a profile MCP name absent from the top-level
-            ``mcp_servers:`` registry (from :func:`_declared_refs`).
-        PluginToolMissing: the ``claude`` binary cannot be resolved (from
-            the first ``claude mcp`` subprocess via :func:`_get_claude_bin`).
-    """
-    return apply_plan(plan_reconcile(cfg, profile))
 
 
 def _converge_add(
