@@ -26,6 +26,7 @@ can act as an instruction.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 from uuid import uuid4
 
 from prompt_toolkit.styles import Style
@@ -120,14 +121,17 @@ def _validate(draft: str) -> str | None:
     return clean
 
 
-def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
+def _review(clean: str, *, style: Style, note: str = "") -> _Draft | Cancelled:
     """Show the draft and the decision bar; return the chosen :class:`_Draft`.
 
     The draft is untrusted model output, so it is control-char-sanitized for
     display (mirroring :func:`~setforge.reconcile.wizard._display`); the folded
-    bytes on Accept always use the raw ``clean``, never this rendering.
+    bytes on Accept always use the raw ``clean``, never this rendering. ``note``
+    is a fixed refusal message shown above the draft.
     """
     body = f"draft:\n{sanitize_controls(clean)}"
+    if note:
+        body = f"{note}\n{body}"
     return button_bar(
         [
             Button("Accept", _Draft.ACCEPT),
@@ -139,6 +143,34 @@ def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
         body=body,
         style=style,
     )
+
+
+def _review_loop(
+    clean: str, *, style: Style
+) -> bytes | Cancelled | Literal[_Draft.REPROMPT]:
+    """Review one draft until the user accepts, goes back, or asks to re-prompt.
+
+    Returns the merged bytes (Accept, or a hand edit that passes
+    :func:`_validate` — the same gate a model draft passes), :data:`CANCEL`
+    (← Back / Esc), or :data:`_Draft.REPROMPT` (Re-prompt, or an aborted Edit).
+    A refused edit keeps the prior draft under review with a message, so the
+    user can edit again or go back; nothing is folded until a draft passes.
+    """
+    note = ""
+    while True:
+        outcome = _review(clean, style=style, note=note)
+        if outcome is CANCEL or outcome is _Draft.BACK:
+            return CANCEL
+        if outcome is _Draft.ACCEPT:
+            return clean.encode("utf-8")
+        if outcome is not _Draft.EDIT:
+            return _Draft.REPROMPT
+        edited = _edit_draft(clean)
+        if edited is CANCEL:
+            return _Draft.REPROMPT
+        if _validate(edited.decode("utf-8")) is not None:
+            return edited
+        note = "couldn't use that edit — it is empty or still has conflict markers"
 
 
 def _instr_body(note: str) -> str:
@@ -188,15 +220,9 @@ def _merge_one(conflict: Conflict, *, display_path: str) -> bytes | Cancelled:
             note = "couldn't get a clean merge — try again"
             continue
 
-        outcome = _review(clean, style=style)
-        if outcome is CANCEL or outcome is _Draft.BACK:
-            return CANCEL
-        if outcome is _Draft.ACCEPT:
-            return clean.encode("utf-8")
-        if outcome is _Draft.EDIT:
-            edited = _edit_draft(clean)
-            if edited is not CANCEL:
-                return edited
+        reviewed = _review_loop(clean, style=style)
+        if reviewed is not _Draft.REPROMPT:
+            return reviewed
         # Re-prompt (or an aborted Edit) → loop; the session resumes.
         note = ""
 

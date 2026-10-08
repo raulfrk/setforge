@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- In the Claude-assisted merge, a draft you edit by hand is now checked like
+  Claude's own drafts: an empty edit or one that still contains conflict markers
+  is refused with a message, and you stay on the review screen to edit again or
+  go back. It used to be accepted and written into the file as typed.
 - A host-local section that `install` seeded from a `section_templates` entry and
   that you later deleted now stays deleted. It used to come back on the next
   install that also brought a change to the same tracked file.
