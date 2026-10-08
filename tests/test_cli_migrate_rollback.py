@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -10,6 +11,7 @@ from typer.testing import CliRunner
 from setforge import operations, scalar_base_store, transitions
 from setforge.base_store_format import SIDECAR_NAME
 from setforge.cli import app
+from setforge.cli.migrate import MigrateChoice
 from setforge.migrations import (
     ManifestEntry,
     ManifestType,
@@ -19,6 +21,7 @@ from setforge.migrations import (
 )
 from tests.shared_helpers import text_images, write_setforge_yaml
 from tests.test_cli_migrate_revert import _write_chain_origin
+from tests.test_marker_retire_migration import _CFG as _MARKER_CFG
 from tests.test_marker_retire_migration import _host_local
 from tests.test_marker_retire_migration import _setup as _write_marker_origin
 
@@ -538,7 +541,11 @@ def test_real_marker_chain_failure_restores_the_whole_state_tree(
     body = _host_local("mine", "## Mine\nhost line\n")
     roots = _write_marker_origin(tmp_path, tracked="# T\n" + body, live="# T\n" + body)
     local_yaml = Path.home() / ".config" / "setforge" / "local.yaml"
-    watched = (roots.cfg_path, roots.repo_root / "tracked" / "claude" / "CLAUDE.md")
+    watched = (
+        roots.cfg_path,
+        roots.repo_root / "tracked" / "claude" / "CLAUDE.md",
+        Path.home() / ".claude" / "CLAUDE.md",
+    )
     target = _fail_after(monkeypatch, failing_from)
     files_before = {path: path.read_bytes() for path in watched}
     state = transitions.state_root()
@@ -563,6 +570,58 @@ def test_real_marker_chain_failure_restores_the_whole_state_tree(
     assert not local_yaml.exists()
     assert _state_files(state) == state_before
     assert operations.active(transitions.MIGRATE_TRANSITION_PROFILE) is None
+
+
+def _image(paths: tuple[Path, ...]) -> dict[Path, tuple[bytes, int] | None]:
+    return {
+        path: (path.read_bytes(), path.stat().st_mode) if path.exists() else None
+        for path in paths
+    }
+
+
+@pytest.mark.parametrize("live_in_home", [True, False])
+def test_declined_marker_migration_leaves_every_file_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_in_home: bool
+) -> None:
+    body = _host_local("mine", "## Mine\nhost line\n")
+    live = Path.home() / ".claude" / "CLAUDE.md"
+    cfg_text = _MARKER_CFG
+    if not live_in_home:
+        live = tmp_path / "elsewhere" / "CLAUDE.md"
+        live.parent.mkdir()
+        cfg_text = cfg_text.replace("~/.claude/CLAUDE.md", str(live))
+    roots = _write_marker_origin(
+        tmp_path, tracked="# T\n" + body, live="# T\n" + body, cfg=cfg_text
+    )
+    live.write_text("# T\n" + body + "live only\n", encoding="utf-8")
+    live.chmod(0o600)
+    watched = (
+        roots.cfg_path,
+        roots.repo_root / "tracked" / "claude" / "CLAUDE.md",
+        live,
+        Path.home() / ".config" / "setforge" / "local.yaml",
+    )
+    before = _image(watched)
+    state = transitions.state_root()
+    state_before = _state_files(state) if state.exists() else {}
+    monkeypatch.setattr(
+        "setforge.cli.migrate.button_bar", lambda *_a, **_k: MigrateChoice.ABORT
+    )
+    # CliRunner swaps in a non-TTY stdin; the confirm step must see a terminal.
+    monkeypatch.setattr(
+        "setforge.cli.migrate.sys",
+        SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True)),
+    )
+
+    result = runner.invoke(
+        app, ["migrate", "--config", str(roots.cfg_path), "--to", "2.1", "--apply"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "aborted: no migrations applied." in result.output
+    assert f"--- {live}" in result.output
+    assert _image(watched) == before
+    assert (_state_files(state) if state.exists() else {}) == state_before
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can enter any directory")

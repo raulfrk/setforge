@@ -831,6 +831,10 @@ def _render_chain_previews(
             cfg_path=_shadow_path(tmp_root, roots.cfg_path),
             repo_root=_shadow_path(tmp_root, roots.repo_root),
             home=_shadow_path(tmp_root, roots.home),
+            # A tracked file's live dst comes from setforge.yaml, not from the
+            # roots above; without this the marker-retire step strips the REAL
+            # deployed file during the preview, before the user has confirmed.
+            live_root=tmp_root,
         )
         # Best-effort: re-run the chain against shadows. Migrations that
         # branch on actual user filesystem layout may not be exercisable

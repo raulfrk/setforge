@@ -377,12 +377,24 @@ class MigrationRoots:
             so ONE revert reaches the chain's byte-exact origin, not
             merely the step's pre-step state. ``None`` when a migration
             is applied outside the driver.
+        live_root: set only by the read-only ``migrate --apply`` preview, to
+            the throwaway tree it mirrors the affected files into. A tracked
+            file's deployed ``dst`` is resolved from ``setforge.yaml``, not
+            from these roots, so a step must pass it through
+            :meth:`live_path` or its preview run rewrites the real file.
     """
 
     cfg_path: Path
     repo_root: Path
     home: Path
     pre_chain_snapshot: Mapping[Path, FilesystemImage] | None = None
+    live_root: Path | None = None
+
+    def live_path(self, dst: Path) -> Path:
+        """Where a step reads/writes the deployed file ``dst`` under these roots."""
+        if self.live_root is None:
+            return dst
+        return self.live_root / dst.relative_to(dst.anchor)
 
 
 @runtime_checkable
