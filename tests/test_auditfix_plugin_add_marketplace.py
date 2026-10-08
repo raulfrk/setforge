@@ -25,6 +25,7 @@ from typer.testing import CliRunner
 from setforge import reconcile_adapter
 from setforge.cli import app
 from setforge.config import load_config, resolve_profile
+from tests.shared_helpers import write_setforge_yaml
 
 
 def _profile_plugin_names(cfg_path: Path, profile: str) -> list[str]:
@@ -57,12 +58,6 @@ profiles:
 """
 
 
-def _write_config(tmp_path: Path) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(_FIXTURE_YAML, encoding="utf-8")
-    return cfg
-
-
 def test_plugin_add_binds_bare_name_and_config_still_loads(tmp_path: Path) -> None:
     """`plugin add` writes a bare profile binding; the config reloads cleanly.
 
@@ -71,7 +66,7 @@ def test_plugin_add_binds_bare_name_and_config_still_loads(tmp_path: Path) -> No
     this ``load_config`` would raise ``ConfigError: ... reference undeclared
     plugin(s): myprofile.superpowers@anthropics``.
     """
-    cfg = _write_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML)
 
     result = CliRunner().invoke(
         app,
@@ -98,7 +93,7 @@ def test_plugin_add_binds_bare_name_and_config_still_loads(tmp_path: Path) -> No
 
 def test_plugin_add_at_form_argument_also_binds_bare_name(tmp_path: Path) -> None:
     """The ``<name>@<marketplace>`` argument form also stores a bare binding."""
-    cfg = _write_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML)
 
     result = CliRunner().invoke(
         app,
@@ -123,7 +118,7 @@ def test_plugin_remove_at_form_drops_bare_binding(tmp_path: Path) -> None:
     Removal must be symmetric with add: the profile holds the bare name, so a
     user passing the ``@``-form must still drop it.
     """
-    cfg = _write_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _FIXTURE_YAML)
 
     # Seed via the corrected add path.
     add = CliRunner().invoke(

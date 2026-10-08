@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import codex_plugins as codex_plugins_mod
 from setforge.cli import app
+from tests.shared_helpers import write_setforge_yaml
 
 
 def test_codex_reconcile_routes_natively_and_second_run_is_noop(
@@ -605,18 +606,11 @@ def _clear_claude_bin_cache() -> Iterator[None]:
     claude_plugins_mod._get_claude_bin.cache_clear()
 
 
-def _write_marketplace_config(tmp_path: Path) -> Path:
-    """Write a setforge.yaml with one declared marketplace under tmp_path."""
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(_MARKETPLACE_FIXTURE_YAML, encoding="utf-8")
-    return cfg
-
-
 @pytest.mark.parametrize("product", ["claude", "codex"])
 def test_marketplace_add_rejects_option_shaped_name_before_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product: str
 ) -> None:
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
     before = cfg.read_bytes()
     native_calls: list[str] = []
     monkeypatch.setattr(
@@ -653,7 +647,7 @@ def test_marketplace_add_rejects_option_shaped_name_before_mutation(
 def test_plugin_add_rejects_option_shaped_name_before_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product: str
 ) -> None:
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
     before = cfg.read_bytes()
     native_calls: list[str] = []
     monkeypatch.setattr(
@@ -701,7 +695,7 @@ def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`marketplace add` with claude absent exits non-zero and writes no YAML."""
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
     before = cfg.read_bytes()
 
     monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
@@ -722,7 +716,7 @@ def test_marketplace_remove_missing_claude_exits_nonzero_and_leaves_yaml_intact(
     The fixture declares a marketplace that ``remove`` would otherwise
     delete, so a byte-identical file proves the YAML editor never ran.
     """
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
     before = cfg.read_bytes()
 
     monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
@@ -750,7 +744,7 @@ def test_marketplace_add_with_claude_present_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`marketplace add` with claude present registers the marketplace (exit 0)."""
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
 
     monkeypatch.setattr(
         "setforge.claude_plugins.resolve_binary", lambda _: Path("/usr/bin/claude")
@@ -772,7 +766,7 @@ def test_marketplace_remove_with_claude_present_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`marketplace remove` with claude present removes the marketplace (exit 0)."""
-    cfg = _write_marketplace_config(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _MARKETPLACE_FIXTURE_YAML)
 
     monkeypatch.setattr(
         "setforge.claude_plugins.resolve_binary", lambda _: Path("/usr/bin/claude")

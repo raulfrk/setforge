@@ -40,6 +40,7 @@ from setforge.vscode_extensions import (
     remove_from_include,
     uninstall_one,
 )
+from tests.shared_helpers import write_setforge_yaml
 
 # --------------------------------------------------------------------------
 # 1. subprocess OSError → ExtensionInstallFailed / report.failed (not raw)
@@ -183,17 +184,11 @@ profiles:
 """
 
 
-def _write_config(tmp_path: Path) -> Path:
-    p = tmp_path / "setforge.yaml"
-    p.write_text(_FIXTURE, encoding="utf-8")
-    return p
-
-
 def test_add_to_include_dump_failure_does_not_truncate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_path = _write_config(tmp_path)
+    config_path = write_setforge_yaml(tmp_path, _FIXTURE)
     original = config_path.read_text(encoding="utf-8")
 
     def _boom(*_a: object, **_kw: object) -> None:
@@ -215,7 +210,7 @@ def test_capture_extensions_dump_failure_does_not_truncate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_path = _write_config(tmp_path)
+    config_path = write_setforge_yaml(tmp_path, _FIXTURE)
     original = config_path.read_text(encoding="utf-8")
 
     monkeypatch.setattr(vscode_extensions, "list_installed", lambda: {"some.other-ext"})
@@ -235,7 +230,7 @@ def test_remove_from_include_dump_failure_does_not_truncate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_path = _write_config(tmp_path)
+    config_path = write_setforge_yaml(tmp_path, _FIXTURE)
     original = config_path.read_text(encoding="utf-8")
 
     def _boom(*_a: object, **_kw: object) -> None:
@@ -251,7 +246,7 @@ def test_remove_from_include_dump_failure_does_not_truncate(
 
 def test_add_to_include_success_writes_updated_content(tmp_path: Path) -> None:
     """The happy path still produces the expected updated YAML on disk."""
-    config_path = _write_config(tmp_path)
+    config_path = write_setforge_yaml(tmp_path, _FIXTURE)
 
     added = add_to_include(config_path, "main", "new.ext")
 

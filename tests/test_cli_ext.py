@@ -15,6 +15,7 @@ from typer.testing import CliRunner, Result
 
 from setforge.cli import app
 from setforge.config import ExtensionPackage, load_config
+from tests.shared_helpers import write_setforge_yaml
 
 
 @pytest.mark.parametrize("excluded", [False, True])
@@ -135,12 +136,6 @@ profiles:
 """
 
 
-def _write_add_fixture(tmp_path: Path) -> Path:
-    p = tmp_path / "setforge.yaml"
-    p.write_text(_ADD_FIXTURE, encoding="utf-8")
-    return p
-
-
 def _invoke_add(cfg: Path, args: list[str]) -> Result:
     """Run ``ext add`` against a real config with install disabled."""
     runner = CliRunner()
@@ -155,7 +150,7 @@ def test_ext_add_name_flag_threads_through_and_echoes_key(tmp_path: Path) -> Non
     """CLI-layer concern the unit tests can't cover: ``--name`` reaches the
     mint (key≠id lands in the config) AND the stdout echo substitutes the
     KEY for the interesting key≠id case."""
-    cfg = _write_add_fixture(tmp_path)
+    cfg = write_setforge_yaml(tmp_path, _ADD_FIXTURE)
     result = _invoke_add(cfg, ["ms-python.python", "--name", "py"])
     assert result.exit_code == 0, result.output
 

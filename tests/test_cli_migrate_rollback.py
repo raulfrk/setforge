@@ -17,7 +17,7 @@ from setforge.migrations import (
     MigrationRoots,
     registry,
 )
-from tests.shared_helpers import text_images
+from tests.shared_helpers import text_images, write_setforge_yaml
 from tests.test_cli_migrate_revert import _write_chain_origin
 from tests.test_marker_retire_migration import _host_local
 from tests.test_marker_retire_migration import _setup as _write_marker_origin
@@ -34,16 +34,10 @@ def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return state
 
 
-def _write_cfg(tmp_path: Path, body: str) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
-
-
 def test_migrate_journal_reserves_every_declared_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(
+    cfg = write_setforge_yaml(
         tmp_path,
         "version: 1\ntracked_files: {}\nprofiles:\n  default: {}\n  team/dev: {}\n",
     )
@@ -211,7 +205,7 @@ class _RaisingStep:
 def test_keyboard_interrupt_mid_chain_rolls_back_and_reraises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
         "setforge.migrations.registry.MIGRATIONS", (_StampStep(), _InterruptStep())
@@ -233,7 +227,7 @@ def test_keyboard_interrupt_mid_chain_rolls_back_and_reraises(
 def test_store_cutover_then_failure_leaves_store_and_log_consistent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     original = cfg.read_text()
     monkeypatch.setattr(
         "setforge.migrations.registry.MIGRATIONS",
@@ -304,7 +298,7 @@ class _ConcurrentInstallStep:
 def test_rollback_sweep_spares_other_profiles_transition_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     holder: list[Path] = []
     monkeypatch.setattr(
         "setforge.migrations.registry.MIGRATIONS",
@@ -340,7 +334,7 @@ def test_rollback_sweep_spares_other_profiles_transition_record(
 def test_store_snapshot_captured_at_chain_start_preserves_prior_leg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
 
     leg = transitions._snapshot_target(
         transitions.SnapshotStore.LOCAL_CONTENT, "default", "cutover-key"
@@ -395,7 +389,7 @@ def _late_leg() -> Path:
 def test_leg_named_only_after_an_earlier_step_is_rolled_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     original = cfg.read_bytes()
     leg = _late_leg()
     leg.parent.mkdir(parents=True)

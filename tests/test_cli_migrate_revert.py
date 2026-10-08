@@ -28,7 +28,7 @@ from setforge.migrations import (
 )
 from setforge.reconcile import file_id
 from setforge.reconcile.host_local_view import host_local_headings_from_store
-from tests.shared_helpers import file_images
+from tests.shared_helpers import file_images, write_setforge_yaml
 
 runner = CliRunner()
 
@@ -44,12 +44,6 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state = tmp_path / "state"
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
     return state
-
-
-def _write_cfg(tmp_path: Path, body: str) -> Path:
-    cfg = tmp_path / "setforge.yaml"
-    cfg.write_text(body, encoding="utf-8")
-    return cfg
 
 
 @dataclass(slots=True, frozen=True)
@@ -199,7 +193,7 @@ def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
     recorded transition carries the full 1.0->3.0 reverse delta, not just the
     step's pre-step (2.1) state.
     """
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     pre_bytes = cfg.read_bytes()
     monkeypatch.setattr(
         "setforge.migrations.registry.MIGRATIONS",
@@ -231,7 +225,7 @@ def test_migrate_apply_records_revertible_transition(
     state_dir: Path,
 ) -> None:
     """A migrate --apply records a MIGRATE transition; revert restores bytes."""
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     pre_bytes = cfg.read_bytes()
     monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
@@ -258,7 +252,7 @@ def test_migrate_downgrade_records_revertible_transition(
     state_dir: Path,
 ) -> None:
     """A migrate --to=<older> downgrade is revertible to pre-downgrade bytes."""
-    cfg = _write_cfg(tmp_path, _AT_1_1)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_1)
     pre_bytes = cfg.read_bytes()
     monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
@@ -288,7 +282,7 @@ def test_migrate_revert_round_trip_is_byte_exact(
     The sidecar did not exist pre-migration, so revert must delete it
     (restore to absent), proving the byte-restore covers creations too.
     """
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     pre_cfg = cfg.read_bytes()
     sidecar = tmp_path / "tracked" / "note.md"
     assert not sidecar.exists()
@@ -322,7 +316,7 @@ def test_migrate_transition_round_trips_through_metadata_load(
     state_dir: Path,
 ) -> None:
     """The MIGRATE enum member deserializes via load_meta / load_latest."""
-    cfg = _write_cfg(tmp_path, _AT_1_0)
+    cfg = write_setforge_yaml(tmp_path, _AT_1_0)
     monkeypatch.setattr("setforge.migrations.registry.MIGRATIONS", (_StampStep(),))
 
     result = runner.invoke(
@@ -650,7 +644,7 @@ def test_migrate_to_6_then_one_revert_reaches_origin(
     — the reverse never re-runs the down-migration, so the restore is exact
     against the original bytes (no ruamel re-dump skew).
     """
-    cfg = _write_cfg(tmp_path, _CFG_AT_5_0_WITH_LEGACY)
+    cfg = write_setforge_yaml(tmp_path, _CFG_AT_5_0_WITH_LEGACY)
     cfg_origin = cfg.read_bytes()
 
     apply = runner.invoke(
@@ -701,7 +695,7 @@ def test_chained_4_0_to_6_0_single_revert_restores_config_to_origin(
     a transition in the chain — the distinguishing case from the single-owner
     5.0-origin terminal-revert test above.
     """
-    cfg = _write_cfg(tmp_path, _CHAIN_CFG_4_0_WITH_LEGACY)
+    cfg = write_setforge_yaml(tmp_path, _CHAIN_CFG_4_0_WITH_LEGACY)
     cfg_origin = cfg.read_bytes()
 
     apply = runner.invoke(
