@@ -2130,6 +2130,49 @@ def test_ordinary_member_with_adjacent_edits_on_both_sides_is_a_conflict(
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("previous_mode", -1, "an invalid file record"),
+        ("previous_payload", "not base64", "invalid previous payload"),
+        ("applied_payload", "not base64", "invalid applied payload"),
+        ("upstream_payload", "not base64", "invalid upstream payload"),
+        ("source_digest", "0" * 64, "an inconsistent file record"),
+        ("previous_mode", 0o644, "an inconsistent file record"),
+        ("created_parents", [1], "an invalid parent record"),
+    ],
+)
+def test_project_sync_names_what_is_wrong_with_a_damaged_file_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    _, target, record, payload = _recorded_injection(tmp_path, monkeypatch)
+    payload["files"][0][field] = value
+    record.write_text(json.dumps(payload))
+    damaged = record.read_bytes()
+
+    refused = CliRunner().invoke(app, ["project", "sync", str(target), "--yes"])
+
+    assert refused.exit_code == 1
+    assert str(refused.exception) == f"project injection state has {message}"
+    assert record.read_bytes() == damaged
+    assert (target / "AGENTS.md").read_text() == "managed\n"
+
+
+def test_sync_plan_reports_the_recorded_profile_source_of_each_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, target, _, _ = _recorded_injection(tmp_path, monkeypatch)
+
+    stored = plan_sync(target).files[0].stored
+
+    assert stored is not None
+    assert stored.source == config.parent / "project" / "demo" / "AGENTS.md"
+
+
 def test_sync_plan_refuses_a_record_whose_file_id_is_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

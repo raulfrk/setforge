@@ -42,3 +42,4 @@ setforge.project_sync.x__prior_ownership_plan__mutmut_15  # equivalent: _claim_m
 setforge.project_sync.x__prior_ownership_plan__mutmut_16  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
 setforge.project_sync.x__prior_ownership_plan__mutmut_17  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
 setforge.project_sync.x__prior_ownership_plan__mutmut_18  # equivalent: _claim_matches_plan reads only file_id, destination, relative_destination, source_mode and source_digest of the prior plan.
+setforge.project_record.x__record_files__mutmut_208  # equivalent: a created parent with a `..` part is never among the parents of its destination, which has none, so the next clause refuses it with the same message.
