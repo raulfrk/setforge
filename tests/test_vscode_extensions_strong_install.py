@@ -8,6 +8,7 @@ import io
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ import pytest
 from setforge.errors import ExtensionInstallFailed, ResolveError
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType, ResolvedPin
 from setforge.vscode_extensions import install_one
+from tests.fakes import FakeCode
 
 
 def _vsix_bytes() -> bytes:
@@ -30,28 +32,10 @@ _VSIX = _vsix_bytes()
 _VSIX_SHA = hashlib.sha256(_VSIX).hexdigest()
 
 
-class _FakeCode:
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-
-    def run(self, args: list[str], **_: Any) -> subprocess.CompletedProcess:
-        self.calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    @property
-    def install_args(self) -> list[str]:
-        return [c[2] for c in self.calls if c[1] == "--install-extension"]
-
-
 @pytest.fixture
-def fake_code(monkeypatch: pytest.MonkeyPatch) -> _FakeCode:
-    fake = _FakeCode()
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary",
-        lambda name: Path("/usr/bin/code") if name == "code" else None,
-    )
-    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake.run)
-    return fake
+def fake_code(fake_code: Callable[..., FakeCode]) -> FakeCode:
+    """The shared ``fake_code`` factory, called once with nothing installed."""
+    return fake_code()
 
 
 def _pin(version: str, sha_hex: str) -> ResolvedPin:
@@ -82,7 +66,7 @@ def _patch_download(
 
 
 def test_pinned_install_downloads_verifies_and_installs_vsix_file(
-    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+    fake_code: FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen = _patch_download(monkeypatch, _VSIX)
 
@@ -96,7 +80,7 @@ def test_pinned_install_downloads_verifies_and_installs_vsix_file(
 
 
 def test_pinned_install_hash_mismatch_fails_and_does_not_install(
-    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+    fake_code: FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wrong_hash = "0" * 64
     _patch_download(monkeypatch, _VSIX)
@@ -108,7 +92,7 @@ def test_pinned_install_hash_mismatch_fails_and_does_not_install(
 
 
 def test_pinned_install_rejects_non_sha256_integrity(
-    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+    fake_code: FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_download(monkeypatch, _VSIX)
     non_sha256 = ResolvedPin(
@@ -126,7 +110,7 @@ def test_pinned_install_rejects_non_sha256_integrity(
 
 
 def test_pinned_install_cleans_up_temp_on_verify_failure(
-    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+    fake_code: FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_download(monkeypatch, _VSIX)
     before = set(Path(tempfile.gettempdir()).glob("setforge-ext-*.vsix"))
@@ -164,7 +148,7 @@ def test_pinned_install_cleans_up_temp_on_code_failure(
 
 
 def test_pinned_install_download_failure_cleans_up_and_wraps(
-    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+    fake_code: FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # download_vsix's guarded fetch surfaces every failure as ResolveError
     # (fetch_bytes wraps URL/timeout/OS/EOF errors); the install path catches
@@ -180,6 +164,6 @@ def test_pinned_install_download_failure_cleans_up_and_wraps(
     assert fake_code.install_args == []
 
 
-def test_no_pin_uses_marketplace_id_unchanged(fake_code: _FakeCode) -> None:
+def test_no_pin_uses_marketplace_id_unchanged(fake_code: FakeCode) -> None:
     install_one("esbenp.prettier-vscode")
     assert fake_code.install_args == ["esbenp.prettier-vscode"]
