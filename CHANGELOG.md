@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `migrate` (the 3.0 to 4.0 step that removes `host_local_sections` and overlay
+  `spans` from `local.yaml`) now checks, before it changes anything, that the
+  rewritten `local.yaml` reads back as intended. A `local.yaml` where a
+  `tracked_files` entry held only `host_local_sections` and had a comment or
+  blank line between its name and that block used to be rewritten as a file
+  that no longer parses (the step reported success and `validate` then
+  stopped on a YAML parse error). It now stops with "refusing to write FILE",
+  writes nothing and rolls back; remove those comments or blank lines and run
+  `migrate` again. Every other `local.yaml`, mixed indentation included, is
+  rewritten exactly as before.
+
 ## [1.5.1] - 2026-10-09
 
 ### Fixed
