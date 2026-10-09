@@ -236,3 +236,27 @@ def test_no_second_gate_holder_can_sweep_while_a_gated_write_is_in_flight(
         True,
     ]
     assert target.read_bytes() == b"ours\n"
+
+
+def test_stale_staging_links_are_removed_only_under_the_mutation_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "target.txt"
+    target.write_bytes(b"mine\n")
+    stale = tmp_path / gated("link")
+    stale.symlink_to(target)
+
+    atomicio.sweep_stale_temp_links(tmp_path / "link")
+
+    assert stale.is_symlink()
+    assert capsys.readouterr().err == ""
+
+    with mutation_locks():
+        atomicio.sweep_stale_temp_links(tmp_path / "link")
+
+    assert [path.name for path in tmp_path.iterdir()] == ["target.txt"]
+    assert target.read_bytes() == b"mine\n"
+    assert capsys.readouterr().err.replace("\n", "") == (
+        "warning: removed a temporary file left by an interrupted "
+        f"setforge run: {stale}"
+    )

@@ -101,3 +101,73 @@ def test_locked_commands_keep_a_marked_symlink_directory_and_ungated_name(
     assert outside.read_bytes() == b"mine\n"
     assert host.live(gated_backup).is_dir()
     assert host.live(unlocked).read_bytes() == b"live writer\n"
+
+
+def symlink_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
+    """A host whose one tracked file is deployed as ``link`` -> ``real.txt``."""
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        tracked={"body.txt": "body\n"},
+        dsts={"body.txt": "~/.x/link"},
+    )
+    host.config.write_text(
+        host.config.read_text(encoding="utf-8").replace(
+            "dst: '~/.x/link'}", "dst: '~/.x/link', symlink: real.txt}"
+        ),
+        encoding="utf-8",
+    )
+    host.live_dir.mkdir()
+    return host
+
+
+def test_install_removes_the_staging_link_a_killed_symlink_deploy_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = symlink_host(tmp_path, monkeypatch)
+    kill_at_rename(host, "link", *INSTALL)
+    (leftover,) = (
+        path for path in host.live_dir.iterdir() if atomicio.is_temp_name(path.name)
+    )
+    assert leftover.is_symlink()
+    recover(host)
+    assert leftover.is_symlink()
+    # Whatever is not a gated staging link of this very destination stays.
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"mine\n")
+    gated, unlocked = leftover_names("link")
+    other, _ = leftover_names("other")
+    backup, _ = leftover_names("link.bak")
+    regular, directory = gated[:-5] + "0.tmp", gated[:-5] + "1.tmp"
+    kept_links = (unlocked, other, backup, ".link.abc12345.tmp")
+    for name in kept_links:
+        host.live(name).symlink_to(outside)
+    host.live(regular).write_bytes(b"mine\n")
+    host.live(directory).mkdir()
+    # A link with the full gated name is removed; what it points at is not.
+    host.live(gated).symlink_to(outside)
+
+    dry = host.proc_install("--dry-run")
+
+    assert dry.returncode == 0, (dry.stdout, dry.stderr)
+    assert REMOVED not in dry.stderr
+    assert leftover.is_symlink()
+    assert host.live(gated).is_symlink()
+
+    installed = host.proc_install()
+
+    assert installed.returncode == 0, (installed.stdout, installed.stderr)
+    reported = installed.stderr.replace("\n", "")
+    assert f"{REMOVED}{leftover}" in reported
+    assert f"{REMOVED}{host.live(gated)}" in reported
+    assert reported.count(REMOVED) == 2
+    assert str(host.live("link").readlink()) == "real.txt"
+    assert host.live("real.txt").read_bytes() == b"body\n"
+    assert outside.read_bytes() == b"mine\n"
+    assert sorted(path.name for path in host.live_dir.iterdir()) == sorted(
+        ("link", "real.txt", regular, directory, *kept_links)
+    )
+    for name in kept_links:
+        assert host.live(name).is_symlink()
+    assert host.live(regular).read_bytes() == b"mine\n"
+    assert host.live(directory).is_dir()

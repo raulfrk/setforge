@@ -344,7 +344,13 @@ Often that is the `setforge recover` or the repeated command that follows the
 interruption. It removes only regular files named
 `.NAME.setforge-<16 hex digits>.tmp` or `.NAME.bak.setforge-<16 hex digits>.tmp`
 in the directory of the file `NAME` it is writing; it never searches other
-directories and never removes a symlink or a directory. `--dry-run` writes
+directories and never removes a symlink or a directory. A tracked file with
+`symlink:` is deployed through a temporary symlink with the same kind of name;
+the next gated deploy of that link removes a leftover symlink named
+`.NAME.setforge-<16 hex digits>.tmp` beside the link `NAME`, with the same
+warning, and never touches what it points at. Only regular files are skipped
+by name: a symlink with such a name is still treated as yours everywhere else,
+so `cleanup-orphans --scan` lists one that no deploy removed. `--dry-run` writes
 nothing, so it removes nothing. Three kinds of leftover stay until you delete
 them: `setforge-u` names, because their writer may still be running; a leftover
 beside a file SetForge does not write again; and the

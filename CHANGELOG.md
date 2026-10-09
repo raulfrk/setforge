@@ -88,6 +88,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removes nothing, and the message now names what is in the way (up to five
   entries), so you can move it and run `setforge recover` again.
 
+- An `install` killed while it was deploying a tracked file with `symlink:`
+  could leave a hidden temporary symlink named
+  `.NAME.setforge-<16 hex digits>.tmp` beside the link, and nothing ever
+  removed it. The next `install` that deploys the same link now removes it and
+  prints the usual `warning: removed a temporary file left by an interrupted
+  setforge run: <path>`. Only the symlink itself is removed, never the file it
+  points at, and `--dry-run` removes nothing. A symlink with such a name that
+  no deploy removes is still listed by `cleanup-orphans --scan`, as before.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed
