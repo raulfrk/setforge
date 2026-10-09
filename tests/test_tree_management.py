@@ -132,6 +132,63 @@ def test_scan_tree_refuses_reserved_publication_names(
         scan_tree(root, TreePolicy())
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read any entry")
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_scan_tree_says_an_unreadable_entry_could_not_be_read(
+    tmp_path: Path, kind: str
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    locked = root / "locked"
+    if kind == "directory":
+        locked.mkdir()
+    else:
+        locked.write_text("secret", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        with pytest.raises(SetforgeError) as refused:
+            scan_tree(root, TreePolicy())
+    finally:
+        locked.chmod(0o700)
+
+    message = str(refused.value)
+    assert f"could not be read: {locked}" in message
+    assert "Permission denied" in message
+    assert "changed while scanning" not in message
+
+
+def test_scan_tree_says_an_entry_that_vanished_changed_while_scanning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "gone").write_text("here at first", encoding="utf-8")
+    original_scan_entry = tree_management._scan_entry
+
+    def remove_before_scanning(
+        context: object,
+        directory_fd: int,
+        directory: Path,
+        name: str,
+        relative_path: object,
+    ) -> None:
+        (directory / name).unlink()
+        original_scan_entry(
+            context,  # type: ignore[arg-type]
+            directory_fd,
+            directory,
+            name,
+            relative_path,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(tree_management, "_scan_entry", remove_before_scanning)
+
+    with pytest.raises(
+        SetforgeError, match=f"entry changed while scanning: {root / 'gone'}"
+    ):
+        scan_tree(root, TreePolicy())
+
+
 def test_plan_removes_only_unchanged_owned_orphans(tmp_path: Path) -> None:
     source = tmp_path / "source"
     live = tmp_path / "live"
@@ -719,6 +776,55 @@ def test_apply_tree_restores_directory_when_child_appears_after_isolation(
 
     assert (live / "orphan" / "external").read_text(encoding="utf-8") == "keep\n"
     assert not list(live.glob(".orphan.setforge-remove-*"))
+
+
+@pytest.mark.parametrize(
+    ("count", "holds"),
+    [
+        (1, "it still holds external-0"),
+        (
+            7,
+            "it still holds external-0, external-1, external-2, external-3, "
+            "external-4 and 2 more",
+        ),
+    ],
+)
+def test_apply_tree_names_the_entries_that_appeared_before_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int, holds: str
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    source.mkdir()
+    (live / "orphan").mkdir(parents=True)
+    (prior_root / "orphan").mkdir(parents=True)
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED)
+    plan = plan_tree(
+        scan_tree(source, policy, capture_payloads=True),
+        scan_tree(live, policy).inventory,
+        scan_tree(prior_root, policy).inventory,
+        policy,
+    )
+    original_entry_at = tree_management._entry_at
+
+    def add_children_after_isolation(
+        parent_fd: int, name: str, relative: str
+    ) -> TreeEntry:
+        entry = original_entry_at(parent_fd, name, relative)
+        for index in range(count):
+            (live / name / f"external-{index}").write_text("keep\n", encoding="utf-8")
+        return entry
+
+    monkeypatch.setattr(tree_management, "_entry_at", add_children_after_isolation)
+
+    with pytest.raises(SetforgeError) as refused:
+        apply_tree(plan, live, policy)
+
+    assert str(refused.value) == (
+        f"refusing unsafe managed tree removal: orphan: {holds}"
+    )
+    assert len(list((live / "orphan").iterdir())) == count
+    assert not _reserved_leftovers(live)
 
 
 def test_apply_tree_refuses_higher_anchor_root_replacement(

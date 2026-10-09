@@ -336,6 +336,11 @@ def _walk_tree(
     for name in names:
         try:
             _scan_entry(context, directory_fd, directory, name, relative_parent / name)
+        except PermissionError as exc:
+            raise SetforgeError(
+                f"managed tree entry could not be read: {directory / name}: "
+                f"{exc.strerror}"
+            ) from exc
         except OSError as exc:
             raise SetforgeError(
                 f"managed tree entry changed while scanning: {directory / name}"
@@ -1019,6 +1024,42 @@ def _exchange_symlink_at(
             os.unlink(temporary, dir_fd=parent_fd)
 
 
+# How many remaining entries a refusal to remove a directory names.
+_REMAINING_NAMES_SHOWN = 5
+
+
+def _rmdir_naming_remaining_at(parent_fd: int, name: str, display: str) -> None:
+    """Remove an emptied directory, or refuse naming the entries that remain."""
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise
+        raise SetforgeError(
+            f"refusing unsafe managed tree removal: {display}"
+            f"{_still_holds_at(parent_fd, name)}"
+        ) from exc
+
+
+def _still_holds_at(parent_fd: int, name: str) -> str:
+    """Word the entries a directory still holds; empty when they cannot be listed."""
+    try:
+        directory_fd = os.open(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+        )
+        try:
+            names = sorted(child.name for child in os.scandir(directory_fd))
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        return ""
+    if not names:
+        return ""
+    shown = ", ".join(names[:_REMAINING_NAMES_SHOWN])
+    more = len(names) - _REMAINING_NAMES_SHOWN
+    return f": it still holds {shown}" + (f" and {more} more" if more > 0 else "")
+
+
 def _apply_removals(plan: TreePlan, root_fd: int) -> None:
     removals = [
         action for action in plan.actions if action.kind is TreeActionKind.REMOVE
@@ -1039,7 +1080,7 @@ def _apply_removals(plan: TreePlan, root_fd: int) -> None:
                     f"managed tree entry changed before removal: {entry.path}"
                 )
             if entry.kind is TreeEntryKind.DIRECTORY:
-                os.rmdir(quarantine, dir_fd=parent_fd)
+                _rmdir_naming_remaining_at(parent_fd, quarantine, action.path)
             else:
                 os.unlink(quarantine, dir_fd=parent_fd)
             os.fsync(parent_fd)

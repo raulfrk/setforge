@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- When `install` refuses to remove a managed-tree directory because a file
+  appeared in it after the plan was made, the message now names the entries that
+  are still there (up to five, then "and N more"), for example
+  `refusing unsafe managed tree removal: orphan: it still holds notes.txt`. It
+  named only the directory. Nothing is removed that was not removed before.
+  A file or directory in a managed tree that `install` cannot read, such as
+  one with permissions `000`, is now reported as "could not be read" with the
+  path and "Permission denied". It was reported as "changed while scanning".
+
 ## [1.5.1] - 2026-10-09
 
 ### Fixed
