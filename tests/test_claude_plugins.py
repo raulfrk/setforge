@@ -399,13 +399,13 @@ def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
 
     Primary acceptance gate: a freshly-declared plugin
     must be both installed AND enabled in a single reconcile run, even
-    though `claude plugin install` alone leaves it disabled.
+    when `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
     original `declared intersect disabled` set, NOT freshly-installed plugins.
     """
     from setforge.claude_plugins import reconcile
 
-    fake = fake_claude()
+    fake = fake_claude(fresh_install_enabled=False)
     cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
@@ -490,7 +490,8 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
     """
     from setforge.claude_plugins import reconcile
 
-    # A fresh install that lands disabled is what makes the enable step run.
+    # The enable step runs either way; landing disabled lets the test see that
+    # its failure left the plugin disabled.
     fake = fake_claude(fresh_install_enabled=False)
     real_run = fake.run
 
@@ -1490,7 +1491,8 @@ def test_install_records_plugin_delta_with_enable_failure(
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
-    # A fresh install that lands disabled is what makes the enable step run.
+    # The enable step runs either way; landing disabled lets the test see that
+    # its failure left the plugin disabled.
     fc = fake_claude(fresh_install_enabled=False)
     real_run = fc.run
 

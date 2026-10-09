@@ -118,6 +118,9 @@ def test_reconcile_path_marketplace_matched_by_path(tmp_path, fake_claude) -> No
 
 
 _GIT_LINK = "https://example.test/o/mp.git"
+# Where the tool that listed the ``git-link-declared-with-a-branch`` and
+# ``url`` rows below keeps its marketplaces.
+_TOOL_DIR = "/home/tester/.claude/plugins/marketplaces"
 
 
 @pytest.mark.parametrize(
@@ -132,6 +135,32 @@ _GIT_LINK = "https://example.test/o/mp.git"
             MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=_GIT_LINK),
             {"source": "git", "url": _GIT_LINK},
             id="git-link",
+        ),
+        pytest.param(
+            MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB,
+                repo="https://github.com/anthropics/claude-code.git#main",
+            ),
+            {
+                "name": "claude-code-plugins",
+                "source": "git",
+                "url": "https://github.com/anthropics/claude-code.git",
+                "installLocation": f"{_TOOL_DIR}/claude-code-plugins",
+            },
+            id="git-link-declared-with-a-branch",
+        ),
+        pytest.param(
+            MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB,
+                repo="http://127.0.0.1:8765/marketplace.json",
+            ),
+            {
+                "name": "url-mp",
+                "source": "url",
+                "url": "http://127.0.0.1:8765/marketplace.json",
+                "installLocation": f"{_TOOL_DIR}/url-mp",
+            },
+            id="url",
         ),
         pytest.param(
             MarketplaceSource(source=MarketplaceSourceKind.PATH, path=Path("/srv/mp")),
@@ -168,6 +197,37 @@ def test_reconcile_skips_add_for_a_marketplace_listed_as_the_tool_lists_it(
 
     assert fake.mp_add_args() == []
     assert report.marketplaces_added == []
+
+
+@pytest.mark.parametrize(
+    "repo",
+    [
+        "https://example.test/o/mp2/marketplace.json#frag",
+        "https://example.test/o/mp2#main",
+        "o/mp2#main",
+    ],
+)
+def test_reconcile_adds_a_marketplace_listed_with_its_ref_only_once(
+    fake_claude, repo: str
+) -> None:
+    """A listing that still carries ``#<ref>`` matches the declared repo too."""
+    fake = fake_claude(marketplaces=[])
+    declared = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
+    cfg = _make_config(marketplaces={"mine": declared})
+    profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
+
+    def changes() -> list[list[str]]:
+        reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+        )
+        return [call[1:] for call in fake.calls if "list" not in call]
+
+    assert changes() == [["plugin", "marketplace", "add", "--", repo]]
+    assert "#" in "".join(fake.marketplaces_state()[0].values())
+    assert changes() == [["plugin", "marketplace", "add", "--", repo]]
+    assert changes() == [["plugin", "marketplace", "add", "--", repo]]
 
 
 def test_reconcile_adds_a_directory_declared_beside_its_marketplace_file(

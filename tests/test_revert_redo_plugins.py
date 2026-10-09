@@ -55,7 +55,9 @@ _GIT_URL = "https://example.com/team/mp2.git"
 _GIT_YAML = _YAML.replace("repo: o/mp2", f"repo: {_GIT_URL}")
 _JSON_URL = "https://example.com/team/mp2/marketplace.json"
 _JSON_YAML = _YAML.replace("repo: o/mp2", f"repo: {_JSON_URL}")
-_MP2_NAMES = {_GIT_URL: "mp2", _JSON_URL: "mp2"}
+# ... and from a git link that names a branch, which the tool does not list.
+_BRANCH_YAML = _YAML.replace("repo: o/mp2", f"repo: {_GIT_URL}#main")
+_MP2_NAMES = {_GIT_URL: "mp2", f"{_GIT_URL}#main": "mp2", _JSON_URL: "mp2"}
 _PATH_YAML = _YAML.replace(
     "mp2: {source: github, repo: o/mp2}", "mp2: {source: path, path: /srv/mp2}"
 )
@@ -102,6 +104,15 @@ def _state(claude: FakeClaude) -> _State:
     )
 
 
+def _failures(result: Result) -> list[str]:
+    """Each failure line shown, without the tool's own message."""
+    return [
+        line.split(" — ")[0]
+        for line in result.output.splitlines()
+        if line.startswith("FAILED")
+    ]
+
+
 def _newest_loaded() -> transitions.TransitionRecord:
     newest = transitions.load_latest("p")
     assert newest is not None
@@ -133,6 +144,9 @@ _HOSTS = [
     ),
     pytest.param([_MP1], [], "", _YAML, id="adds-one-marketplace"),
     pytest.param([_MP1], [], "", _GIT_YAML, id="adds-a-marketplace-from-a-git-link"),
+    pytest.param(
+        [_MP1], [], "", _BRANCH_YAML, id="adds-a-marketplace-from-a-git-link-branch"
+    ),
     pytest.param([_MP1], [], "", _JSON_YAML, id="adds-a-marketplace-from-a-json-link"),
     pytest.param([_MP1], [], "", _PATH_YAML, id="adds-a-marketplace-from-a-directory"),
 ]
@@ -202,7 +216,10 @@ def test_redo_does_not_reinstall_a_plugin_removed_by_hand_before_the_revert(
     claude.run(["claude", "plugin", "uninstall", "extra@mp1"])
     installs_before = len(claude.install_args())
 
-    assert _revert(tmp_path).exit_code == 0
+    first = _revert(tmp_path)
+    assert first.exit_code == 0
+    # The tool refuses to uninstall what is not installed, and that is shown.
+    assert _failures(first) == ["FAILED plugin uninstall extra@mp1"]
     assert _state(claude)[0] == {}
     assert _revert(tmp_path).exit_code == 0
 
@@ -351,14 +368,26 @@ def test_revert_record_lists_what_the_revert_itself_changed(
 
 
 @pytest.mark.parametrize(
-    ("yaml", "link"),
-    [(_GIT_YAML, _GIT_URL), (_JSON_YAML, _JSON_URL)],
-    ids=["git-link", "json-link"],
+    ("yaml", "declared", "link"),
+    [
+        (_GIT_YAML, _GIT_URL, _GIT_URL),
+        (_BRANCH_YAML, f"{_GIT_URL}#main", _GIT_URL),
+        (_JSON_YAML, _JSON_URL, _JSON_URL),
+    ],
+    ids=["git-link", "git-link-branch", "json-link"],
 )
 def test_revert_records_a_link_marketplace_in_the_form_releases_read(
-    tmp_path: Path, fake_claude: Callable[..., FakeClaude], yaml: str, link: str
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    yaml: str,
+    declared: str,
+    link: str,
 ) -> None:
-    """The record holds only the two source kinds every release accepts."""
+    """The record holds only the two source kinds every release accepts.
+
+    It holds the link as the tool lists it: without the branch it was
+    declared with.
+    """
     claude = fake_claude(marketplaces=[dict(_MP1)], marketplace_names=_MP2_NAMES)
     assert _install(tmp_path, yaml=yaml).exit_code == 0
 
@@ -370,7 +399,23 @@ def test_revert_records_a_link_marketplace_in_the_form_releases_read(
     ]
     # Every release registers it again with the link itself as the argument.
     assert _revert(tmp_path).exit_code == 0
-    assert claude.mp_add_args() == [link, link]
+    assert claude.mp_add_args() == [declared, link]
+
+
+def test_install_after_only_the_branch_of_a_git_link_changed_runs_no_plugin_command(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    """The tool does not list the branch, so a change of branch alone is not seen."""
+    claude = fake_claude(marketplaces=[dict(_MP1)], marketplace_names=_MP2_NAMES)
+    assert _install(tmp_path, yaml=_BRANCH_YAML).exit_code == 0
+    calls_before = len(claude.calls)
+
+    again = _install(tmp_path, yaml=_BRANCH_YAML.replace("#main", "#dev"))
+
+    assert again.exit_code == 0, (again.output, again.exception)
+    assert [
+        call[1:] for call in claude.calls[calls_before:] if call[-2:-1] != ["list"]
+    ] == []
 
 
 @pytest.mark.parametrize(
@@ -415,6 +460,11 @@ def test_revert_record_written_by_a_released_version_reverts_as_it_did(
     result = _revert(tmp_path)
 
     assert result.exit_code == 0, (result.output, result.exception)
+    # The tool refuses to uninstall what is not installed, and that is shown.
+    assert _failures(result) == [
+        "FAILED plugin uninstall extra@mp1",
+        "FAILED plugin uninstall review@mp1",
+    ]
     changing = [
         call[1:]
         for call in claude.calls[calls_before:]

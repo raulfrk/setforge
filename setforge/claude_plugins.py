@@ -556,7 +556,8 @@ def _registered_source_identities(installed: dict[str, dict[str, object]]) -> se
     ``url`` or ``path`` key: exactly the argument the marketplace was added
     with. A ``source`` that carries the origin itself (``github:owner/repo``
     or a filesystem path) is still read. Normalizes each so it can be matched
-    against :func:`_source_identity` of a declared marketplace.
+    against :func:`_source_identity` of a declared marketplace: a repo or link
+    is compared without a ``#ref``, as the declared one is.
     """
     identities: set[str] = set()
     for entry in installed.values():
@@ -569,9 +570,9 @@ def _registered_source_identities(installed: dict[str, dict[str, object]]) -> se
             if origin_key == "path":
                 identities.add(str(Path(origin).expanduser()))
             else:
-                identities.add(_normalize_github_source(origin))
+                identities.add(_normalize_github_source(origin).partition("#")[0])
         elif _is_github_source(source):
-            identities.add(_normalize_github_source(source))
+            identities.add(_normalize_github_source(source).partition("#")[0])
         else:
             identities.add(str(Path(source).expanduser()))
     return identities
