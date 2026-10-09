@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `cleanup-orphans --scan` no longer stops for the profile you selected when
+  another profile has a bundle file component whose `dst` contains a misspelled
+  variable (the "bundle file component ... is not a renderable Jinja2 template"
+  error); it worked this way before 1.5.0. The scan now warns that the other
+  profile could not be resolved, skips every directory only that profile uses,
+  and does not list a file an earlier install or ownership claim recorded for
+  that component, so files it deployed are not offered for deletion. A file in a
+  directory other profiles share that no install or claim recorded for it cannot
+  be told from a stray file and is still listed, so fix the typo first if that
+  matters. A typo in the bundle you selected still stops the scan with the error
+  naming the variable.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

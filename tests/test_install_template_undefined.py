@@ -11,6 +11,7 @@ Drives the real ``setforge`` CLI against a temp config repo with a sandboxed
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from typer.testing import CliRunner
 
 from setforge import transitions
 from setforge.cli import app
+from setforge.cli import orphans as orphans_mod
 from setforge.errors import ConfigError
 from setforge.file_ownership import file_resource_id
 from setforge.ownership import OwnershipStore
@@ -231,3 +233,207 @@ def test_ownership_revert_ignores_a_typo_in_an_unrelated_file(
     )
 
     assert result.exit_code == 0, result.output
+
+
+_INSTALL_ARGS = ("--no-secrets-scan", "--no-git-check", "--yes")
+_BUNDLE_TYPO = "{{ hom }}/qdir/bundle.txt"
+_QUIET_WARNING = "files it may manage are not listed"
+
+
+def _write_bundle_profile_config(
+    config_repo: ConfigRepo, *, bundle_dst: str | None, plain_in_qdir: bool = False
+) -> Path:
+    """Profile ``p`` owns ``~/out/ok.txt``; profile ``q`` deploys a bundle file.
+
+    ``bundle_dst`` is the bundle file component's destination template; ``None``
+    leaves ``q`` out entirely. ``plain_in_qdir`` gives ``q`` an ordinary tracked
+    file next to the bundle file, so ``~/qdir`` is a directory only ``q`` uses.
+    """
+    for name in ("ok.txt", "bundle.txt", "plain.txt"):
+        config_repo.write_tracked(name, _BODY)
+    plain = (
+        "  plain:\n    src: plain.txt\n    dst: '{{ home }}/qdir/plain.txt'\n"
+        "    template: true\n"
+        if plain_in_qdir
+        else ""
+    )
+    bundle = (
+        "bundles:\n  tools:\n    components:\n      - id: bundle\n        file:\n"
+        f"          src: bundle.txt\n          dst: {bundle_dst!r}\n"
+        "          template: true\n"
+        if bundle_dst is not None
+        else ""
+    )
+    q = (
+        "  q:\n"
+        f"    tracked_files: [{'plain' if plain_in_qdir else ''}]\n"
+        "    bundles: [tools]\n"
+        if bundle_dst is not None
+        else ""
+    )
+    config_repo.config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  good:\n    src: ok.txt\n    dst: '{{ home }}/out/ok.txt'\n"
+        "    template: true\n"
+        f"{plain}"
+        f"{bundle}"
+        "profiles:\n  p:\n    tracked_files: [good]\n"
+        f"{q}",
+        encoding="utf-8",
+    )
+    return config_repo.config
+
+
+def _scan(profile: str, config: Path, *extra: str) -> Result:
+    return _run_as(profile, "cleanup-orphans", config, "--scan", *extra)
+
+
+def _flat(result: Result) -> str:
+    """Output with line wraps and runs of spaces removed, for substring checks."""
+    return "".join(result.output.split())
+
+
+def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_bundle_profile_config(config_repo, bundle_dst=None)
+    assert _run_as("p", "install", config, *_INSTALL_ARGS).exit_code == 0
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+    baseline = _scan("p", config)
+    assert baseline.exit_code == 0, baseline.output
+    assert str(stray) in _flat(baseline)
+
+    _write_bundle_profile_config(config_repo, bundle_dst=_BUNDLE_TYPO)
+    result = _scan("p", config)
+
+    assert result.exit_code == 0, result.output
+    assert str(stray) in _flat(result)
+    listing = "=== unrecorded"
+    assert result.output.split(listing)[1:] == baseline.output.split(listing)[1:]
+    warning = _flat(result)
+    assert "profileqcouldnotberesolved" in warning
+    assert "tools.bundle" in warning
+    assert "hom" in warning
+    assert _QUIET_WARNING.replace(" ", "") in warning
+    assert stray.read_text(encoding="utf-8") == "not recorded\n"
+
+
+def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clean = _write_bundle_profile_config(
+        config_repo, bundle_dst="{{ home }}/qdir/bundle.txt", plain_in_qdir=True
+    )
+    for profile in ("p", "q"):
+        assert _run_as(profile, "install", clean, *_INSTALL_ARGS).exit_code == 0
+    deployed = Path.home() / "qdir" / "bundle.txt"
+    q_stray = Path.home() / "qdir" / "stray.txt"
+    p_stray = Path.home() / "out" / "stray.txt"
+    q_stray.write_text("not recorded\n", encoding="utf-8")
+    p_stray.write_text("not recorded\n", encoding="utf-8")
+    baseline = _flat(_scan("p", clean))
+    assert str(q_stray) in baseline
+    assert str(p_stray) in baseline
+    assert str(deployed) not in baseline
+
+    config = _write_bundle_profile_config(
+        config_repo, bundle_dst=_BUNDLE_TYPO, plain_in_qdir=True
+    )
+    listed = _scan("p", config)
+
+    assert listed.exit_code == 0, listed.output
+    assert str(p_stray) in _flat(listed)
+    assert str(q_stray) not in _flat(listed)
+    assert str(deployed) not in _flat(listed)
+    assert "profileqcouldnotberesolved" in _flat(listed)
+
+    monkeypatch.setattr(
+        orphans_mod, "_confirm_scan_entries", lambda entries, _console: entries
+    )
+    applied = _scan("p", config, "--apply")
+
+    assert applied.exit_code == 0, applied.output
+    assert not p_stray.exists()
+    assert q_stray.exists()
+    assert deployed.exists()
+
+
+def test_scan_recognises_a_bundle_file_by_the_destination_an_install_recorded(
+    config_repo: ConfigRepo,
+) -> None:
+    """The lost file shares ``p``'s directory and was already in place at install."""
+    clean = _write_bundle_profile_config(
+        config_repo, bundle_dst="{{ home }}/out/bundle.txt", plain_in_qdir=True
+    )
+    deployed = Path.home() / "out" / "bundle.txt"
+    deployed.parent.mkdir()
+    deployed.write_text(_BODY, encoding="utf-8")
+    for profile in ("p", "q"):
+        assert _run_as(profile, "install", clean, *_INSTALL_ARGS).exit_code == 0
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+
+    config = _write_bundle_profile_config(
+        config_repo, bundle_dst=_BUNDLE_TYPO, plain_in_qdir=True
+    )
+    listed = _scan("p", config)
+
+    assert listed.exit_code == 0, listed.output
+    assert str(stray) in _flat(listed)
+    assert str(deployed) not in _flat(listed)
+
+
+def test_scan_recognises_a_bundle_file_by_its_ownership_claim(
+    config_repo: ConfigRepo, init_git_repo: Callable[[Path], Path]
+) -> None:
+    """The lost file shares ``p``'s directory and the transition log is gone."""
+    init_git_repo(config_repo.root)
+    clean = _write_bundle_profile_config(
+        config_repo, bundle_dst="{{ home }}/out/bundle.txt"
+    )
+    for profile in ("p", "q"):
+        installed = _run_as(profile, "install", clean, *_INSTALL_ARGS, "--no-fetch")
+        assert installed.exit_code == 0, installed.output
+    deployed = Path.home() / "out" / "bundle.txt"
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+    shutil.rmtree(transitions.transitions_root())
+
+    config = _write_bundle_profile_config(
+        config_repo, bundle_dst="{{ hom }}/out/bundle.txt"
+    )
+    listed = _scan("p", config)
+
+    assert listed.exit_code == 0, listed.output
+    assert str(stray) in _flat(listed)
+    assert str(deployed) not in _flat(listed)
+
+
+def test_scan_output_is_unchanged_by_a_sibling_bundle_that_renders(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_bundle_profile_config(config_repo, bundle_dst=None)
+    assert _run_as("p", "install", config, *_INSTALL_ARGS).exit_code == 0
+    (Path.home() / "out" / "stray.txt").write_text("x\n", encoding="utf-8")
+    baseline = _scan("p", config)
+    assert baseline.exit_code == 0, baseline.output
+
+    _write_bundle_profile_config(config_repo, bundle_dst="{{ home }}/qdir/bundle.txt")
+    result = _scan("p", config)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == baseline.output
+
+
+def test_bundle_file_typo_in_this_profiles_own_bundle_is_still_refused(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_bundle_profile_config(config_repo, bundle_dst=_BUNDLE_TYPO)
+
+    result = _scan("q", config)
+
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, ConfigError)
+    assert "hom" in str(result.exception)

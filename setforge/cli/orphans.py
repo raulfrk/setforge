@@ -189,12 +189,26 @@ def _print_dry_run(
     )
 
 
+def _print_unresolved_profiles(
+    result: orphan_scan.ScanResult, console: Console
+) -> None:
+    """Name each profile the scan could only partly resolve and what that costs."""
+    for unresolved in result.unresolved:
+        console.print(
+            f"warning: profile {unresolved.profile} could not be resolved "
+            f"({unresolved.reason}); files it may manage are not listed",
+            markup=False,
+            highlight=False,
+        )
+
+
 def _print_scan_dry_run(
     result: orphan_scan.ScanResult,
     console: Console,
     config_path: Path | None = None,
 ) -> None:
     """Render unrecorded scan candidates without implying attribution."""
+    _print_unresolved_profiles(result, console)
     if not result.entries:
         console.print("=== no unrecorded managed-tree candidates ===")
     else:
@@ -320,6 +334,7 @@ def _execute_scan_cleanup(
 ) -> None:
     """Apply only individually approved candidates surviving a locked re-scan."""
     _, initial = _detect_scan_live(profile, config_path)
+    _print_unresolved_profiles(initial, console)
     if not initial.entries:
         console.print("=== no unrecorded managed-tree candidates ===")
         return
