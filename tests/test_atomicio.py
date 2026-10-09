@@ -1,6 +1,7 @@
 """Tests for the shared atomic-write primitive."""
 
 import ast
+import contextlib
 import errno
 import os
 import stat
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from setforge import atomicio
+from setforge.locking import mutation_locks
 
 
 def test_atomic_write_bytes_at_stays_bound_after_parent_symlink_swap(
@@ -616,3 +618,30 @@ def test_fsync_path_succeeds_on_file_and_dir(tmp_path: Path) -> None:
     target.write_text("x\n")
     atomicio.fsync_path(target, strict=True)
     atomicio.fsync_path(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("gate_held", "backup", "longest"),
+    [(True, False, 224), (True, True, 220), (False, False, 223), (False, True, 219)],
+)
+def test_longest_destination_name_an_atomic_write_accepts(
+    tmp_path: Path, gate_held: bool, backup: bool, longest: int
+) -> None:
+    """The temp name must fit the 255-byte name limit beside the destination."""
+    gate = mutation_locks() if gate_held else contextlib.nullcontext()
+    fits = tmp_path / ("n" * longest)
+    too_long = tmp_path / ("m" * (longest + 1))
+    if backup:
+        fits.write_bytes(b"old\n")
+        too_long.write_bytes(b"old\n")
+
+    with gate:
+        atomicio.atomic_write_bytes(fits, b"new\n", backup=backup)
+        with pytest.raises(OSError, match="File name too long") as raised:
+            atomicio.atomic_write_bytes(too_long, b"new\n", backup=backup)
+
+    assert fits.read_bytes() == b"new\n"
+    assert raised.value.errno == errno.ENAMETOOLONG
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+        [fits.name, *([f"{fits.name}.bak", too_long.name] if backup else [])]
+    )

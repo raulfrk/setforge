@@ -33,11 +33,11 @@ import ctypes
 import errno
 import os
 import re
+import secrets
 import shutil
 import stat
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from uuid import uuid4
 
 import typer
 
@@ -48,21 +48,25 @@ RENAME_NOREPLACE = 1
 RENAME_EXCHANGE = 2
 RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 
-_GATED_TEMP = r"\.setforge-[0-9a-f]{32}\.tmp"
-_TEMP_NAME_RE = re.compile(r"\..+\.setforge-(?:unlocked-)?[0-9a-f]{32}\.tmp", re.DOTALL)
+# What follows ``.<name>`` in a temp name: 16 random hex digits, with ``u``
+# before them when made outside the mutation gate. Kept short because the
+# whole name must fit the filesystem's limit beside the destination.
+_GATED_TEMP = r"\.setforge-[0-9a-f]{16}\.tmp"
+TEMP_SUFFIX = r"\.setforge-u?[0-9a-f]{16}\.tmp"
+_TEMP_NAME_RE = re.compile(r"\..+" + TEMP_SUFFIX, re.DOTALL)
 
 
 def temp_name(name: str) -> str:
     """Return a fresh temporary sibling name for the entry ``name``.
 
     A name made while the mutation gate is held is ``.<name>.setforge-<hex>.tmp``;
-    one made outside it carries ``unlocked-`` before the hex. The gate is
+    one made outside it carries ``u`` before the hex. The gate is
     exclusive and dies with its process, so a gate holder that meets the first
     form knows its writer is gone; the second form may belong to a live writer
     and is never removed.
     """
-    marker = "setforge-" if locking.mutation_gate_held() else "setforge-unlocked-"
-    return f".{name}.{marker}{uuid4().hex}.tmp"
+    marker = "setforge-" if locking.mutation_gate_held() else "setforge-u"
+    return f".{name}.{marker}{secrets.token_hex(8)}.tmp"
 
 
 def is_temp_name(name: str) -> bool:

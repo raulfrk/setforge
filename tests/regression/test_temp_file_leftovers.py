@@ -77,12 +77,15 @@ def test_temp_names_carry_the_marker_and_lookalikes_do_not() -> None:
     gated, unlocked = leftover_names("settings.json")
 
     assert gated.startswith(".settings.json.setforge-")
-    assert unlocked.startswith(".settings.json.setforge-unlocked-")
+    assert unlocked.startswith(".settings.json.setforge-u")
+    assert not gated.startswith(".settings.json.setforge-u")
+    assert len(gated) == len("settings.json") + 31
+    assert len(unlocked) == len("settings.json") + 32
     assert gated.endswith(".tmp")
     assert unlocked.endswith(".tmp")
     assert atomicio.is_temp_name(gated)
     assert atomicio.is_temp_name(unlocked)
-    for name in (*LOOKALIKES, ".a.setforge-create", "a.setforge-" + "0" * 32 + ".tmp"):
+    for name in (*LOOKALIKES, ".a.setforge-create", "a.setforge-" + "0" * 16 + ".tmp"):
         assert not atomicio.is_temp_name(name), name
 
 

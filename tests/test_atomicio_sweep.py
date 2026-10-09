@@ -14,7 +14,7 @@ from setforge import atomicio
 from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks
 
-HEX = "a" * 32
+HEX = "a" * 16
 
 
 def gated(name: str) -> str:
@@ -53,7 +53,7 @@ def test_gated_write_removes_and_reports_the_destinations_leftovers(
 @pytest.mark.parametrize(
     "name",
     [
-        ".settings.json.setforge-unlocked-" + HEX + ".tmp",  # may be a live writer
+        ".settings.json.setforge-u" + HEX + ".tmp",  # may be a live writer
         gated("other.json"),  # another destination's
         ".settings.json.abc12345.tmp",  # an earlier release's, or the user's
         "settings.json.tmp",
@@ -165,7 +165,8 @@ def test_no_second_gate_holder_can_sweep_while_a_gated_write_is_in_flight(
 
     def replace(src: Path, dst: Path) -> None:
         assert atomicio.is_temp_name(Path(src).name)
-        assert "unlocked" not in Path(src).name
+        assert Path(src).name.startswith(".settings.json.setforge-")
+        assert not Path(src).name.startswith(".settings.json.setforge-u")
         thread = threading.Thread(target=other_command)
         thread.start()
         thread.join()

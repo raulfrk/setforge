@@ -11,16 +11,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `setforge` command killed while it was writing a file could leave a hidden
   temporary file beside it. Nothing removed that file, and one left inside a
   tracked directory was deployed to the live directory by the next `install`.
-  Temporary files are now named `.NAME.setforge-<32 hex digits>.tmp` (with
-  `unlocked-` before the digits when written outside the mutation gate), and
+  Temporary files are now named `.NAME.setforge-<16 hex digits>.tmp` (with
+  `u` before the digits when written outside the mutation gate), and
   `install`, `sync`, `compare` and `cleanup-orphans --scan` skip files with
   these names. Your own files, such as `foo.tmp` or `.foo.abc12345.tmp`, are
   handled as before. The next command that writes the same file while holding
   the mutation gate (often `setforge recover` or the repeated command) removes
   the leftover and prints `warning: removed a temporary file left by an
   interrupted setforge run: <path>`. `--dry-run` removes nothing. Leftovers
-  with `unlocked-` in the name, and the `.NAME.<8 characters>.tmp` files that
+  with `u` before the digits, and the `.NAME.<8 characters>.tmp` files that
   1.5.0 and earlier left, are not removed automatically; delete them by hand.
+  The longer temporary name lowers the longest file name SetForge can write
+  from 241 to 224 bytes for a new file and from 237 to 220 for an update
+  (one byte less for a write made outside the mutation gate).
   A managed tree with `orphans: remove-owned` keeps a directory that still
   holds a leftover instead of removing it.
 

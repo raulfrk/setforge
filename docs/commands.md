@@ -330,8 +330,8 @@ reported as uncertain/manual even if it did not reach its completion marker.
 
 SetForge writes a file by writing a temporary file beside it and renaming it
 into place. A command killed between the two leaves that temporary file
-behind, named `.NAME.setforge-<32 hex digits>.tmp` (or
-`.NAME.setforge-unlocked-<32 hex digits>.tmp` when the command ran outside the
+behind, named `.NAME.setforge-<16 hex digits>.tmp` (or
+`.NAME.setforge-u<16 hex digits>.tmp` when the command ran outside the
 mutation gate, as `completion install` does). Files with these names are never
 deployed, captured by `sync`, reported by `compare` or offered by
 `cleanup-orphans --scan`; your own files with other names, such as `foo.tmp`,
@@ -342,11 +342,11 @@ the leftover and says so on standard error:
 `warning: removed a temporary file left by an interrupted setforge run: <path>`.
 Often that is the `setforge recover` or the repeated command that follows the
 interruption. It removes only regular files named
-`.NAME.setforge-<32 hex digits>.tmp` or `.NAME.bak.setforge-<32 hex digits>.tmp`
+`.NAME.setforge-<16 hex digits>.tmp` or `.NAME.bak.setforge-<16 hex digits>.tmp`
 in the directory of the file `NAME` it is writing; it never searches other
 directories and never removes a symlink or a directory. `--dry-run` writes
 nothing, so it removes nothing. Three kinds of leftover stay until you delete
-them: `unlocked-` names, because their writer may still be running; a leftover
+them: `setforge-u` names, because their writer may still be running; a leftover
 beside a file SetForge does not write again; and the
 `.NAME.<8 characters>.tmp` files that earlier releases left, because that
 name does not prove the file is SetForge's.

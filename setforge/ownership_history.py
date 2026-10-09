@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from setforge import operations
+from setforge import atomicio, operations
 from setforge.errors import CorruptOwnershipState, OwnershipError
 from setforge.locking import require_resources_lock
 from setforge.ownership import (
@@ -53,7 +53,7 @@ _UUID_TEXT = (
 _UUID_FILE_RE = re.compile(rf"{_UUID_TEXT}\.json")
 # Also the unmarked name releases before the shared naming helper wrote.
 _ATOMIC_TEMP_FILE_RE = re.compile(
-    rf"\.{_UUID_TEXT}\.json\.(?:setforge-(?:unlocked-)?)?[0-9a-f]{{32}}\.tmp"
+    rf"\.{_UUID_TEXT}\.json(?:{atomicio.TEMP_SUFFIX}|\.[0-9a-f]{{32}}\.tmp)"
 )
 
 
