@@ -371,6 +371,93 @@ def test_render_yaml_writes_a_document_with_tags_and_keeps_its_lines(
     assert render_yaml(data, text) == text + ("added: new\n" if edit else "")
 
 
+# ruamel cannot dump a list whose first item is a flow mapping with a trailing
+# comment and whose next item is a block entry or quoted: it writes the comment
+# where the next item should start, and the text does not parse. Such a file is
+# ordinary and was always written as its own lines with only the edit applied,
+# so it must still be. The renderings are what the previous renderer produced.
+_FLOW_FIRST_LISTS = {
+    "key-comment": (
+        "packages:  # the list\n"
+        "  - {id: a.b, kind: ext}  # pinned\n"
+        '  - "c.d"\n'
+        "  - e.f\n"
+    ),
+    "blank-line": (
+        'packages:\n\n  - {id: a.b, kind: ext}  # pinned\n  - "c.d"\n  - e.f\n'
+    ),
+    "comment-line": (
+        "packages:\n"
+        "  # the list\n"
+        "  - {id: a.b, kind: ext}  # pinned\n"
+        '  - "c.d"\n'
+        "  - e.f\n"
+    ),
+    "flow-list": (
+        'packages:  # the list\n  - [a.b, ext]  # pinned\n  - "c.d"\n  - e.f\n'
+    ),
+}
+_FLOW_FIRST_EDITS = {
+    "unchanged": (
+        lambda data: None,
+        "{packages}other: 1\nnames:\n  - x\n  - y\n",
+    ),
+    "new-key": (
+        lambda data: data.update(added="new"),
+        "{packages}other: 1\nnames:\n  - x\n  - y\nadded: new\n",
+    ),
+    "set-scalar": (
+        lambda data: data.update(other=2),
+        "{packages}other: 2\nnames:\n  - x\n  - y\n",
+    ),
+    "append": (
+        lambda data: data["packages"].append("g.h"),
+        "{packages}  - g.h\nother: 1\nnames:\n  - x\n  - y\n",
+    ),
+    "append-elsewhere": (
+        lambda data: data["names"].append("z"),
+        "{packages}other: 1\nnames:\n  - x\n  - y\n  - z\n",
+    ),
+    "remove-key": (
+        lambda data: data.pop("other"),
+        "{packages}names:\n  - x\n  - y\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("edit", _FLOW_FIRST_EDITS)
+@pytest.mark.parametrize("shape", _FLOW_FIRST_LISTS)
+def test_render_yaml_writes_a_list_that_ruamel_cannot_dump_back(
+    shape: str, edit: str
+) -> None:
+    packages = _FLOW_FIRST_LISTS[shape]
+    text = _FLOW_FIRST_EDITS["unchanged"][1].format(packages=packages)
+    apply, template = _FLOW_FIRST_EDITS[edit]
+    data = yaml_rt().load(text)
+    apply(data)
+
+    assert render_yaml(data, text) == template.format(packages=packages)
+
+
+def test_render_yaml_still_refuses_a_splice_that_does_not_read_back() -> None:
+    """With ruamel's dump unparseable, no line is re-indented, so a new item
+    under a list written flush (``- y``) lands two columns in, and is read as
+    part of ``y``. The previous renderer wrote that file."""
+    text = (
+        "packages:  # the list\n"
+        "  - {id: a.b, kind: ext}  # pinned\n"
+        '  - "c.d"\n'
+        "  - e.f\n"
+        "names:\n"
+        "- y\n"
+    )
+    data = yaml_rt().load(text)
+    data["names"].append("z")
+
+    with pytest.raises(SetforgeError, match="would not read back"):
+        render_yaml(data, text)
+
+
 def test_atomic_write_yaml_keeps_a_tagged_scalar_in_a_local_config(
     tmp_path: Path,
 ) -> None:
