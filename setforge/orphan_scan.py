@@ -18,7 +18,6 @@ from setforge.config import (
     FileComponent,
     ResolvedProfile,
     resolve_effective_profile,
-    resolve_profile,
 )
 from setforge.errors import ConfigError, SetforgeError
 from setforge.paths import journals_root, snapshots_root, state_root
@@ -161,19 +160,9 @@ def _managed_inventory(
     unresolved: list[UnresolvedProfile] = []
     lost_ids: set[str] = set()
     for profile_name in config.profiles:
-        effective_config = config.model_copy(deep=True)
-        selected = profile_name == profile
-        lost = (
-            {}
-            if selected
-            else _without_unrenderable_bundle_files(effective_config, profile_name)
+        effective_config, effective, lost = _resolve_for_inventory(
+            config, profile_name, repo_root, selected=profile_name == profile
         )
-        effective = resolve_effective_profile(
-            effective_config, profile_name, repo_root
-        ).resolved
-        if not selected:
-            effective, lost_files = _without_unrenderable(effective, effective_config)
-            lost.update(lost_files)
         if lost:
             unresolved.append(UnresolvedProfile(profile_name, "; ".join(lost.values())))
             lost_ids.update(lost)
@@ -254,6 +243,40 @@ def _managed_inventory(
     )
 
 
+def _resolve_for_inventory(
+    config: Config, profile_name: str, repo_root: Path, *, selected: bool
+) -> tuple[Config, ResolvedProfile, dict[str, str]]:
+    """Resolve one profile on its own config copy, with the entries left out.
+
+    The selected profile raises on a dst that will not render. Any other
+    profile is resolved without those entries, which are returned by tracked
+    id with the reason.
+    """
+    effective_config = config.model_copy(deep=True)
+    lost: dict[str, str] = {}
+    try:
+        effective = resolve_effective_profile(
+            effective_config, profile_name, repo_root
+        ).resolved
+    except ConfigError:
+        if selected:
+            raise
+        # Retry on a fresh copy without the bundle file components that will
+        # not render; the same error is raised again when it was something
+        # else, or a component this profile does not use.
+        effective_config = config.model_copy(deep=True)
+        dropped = _without_unrenderable_bundle_files(effective_config)
+        effective = resolve_effective_profile(
+            effective_config, profile_name, repo_root
+        ).resolved
+        for bundle_id in effective.bundles:
+            lost.update(dropped.get(bundle_id, {}))
+    if not selected:
+        effective, lost_files = _without_unrenderable(effective, effective_config)
+        lost.update(lost_files)
+    return effective_config, effective, lost
+
+
 def _ignored_destinations(
     config: Config, repo_root: Path, transitions_dir: Path
 ) -> set[Path]:
@@ -284,19 +307,16 @@ def _without_unrenderable(
     return effective.model_copy(update={"tracked_files": renderable}), lost
 
 
-def _without_unrenderable_bundle_files(config: Config, profile: str) -> dict[str, str]:
-    """Drop the profile's bundle file components whose dst will not render.
+def _without_unrenderable_bundle_files(config: Config) -> dict[str, dict[str, str]]:
+    """Drop every bundle's file components whose dst will not render.
 
-    Returns each dropped component's synthetic tracked-file id with the reason,
-    like :func:`_without_unrenderable` does for plain tracked files, which only
-    runs once bundle components have been expanded. The profile's other entries
-    resolve as usual.
+    Returns, per bundle, each dropped component's synthetic tracked-file id
+    with the reason, like :func:`_without_unrenderable` does for plain tracked
+    files, which only runs once bundle components have been expanded. The
+    caller keeps the bundles the effective profile selects.
     """
-    lost: dict[str, str] = {}
-    for bundle_id in resolve_profile(config, profile).bundles:
-        bundle = config.bundles.get(bundle_id)
-        if bundle is None:
-            continue
+    dropped: dict[str, dict[str, str]] = {}
+    for bundle_id, bundle in config.bundles.items():
         kept = []
         for component in bundle.components:
             synthetic_id = f"{bundle_id}.{component.id}"
@@ -304,9 +324,9 @@ def _without_unrenderable_bundle_files(config: Config, profile: str) -> dict[str
             if reason is None:
                 kept.append(component)
             else:
-                lost[synthetic_id] = reason
+                dropped.setdefault(bundle_id, {})[synthetic_id] = reason
         bundle.components = kept
-    return lost
+    return dropped
 
 
 def _unrenderable_reason(

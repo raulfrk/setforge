@@ -333,6 +333,20 @@ def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo
     assert stray.read_text(encoding="utf-8") == "not recorded\n"
 
 
+def test_scan_reports_a_profile_that_inherits_the_misspelled_bundle_file(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_q_file_config(config_repo, q_dst=_Q_TYPO)
+    with config.open("a", encoding="utf-8") as handle:
+        handle.write("  r:\n    extends: q\n")
+
+    result = _scan("p", config)
+
+    assert result.exit_code == 0, result.output
+    assert "profileqcouldnotberesolved" in _flat(result)
+    assert "profilercouldnotberesolved" in _flat(result)
+
+
 @pytest.mark.parametrize("kind", ["bundle", "tracked"])
 def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch, kind: str
