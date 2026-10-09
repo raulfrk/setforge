@@ -13,6 +13,12 @@ names the plugin.
 the same rules: a revert whose recorded transition does not involve the plugin
 goes ahead and leaves the plugin alone, and one that would have to change it
 stops first.
+
+The tool reports a marketplace added from a path as a ``directory`` or ``file``
+source and one added from a link as a ``url`` source. Recovery reads the path
+shapes. A ``url`` source it cannot read follows the same rules as the plugin
+above: install and revert go ahead and leave it registered, and a revert that
+would have to remove it stops first.
 """
 
 from __future__ import annotations
@@ -430,3 +436,232 @@ def test_revert_that_would_register_the_plugins_marketplace_stops_first(
     assert _claude_calls_after(claude, calls_before) <= _LIST_ONLY
     assert [m["name"] for m in claude.marketplaces_state()] == ["mp1"]
     assert operations.active("p") is None
+
+
+_REPORTED_MARKETPLACES = [
+    pytest.param(
+        {"name": "localmp", "source": "directory", "path": "/srv/localmp"},
+        id="directory",
+    ),
+    pytest.param(
+        {"name": "localmp", "source": "file", "path": "/srv/localmp/marketplace.json"},
+        id="file",
+    ),
+    pytest.param(
+        {"name": "localmp", "source": "url", "url": "http://example.test/mp.json"},
+        id="url",
+    ),
+]
+
+
+def _claude_with_marketplace(
+    fake_claude: Callable[..., FakeClaude], marketplace: dict[str, object]
+) -> FakeClaude:
+    return fake_claude(
+        marketplaces=[{"name": "mp1", "source": "o/mp1"}, dict(marketplace)],
+        plugins=[
+            {"id": "review@mp1", "enabled": True, "scope": "user"},
+            {"id": "tool@localmp", "enabled": True, "scope": "user"},
+        ],
+    )
+
+
+@pytest.mark.parametrize("marketplace", _REPORTED_MARKETPLACES)
+def test_install_goes_ahead_with_a_directory_file_or_url_marketplace(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    marketplace: dict[str, object],
+) -> None:
+    claude = _claude_with_marketplace(fake_claude, marketplace)
+
+    result = _install(tmp_path)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert claude.uninstall_args() == []
+    assert claude.mp_add_args() == ["o/mp2"]
+    assert marketplace in claude.marketplaces_state()
+
+
+@pytest.mark.parametrize("marketplace", _REPORTED_MARKETPLACES)
+def test_failed_install_keeps_a_directory_file_or_url_marketplace(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    monkeypatch: pytest.MonkeyPatch,
+    marketplace: dict[str, object],
+) -> None:
+    claude = _claude_with_marketplace(fake_claude, marketplace)
+
+    def fail_after_plugins(*_args: object, **_kwargs: object) -> Path:
+        raise RuntimeError("write failed after the plugins were reconciled")
+
+    monkeypatch.setattr(
+        "setforge.cli.install._write_install_transition", fail_after_plugins
+    )
+
+    result = _install(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert claude.install_args() == ["extra@mp1"]
+    assert claude.uninstall_args() == ["extra@mp1"]
+    assert claude.marketplaces_state() == [
+        {"name": "mp1", "source": "o/mp1"},
+        marketplace,
+    ]
+    assert "tool@localmp" in claude.installed_state()
+    assert operations.active("p") is None
+
+
+@pytest.mark.parametrize("marketplace", _REPORTED_MARKETPLACES)
+def test_revert_that_does_not_involve_the_marketplace_leaves_it_alone(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    marketplace: dict[str, object],
+) -> None:
+    claude = _claude_with_marketplace(fake_claude, marketplace)
+    assert _install(tmp_path).exit_code == 0
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert claude.uninstall_args() == ["extra@mp1"]
+    assert claude.marketplaces_state() == [
+        {"name": "mp1", "source": "o/mp1"},
+        marketplace,
+    ]
+    assert "tool@localmp" in claude.installed_state()
+
+
+def _reregister_mp2(claude: FakeClaude, source: dict[str, object]) -> None:
+    # The install added mp2; outside setforge it is now registered another way.
+    claude._marketplaces[:] = [
+        {"name": "mp1", "source": "o/mp1"},
+        {"name": "mp2", **source},
+    ]
+
+
+def _install_with_mp2_added(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> FakeClaude:
+    claude = fake_claude(
+        marketplaces=[{"name": "mp1", "source": "o/mp1"}],
+        plugins=[{"id": "review@mp1", "enabled": True, "scope": "user"}],
+    )
+    assert _install(tmp_path).exit_code == 0
+    return claude
+
+
+def test_revert_that_would_remove_the_marketplace_stops_before_changing_anything(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    claude = _install_with_mp2_added(tmp_path, fake_claude)
+    _reregister_mp2(claude, {"source": "url", "url": "http://example.test/mp.json"})
+    calls_before = len(claude.calls)
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SetforgeError), result.exception
+    assert "marketplace 'mp2' is registered" in str(result.exception)
+    assert "claude plugin marketplace remove mp2" in str(result.exception)
+    assert "then run revert again" in str(result.exception)
+    assert _claude_calls_after(claude, calls_before) <= _LIST_ONLY
+    assert "extra@mp1" in claude.installed_state()
+    assert operations.active("p") is None
+    assert (Path.home() / ".setforge-test" / "y").exists()
+
+
+def test_revert_removes_a_marketplace_listed_with_a_path_source(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    claude = _install_with_mp2_added(tmp_path, fake_claude)
+    _reregister_mp2(claude, {"source": "directory", "path": "/srv/mp2"})
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert [m["name"] for m in claude.marketplaces_state()] == ["mp1"]
+
+
+def test_baseline_leaves_out_a_marketplace_recovery_cannot_read_and_its_plugins() -> (
+    None
+):
+    url: dict[str, object] = {
+        "name": "urlmp",
+        "source": "url",
+        "url": "http://example.test/mp.json",
+    }
+    path: dict[str, object] = {
+        "name": "dirmp",
+        "source": "directory",
+        "path": "/srv/dirmp",
+    }
+
+    baseline = operations.plugin_recovery_baseline(
+        {
+            "tool@urlmp": {"id": "tool@urlmp", "enabled": True},
+            "tool@dirmp": {"id": "tool@dirmp", "enabled": True},
+        },
+        {"urlmp": url, "dirmp": path},
+        touched=set(),
+        marketplaces_added=(),
+    )
+
+    assert baseline == {
+        "plugins": {"tool@dirmp": {"id": "tool@dirmp", "enabled": True}},
+        "marketplaces": {"dirmp": path},
+    }
+    operations._validate_plugin_payload(json.loads(json.dumps(baseline)))
+
+
+def test_baseline_refuses_a_plugin_of_an_unreadable_marketplace_it_would_change() -> (
+    None
+):
+    with pytest.raises(SetforgeError) as raised:
+        operations.plugin_recovery_baseline(
+            {"tool@urlmp": {"id": "tool@urlmp", "enabled": True}},
+            {"urlmp": {"name": "urlmp", "source": "url", "url": "http://x.test/m"}},
+            touched={"tool@urlmp"},
+            marketplaces_added=(),
+            operation="revert",
+        )
+
+    message = str(raised.value)
+    assert "plugin 'tool@urlmp' is installed" in message
+    assert "the source of its marketplace 'urlmp' cannot be read" in message
+    assert "claude plugin uninstall tool@urlmp" in message
+    assert "register that marketplace" not in message
+    assert "then run revert again" in message
+
+
+def test_recovery_removes_a_path_marketplace_the_install_added_not_a_url_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from setforge import claude_plugins
+
+    marketplaces: dict[str, dict[str, object]] = {
+        "mp1": {"source": "github:o/mp1"},
+        "urlmp": {"source": "url", "url": "http://example.test/mp.json"},
+        "added": {"source": "directory", "path": "/srv/added"},
+    }
+    plugins: dict[str, dict[str, object]] = {
+        "kept@mp1": {"enabled": True},
+        "tool@urlmp": {"enabled": True},
+        "new@added": {"enabled": True},
+    }
+    uninstalled: list[str] = []
+    monkeypatch.setattr(claude_plugins, "list_marketplaces", lambda: dict(marketplaces))
+    monkeypatch.setattr(claude_plugins, "list_installed", lambda: dict(plugins))
+    monkeypatch.setattr(claude_plugins, "plugin_uninstall", uninstalled.append)
+    monkeypatch.setattr(claude_plugins, "marketplace_remove", marketplaces.pop)
+    monkeypatch.setattr(claude_plugins, "plugin_enable", lambda _id: None)
+    monkeypatch.setattr(claude_plugins, "plugin_disable", lambda _id: None)
+
+    operations._recover_plugins(
+        {
+            "plugins": {"kept@mp1": {"enabled": True}},
+            "marketplaces": {"mp1": {"source": "github:o/mp1"}},
+        }
+    )
+
+    assert uninstalled == ["new@added"]
+    assert list(marketplaces) == ["mp1", "urlmp"]

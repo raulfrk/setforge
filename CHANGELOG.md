@@ -93,7 +93,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   disable it, or a recorded install of it that revert would uninstall) or would
   register its missing marketplace now stops before changing anything, with an
   error naming the plugin and saying to uninstall it or register that
-  marketplace yourself.
+  marketplace yourself. A marketplace the plugin tool reports from a local
+  directory or marketplace file (as it does for one added from a path) is now
+  read like any other, and one reported with a source SetForge cannot read back
+  (for example a URL; the error was `ValueError: marketplace '...' has no
+  recoverable source identity`) is left registered as it is: install and revert
+  go ahead, and a revert that would remove it stops first, with an error naming
+  the marketplace.
 
 ## [1.5.0] - 2026-10-09
 

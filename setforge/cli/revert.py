@@ -679,6 +679,7 @@ def _prepare_revert_journal(
     has_plugins = False
     plugins_changed: set[str] = set()
     marketplaces_registered: set[str] = set()
+    marketplaces_unregistered: set[str] = set()
     has_codex_plugins = False
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for record in chain:
@@ -703,6 +704,7 @@ def _prepare_revert_journal(
             marketplaces_registered.update(
                 name for name, _source in record.plugins.marketplaces_removed
             )
+            marketplaces_unregistered.update(record.plugins.marketplaces_added)
         has_codex_plugins |= record.codex_plugins is not None
         if record.mcp is not None:
             delta = record.mcp
@@ -725,6 +727,7 @@ def _prepare_revert_journal(
             plugins=has_plugins,
             plugins_changed=plugins_changed,
             marketplaces_registered=marketplaces_registered,
+            marketplaces_unregistered=marketplaces_unregistered,
             codex_plugins=has_codex_plugins,
             mcp_endpoints=mcp_endpoints,
         ),
@@ -786,6 +789,7 @@ def _revert_adapter_snapshots(
     plugins: bool,
     plugins_changed: Collection[str],
     marketplaces_registered: Collection[str],
+    marketplaces_unregistered: Collection[str],
     codex_plugins: bool,
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]],
 ) -> tuple[operations.AdapterSnapshot, ...]:
@@ -810,6 +814,7 @@ def _revert_adapter_snapshots(
                         claude_plugins.list_marketplaces(),
                         touched=plugins_changed,
                         marketplaces_added=marketplaces_registered,
+                        marketplaces_removed=marketplaces_unregistered,
                         operation="revert",
                     ),
                     sort_keys=True,
