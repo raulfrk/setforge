@@ -73,7 +73,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   entry of a list no longer deletes the comment after that list. Removing the
   only key of a block (for example `config remove --local tracked_files.foo`
   when `foo` is the only entry under `tracked_files`) still deletes the comment
-  that follows the block, as it did before.
+  that follows the block, as it did before. So does removing a key whose list
+  ends on an entry written on one line (`- {x: 1}` or `- [b]`): the comment
+  above the next key is still deleted.
 
 ### Changed
 

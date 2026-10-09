@@ -445,7 +445,7 @@ def _keep_entry_tail(parent: CommentedMap, leaf: str, index: int, tail: str) -> 
     else:
         seq.fa.set_flow_style()
         key_entry = parent.ca.items.get(leaf)
-        if key_entry is not None:
+        if key_entry is not None and not key_entry[3]:
             # ruamel writes the key's comment in place of the list's own.
             entry, slot = key_entry, 2
         else:

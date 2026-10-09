@@ -933,6 +933,18 @@ _AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"
             "plugins:\n  remove: [old@team]\n\n  add: []\n",
             id="only-entry-below-a-blank-line-after-an-inline-list",
         ),
+        pytest.param(
+            "plugins:\n  add:\n    # linting\n    - lint@team\n",
+            "lint@team",
+            "plugins:\n  add: []\n    # linting\n",
+            id="only-entry-below-a-comment-under-its-key",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n\n    - lint@team\n",
+            "lint@team",
+            "plugins:\n  add: []\n\n",
+            id="only-entry-below-a-blank-line-under-its-key",
+        ),
     ],
 )
 def test_config_remove_keeps_the_comments_that_follow_the_entry(
@@ -946,6 +958,34 @@ def test_config_remove_keeps_the_comments_that_follow_the_entry(
     _write_local(seed_local, seed + _AFTER)
 
     argv = ["config", "remove", "--local", "plugins.add", entry, "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    [
+        pytest.param(
+            "orphan_ignore:\n  # paths setforge leaves alone\n  - two\n",
+            "orphan_ignore: []\n  # paths setforge leaves alone\n",
+            id="comment-under-the-key",
+        ),
+        pytest.param(
+            "orphan_ignore:\n\n  - two\n",
+            "orphan_ignore: []\n\n",
+            id="blank-line-under-the-key",
+        ),
+    ],
+)
+def test_config_remove_keeps_the_order_of_lines_between_a_key_and_its_only_entry(
+    runner: CliRunner, seed_local: Path, seed: str, expected: str
+) -> None:
+    """A comment under the key stays above the comment that followed the entry."""
+    _write_local(seed_local, seed + _AFTER)
+
+    argv = ["config", "remove", "--local", "orphan_ignore", "two", "--yes"]
     result = runner.invoke(app, argv)
 
     assert result.exit_code == 0, result.output
