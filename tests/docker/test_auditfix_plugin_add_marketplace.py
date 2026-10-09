@@ -255,6 +255,74 @@ def test_marketplace_add_writes_yaml_and_registers(
     assert _MP_NAME not in yaml_after, yaml_after
 
 
+# Passes every call through to the real ``claude`` after recording its arguments.
+_RECORDER = "/tmp/claude-recorder"
+_RECORDED_CALLS = "/tmp/claude-calls.log"
+_RECORDER_SCRIPT = f"""\
+#!/bin/sh
+printf '%s\\n' "$*" >> {_RECORDED_CALLS}
+exec claude "$@"
+"""
+_INSTALL_YAML = f"""\
+version: 1
+schema_version: '6.0'
+tracked_files:
+  foo:
+    src: foo.md
+    dst: /tmp/out/foo.md
+marketplaces:
+  {_MP_NAME}:
+    source: path
+    path: {_MP_DIR}
+claude_plugins:
+  {_PLUGIN_NAME}:
+    marketplace: {_MP_NAME}
+packages:
+  {_PLUGIN_NAME}:
+    type: plugin
+    plugin: {_PLUGIN_NAME}
+profiles:
+  base:
+    tracked_files:
+      - foo
+    packages:
+      - {_PLUGIN_NAME}
+"""
+
+
+def test_second_install_adds_no_marketplace_the_tool_already_lists(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """The real tool lists a registered marketplace with ``source`` as a kind
+    word (``directory``) and the origin in ``path``. ``install`` must read that
+    as the declared path, so a second run issues no ``marketplace add``."""
+    c = docker_container(env={"SETFORGE_CLAUDE_BIN": _RECORDER})
+    c.write_text(_RECORDER, _RECORDER_SCRIPT)
+    c.exec(["chmod", "+x", _RECORDER])
+    _bootstrap_config(c)
+    c.write_text(f"{_SRC_REPO}/setforge.yaml", _INSTALL_YAML)
+    _bootstrap_local_marketplace(c)
+    install = ["uv", "run", "setforge", "install", "--profile=base", "--yes"]
+    list_marketplaces = ["claude", "plugin", "marketplace", "list", "--json"]
+
+    first = c.exec(install, check=False)
+    assert first.returncode == 0, first.stdout + first.stderr
+    first_calls = c.read_text(_RECORDED_CALLS).splitlines()
+    assert f"plugin marketplace add -- {_MP_DIR}" in first_calls, first_calls
+    listed = c.exec(list_marketplaces).stdout
+    assert [(row["source"], row["path"]) for row in json.loads(listed)] == [
+        ("directory", _MP_DIR)
+    ], listed
+    c.exec(["rm", _RECORDED_CALLS])
+
+    second = c.exec(install, check=False)
+    assert second.returncode == 0, second.stdout + second.stderr
+    second_calls = c.read_text(_RECORDED_CALLS).splitlines()
+    assert "plugin marketplace list --json" in second_calls, second_calls
+    assert [call for call in second_calls if "marketplace add" in call] == []
+    assert c.exec(list_marketplaces).stdout == listed
+
+
 @pytest.mark.network_canary
 @NETWORK_ONLY
 def test_marketplace_add_binary_failure_does_not_leave_orphan_yaml_entry(

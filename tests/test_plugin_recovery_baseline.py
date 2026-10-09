@@ -4,8 +4,9 @@ Before changing Claude plugins, ``install`` and ``revert`` journal the plugin
 tool's whole inventory, and a rollback puts back everything that differs from
 it. The journal can only hold a plugin recovery could reinstall (an id of the
 form ``NAME@MARKETPLACE``, a registered marketplace, a known enabled state) and
-a marketplace it could register again (a GitHub repo or a path). When the tool
-listed anything else, both commands used to stop with a raw ``ValueError``.
+a marketplace it could register again (a GitHub repo, a git link or a path).
+When the tool listed anything else, both commands used to stop with a raw
+``ValueError``.
 
 Now a command that changes no plugin or marketplace goes ahead and journals no
 plugin inventory, so a rollback runs no plugin command at all. A command that
@@ -92,8 +93,13 @@ _LIST_ONLY = {
 }
 
 
-_MP1: dict[str, object] = {"name": "mp1", "source": "o/mp1"}
-_MP2: dict[str, object] = {"name": "mp2", "source": "o/mp2"}
+# Marketplace rows as the plugin tool lists them: ``source`` is the kind of
+# origin and the origin itself is a sibling key.
+_MP1: dict[str, object] = {"name": "mp1", "source": "github", "repo": "o/mp1"}
+_MP2: dict[str, object] = {"name": "mp2", "source": "github", "repo": "o/mp2"}
+# The same two with the origin in ``source`` itself, which is still read.
+_MP1_BARE: dict[str, object] = {"name": "mp1", "source": "o/mp1"}
+_MP2_BARE: dict[str, object] = {"name": "mp2", "source": "o/mp2"}
 _REVIEW: dict[str, object] = {"id": "review@mp1", "enabled": True, "scope": "user"}
 _EXTRA: dict[str, object] = {"id": "extra@mp1", "enabled": True, "scope": "user"}
 
@@ -129,12 +135,6 @@ _UNRECORDABLE = [
         {"name": "urlmp", "source": "url", "url": "http://example.test/mp.json"},
         "marketplace 'urlmp': setforge cannot read where it was added from",
         id="url-marketplace",
-    ),
-    pytest.param(
-        "marketplace",
-        {"name": "gitmp", "source": "git", "url": "https://example.test/mp.git"},
-        "marketplace 'gitmp': setforge cannot read where it was added from",
-        id="git-marketplace",
     ),
 ]
 _STRAY = ("plugin", {"id": "stray@ghost", "enabled": True})
@@ -238,6 +238,7 @@ def test_install_with_a_report_policy_goes_ahead_and_still_reports(
     assert result.exit_code == 0, (result.output, result.exception)
     assert _deployed()
     assert "would add marketplace mp2" in result.output
+    assert "would add marketplace mp1" not in result.output
     assert "extra@mp1" in result.output
     assert _claude_calls_after(claude, 0) <= _LIST_ONLY
 
@@ -392,6 +393,24 @@ def test_failed_install_removes_a_marketplace_it_added_that_is_listed_as_a_link(
     assert operations.active("p") is None
 
 
+@pytest.mark.parametrize("yaml", [_YAML, _GIT_YAML], ids=["github", "git-link"])
+def test_second_install_on_a_host_the_first_set_up_runs_no_plugin_command(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude], yaml: str
+) -> None:
+    claude = fake_claude(marketplace_names={_GIT_URL: "mp2"})
+    first = _install(tmp_path, yaml=yaml)
+    assert first.exit_code == 0, (first.output, first.exception)
+    assert len(claude.mp_add_args()) == 2
+    start = len(claude.calls)
+    before = (claude.installed_state(), claude.marketplaces_state())
+
+    second = _install(tmp_path, yaml=yaml)
+
+    assert second.exit_code == 0, (second.output, second.exception)
+    assert _claude_calls_after(claude, start) <= _LIST_ONLY
+    assert (claude.installed_state(), claude.marketplaces_state()) == before
+
+
 _PATH_MARKETPLACES = [
     pytest.param(
         {"name": "localmp", "source": "directory", "path": "/srv/localmp"},
@@ -423,6 +442,35 @@ def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_path(
     assert claude.uninstall_args() == ["extra@mp1"]
     assert claude.installed_state() == {"review@mp1": _REVIEW, "tool@localmp": _TOOL}
     assert claude.marketplaces_state() == [_MP1, marketplace]
+    assert operations.active("p") is None
+
+
+_GIT_MP: dict[str, object] = {
+    "name": "gitmp",
+    "source": "git",
+    "url": "https://example.test/o/gitmp.git",
+}
+_GIT_TOOL: dict[str, object] = {"id": "tool@gitmp", "enabled": True, "scope": "user"}
+_GIT_MP_NAMES = {"https://example.test/o/gitmp.git": "gitmp"}
+
+
+def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_git_link(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude = fake_claude(marketplaces=[_MP1, _GIT_MP], plugins=[_REVIEW, _GIT_TOOL])
+    journaled = _fail_after_plugins(monkeypatch)
+
+    result = _install(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, RuntimeError), result.exception
+    assert journaled == [True]
+    assert claude.install_args() == ["extra@mp1"]
+    assert claude.uninstall_args() == ["extra@mp1"]
+    assert claude.installed_state() == {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL}
+    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
     assert operations.active("p") is None
 
 
@@ -474,13 +522,73 @@ def test_recovery_registers_a_removed_path_marketplace_again_from_its_path(
     assert claude.enable_args() == ["tool@localmp"]
 
 
+def test_recovery_registers_a_removed_git_link_marketplace_again_from_its_link(
+    fake_claude: Callable[..., FakeClaude],
+) -> None:
+    claude = fake_claude(
+        marketplaces=[_MP1], plugins=[_REVIEW], marketplace_names=_GIT_MP_NAMES
+    )
+
+    operations.recover_adapters(
+        _plugin_journal(
+            {
+                "plugins": {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL},
+                "marketplaces": {"mp1": _MP1, "gitmp": _GIT_MP},
+            }
+        )
+    )
+
+    assert claude.mp_add_args() == [_GIT_MP["url"]]
+    assert claude.install_args() == ["tool@gitmp"]
+    assert claude.enable_args() == ["tool@gitmp"]
+    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
+
+
+def test_recovery_puts_back_a_git_link_marketplace_now_listed_from_another_link(
+    fake_claude: Callable[..., FakeClaude],
+) -> None:
+    moved = {**_GIT_MP, "url": "https://example.test/fork/gitmp.git"}
+    claude = fake_claude(
+        marketplaces=[_MP1, moved],
+        plugins=[_REVIEW, _GIT_TOOL],
+        marketplace_names=_GIT_MP_NAMES,
+    )
+
+    operations.recover_adapters(
+        _plugin_journal(
+            {
+                "plugins": {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL},
+                "marketplaces": {"mp1": _MP1, "gitmp": _GIT_MP},
+            }
+        )
+    )
+
+    assert [
+        tuple(call[1:]) for call in claude.calls if tuple(call[1:]) not in _LIST_ONLY
+    ] == [
+        ("plugin", "uninstall", "tool@gitmp"),
+        ("plugin", "marketplace", "remove", "gitmp"),
+        ("plugin", "marketplace", "add", "--", _GIT_MP["url"]),
+        ("plugin", "install", "tool@gitmp", "--scope=user"),
+        ("plugin", "enable", "tool@gitmp"),
+    ]
+    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
+
+
+def test_a_journal_listing_a_git_link_marketplace_without_its_link_is_refused() -> None:
+    with pytest.raises(ValueError, match="no recoverable source identity"):
+        operations._validate_plugin_payload(
+            {"plugins": {}, "marketplaces": {"gitmp": {"source": "git"}}}
+        )
+
+
 # A journal exactly as 1.3.8 to 1.5.0 wrote it (the tool's two listings, as
 # listed), the host an interrupted command left behind, and the commands those
 # releases ran to recover it.
 _OLD_JOURNALS = [
     pytest.param(
-        {"plugins": {"review@mp1": _REVIEW}, "marketplaces": {"mp1": _MP1}},
-        {"plugins": [_REVIEW, _EXTRA], "marketplaces": [_MP1, _MP2]},
+        {"plugins": {"review@mp1": _REVIEW}, "marketplaces": {"mp1": _MP1_BARE}},
+        {"plugins": [_REVIEW, _EXTRA], "marketplaces": [_MP1_BARE, _MP2_BARE]},
         [
             ("plugin", "uninstall", "extra@mp1"),
             ("plugin", "marketplace", "remove", "mp2"),
@@ -490,9 +598,12 @@ _OLD_JOURNALS = [
     pytest.param(
         {
             "plugins": {"review@mp1": _REVIEW, "extra@mp2": {"enabled": False}},
-            "marketplaces": {"mp1": _MP1, "mp2": {"source": "github", "repo": "o/mp2"}},
+            "marketplaces": {
+                "mp1": _MP1_BARE,
+                "mp2": {"source": "github", "repo": "o/mp2"},
+            },
         },
-        {"plugins": [{**_REVIEW, "enabled": False}], "marketplaces": [_MP1]},
+        {"plugins": [{**_REVIEW, "enabled": False}], "marketplaces": [_MP1_BARE]},
         [
             ("plugin", "marketplace", "add", "--", "o/mp2"),
             ("plugin", "install", "extra@mp2", "--scope=user"),
@@ -524,12 +635,39 @@ _OLD_JOURNALS = [
         id="restores-the-whole-inventory",
     ),
     pytest.param(
-        {"plugins": {"review@mp1": _REVIEW}, "marketplaces": {"mp1": _MP1}},
-        {"plugins": [_REVIEW], "marketplaces": [_MP1]},
+        {"plugins": {"review@mp1": _REVIEW}, "marketplaces": {"mp1": _MP1_BARE}},
+        {"plugins": [_REVIEW], "marketplaces": [_MP1_BARE]},
         [],
         id="nothing-to-do",
     ),
 ]
+
+
+def test_an_earlier_journal_recovers_over_a_same_named_git_link_marketplace(
+    fake_claude: Callable[..., FakeClaude],
+) -> None:
+    """Earlier releases stopped here: they could not read the listed row."""
+    payload: dict[str, object] = {
+        "plugins": {"review@mp1": _REVIEW},
+        "marketplaces": {"mp1": _MP1_BARE},
+    }
+    claude = fake_claude(
+        marketplaces=[{**_GIT_MP, "name": "mp1"}],
+        plugins=[_REVIEW],
+        marketplace_names={"o/mp1": "mp1"},
+    )
+
+    operations.recover_adapters(_plugin_journal(payload))
+
+    assert [
+        tuple(call[1:]) for call in claude.calls if tuple(call[1:]) not in _LIST_ONLY
+    ] == [
+        ("plugin", "uninstall", "review@mp1"),
+        ("plugin", "marketplace", "remove", "mp1"),
+        ("plugin", "marketplace", "add", "--", "o/mp1"),
+        ("plugin", "install", "review@mp1", "--scope=user"),
+        ("plugin", "enable", "review@mp1"),
+    ]
 
 
 @pytest.mark.parametrize(("payload", "host", "commands"), _OLD_JOURNALS)
@@ -555,7 +693,7 @@ def test_a_journal_from_an_earlier_release_recovers_as_that_release_did(
 def test_the_journaled_inventory_is_written_as_earlier_releases_wrote_it() -> None:
     plugins = {"review@mp1": dict(_REVIEW)}
     marketplaces: dict[str, dict[str, object]] = {
-        "mp1": dict(_MP1),
+        "mp1": dict(_MP1_BARE),
         "mp2": {"source": "github", "repo": "o/mp2"},
     }
 

@@ -125,6 +125,15 @@ recovers as it did in those releases, with one difference: where those releases
 stopped because a marketplace of the same name is currently listed with a
 `directory` or `file` source, recovery now completes.
 
+From the release that follows 1.5.1, the plugin inventory may also list a
+marketplace added from a git link (`source` `git`, with a `url`), under the same
+rule: releases up to 1.5.1 could not write such a journal and refuse to read one
+("invalid operation journal ... has no recoverable source identity"), changing
+nothing, so recover it with the release that wrote it and do not move it aside.
+A journal written by 1.3.8 to 1.5.1 recovers as it did in the release that
+wrote it, with the same one difference for a marketplace of the same name that
+is currently listed with a `git` source.
+
 ### Project injection records
 
 Project injection records are private state, not config, and carry their own

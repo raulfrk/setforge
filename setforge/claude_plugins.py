@@ -534,20 +534,40 @@ def _normalize_github_source(raw: str) -> str:
     return raw.removeprefix("github:")
 
 
+# The key that holds the origin in a marketplace row, by the row's ``source``.
+_NATIVE_ORIGIN_KEY = {
+    "github": "repo",
+    "git": "url",
+    "url": "url",
+    "directory": "path",
+    "file": "path",
+}
+
+
 def _registered_source_identities(installed: dict[str, dict[str, object]]) -> set[str]:
     """Collect canonical source identities of already-registered marketplaces.
 
-    Each value from :func:`list_marketplaces` is a claude-reported entry
-    whose ``source`` field carries the origin (``github:owner/repo`` or a
-    filesystem path). Normalizes each so it can be matched against
-    :func:`_source_identity` of a declared marketplace.
+    Each value from :func:`list_marketplaces` is a claude-reported entry.
+    The tool lists ``source`` as the kind of origin (``github``, ``git``,
+    ``url``, ``directory``, ``file``) with the origin in a sibling ``repo``,
+    ``url`` or ``path`` key: exactly the argument the marketplace was added
+    with. A ``source`` that carries the origin itself (``github:owner/repo``
+    or a filesystem path) is still read. Normalizes each so it can be matched
+    against :func:`_source_identity` of a declared marketplace.
     """
     identities: set[str] = set()
     for entry in installed.values():
         source = entry.get("source")
         if not isinstance(source, str) or not source:
             continue
-        if _is_github_source(source):
+        origin_key = _NATIVE_ORIGIN_KEY.get(source)
+        origin = entry.get(origin_key) if origin_key is not None else None
+        if isinstance(origin, str) and origin:
+            if origin_key == "path":
+                identities.add(str(Path(origin).expanduser()))
+            else:
+                identities.add(_normalize_github_source(origin))
+        elif _is_github_source(source):
             identities.add(_normalize_github_source(source))
         else:
             identities.add(str(Path(source).expanduser()))

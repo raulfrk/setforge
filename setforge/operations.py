@@ -2534,7 +2534,8 @@ def _recover_marketplaces(marketplaces: dict[object, object]) -> None:
     for name in sorted((set(typed) - set(current)) | drifted):
         row = typed[name]
         source_kind, source_value = _marketplace_source_identity(name, row)
-        if source_kind == "github":
+        if source_kind in ("github", "git"):
+            # ``marketplace add`` takes a git link where it takes a repo slug.
             source = MarketplaceSource(
                 source=MarketplaceSourceKind.GITHUB,
                 repo=source_value,
@@ -2560,17 +2561,36 @@ def _drifted_marketplace_names(
     }
 
 
+# A marketplace row's ``source`` word -> its identity kind and the key that
+# holds its origin.
+_NATIVE_MARKETPLACE_ORIGIN: Final[Mapping[str, tuple[str, str]]] = {
+    "github": ("github", "repo"),
+    "directory": ("path", "path"),
+    "file": ("path", "path"),
+    "git": ("git", "url"),
+}
+
+
 def _marketplace_source_identity(
     name: str, row: Mapping[str, object]
 ) -> tuple[str, str]:
-    """Normalize Claude's accepted marketplace source JSON representations."""
+    """Normalize Claude's accepted marketplace source JSON representations.
+
+    Returns the kind (``github``, ``path`` or ``git``) and the origin a
+    marketplace can be registered again from. Releases up to 1.5.1 raise for a
+    ``git`` row, so they refuse a journal that holds one.
+    """
     raw_source = row.get("source")
-    repo = row.get("repo")
-    if raw_source == "github" and isinstance(repo, str) and repo:
-        return "github", repo
-    path = row.get("path")
-    if raw_source in ("directory", "file") and isinstance(path, str) and path:
-        return "path", path
+    native = (
+        _NATIVE_MARKETPLACE_ORIGIN.get(raw_source)
+        if isinstance(raw_source, str)
+        else None
+    )
+    if native is not None:
+        kind, key = native
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return kind, value
     if isinstance(raw_source, str) and raw_source.startswith("github:"):
         value = raw_source.removeprefix("github:")
         if value:

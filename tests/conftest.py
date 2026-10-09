@@ -384,7 +384,7 @@ class FakeClaude:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
-        native_rows: bool = False,
+        native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
     ) -> None:
         # Each marketplace entry: {"name": str, "source": str, ...}
@@ -552,7 +552,7 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
-        native_rows: bool = False,
+        native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
     ) -> FakeClaude:
         fake = FakeClaude(
