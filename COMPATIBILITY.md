@@ -118,9 +118,12 @@ The journal of an unfinished `install` or `revert` is private state that
 list a marketplace as the plugin tool reports one added from a path (`source`
 `directory` or `file`, with a `path`). Releases up to 1.5.0 could not write
 such a journal and refuse to read one ("invalid operation journal"), changing
-nothing; recover it with the release that wrote it. Every other journal is
-written as before, and a journal written by 1.3.8 to 1.5.0 recovers exactly as
-it did in those releases.
+nothing; recover it with the release that wrote it. Do not move the journal
+aside as the older release's error suggests: that abandons the rollback. Every
+other journal is written as before, and a journal written by 1.3.8 to 1.5.0
+recovers as it did in those releases, with one difference: where those releases
+stopped because a marketplace of the same name is currently listed with a
+`directory` or `file` source, recovery now completes.
 
 ### Project injection records
 
