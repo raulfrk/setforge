@@ -27,6 +27,7 @@ from setforge.migrations import _yaml_ops
 from setforge.migrations._yaml_ops import (
     atomic_write_yaml,
     rename_key,
+    render_yaml,
     yaml_rt,
 )
 
@@ -226,6 +227,53 @@ def test_atomic_write_yaml_accepts_every_document_that_reads_back(
 
     written = target.read_text(encoding="utf-8")
     assert _yaml_ops._plain(yaml_rt().load(written)) == _yaml_ops._plain(data)
+
+
+# ruamel loads a tagged scalar as an object that compares by identity, and a
+# list that carries a tag has no recorded positions. Neither is a reason to
+# refuse a file: it must write, byte for byte, with or without an unrelated key.
+_TAGGED = [
+    pytest.param("a: !!str 1\nb: 2\n", id="str-tag"),
+    pytest.param("code: !!str /usr/bin/code\n", id="str-tag-path"),
+    pytest.param("a: !custom v\nb: 2\n", id="custom-tag"),
+    pytest.param("a: !!str 1\nb: !!str 1\n", id="same-tag-twice"),
+    pytest.param("l:\n  - !!str 1\n  - 2\n", id="tag-in-list"),
+    pytest.param("!!str 1: x\nb: 2\n", id="tag-on-key"),
+    pytest.param("s: !!set\n  ? !!str 1\n  ? b\nc: 2\n", id="tag-in-set"),
+    pytest.param("a: !x |\n  text\nb: 2\n", id="tag-on-block-scalar"),
+    pytest.param("a: !x\n  - 1\n  - 2\nb: 2\n", id="tagged-list"),
+    pytest.param("a: !x\n  k: 1\nb: 2\n", id="tagged-map"),
+    pytest.param(
+        "a: !!null\nb: !!int '5'\nc: !!float 5\nd: !!bool 'true'\n", id="core"
+    ),
+    pytest.param("a: !!timestamp 2026-01-01\nb: 2\n", id="timestamp-tag"),
+]
+
+
+@pytest.mark.parametrize("text", _TAGGED)
+@pytest.mark.parametrize("edit", [False, True], ids=["unchanged", "edited"])
+def test_render_yaml_writes_a_document_with_tags_and_keeps_its_lines(
+    text: str, edit: bool
+) -> None:
+    data = yaml_rt().load(text)
+    if edit:
+        data["added"] = "new"
+
+    assert render_yaml(data, text) == text + ("added: new\n" if edit else "")
+
+
+def test_atomic_write_yaml_keeps_a_tagged_scalar_in_a_local_config(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "local.yaml"
+    text = "# mine\nbinaries:\n  code: !!str /usr/bin/code\n"
+    target.write_text(text, encoding="utf-8")
+    data = yaml_rt().load(text)
+    data["orphan_ignore"] = ["tool"]
+
+    atomic_write_yaml(target, data)
+
+    assert target.read_text(encoding="utf-8") == text + "orphan_ignore:\n- tool\n"
 
 
 def test_atomic_write_yaml_fsyncs_tmp_fd_before_replace(

@@ -1446,6 +1446,24 @@ def test_ignore_writes_local_yaml_not_tracked(
     assert payload == {"orphan_ignore": ["kept"]}
 
 
+def test_ignore_keeps_a_tagged_value_in_local_yaml(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A `!!str` tag in local.yaml is part of the file, not a reason to refuse."""
+    cfg = _write_minimal_yaml(tmp_path)
+    local = paths.local_config_path()
+    seed = "binaries:\n  code: !!str /usr/bin/code\n"
+    local.write_text(seed, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["cleanup-orphans", "--profile", "p", "--config", str(cfg), "--ignore", "kept"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert local.read_text(encoding="utf-8") == seed + "orphan_ignore:\n- kept\n"
+
+
 def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
     """Re-adding an existing id leaves the list shape unchanged."""
     cfg = _write_minimal_yaml(tmp_path)

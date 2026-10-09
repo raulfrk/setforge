@@ -59,6 +59,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of a config file are also kept when it is edited.
 - A config file that uses a YAML merge key (`<<: *name`) can be edited again.
   Every command that rewrites the file used to stop with `KeyError`.
+- A config file with a list that carries a YAML tag (`key: !tag`, then `- item`
+  lines) can be edited. Every command that rewrites the file used to stop with
+  `TypeError`.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register
