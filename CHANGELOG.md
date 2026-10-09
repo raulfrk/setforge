@@ -23,11 +23,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleting the whole list. A `local.yaml` already written with a single value
   still has to be corrected by hand: make it a list. Removing a list entry now
   keeps the comment lines that follow it, such as one above the next key.
-  `config add` and `config remove` also refuse, and leave the file unchanged,
-  when the edited file would not read back as the change they checked, which
-  lists indented differently from one another in the same file can cause (the
-  new entry used to be written wrongly with no error); give the lists the same
-  indentation and retry.
+  `config add` and `config remove` also refuse, and write nothing, when the
+  edited file would not read back as the change they checked (the new entry
+  used to be written wrongly with no error). The message says to edit the file
+  by hand; lists indented differently from one another in the same file are a
+  common cause. A `local.yaml` with no final newline now takes an add, and the
+  file gains the newline; the new line used to be joined onto the last one.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register
