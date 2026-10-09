@@ -11,6 +11,7 @@ the undo instead of redoing the install.
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -46,6 +47,12 @@ profiles:
     packages: [review, extra]
 """
 _PRUNE = "    reconcile: {plugins: {policy: prune}}\n"
+# The same config with ``mp2`` added from a git link, and from a directory.
+_GIT_URL = "https://example.com/team/mp2.git"
+_GIT_YAML = _YAML.replace("repo: o/mp2", f"repo: {_GIT_URL}")
+_PATH_YAML = _YAML.replace(
+    "mp2: {source: github, repo: o/mp2}", "mp2: {source: path, path: /srv/mp2}"
+)
 
 _MP1: dict[str, object] = {"name": "mp1", "source": "github", "repo": "o/mp1"}
 _MP2: dict[str, object] = {"name": "mp2", "source": "github", "repo": "o/mp2"}
@@ -56,8 +63,8 @@ _OTHER: dict[str, object] = {"id": "other@mp1", "enabled": True, "scope": "user"
 _State = tuple[dict[str, dict], dict[str, dict]]
 
 
-def _install(tmp_path: Path, policy: str = "") -> Result:
-    cfg = write_setforge_yaml(tmp_path, _YAML + policy)
+def _install(tmp_path: Path, policy: str = "", yaml: str = _YAML) -> Result:
+    cfg = write_setforge_yaml(tmp_path, yaml + policy)
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "x").write_text("x\n", encoding="utf-8")
     return CliRunner().invoke(
@@ -96,38 +103,48 @@ def _newest_record() -> Path:
 # The host each install starts from, the reconcile policy, and the one kind of
 # plugin change that install then makes.
 _HOSTS = [
-    pytest.param([], [], "", id="adds-marketplaces-and-installs-plugins"),
-    pytest.param([_MP1, _MP2], [_REVIEW], "", id="installs-a-plugin"),
+    pytest.param([], [], "", _YAML, id="adds-marketplaces-and-installs-plugins"),
+    pytest.param([_MP1, _MP2], [_REVIEW], "", _YAML, id="installs-a-plugin"),
     pytest.param(
         [_MP1, _MP2],
         [_REVIEW, {**_EXTRA, "enabled": False}],
         "",
+        _YAML,
         id="enables-a-plugin",
     ),
     pytest.param(
-        [_MP1, _MP2], [_REVIEW, _EXTRA, _OTHER], _PRUNE, id="disables-a-plugin"
+        [_MP1, _MP2],
+        [_REVIEW, _EXTRA, _OTHER],
+        _PRUNE,
+        _YAML,
+        id="disables-a-plugin",
     ),
-    pytest.param([_MP1], [], "", id="adds-one-marketplace"),
+    pytest.param([_MP1], [], "", _YAML, id="adds-one-marketplace"),
+    pytest.param([_MP1], [], "", _GIT_YAML, id="adds-a-marketplace-from-a-git-link"),
+    pytest.param([_MP1], [], "", _PATH_YAML, id="adds-a-marketplace-from-a-directory"),
 ]
 
 
-@pytest.mark.parametrize(("marketplaces", "plugins", "policy"), _HOSTS)
+@pytest.mark.parametrize(("marketplaces", "plugins", "policy", "yaml"), _HOSTS)
 def test_second_revert_redoes_the_install_and_third_undoes_it_again(
     tmp_path: Path,
     fake_claude: Callable[..., FakeClaude],
     marketplaces: list[dict[str, object]],
     plugins: list[dict[str, object]],
     policy: str,
+    yaml: str,
 ) -> None:
     claude = fake_claude(
         marketplaces=[dict(row) for row in marketplaces],
         plugins=[dict(row) for row in plugins],
         native_rows=True,
+        marketplace_names={_GIT_URL: "mp2"},
     )
     before_install = _state(claude)
-    assert _install(tmp_path, policy).exit_code == 0
+    assert _install(tmp_path, policy, yaml).exit_code == 0
     after_install = _state(claude)
     assert after_install != before_install
+    assert set(after_install[1]) == {"mp1", "mp2"}
 
     first = _revert(tmp_path)
     assert first.exit_code == 0, (first.output, first.exception)
@@ -142,10 +159,19 @@ def test_second_revert_redoes_the_install_and_third_undoes_it_again(
     assert _state(claude) == before_install
 
 
+@pytest.mark.parametrize(
+    "fresh_install_enabled", [False, True], ids=["lands-disabled", "lands-enabled"]
+)
 def test_redo_leaves_a_plugin_that_was_installed_disabled_disabled(
-    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    fresh_install_enabled: bool,
 ) -> None:
-    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], native_rows=True)
+    claude = fake_claude(
+        marketplaces=[dict(_MP1), dict(_MP2)],
+        native_rows=True,
+        fresh_install_enabled=fresh_install_enabled,
+    )
     assert _install(tmp_path).exit_code == 0
     claude.run(["claude", "plugin", "disable", "extra@mp1"])
     after_install = _state(claude)
@@ -155,6 +181,56 @@ def test_redo_leaves_a_plugin_that_was_installed_disabled_disabled(
     assert _revert(tmp_path).exit_code == 0
 
     assert _state(claude) == after_install
+
+
+def test_redo_does_not_reinstall_a_plugin_removed_by_hand_before_the_revert(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], native_rows=True)
+    assert _install(tmp_path).exit_code == 0
+    claude.run(["claude", "plugin", "uninstall", "extra@mp1"])
+    installs_before = len(claude.install_args())
+
+    assert _revert(tmp_path).exit_code == 0
+    assert _state(claude)[0] == {}
+    assert _revert(tmp_path).exit_code == 0
+
+    assert claude.install_args()[installs_before:] == ["review@mp1"]
+    assert set(_state(claude)[0]) == {"review@mp1"}
+
+
+def test_plugin_that_fails_to_reinstall_on_redo_is_not_recorded_as_installed(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], native_rows=True)
+    assert _install(tmp_path).exit_code == 0
+    assert _revert(tmp_path).exit_code == 0
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if args[1:4] == ["plugin", "install", "extra@mp1"]:
+            claude.calls.append(list(args))
+            raise subprocess.CalledProcessError(1, args, "", "install failed")
+        return claude.run(args, **kwargs)
+
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", run)
+    redo = _revert(tmp_path)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", claude.run)
+
+    assert "FAILED plugin install extra@mp1" in redo.output
+    assert set(_state(claude)[0]) == {"review@mp1"}
+    redo_record = json.loads(
+        (_newest_record() / "plugins.json").read_text(encoding="utf-8")
+    )
+    assert redo_record["installed"] == ["review@mp1"]
+    uninstalls_before = len(claude.uninstall_args())
+
+    third = _revert(tmp_path)
+
+    assert third.exit_code == 0, (third.output, third.exception)
+    assert claude.uninstall_args()[uninstalls_before:] == ["review@mp1"]
+    assert _state(claude)[0] == {}
 
 
 def test_revert_record_lists_what_the_revert_itself_changed(
@@ -198,6 +274,23 @@ def test_revert_record_lists_what_the_revert_itself_changed(
     assert "- marketplace:mp1" in shown.output
     # Both records count two plugins and two marketplaces.
     assert [row.plugin_count for row in transitions.list_transitions(["p"])] == [4, 4]
+
+
+def test_revert_records_a_git_link_marketplace_in_the_form_releases_read(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    """The record holds only the two source kinds every release accepts."""
+    fake_claude(
+        marketplaces=[dict(_MP1)], native_rows=True, marketplace_names={_GIT_URL: "mp2"}
+    )
+    assert _install(tmp_path, yaml=_GIT_YAML).exit_code == 0
+
+    assert _revert(tmp_path).exit_code == 0
+
+    record = json.loads((_newest_record() / "plugins.json").read_text(encoding="utf-8"))
+    assert record["marketplaces_removed"] == [
+        ["mp2", {"source": "github", "repo": _GIT_URL}]
+    ]
 
 
 @pytest.mark.parametrize(

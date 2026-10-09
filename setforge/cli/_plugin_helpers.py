@@ -1134,8 +1134,13 @@ def _plugin_state_before_reverse(
                     )
                 except ValueError:
                     continue
-                key = "repo" if kind == MarketplaceSourceKind.GITHUB else "path"
-                sources[name] = {"source": kind, key: value}
+                # ``marketplace add`` takes a git link where it takes a repo
+                # slug, so both are recorded as a ``github`` source.
+                sources[name] = (
+                    {"source": MarketplaceSourceKind.PATH.value, "path": value}
+                    if kind == "path"
+                    else {"source": MarketplaceSourceKind.GITHUB.value, "repo": value}
+                )
     except PluginToolMissing:
         # Every inverse op below then skips with its own warning.
         pass
@@ -1226,8 +1231,9 @@ def _reverse_plugins(
             if name in sources_before
         ),
         uninstalled=tuple(
-            (plugin_id, enabled_before.get(plugin_id, True))
+            (plugin_id, enabled_before[plugin_id])
             for plugin_id in accumulators["installed"]
+            if plugin_id in enabled_before
         ),
     )
     return reverse_delta, failed

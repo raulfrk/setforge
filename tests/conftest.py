@@ -386,6 +386,7 @@ class FakeClaude:
         plugins: list[dict] | None = None,
         native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
+        fresh_install_enabled: bool = False,
     ) -> None:
         # Each marketplace entry: {"name": str, "source": str, ...}
         self._marketplaces: list[dict] = list(marketplaces or [])
@@ -395,6 +396,9 @@ class FakeClaude:
         # name the marketplace declares, which need not match any config key.
         self._native_rows = native_rows
         self._marketplace_names = dict(marketplace_names or {})
+        # The real tool lists a freshly installed plugin as enabled; the fake
+        # lands it disabled unless ``fresh_install_enabled`` is set.
+        self._fresh_install_enabled = fresh_install_enabled
         # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
         self._plugins: list[dict] = list(plugins or [])
         self.calls: list[list[str]] = []
@@ -463,7 +467,11 @@ class FakeClaude:
                 # without touching enabledPlugins. Plugin lands disabled
                 # until 'enable' runs.
                 self._plugins.append(
-                    {"id": plugin_arg, "enabled": False, "scope": "user"}
+                    {
+                        "id": plugin_arg,
+                        "enabled": self._fresh_install_enabled,
+                        "scope": "user",
+                    }
                 )
             # Re-install of an already-installed plugin: no-op on enabled
             # state (production claude doesn't touch enabledPlugins on
@@ -554,12 +562,14 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         plugins: list[dict] | None = None,
         native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
+        fresh_install_enabled: bool = False,
     ) -> FakeClaude:
         fake = FakeClaude(
             marketplaces=marketplaces,
             plugins=plugins,
             native_rows=native_rows,
             marketplace_names=marketplace_names,
+            fresh_install_enabled=fresh_install_enabled,
         )
         # Snapshot the pre-monkeypatch ``subprocess.run`` so FakeClaude
         # can forward non-claude argv (git etc.) to the real function.
