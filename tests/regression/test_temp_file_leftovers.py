@@ -46,9 +46,9 @@ def leftover_names(name: str) -> tuple[str, str]:
     return gated, atomicio.temp_name(name)
 
 
-def kill_at_rename(host: Host, leaf: str, *argv: str) -> None:
+def kill_at_rename(host: Host, leaf: str, *argv: str, config: bool = True) -> None:
     killed = subprocess.run(
-        [sys.executable, "-c", KILL_AT_RENAME, *host._argv(argv, True, True)],
+        [sys.executable, "-c", KILL_AT_RENAME, *host._argv(argv, config, True)],
         cwd=REPO_ROOT,
         env={**host.proc_env(), "SETFORGE_KILL_AT": leaf},
         text=True,
@@ -178,16 +178,100 @@ def test_a_marked_directory_or_symlink_in_a_managed_tree_is_still_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     host = _tree_host(tmp_path, monkeypatch, {"managed": "~/.managed"})
+    host.config.write_text(
+        host.config.read_text(encoding="utf-8").replace(
+            "tree: {}", "tree: {symlinks: preserve}"
+        ),
+        encoding="utf-8",
+    )
     source = host.tracked("managed")
     directory, _ = leftover_names("dir")
     (source / directory).mkdir()
     (source / directory / "inner.txt").write_bytes(b"mine\n")
+    links = leftover_names("kept.txt")
+    for link in links:
+        (source / link).symlink_to("kept.txt")
 
     installed = host.install()
 
     assert installed.exit_code == 0, installed.output
     live = host.real_home / ".managed"
     assert (live / directory / "inner.txt").read_bytes() == b"mine\n"
+    for link in links:
+        assert (live / link).is_symlink()
+        assert str((live / link).readlink()) == "kept.txt"
+
+
+def test_orphan_scan_offers_a_marked_symlink_and_a_file_in_a_marked_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _tree_host(tmp_path, monkeypatch, {"managed": "~/.managed"})
+    assert host.install().exit_code == 0
+    live = host.real_home / ".managed"
+    directory, _ = leftover_names("dir")
+    (live / directory).mkdir()
+    (live / directory / "inner.txt").write_bytes(b"mine\n")
+    links = leftover_names("kept.txt")
+    for link in links:
+        (live / link).symlink_to("kept.txt")
+
+    scan = host.cli("cleanup-orphans", "--scan")
+
+    assert scan.exit_code == 0, scan.output
+    flat = scan.output.replace("\n", "")
+    assert str(live / directory / "inner.txt") in flat
+    for link in links:
+        assert str(live / link) in flat
+
+
+def test_a_killed_symlink_deploy_leaves_a_marked_link_that_is_never_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        tracked={"body.txt": "body\n"},
+        dsts={"body.txt": "~/.x/link"},
+        extra_yaml="  d: {src: d, dst: '~/.y/d'}",
+        profile_yaml="      - d",
+    )
+    host.config.write_text(
+        host.config.read_text(encoding="utf-8").replace(
+            "dst: '~/.x/link'}", "dst: '~/.x/link', symlink: real.txt}"
+        ),
+        encoding="utf-8",
+    )
+    host.tracked("d").mkdir()
+    host.tracked("d/real.txt").write_bytes(b"one\n")
+    host.live_dir.mkdir()
+
+    kill_at_rename(host, "link", "install", "--yes", "--no-fetch", "--no-git-check")
+
+    assert host.live("real.txt").read_bytes() == b"body\n"
+    (leftover,) = (
+        path for path in host.live_dir.iterdir() if atomicio.is_temp_name(path.name)
+    )
+    assert sorted(path.name for path in host.live_dir.iterdir()) == sorted(
+        ("real.txt", leftover.name)
+    )
+    assert leftover.is_symlink()
+    assert leftover.name.startswith(".link.setforge-")
+    assert not leftover.name.startswith(".link.setforge-u")
+    recovered = host.proc("recover", "--apply", "--yes", config=False)
+    assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+    # The same link inside a tracked directory is neither deployed nor captured.
+    (host.tracked("d") / leftover.name).symlink_to("real.txt")
+
+    installed = host.install()
+
+    assert installed.exit_code == 0, installed.output
+    assert str(host.live("link").readlink()) == "real.txt"
+    live_d = host.home / ".y" / "d"
+    assert [path.name for path in live_d.iterdir()] == ["real.txt"]
+    (live_d / leftover.name).symlink_to("real.txt")
+    compared = host.cli("compare", "--check")
+    assert compared.exit_code == 0, compared.output
+    assert leftover.name not in compared.output.replace("\n", "")
 
 
 def test_orphan_scan_offers_lookalikes_and_never_a_leftover(

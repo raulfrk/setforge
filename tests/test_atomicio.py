@@ -406,8 +406,8 @@ def test_mode_applied_on_text_variant(tmp_path: Path) -> None:
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
 
-def test_mode_none_keeps_mkstemp_default(tmp_path: Path) -> None:
-    """``mode=None`` applies no perm bits — the 0600 ``mkstemp`` default
+def test_mode_none_keeps_temp_file_default(tmp_path: Path) -> None:
+    """``mode=None`` applies no perm bits — the 0600 temp-file default
     rides through to the destination."""
     target = tmp_path / "file.bin"
     atomicio.atomic_write_bytes(target, b"x")

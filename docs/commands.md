@@ -349,7 +349,10 @@ nothing, so it removes nothing. Three kinds of leftover stay until you delete
 them: `setforge-u` names, because their writer may still be running; a leftover
 beside a file SetForge does not write again; and the
 `.NAME.<8 characters>.tmp` files that earlier releases left, because that
-name does not prove the file is SetForge's.
+name does not prove the file is SetForge's. The gate is per user and cache
+root: two SetForge processes running under different `$HOME` or cache roots
+hold different gates, as for all SetForge locking, so do not point them at
+the same files.
 
 A managed tree with `orphans: remove-owned` keeps a directory that still holds
 such a leftover, and the directories above it, even after the directory is

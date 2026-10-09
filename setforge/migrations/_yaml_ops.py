@@ -255,7 +255,7 @@ def atomic_write_yaml(
     survives power loss, not just a process crash.
 
     The DESTINATION's permission bits are preserved (``mode=`` computed
-    from the existing file): ``mkstemp`` creates the tmp at 0600, so a
+    from the existing file): the tmp is created at 0600, so a
     plain replace would silently narrow a group/other-readable config
     to owner-only on every migrate/pin write. New files keep the 0600
     default (``mode=None``).

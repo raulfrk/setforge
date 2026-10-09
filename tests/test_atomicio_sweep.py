@@ -4,6 +4,7 @@ Only the gated names of the destination being written, only regular files,
 only in the destination's own directory, and only while the mutation gate is
 held."""
 
+import errno
 import os
 import threading
 from pathlib import Path
@@ -93,6 +94,58 @@ def test_gated_write_never_removes_a_symlink_or_directory(
     assert outside.read_bytes() == b"mine\n"
     assert (directory / "inner.txt").read_bytes() == b"mine\n"
     assert capsys.readouterr().err == ""
+
+
+def test_a_leftover_that_cannot_be_removed_is_skipped_and_the_write_completes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "settings.json"
+    # Sorted first, so the sweep meets the one it cannot remove first.
+    stale = tmp_path / gated("settings.json.bak")
+    stale.write_bytes(b"half\n")
+    removable = tmp_path / gated("settings.json")
+    removable.write_bytes(b"half\n")
+    real_unlink = os.unlink
+
+    def unlink(name: str, *, dir_fd: int | None = None) -> None:
+        if name == stale.name:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), name)
+        real_unlink(name, dir_fd=dir_fd)
+
+    monkeypatch.setattr(atomicio.os, "unlink", unlink)
+
+    with mutation_locks():
+        atomicio.atomic_write_bytes(target, b"new\n")
+
+    assert target.read_bytes() == b"new\n"
+    assert stale.read_bytes() == b"half\n"
+    # The failure is not reported as a removal; the next leftover still goes.
+    assert capsys.readouterr().err == (
+        "warning: removed a temporary file left by an interrupted "
+        f"setforge run: {removable}\n"
+    )
+    assert not removable.exists()
+
+
+def test_a_directory_that_cannot_be_listed_is_not_swept_and_the_write_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "settings.json"
+    stale = tmp_path / gated("settings.json")
+    stale.write_bytes(b"half\n")
+
+    def listdir(path: object) -> list[str]:
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES))
+
+    monkeypatch.setattr(atomicio.os, "listdir", listdir)
+
+    with mutation_locks():
+        atomicio.atomic_write_bytes(target, b"new\n")
+
+    assert target.read_bytes() == b"new\n"
+    assert stale.read_bytes() == b"half\n"
 
 
 def test_sweep_stays_in_the_destinations_own_directory(tmp_path: Path) -> None:
