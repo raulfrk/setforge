@@ -507,9 +507,14 @@ def _list_at(seed_local: Path, key: str) -> object:
     return load_yaml_mapping(seed_local)[block][leaf]
 
 
+# Not 0o600: the writer creates new files at 0o600, so only another mode shows
+# that an existing file's permissions are kept.
+_SEEDED_MODE = 0o640
+
+
 def _write_local(seed_local: Path, text: str) -> None:
     seed_local.write_text(text, encoding="utf-8")
-    seed_local.chmod(0o600)
+    seed_local.chmod(_SEEDED_MODE)
 
 
 @pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
@@ -554,7 +559,7 @@ def test_config_add_appends_to_the_existing_list(
     text = seed_local.read_text(encoding="utf-8")
     assert "# keep this comment" in text
     assert "# existing entries" in text
-    assert seed_local.stat().st_mode & 0o777 == 0o600
+    assert seed_local.stat().st_mode & 0o777 == _SEEDED_MODE
     _assert_profile_still_resolves(runner, list_overlay_config)
 
 
@@ -577,7 +582,7 @@ def test_config_remove_drops_one_list_entry(
     text = seed_local.read_text(encoding="utf-8")
     assert "# keep this comment" in text
     assert "# existing entries" in text
-    assert seed_local.stat().st_mode & 0o777 == 0o600
+    assert seed_local.stat().st_mode & 0o777 == _SEEDED_MODE
     _assert_profile_still_resolves(runner, list_overlay_config)
 
 
@@ -676,3 +681,118 @@ def test_config_add_refuses_an_unknown_overlay_key(
     assert result.exit_code != 0
     assert "unknown path" in str(result.exception)
     assert seed_local.read_bytes() == before
+
+
+# Lists indented differently from one another in the same file. The renderer
+# keeps the lines an edit did not touch and writes the new entry in the first
+# list's style, so an append to the other list lands at the wrong indentation.
+_MIXED_INDENT = [
+    pytest.param(
+        "plugins:\n  add:\n    - a\nextensions:\n  remove:\n  - e.two\n",
+        id="indented-then-flush",
+    ),
+    pytest.param(
+        "plugins:\n  add:\n  - a\nextensions:\n  remove:\n    - e.two\n",
+        id="flush-then-indented",
+    ),
+]
+
+
+@pytest.mark.parametrize("seed", _MIXED_INDENT)
+def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
+    runner: CliRunner, seed_local: Path, seed: str
+) -> None:
+    """An append that the renderer would write wrongly is refused, not written.
+
+    Before the check the first layout was written as ``['e.two - pub.ext']``
+    and the second as YAML that does not parse; both exited 0.
+    """
+    _write_local(seed_local, seed)
+    before = seed_local.read_bytes()
+
+    argv = ["config", "add", "--local", "extensions.remove", "pub.ext", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code != 0
+    assert "would not read back" in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize("seed", _MIXED_INDENT)
+def test_config_add_keeps_a_mixed_indent_file_when_the_edit_reads_back(
+    runner: CliRunner, seed_local: Path, seed: str
+) -> None:
+    """The check compares meaning, so an edit that renders correctly still lands."""
+    _write_local(seed_local, seed)
+
+    result = runner.invoke(
+        app, ["config", "add", "--local", "plugins.add", "pub@team", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _list_at(seed_local, "plugins.add") == ["a", "pub@team"]
+    assert _list_at(seed_local, "extensions.remove") == ["e.two"]
+
+
+_AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"
+
+
+@pytest.mark.parametrize(
+    ("seed", "entry", "expected"),
+    [
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n    - fmt@team\n",
+            "fmt@team",
+            "plugins:\n  add:\n    - lint@team\n",
+            id="last-of-two",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n",
+            "lint@team",
+            "plugins:\n  add: []\n",
+            id="only-entry",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n    - fmt@team\n    - docs@team\n"
+            "    # about docs\n",
+            "docs@team",
+            "plugins:\n  add:\n    - lint@team\n    - fmt@team\n    # about docs\n",
+            id="indented-comment-after-last",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n    # about fmt\n    - fmt@team\n"
+            "    - docs@team\n",
+            "lint@team",
+            "plugins:\n  add:\n    # about fmt\n    - fmt@team\n    - docs@team\n",
+            id="first-of-three",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n    - fmt@team\n    # about docs\n"
+            "    - docs@team\n",
+            "fmt@team",
+            "plugins:\n  add:\n    - lint@team\n    # about docs\n    - docs@team\n",
+            id="middle-of-three",
+        ),
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n    - fmt@team  # own note\n",
+            "fmt@team",
+            "plugins:\n  add:\n    - lint@team\n",
+            id="own-inline-comment-goes-with-the-entry",
+        ),
+    ],
+)
+def test_config_remove_keeps_the_comments_that_follow_the_entry(
+    runner: CliRunner, seed_local: Path, seed: str, entry: str, expected: str
+) -> None:
+    """Comments after the removed entry belong to what follows it; keep them.
+
+    The one on the entry's own line goes with it. A comment above the next key
+    used to vanish when the last entry of the list before it was removed.
+    """
+    _write_local(seed_local, seed + _AFTER)
+
+    argv = ["config", "remove", "--local", "plugins.add", entry, "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
