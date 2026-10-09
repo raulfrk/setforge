@@ -19,11 +19,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import locking, reconcile
 from setforge.cli import app
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, SetforgeError
 from setforge.migrations import (
     MigrationRoots,
     current_expected_schema_version,
@@ -398,3 +399,189 @@ def test_migrate_then_revert_restores_local_yaml_and_reconcile_legs(
     assert cfg.read_bytes() == cfg_pre
     for p, want in pre.items():
         assert p.read_bytes() == want, f"revert did not restore {p} byte-exact"
+
+
+_SECTION_YAML = """\
+host_local_sections:
+  my-tweaks:
+    anchor:
+      kind: after-heading
+      value: Alpha
+    body: "## My Tweaks\\nmy custom line\\n"
+"""
+
+
+def _notes_entry(*, before: str = "", after: str = "") -> str:
+    """A ``tracked_files`` ``notes`` entry with the section between two extras."""
+    section = textwrap.indent(_SECTION_YAML, "    ")
+    return f"tracked_files:\n  notes:\n{before}{section}{after}"
+
+
+def _strip_through_apply(tmp_path: Path, local_text: str) -> tuple[MigrationRoots, str]:
+    roots = _setup(tmp_path, local_yaml_body=local_text, deploy=False)
+    SpanSurfaceRetireMigration().apply(roots=roots)
+    return roots, _local_yaml_path(roots).read_text(encoding="utf-8")
+
+
+def test_strip_writes_the_same_bytes_for_an_ordinary_local_yaml(tmp_path) -> None:
+    """The strip keeps its writer: this literal is what the migration wrote
+    before the read-back check was added (comments, order and the survivor span
+    kept; the document re-indented to the writer's own style)."""
+    local = "# Host-local overrides.\n" + _notes_entry(
+        before='    mode: "0600"  # private\n',
+        after="    spans:\n      - kind: overlay\n        start: 1\n"
+        "      - kind: keep\n        start: 2\n"
+        "  other:\n    dst: ~/other.md\n"
+        "binaries:\n    code: /usr/bin/code\n",
+    )
+    _, written = _strip_through_apply(tmp_path, local)
+    assert written == (
+        "# Host-local overrides.\n"
+        "tracked_files:\n"
+        "  notes:\n"
+        '    mode: "0600"  # private\n'
+        "    spans:\n"
+        "    - kind: keep\n"
+        "      start: 2\n"
+        "  other:\n"
+        "    dst: ~/other.md\n"
+        "binaries:\n"
+        "  code: /usr/bin/code\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("local", "want"),
+    [
+        pytest.param(
+            "plugins:\n    add:\n        - foo\n        - bar\n"
+            + _notes_entry(after='    mode: "0600"\n')
+            + "extensions:\n  add:\n  - a.b\n  - c.d\n",
+            {
+                "plugins": {"add": ["foo", "bar"]},
+                "tracked_files": {"notes": {"mode": "0600"}},
+                "extensions": {"add": ["a.b", "c.d"]},
+            },
+            id="mixed-indentation",
+        ),
+        pytest.param(
+            "tracked_files:\n    notes:\n        mode: '0600'\n"
+            + textwrap.indent(_SECTION_YAML, "        ")
+            + "    other:\n      dst: ~/o.md\n",
+            {"tracked_files": {"notes": {"mode": "0600"}, "other": {"dst": "~/o.md"}}},
+            id="mixed-mapping-indent",
+        ),
+        pytest.param(
+            'tracked_files:\n  notes: {mode: "0600", host_local_sections: '
+            "{my-tweaks: {anchor: {kind: after-heading, value: Alpha}, "
+            'body: "## My Tweaks\\nmy custom line\\n"}}}\n',
+            {"tracked_files": {"notes": {"mode": "0600"}}},
+            id="flow-mapping",
+        ),
+        pytest.param(
+            _notes_entry(after="    mode: '0600'").rstrip("\n"),
+            {"tracked_files": {"notes": {"mode": "0600"}}},
+            id="no-final-newline",
+        ),
+        pytest.param(
+            "# a\n# b\n" + _notes_entry(after="    mode: '0600'\n") + "# end\n",
+            {"tracked_files": {"notes": {"mode": "0600"}}},
+            id="comments-outside-the-entry",
+        ),
+    ],
+)
+def test_strip_keeps_the_data_of_an_unusual_layout(
+    tmp_path, local: str, want: object
+) -> None:
+    roots, written = _strip_through_apply(tmp_path, local)
+    assert YAML(typ="safe").load(written) == want
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+
+
+def test_a_local_yaml_of_only_comments_is_left_alone(tmp_path) -> None:
+    text = "# nothing here yet\n# still nothing\n"
+    roots, written = _strip_through_apply(tmp_path, text)
+    assert written == text
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+
+
+_NOT_READ_BACK = (
+    "refusing to write {path}: the edited file would not read back as the change "
+    "that was checked, so nothing was written. Remove the comments and blank "
+    "lines inside its tracked_files entries, then run the migration again."
+)
+
+# The entry holds nothing but the section, so stripping empties it; a comment
+# or blank line between its key and the block makes the emptied entry unreadable.
+_EMPTIED_ENTRY = [
+    pytest.param(
+        "tracked_files:\n  notes:  # the notes\n"
+        + textwrap.indent(_SECTION_YAML, "    "),
+        id="comment-on-the-key-line",
+    ),
+    pytest.param(
+        "tracked_files:\n  notes:\n    # why\n"
+        + textwrap.indent(_SECTION_YAML, "    "),
+        id="comment-above-the-section",
+    ),
+    pytest.param(
+        "tracked_files:\n  notes:\n\n" + textwrap.indent(_SECTION_YAML, "    "),
+        id="blank-line-above-the-section",
+    ),
+]
+
+
+@pytest.mark.parametrize("local", _EMPTIED_ENTRY)
+def test_apply_refuses_a_strip_that_would_not_read_back(tmp_path, local: str) -> None:
+    """Such a file used to be written unreadable, with the migration reporting
+    success; now it is refused before anything changes."""
+    roots = _setup(tmp_path, local_yaml_body=local, deploy=False)
+    local_yaml = _local_yaml_path(roots)
+    cfg_before = roots.cfg_path.read_bytes()
+
+    with pytest.raises(SetforgeError) as raised:
+        SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert str(raised.value) == _NOT_READ_BACK.format(path=local_yaml)
+    assert local_yaml.read_text(encoding="utf-8") == local
+    assert roots.cfg_path.read_bytes() == cfg_before
+    assert reconcile.read_base("default", file_id("notes")) is None
+
+
+@pytest.mark.parametrize("local", _EMPTIED_ENTRY)
+def test_migrate_apply_refuses_a_strip_that_would_not_read_back(
+    tmp_path: Path, state_dir: Path, local: str
+) -> None:
+    roots = _setup(tmp_path, local_yaml_body=local)
+    local_yaml = _local_yaml_path(roots)
+    cfg_before = roots.cfg_path.read_bytes()
+
+    result = runner.invoke(
+        app,
+        ["migrate", "--config", str(roots.cfg_path), "--to", "4.0", "--apply", "--yes"],
+    )
+
+    assert result.exit_code != 0
+    assert _NOT_READ_BACK.format(path=local_yaml) in " ".join(result.output.split())
+    assert local_yaml.read_text(encoding="utf-8") == local
+    assert roots.cfg_path.read_bytes() == cfg_before
+    assert reconcile.read_base("default", file_id("notes")) is None
+
+
+def test_the_refusal_clears_once_the_comment_is_removed(tmp_path) -> None:
+    roots = _setup(
+        tmp_path,
+        local_yaml_body="tracked_files:\n  notes:\n    # why\n"
+        + textwrap.indent(_SECTION_YAML, "    "),
+        deploy=False,
+    )
+    with pytest.raises(SetforgeError):
+        SpanSurfaceRetireMigration().apply(roots=roots)
+
+    _local_yaml_path(roots).write_text(_notes_entry(), encoding="utf-8")
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert YAML(typ="safe").load(_local_yaml_path(roots).read_text()) == {
+        "tracked_files": {"notes": {}}
+    }
+    assert detect_current_schema(roots.cfg_path) == "4.0"

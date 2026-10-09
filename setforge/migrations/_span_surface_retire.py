@@ -48,7 +48,7 @@ from setforge.base_store_format import SIDECAR_NAME
 from setforge.body_canon import canonical_body, inject_body_at_anchor
 from setforge.compare import resolve_src
 from setforge.config import Config, resolve_profile
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, SetforgeError
 from setforge.host_local_inject import _read_body
 from setforge.migrations import (
     ManifestEntry,
@@ -57,7 +57,7 @@ from setforge.migrations import (
     _require_mapping_root,
 )
 from setforge.migrations._profile_fields_retire import _strip_legacy_profile_fields
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations._yaml_ops import _reads_back, atomic_write_yaml, yaml_rt
 from setforge.reconcile import file_id
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.host_local_view import host_local_headings_from_store
@@ -210,6 +210,11 @@ class SpanSurfaceRetireMigration:
 
         profiles = sorted({fold.profile for fold in folds})
         local_yaml = _local_yaml_path(roots)
+        # Compute (don't write) the post-strip image so it can be COMMITTED
+        # before the destructive strip lands (INV-5). Done up front, with the
+        # headings pre-flight, so a file that cannot be rewritten readably is
+        # refused before the fold or the stamp changes anything.
+        local_post = _stripped_local_yaml_text(local_yaml)
         origin = transitions.capture_files((roots.cfg_path, local_yaml), strict=True)
 
         with contextlib.ExitStack() as locks:
@@ -222,9 +227,6 @@ class SpanSurfaceRetireMigration:
                 _fold_sections(fold)
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            # Compute (don't write) the post-strip image so it can be
-            # COMMITTED before the destructive strip lands (INV-5).
-            local_post = _stripped_local_yaml_text(local_yaml)
 
             # A chain-threaded pre_chain_snapshot becomes file_pre so the
             # reverse delta reaches the chain's ORIGIN (INV-5), not just here.
@@ -523,6 +525,13 @@ def _stripped_local_yaml_text(local_yaml: Path) -> str | None:
     folds into the store. Non-overlay spans (if any) and every other overlay knob
     (mode / dst / symlink_target) are left untouched. The ruamel round-trip
     preserves surrounding comments + key order.
+
+    Raises:
+        SetforgeError: The stripped text would not parse back to the stripped
+            data (ruamel writes an emptied entry badly when a comment or blank
+            line sat between its key and the removed block). The file is left
+            unchanged; this is the same refusal
+            :func:`~setforge.migrations._yaml_ops.render_yaml` makes.
     """
     import io
     from collections.abc import MutableMapping
@@ -549,7 +558,15 @@ def _stripped_local_yaml_text(local_yaml: Path) -> str | None:
         return current
     buf = io.StringIO()
     yaml_rt().dump(data, buf)
-    return buf.getvalue()
+    text = buf.getvalue()
+    if not _reads_back(text, data):
+        raise SetforgeError(
+            f"refusing to write {local_yaml}: the edited file would not read back "
+            f"as the change that was checked, so nothing was written. Remove the "
+            f"comments and blank lines inside its tracked_files entries, then run "
+            f"the migration again."
+        )
+    return text
 
 
 def _write_stripped_local_yaml(local_yaml: Path, stripped_text: str | None) -> None:
