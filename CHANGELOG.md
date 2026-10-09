@@ -21,6 +21,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   interrupted setforge run: <path>`. `--dry-run` removes nothing. Leftovers
   with `unlocked-` in the name, and the `.NAME.<8 characters>.tmp` files that
   1.5.0 and earlier left, are not removed automatically; delete them by hand.
+  A managed tree with `orphans: remove-owned` keeps a directory that still
+  holds a leftover instead of removing it.
 
 ## [1.5.0] - 2026-10-09
 

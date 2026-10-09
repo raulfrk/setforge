@@ -7,6 +7,7 @@ exactly as any other file."""
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from setforge import atomicio
 from setforge.locking import mutation_locks
-from tests.regression.support import REPO_ROOT, Host
+from tests.regression.support import REPO_ROOT, Host, tree
 from tests.regression.test_ownership import _tree_host
 
 # A user's files whose names merely resemble a temp file.
@@ -205,3 +206,57 @@ def test_orphan_scan_offers_lookalikes_and_never_a_leftover(
     for name in leftovers:
         assert name not in flat
         assert (live / name).read_bytes() == b"x\n"
+
+
+@pytest.mark.parametrize("gate", ["gated", "unlocked"])
+def test_a_leftover_keeps_the_managed_directory_it_sits_in_when_that_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: str
+) -> None:
+    host = _tree_host(tmp_path, monkeypatch, {"managed": "~/.managed"})
+    host.config.write_text(
+        host.config.read_text(encoding="utf-8").replace(
+            "tree: {}", "tree: {orphans: remove-owned}"
+        ),
+        encoding="utf-8",
+    )
+    source = host.tracked("managed")
+    (source / "sub" / "deep").mkdir(parents=True)
+    (source / "sub" / "a.txt").write_bytes(b"one\n")
+    (source / "sub" / "deep" / "b.txt").write_bytes(b"two\n")
+    (source / "gone").mkdir()
+    (source / "gone" / "c.txt").write_bytes(b"three\n")
+    assert host.install().exit_code == 0
+    live = host.real_home / ".managed"
+    name = leftover_names("b.txt")[gate == "unlocked"]
+    leftover = live / "sub" / "deep" / name
+    leftover.write_bytes(b"half\n")
+    shutil.rmtree(source / "sub")
+    shutil.rmtree(source / "gone")
+
+    dry = host.proc_install("--dry-run")
+
+    assert dry.returncode == 0, (dry.stdout, dry.stderr)
+    assert (live / "sub" / "a.txt").exists()
+    assert (live / "gone" / "c.txt").exists()
+    assert "WOULD update" in dry.stdout
+
+    installed = host.proc_install()
+
+    assert installed.returncode == 0, (installed.stdout, installed.stderr)
+    # The directories on the way to the leftover stay; everything else goes.
+    assert tree(live) == {
+        "kept.txt": b"kept\n",
+        "sub": "<dir>",
+        "sub/deep": "<dir>",
+        f"sub/deep/{name}": b"half\n",
+    }
+    assert "removal" not in installed.stderr
+    compared = host.cli("compare", "--check")
+    assert compared.exit_code == 0, compared.output
+    again = host.proc_install()
+    assert again.returncode == 0, (again.stdout, again.stderr)
+    assert tree(live)[f"sub/deep/{name}"] == b"half\n"
+    assert (live / "sub" / "deep").is_dir()
+    settled = host.proc_install("--dry-run")
+    assert settled.returncode == 0, (settled.stdout, settled.stderr)
+    assert "WOULD update" not in settled.stdout

@@ -351,6 +351,12 @@ beside a file SetForge does not write again; and the
 `.NAME.<8 characters>.tmp` files that earlier releases left, because that
 name does not prove the file is SetForge's.
 
+A managed tree with `orphans: remove-owned` keeps a directory that still holds
+such a leftover, and the directories above it, even after the directory is
+removed from the tracked source: `install` removes the other owned entries and
+leaves the leftover in place. Delete the leftover and the next `install`
+removes the directory.
+
 ## Package locks and Cargo
 
 `setforge lock --profile=<profile>` resolves all lockable entries selected by
