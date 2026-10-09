@@ -15,7 +15,7 @@ from setforge.claude_yaml_editor import yaml_add_plugin_to_profile
 from setforge.cli import app
 from setforge.cli.cleanup import mark_orphan
 from setforge.provision.protocol import Identity
-from setforge.vscode_extensions import add_to_include
+from setforge.vscode_extensions import add_to_include, remove_from_include
 
 _BASE = """\
 version: 1
@@ -336,3 +336,17 @@ def test_migrate_apply_on_a_hand_styled_config_reads_back(
     assert "    # the daily driver\n" in after
     assert f"{first}- d\n" in after
     assert f"{second}- rg\n{second}- fd\n" in after
+
+
+def test_ext_remove_below_a_blank_line_reads_back(tmp_path: Path) -> None:
+    """Emptying a list that has a blank line under its key used to write
+    ``packages:``, the blank line, then ``[]`` at the margin, which does not parse."""
+    text = _BASE.replace("      - keep.me  # pinned\n", "\n      - keep.me\n")
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(text, encoding="utf-8")
+
+    assert remove_from_include(cfg, "base", "keep.me")
+
+    after = cfg.read_text(encoding="utf-8")
+    assert _base_profile(cfg) == {"tracked_files": ["d"], "packages": []}
+    assert "# Packages comment.\n" in after

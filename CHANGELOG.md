@@ -38,6 +38,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `keep.me - new.one`) or left a file that no longer parsed; `ext add`,
   `plugin add`, `cleanup` and `migrate --apply` did this with no error, and
   `config add` refused the edit.
+- Removing the only entry under a key that is followed by a blank line or a
+  comment (for example `binaries:`, an empty line, then `code: ...`) now leaves
+  `binaries: {}` with the blank line or comment after it. The `{}` or `[]` used
+  to be written on its own line below them, which does not parse: `ext remove`
+  left a broken `setforge.yaml`, and `config remove` refused the edit.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register

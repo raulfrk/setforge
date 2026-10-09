@@ -811,19 +811,36 @@ def test_config_add_writes_a_file_that_has_no_final_newline(
     assert YAML(typ="safe").load(written) == expected
 
 
-def test_config_remove_refuses_when_a_blank_line_follows_the_parent_key(
-    runner: CliRunner, seed_local: Path
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    [
+        pytest.param(
+            "binaries:\n\n  code: /usr/bin/code\nplugins:\n  add: []\n",
+            "binaries: {}\n\nplugins:\n  add: []\n",
+            id="blank-line",
+        ),
+        pytest.param(
+            "binaries: # mine\n  # the editor\n  code: /usr/bin/code\n",
+            "binaries: {} # mine\n  # the editor\n",
+            id="comments",
+        ),
+    ],
+)
+def test_config_remove_empties_a_mapping_that_has_lines_under_its_key(
+    runner: CliRunner, seed_local: Path, seed: str, expected: str
 ) -> None:
-    """The renderer would misplace this edit; it is refused, not written."""
-    _write_local(seed_local, "binaries:\n\n  code: /usr/bin/code\n")
-    before = seed_local.read_bytes()
+    """Blank and comment lines between a key and its only child stay put.
+
+    They used to be written between the key and the ``{}`` that replaces the
+    child, which does not parse.
+    """
+    _write_local(seed_local, seed)
 
     argv = ["config", "remove", "--local", "binaries.code", "--yes"]
     result = runner.invoke(app, argv)
 
-    assert result.exit_code != 0
-    assert "would not read back" in str(result.exception)
-    assert seed_local.read_bytes() == before
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected
 
 
 _AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"

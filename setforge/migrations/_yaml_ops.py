@@ -27,7 +27,8 @@ from typing import Any
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.error import CommentMark, YAMLError
+from ruamel.yaml.tokens import CommentToken
 
 from setforge import atomicio
 from setforge.errors import ConfigError
@@ -120,6 +121,10 @@ def render_yaml(
     the entries it joins. The original's BOM and CRLF line ends are carried
     over.
 
+    A comment that sat between a key and a block value that is now empty is
+    moved after the ``{}`` / ``[]`` in ``data`` itself: ruamel would write it
+    before the brackets, which does not parse.
+
     A rendering that would not parse back to ``data`` is passed over for
     the plain dump in the original's first indent style.
     """
@@ -155,6 +160,45 @@ def _reads_back(text: str, data: Any) -> bool:  # noqa: ANN401
         return False
 
 
+def _rehome_comments_of_emptied(node: Any) -> None:  # noqa: ANN401
+    """Move a comment between a key and its now-empty value after the value."""
+    if isinstance(node, CommentedSeq):
+        for item in node:
+            _rehome_comments_of_emptied(item)
+    if not isinstance(node, CommentedMap):
+        return
+    for key, value in node.items():
+        _rehome_comments_of_emptied(value)
+        entry = node.ca.items.get(key)
+        if (
+            not isinstance(value, (CommentedMap, CommentedSeq))
+            or value
+            or not entry
+            or not (entry[2] or entry[3])
+        ):
+            continue
+        own = "".join(
+            " " * token.start_mark.column + token.value
+            if token.value.strip()
+            else token.value
+            for token in entry[3] or []
+        )
+        attached = value.ca.comment
+        if attached is not None:
+            if attached[0] is not None and attached[0] is not entry[2]:
+                # Already placed after the value; it would hide behind ours.
+                own += attached[0].value.removeprefix("\n")
+            attached[0] = None
+            if attached[1] is not None and attached[1] == entry[3]:
+                attached[1] = None
+        entry[3] = None
+        value.fa.set_flow_style()
+        if entry[2] is None:
+            entry[2] = CommentToken("\n" + own, CommentMark(0))
+        else:
+            entry[2].value += own
+
+
 def _render_lf(
     data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
     text: str,
@@ -173,6 +217,7 @@ def _render_lf(
         yaml.dump(value, buf)
         return buf.getvalue()
 
+    _rehome_comments_of_emptied(data)
     new = dump(data)
     if not text.strip():
         return [new]
