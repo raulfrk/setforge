@@ -23,6 +23,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleting the whole list. A `local.yaml` already written with a single value
   still has to be corrected by hand: make it a list.
 
+- `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
+  `NAME` is already declared under a different marketplace. It used to register
+  the new marketplace and install the plugin from it while `setforge.yaml` kept
+  naming the old one, and exited 0. It now stops before changing anything, names
+  the marketplace the plugin is already declared under, and leaves
+  `setforge.yaml` and the plugin tool untouched. Adding the plugin again under
+  the marketplace it is declared under, or to another profile, works as before.
+- `plugin reconcile --dry-run` (and a plugin policy of `report`) now lists each
+  marketplace it would add, as `would add marketplace  NAME`, before the plugin
+  lines. When adding a marketplace was the only thing pending, it used to print
+  nothing at all and still exit 1. The exit code and the output of a real run
+  are unchanged.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

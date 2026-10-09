@@ -177,8 +177,12 @@ def plugin_add(
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
+        cfg = _require_known_profile(config, profile)
         claude_yaml_editor_mod.require_plugin_package_available(
-            _require_known_profile(config, profile), profile, plugin_name
+            cfg, profile, plugin_name
+        )
+        claude_yaml_editor_mod.require_plugin_marketplace_available(
+            cfg.claude_plugins, plugin_name, mp_name
         )
         _register_plugin_in_yaml(
             config, profile, plugin_name, mp_name, source, no_install=no_install
@@ -199,7 +203,10 @@ def _codex_plugin_add(  # noqa: C901 - transactional native/YAML compensation
     with operations.transaction(
         resources=True, config_dir=config.resolve().parent, profile=profile
     ):
-        _require_known_profile(config, profile)
+        cfg = _require_known_profile(config, profile)
+        claude_yaml_editor_mod.require_plugin_marketplace_available(
+            {} if cfg.codex is None else cfg.codex.plugins, plugin_name, marketplace
+        )
         config_target = config.resolve()
         config_before = config_target.read_bytes()
         config_mode = config_target.stat().st_mode & 0o7777
@@ -717,11 +724,15 @@ def _render_reconcile_report(
 
     ``is_read_only`` toggles the verb between ``would <action>`` (dry-run /
     ``REPORT`` policy) and the past-tense action (PRUNE/ADDITIVE actually
-    ran). Plugin ids that landed in ``report.failed`` are suppressed from
-    the action lists so the user doesn't see "installed X" followed by
-    "FAILED X" for the same id.
+    ran). Marketplaces to add are listed only in the read-only case; a live run
+    has never printed them. Plugin ids and marketplace names that landed in
+    ``report.failed`` are suppressed from the action lists so the user doesn't
+    see "installed X" followed by "FAILED X" for the same id.
     """
     failed_ids = {pid for pid, _ in report.failed}
+    for mp_name in report.marketplaces_added if is_read_only else ():
+        if mp_name not in failed_ids:
+            typer.echo(f"would add marketplace  {mp_name}")
     for name, mp in report.to_install:
         pid = f"{name}@{mp}"
         verb = "would install" if is_read_only else "installed"
