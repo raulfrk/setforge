@@ -354,6 +354,16 @@ root: two SetForge processes running under different `$HOME` or cache roots
 hold different gates, as for all SetForge locking, so do not point them at
 the same files.
 
+`setforge recover --apply` also removes such a leftover when it undoes a
+directory the interrupted command created: if everything directly inside that
+directory is a regular file named `.NAME.setforge-<16 hex digits>.tmp`, it
+removes those files with the same warning, then the directory. If the
+directory holds anything else (your own file, a `setforge-u` name, a symlink
+or a subdirectory), it removes nothing and stops with
+`refusing to remove non-empty recovery directory <dir>: it still holds <names>`,
+listing up to five entries. Move those entries away and run `setforge recover`
+again.
+
 A managed tree with `orphans: remove-owned` keeps a directory that still holds
 such a leftover, and the directories above it, even after the directory is
 removed from the tracked source: `install` removes the other owned entries and

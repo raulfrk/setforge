@@ -54,6 +54,7 @@ RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}
 _GATED_TEMP = r"\.setforge-[0-9a-f]{16}\.tmp"
 TEMP_SUFFIX = r"\.setforge-u?[0-9a-f]{16}\.tmp"
 _TEMP_NAME_RE = re.compile(r"\..+" + TEMP_SUFFIX, re.DOTALL)
+_GATED_TEMP_NAME_RE = re.compile(r"\..+" + _GATED_TEMP, re.DOTALL)
 
 
 def temp_name(name: str) -> str:
@@ -72,6 +73,21 @@ def temp_name(name: str) -> str:
 def is_temp_name(name: str) -> bool:
     """Whether ``name`` has either shape :func:`temp_name` produces."""
     return _TEMP_NAME_RE.fullmatch(name) is not None
+
+
+def is_gated_temp_name(name: str) -> bool:
+    """Whether ``name`` is a temp name made while the mutation gate was held."""
+    return _GATED_TEMP_NAME_RE.fullmatch(name) is not None
+
+
+def report_removed_temp(path: Path) -> None:
+    """Tell the user on stderr that the leftover temp file ``path`` was removed."""
+    typer.secho(
+        "warning: removed a temporary file left by an interrupted "
+        f"setforge run: {path}",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
 
 
 def _sweep_stale_temp_files(path: Path) -> None:
@@ -99,12 +115,7 @@ def _sweep_stale_temp_files(path: Path) -> None:
                 os.unlink(name, dir_fd=parent_fd)
             except OSError:
                 continue
-            typer.secho(
-                "warning: removed a temporary file left by an interrupted "
-                f"setforge run: {path.parent / name}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
+            report_removed_temp(path.parent / name)
     except OSError:
         return
     finally:

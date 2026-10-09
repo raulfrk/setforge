@@ -76,6 +76,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A managed tree with `orphans: remove-owned` keeps a directory that still
   holds a leftover instead of removing it.
 
+- An `install` killed while it was writing a file into a directory that the
+  same install had just created left its temporary file in that directory.
+  `setforge recover --apply` then stopped with `refusing to remove non-empty
+  recovery directory`, and every later command was refused until you deleted
+  the hidden file by hand. Recovery now removes the leftover (only regular
+  files named `.NAME.setforge-<16 hex digits>.tmp` directly inside a directory
+  the interrupted command created), prints the usual `warning: removed a
+  temporary file left by an interrupted setforge run: <path>`, and removes the
+  directory. If the directory holds anything else, recovery still stops and
+  removes nothing, and the message now names what is in the way (up to five
+  entries), so you can move it and run `setforge recover` again.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

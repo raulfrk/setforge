@@ -17,7 +17,14 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from setforge import codex_plugins, locking, operations, orphan_scan, transitions
+from setforge import (
+    atomicio,
+    codex_plugins,
+    locking,
+    operations,
+    orphan_scan,
+    transitions,
+)
 from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks, profile_lock
 from setforge.ownership import (
@@ -1246,6 +1253,84 @@ def test_recovery_refuses_nonempty_created_directory(
     with pytest.raises(SetforgeError, match="non-empty recovery directory"):
         operations.recover_files(journal)
     assert operations.active("p") is not None
+
+
+def _journal_creating(
+    tmp_path: Path, created: Path, *, guarded: bool
+) -> operations.OperationJournal:
+    """A journal whose operation made ``created``; ``guarded`` anchors recovery."""
+    return operations.begin_checkpoint(
+        operations.prepare(
+            command="snapshot restore" if guarded else "install",
+            profile="p",
+            config_dir=tmp_path,
+            resources_lock=not guarded,
+            paths=(created,),
+            path_guards=_path_guards(created) if guarded else (),
+        ),
+        name="files",
+        kind=operations.CheckpointKind.REVERSIBLE,
+        recovery="restore files",
+    )
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_recovery_removes_created_directory_holding_only_gated_temp_files(
+    tmp_path: Path,
+    operation_state: Path,
+    capsys: pytest.CaptureFixture[str],
+    guarded: bool,
+) -> None:
+    created = tmp_path / "created"
+    journal = _journal_creating(tmp_path, created, guarded=guarded)
+    created.mkdir()
+    with mutation_locks(allow_operation_id=journal.operation_id):
+        leftovers = [
+            created / atomicio.temp_name(name) for name in ("a.txt", "a.txt.bak")
+        ]
+    for leftover in leftovers:
+        leftover.write_bytes(b"half\n")
+
+    # Outside the mutation gate the writer of a gated name may still be alive.
+    with pytest.raises(SetforgeError, match=r"non-empty .*directory") as refused:
+        operations.recover_files(journal)
+
+    for leftover in leftovers:
+        assert leftover.name in str(refused.value)
+        assert leftover.read_bytes() == b"half\n"
+
+    with mutation_locks(allow_operation_id=journal.operation_id):
+        operations.recover_files(operations.load("p"))
+
+    assert not created.exists()
+    reported = capsys.readouterr().err.replace("\n", "")
+    for leftover in leftovers:
+        assert (
+            "warning: removed a temporary file left by an interrupted setforge "
+            f"run: {leftover}" in reported
+        )
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_recovery_refusal_names_a_bounded_list_of_blocking_entries(
+    tmp_path: Path, operation_state: Path, guarded: bool
+) -> None:
+    created = tmp_path / "created"
+    journal = _journal_creating(tmp_path, created, guarded=guarded)
+    created.mkdir()
+    for index in range(7):
+        (created / f"user-{index}").write_text("user", encoding="utf-8")
+
+    with (
+        mutation_locks(allow_operation_id=journal.operation_id),
+        pytest.raises(SetforgeError) as refused,
+    ):
+        operations.recover_files(operations.load("p"))
+
+    assert str(refused.value).endswith(
+        f"{created}: it still holds user-0, user-1, user-2, user-3, user-4 and 2 more"
+    )
+    assert len(list(created.iterdir())) == 7
 
 
 def _journal_creating_state_root(
