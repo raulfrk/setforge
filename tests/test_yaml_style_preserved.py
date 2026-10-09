@@ -338,6 +338,63 @@ def test_migrate_apply_on_a_hand_styled_config_reads_back(
     assert f"{second}- rg\n{second}- fd\n" in after
 
 
+_FLOW_ITEM_ABOVE_BLOCK_ITEM = """\
+version: 1
+
+tracked_files:
+  d:
+    src: x
+    dst: y
+  e:
+    src: p
+    dst: q
+
+bundles:
+  tools:
+    components:  # the list
+      - {id: one, plugin: a@b}  # pinned
+      - id: two  # second
+        plugin: c@d
+      - id: three
+        plugin: e@f
+
+profiles:
+  base:
+    tracked_files:
+      - d
+"""
+
+
+def test_config_add_to_a_config_with_a_flow_item_above_a_block_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A list that starts with a flow mapping and a comment, then block entries,
+    is a file ruamel cannot dump back. Edits to it were refused; the edit must
+    now add one line and leave every other line as it was."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(_FLOW_ITEM_ABOVE_BLOCK_ITEM, encoding="utf-8")
+    monkeypatch.setattr("setforge.cli.config._tracked_yaml_path", lambda: cfg)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "config",
+            "add",
+            "--tracked",
+            "profiles.base.tracked_files",
+            "e",
+            "--profile=base",
+            "--yes",
+            "--no-git-check",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert cfg.read_text(encoding="utf-8") == _FLOW_ITEM_ABOVE_BLOCK_ITEM + (
+        "      - e\n"
+    )
+
+
 def test_ext_remove_below_a_blank_line_reads_back(tmp_path: Path) -> None:
     """Emptying a list that has a blank line under its key used to write
     ``packages:``, the blank line, then ``[]`` at the margin, which does not parse."""

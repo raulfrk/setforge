@@ -278,7 +278,7 @@ def _entry_lines(new: str) -> tuple[dict[int, int], dict[int, int | None]] | Non
     Returns ``(owner, holder)``: ``owner[line]`` is the id of the outermost
     block mapping or sequence with a key or item starting on ``line``, and
     ``holder[id]`` is the line of the entry that collection is the value of
-    (``None`` for the document root).
+    (``None`` for the document root). Returns ``None`` when ``new`` does not parse.
     """
     try:
         root = yaml_rt().load(new)
@@ -317,15 +317,16 @@ def _keep_original_lines(text: str, baseline: str, new: str) -> str | None:
     Every other line of ``new`` is shifted by the difference between the
     original and the dumped indentation of the entries it sits among: its
     collection's other entries, else the entry holding that collection. A
-    line that starts no entry moves with the entry above it.
+    line that starts no entry moves with the entry above it. When ``new``
+    does not parse (ruamel cannot dump some comment placements), no line is
+    shifted: the caller's read-back check refuses the result if that is wrong.
     Returns ``None`` when the lines cannot be paired or shifted.
     """
     base_lines = baseline.splitlines(keepends=True)
     orig_lines = text.splitlines(keepends=True)
-    entries = _entry_lines(new)
-    if len(base_lines) != len(orig_lines) or entries is None:
+    if len(base_lines) != len(orig_lines):
         return None
-    owner, holder = entries
+    owner, holder = _entry_lines(new) or ({}, {})
     new_lines = new.splitlines(keepends=True)
     matcher = difflib.SequenceMatcher(None, base_lines, new_lines, autojunk=False)
     kept = {
