@@ -252,12 +252,15 @@ def _write_q_file_config(
     """Profile ``p`` owns ``~/out/ok.txt``; profile ``q`` deploys one more file.
 
     ``q_dst`` is that file's destination template (``None`` leaves ``q`` out
-    entirely); ``kind`` makes it a bundle file component or a tracked file.
+    entirely); ``kind`` makes it a bundle file component, a tracked file, or a
+    tracked directory (or managed tree) holding ``inner.txt``.
     ``plain_in_qdir`` gives ``q`` an ordinary tracked file as well, so ``~/qdir``
     is a directory only ``q`` uses.
     """
-    for name in ("ok.txt", "q-file.txt", "plain.txt"):
+    for name in ("ok.txt", "q-file.txt", "plain.txt", "q-tree/inner.txt"):
         config_repo.write_tracked(name, _BODY)
+    src = "q-file.txt" if kind in ("bundle", "tracked") else "q-tree"
+    tree = "    tree: {}\n" if kind == "tree" else ""
     plain = (
         "  plain:\n    src: plain.txt\n    dst: '{{ home }}/qdir/plain.txt'\n"
         "    template: true\n"
@@ -265,8 +268,8 @@ def _write_q_file_config(
         else ""
     )
     q_file = (
-        f"  q-file:\n    src: q-file.txt\n    dst: {q_dst!r}\n    template: true\n"
-        if q_dst is not None and kind == "tracked"
+        f"  q-file:\n    src: {src}\n    dst: {q_dst!r}\n    template: true\n{tree}"
+        if q_dst is not None and kind != "bundle"
         else ""
     )
     bundle = (
@@ -383,12 +386,13 @@ def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     applied = _scan("p", config, "--apply")
 
     assert applied.exit_code == 0, applied.output
+    assert "profileqcouldnotberesolved" in _flat(applied)
     assert not p_stray.exists()
     assert q_stray.exists()
     assert deployed.exists()
 
 
-@pytest.mark.parametrize("kind", ["bundle", "tracked"])
+@pytest.mark.parametrize("kind", ["bundle", "tracked", "directory"])
 def test_scan_recognises_a_file_by_the_destination_an_install_recorded(
     config_repo: ConfigRepo, kind: str
 ) -> None:
@@ -397,7 +401,9 @@ def test_scan_recognises_a_file_by_the_destination_an_install_recorded(
         config_repo, kind=kind, q_dst="{{ home }}/out/q-file.txt", plain_in_qdir=True
     )
     deployed = Path.home() / "out" / "q-file.txt"
-    deployed.parent.mkdir()
+    if kind == "directory":
+        deployed = deployed / "inner.txt"
+    deployed.parent.mkdir(parents=True)
     deployed.write_text(_BODY, encoding="utf-8")
     for profile in ("p", "q"):
         assert _run_as(profile, "install", clean, *_INSTALL_ARGS).exit_code == 0
