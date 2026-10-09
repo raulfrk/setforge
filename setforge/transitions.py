@@ -6,7 +6,8 @@ under ``~/.local/state/setforge/transitions/`` containing:
 - ``meta.json`` — command, profile, UTC timestamp, host, setforge version
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
-  added / removed marketplaces (omitted if no plugin delta)
+  added / removed marketplaces, and the plugins a revert uninstalled
+  (omitted if no plugin delta)
 - ``mcp.json`` — added / updated MCP-server registrations (omitted if no
   MCP delta)
 - ``filesystem_deltas.json`` — pre/post images (kind, bytes, link target,
@@ -502,6 +503,13 @@ class PluginDelta:
       :func:`write_transition` raises :class:`TypeError` defensively
       on any non-string value to surface contract violations loudly.
 
+    - ``uninstalled`` — ``(plugin_id, was_enabled)`` pairs for plugins
+      that transitioned from present to absent, with the enabled state
+      each had beforehand. Only a revert writes it (install never
+      uninstalls), so that reverting that revert can reinstall the plugin
+      as it was. Stored as an optional ``uninstalled`` key that is omitted
+      when empty; a release without the field ignores the key.
+
     Failed plugin operations are excluded so revert never tries to
     reverse a no-op, mirroring :class:`ExtensionDelta`'s contract.
     """
@@ -511,6 +519,7 @@ class PluginDelta:
     disabled: tuple[str, ...]
     marketplaces_added: tuple[str, ...]
     marketplaces_removed: tuple[tuple[str, dict[str, str]], ...]
+    uninstalled: tuple[tuple[str, bool], ...] = ()
 
     def is_empty(self) -> bool:
         return not (
@@ -519,6 +528,7 @@ class PluginDelta:
             or self.disabled
             or self.marketplaces_added
             or self.marketplaces_removed
+            or self.uninstalled
         )
 
 
@@ -959,6 +969,25 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
             )
         validated_pairs.append((name, dict(payload)))
 
+    uninstalled_raw = raw.get("uninstalled", [])
+    if not isinstance(uninstalled_raw, list):
+        raise InvalidTransitionRecord(
+            f"plugins.json: uninstalled must be a list, got "
+            f"{type(uninstalled_raw).__name__}"
+        )
+    uninstalled: list[tuple[str, bool]] = []
+    for entry in uninstalled_raw:
+        if not (
+            isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and isinstance(entry[1], bool)
+        ):
+            raise InvalidTransitionRecord(
+                f"plugins.json: malformed uninstalled entry: {entry!r}"
+            )
+        uninstalled.append((entry[0], entry[1]))
+
     def _str_list_field(key: str) -> tuple[str, ...]:
         return tuple(
             _validated_str_list(raw.get(key, []), key=key, source_label="plugins.json")
@@ -970,6 +999,7 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
         disabled=_str_list_field("disabled"),
         marketplaces_added=_str_list_field("marketplaces_added"),
         marketplaces_removed=tuple(validated_pairs),
+        uninstalled=tuple(uninstalled),
     )
 
 
@@ -1728,21 +1758,22 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
                     f"({type(value).__name__}). Callers must serialize "
                     "via MarketplaceSource.model_dump(mode='json')."
                 )
-    return (
-        json.dumps(
-            {
-                "installed": list(plugin_delta.installed),
-                "enabled": list(plugin_delta.enabled),
-                "disabled": list(plugin_delta.disabled),
-                "marketplaces_added": list(plugin_delta.marketplaces_added),
-                "marketplaces_removed": [
-                    [name, dict(src)] for name, src in plugin_delta.marketplaces_removed
-                ],
-            },
-            indent=2,
-        )
-        + "\n"
-    )
+    payload: dict[str, object] = {
+        "installed": list(plugin_delta.installed),
+        "enabled": list(plugin_delta.enabled),
+        "disabled": list(plugin_delta.disabled),
+        "marketplaces_added": list(plugin_delta.marketplaces_added),
+        "marketplaces_removed": [
+            [name, dict(src)] for name, src in plugin_delta.marketplaces_removed
+        ],
+    }
+    # Omitted when empty so a record with no uninstall is written exactly as
+    # releases without the field wrote it.
+    if plugin_delta.uninstalled:
+        payload["uninstalled"] = [
+            [plugin_id, enabled] for plugin_id, enabled in plugin_delta.uninstalled
+        ]
+    return json.dumps(payload, indent=2) + "\n"
 
 
 def _serialize_codex_plugin_payload(
@@ -2155,6 +2186,7 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
             "disabled",
             "marketplaces_added",
             "marketplaces_removed",
+            "uninstalled",
         ),
         codex_plugin_count=_delta_count(
             lambda: load_codex_plugin_delta(transition_dir),

@@ -1656,8 +1656,9 @@ def test_revert_partial_failure(
     Strategy: install (lands plugin + marketplace), then monkeypatch
     ``subprocess.run`` to fail on ``plugin uninstall`` only. Revert
     should still succeed at ``marketplace remove`` and write a
-    ``plugins.json`` whose ``installed`` field is empty (uninstall
-    failed) but ``marketplaces_added`` contains the removed marketplace.
+    ``plugins.json`` that lists no uninstalled plugin (uninstall
+    failed) but whose ``marketplaces_removed`` names the removed
+    marketplace.
     """
     from typer.testing import CliRunner
 
@@ -1695,20 +1696,22 @@ def test_revert_partial_failure(
     # Revert still exits 0 — partial failure is warn-and-continue.
     assert reverted.exit_code == 0, reverted.output
 
-    # The reverse transition records only what succeeded: marketplace
-    # was removed (the inverse of ``marketplaces_added``), but plugin
-    # uninstall failed so ``installed`` is empty in the reverse delta.
+    # The reverse transition records only what succeeded: the marketplace
+    # was removed (the inverse of ``marketplaces_added``), but the plugin
+    # uninstall failed so the reverse delta lists no uninstalled plugin.
     reverse_transition = _latest_transition(state_dir)
     reverse_payload = json.loads(
         (reverse_transition / "plugins.json").read_text(encoding="utf-8")
     )
-    # Reverse delta semantics: ``installed`` lists plugins the reverse
-    # uninstalled. Empty here because the uninstall raised.
+    # The reverse delta names what the revert itself changed. It
+    # uninstalled nothing, because the uninstall raised.
+    assert "uninstalled" not in reverse_payload
     assert reverse_payload["installed"] == []
-    # ``marketplaces_added`` lists marketplaces the reverse removed
-    # (the inverse name for the forward direction). Marketplace remove
-    # succeeded.
-    assert reverse_payload["marketplaces_added"] == ["claude-plugins-official"]
+    # The marketplace remove succeeded.
+    assert reverse_payload["marketplaces_added"] == []
+    assert [name for name, _source in reverse_payload["marketplaces_removed"]] == [
+        "claude-plugins-official"
+    ]
 
 
 def test_roundtrip_file_and_plugin_state(
