@@ -36,7 +36,6 @@ from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )
-from ruamel.yaml.error import YAMLError
 
 from setforge import atomicio, paths
 from setforge.binaries import ensure_local_config_stub
@@ -702,26 +701,6 @@ def _read_raw(yaml_path: Path) -> str:
     return yaml_path.read_bytes().decode("utf-8") if yaml_path.exists() else ""
 
 
-def _require_text_reads_back(text: str, doc: CommentedMap, yaml_path: Path) -> None:
-    """Refuse ``text`` unless it parses back to the validated candidate ``doc``.
-
-    The renderer keeps the lines an edit did not touch and writes the new ones
-    in the file's first list style, so a file whose lists are indented
-    differently can come out reading as another document, or not at all.
-    """
-    try:
-        read_back = _to_plain(yaml_rt().load(text))
-    except YAMLError:
-        read_back = None
-    if read_back != _to_plain(doc):
-        raise SetforgeError(
-            f"refusing to write {yaml_path}: the edited file would not read back "
-            f"as the change that was checked, so nothing was written. Edit the "
-            f"file by hand instead. Lists indented differently from one another "
-            f"are a common cause."
-        )
-
-
 def _preview_and_write(
     *, yaml_path: Path, doc: CommentedMap, before_text: str, yes: bool
 ) -> None:
@@ -732,15 +711,11 @@ def _preview_and_write(
     silently when the user declines (``_prompt_confirm`` returns
     ``False``); the file is untouched.
 
-    The text that is checked, previewed and written is one string. A file
-    without a final newline is rendered as if it had one (editors often omit
-    it), so the written file gains it.
+    The text that is checked, previewed and written is one string: the
+    renderer refuses, before anything is shown, a text that would not read
+    back as ``doc``. A file without a final newline gains one.
     """
-    render_from = before_text
-    if before_text and not before_text.endswith("\n"):
-        render_from += "\r\n" if "\r\n" in before_text else "\n"
-    after_text = render_yaml(doc, render_from or None)
-    _require_text_reads_back(after_text, doc, yaml_path)
+    after_text = render_yaml(doc, before_text or None, path=yaml_path)
     diff_text = _render_diff(before_text, after_text, yaml_path)
     console = make_console(stderr=True)
     if not _prompt_confirm(

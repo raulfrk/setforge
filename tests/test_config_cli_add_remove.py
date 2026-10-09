@@ -690,43 +690,43 @@ def test_config_add_refuses_an_unknown_overlay_key(
 _MIXED_INDENT = [
     pytest.param(
         "plugins:\n  add:\n    - a\nextensions:\n  remove:\n  - e.two\n",
+        "  - pub.ext\n",
         id="indented-then-flush",
     ),
     pytest.param(
         "plugins:\n  add:\n  - a\nextensions:\n  remove:\n    - e.two\n",
+        "    - pub.ext\n",
         id="flush-then-indented",
     ),
 ]
 
 
-@pytest.mark.parametrize("seed", _MIXED_INDENT)
-def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
-    runner: CliRunner, seed_local: Path, seed: str
+@pytest.mark.parametrize(("seed", "added"), _MIXED_INDENT)
+def test_config_add_indents_the_entry_like_the_list_it_joins(
+    runner: CliRunner, seed_local: Path, seed: str, added: str
 ) -> None:
-    """An append that the renderer would write wrongly is refused, not written.
+    """Lists indented differently in one file each keep their own indentation.
 
-    Before the check the first layout was written as ``['e.two - pub.ext']``
-    and the second as YAML that does not parse; both exited 0.
+    The new entry used to be written in the file's first list style: glued onto
+    the entry above as ``['e.two - pub.ext']`` in the first layout, YAML that
+    does not parse in the second.
     """
     _write_local(seed_local, seed)
-    before = seed_local.read_bytes()
 
     argv = ["config", "add", "--local", "extensions.remove", "pub.ext", "--yes"]
     result = runner.invoke(app, argv)
 
-    assert result.exit_code != 0
-    message = str(result.exception)
-    assert "would not read back" in message
-    assert "nothing was written" in message
-    assert "Edit the file by hand" in message
-    assert seed_local.read_bytes() == before
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == seed + added
+    assert _list_at(seed_local, "extensions.remove") == ["e.two", "pub.ext"]
+    assert _list_at(seed_local, "plugins.add") == ["a"]
 
 
-@pytest.mark.parametrize("seed", _MIXED_INDENT)
-def test_config_add_keeps_a_mixed_indent_file_when_the_edit_reads_back(
-    runner: CliRunner, seed_local: Path, seed: str
+@pytest.mark.parametrize(("seed", "added"), _MIXED_INDENT)
+def test_config_add_to_the_first_list_of_a_mixed_indent_file(
+    runner: CliRunner, seed_local: Path, seed: str, added: str
 ) -> None:
-    """The check compares meaning, so an edit that renders correctly still lands."""
+    del added
     _write_local(seed_local, seed)
 
     result = runner.invoke(
@@ -736,6 +736,62 @@ def test_config_add_keeps_a_mixed_indent_file_when_the_edit_reads_back(
     assert result.exit_code == 0, result.output
     assert _list_at(seed_local, "plugins.add") == ["a", "pub@team"]
     assert _list_at(seed_local, "extensions.remove") == ["e.two"]
+
+
+def test_config_add_to_a_list_shared_through_an_alias_writes_it_once(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """Every key sharing the list reads the new entry, as the file says."""
+    seed = "plugins:\n  add: &shared\n    - a.b\nextensions:\n  add: *shared\n"
+    _write_local(seed_local, seed)
+
+    argv = ["config", "add", "--local", "plugins.add", "c.d", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == seed.replace(
+        "    - a.b\n", "    - a.b\n    - c.d\n"
+    )
+    assert _list_at(seed_local, "extensions.add") == ["a.b", "c.d"]
+
+
+def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """A value YAML cannot hold as written is refused, not written changed.
+
+    U+0085 is a line break to YAML: the value would read back as ``/opt/a b``.
+    """
+    _write_local(seed_local, "binaries:\n  code: /usr/bin/code\n")
+    before = seed_local.read_bytes()
+
+    argv = ["config", "add", "--local", "binaries.tool", "/opt/a\x85b", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code != 0
+    assert str(result.exception) == (
+        f"refusing to write {seed_local}: the edited file would not read back "
+        f"as the change that was checked, so nothing was written. Edit the file "
+        f"by hand instead."
+    )
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize("seed", ["# notes\n", "# notes", "\n# notes\n\n"])
+def test_config_add_keeps_the_comments_of_a_file_that_holds_nothing_else(
+    runner: CliRunner, seed_local: Path, seed: str
+) -> None:
+    """A ``local.yaml`` of only comments used to lose them on the first add."""
+    _write_local(seed_local, seed)
+
+    argv = ["config", "add", "--local", "binaries.code", "/usr/bin/code", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    kept = seed if seed.endswith("\n") else seed + "\n"
+    assert seed_local.read_text(encoding="utf-8") == (
+        kept + "binaries:\n  code: /usr/bin/code\n"
+    )
 
 
 # An editor may leave out the final newline. The renderer used to join the new
@@ -790,19 +846,36 @@ def test_config_add_writes_a_file_that_has_no_final_newline(
     assert YAML(typ="safe").load(written) == expected
 
 
-def test_config_remove_refuses_when_a_blank_line_follows_the_parent_key(
-    runner: CliRunner, seed_local: Path
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    [
+        pytest.param(
+            "binaries:\n\n  code: /usr/bin/code\nplugins:\n  add: []\n",
+            "binaries: {}\n\nplugins:\n  add: []\n",
+            id="blank-line",
+        ),
+        pytest.param(
+            "binaries: # mine\n  # the editor\n  code: /usr/bin/code\n",
+            "binaries: {} # mine\n  # the editor\n",
+            id="comments",
+        ),
+    ],
+)
+def test_config_remove_empties_a_mapping_that_has_lines_under_its_key(
+    runner: CliRunner, seed_local: Path, seed: str, expected: str
 ) -> None:
-    """The renderer would misplace this edit; it is refused, not written."""
-    _write_local(seed_local, "binaries:\n\n  code: /usr/bin/code\n")
-    before = seed_local.read_bytes()
+    """Blank and comment lines between a key and its only child stay put.
+
+    They used to be written between the key and the ``{}`` that replaces the
+    child, which does not parse.
+    """
+    _write_local(seed_local, seed)
 
     argv = ["config", "remove", "--local", "binaries.code", "--yes"]
     result = runner.invoke(app, argv)
 
-    assert result.exit_code != 0
-    assert "would not read back" in str(result.exception)
-    assert seed_local.read_bytes() == before
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected
 
 
 _AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"

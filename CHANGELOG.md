@@ -26,9 +26,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `config add` and `config remove` also refuse, and write nothing, when the
   edited file would not read back as the change they checked (the new entry
   used to be written wrongly with no error). The message says to edit the file
-  by hand; lists indented differently from one another in the same file are a
-  common cause. A `local.yaml` with no final newline now takes an add, and the
+  by hand. A `local.yaml` with no final newline now takes an add, and the
   file gains the newline; the new line used to be joined onto the last one.
+- Every command that edits `setforge.yaml` or `local.yaml` (`config add` and
+  `remove`, `ext add` and `remove`, `plugin add` and `remove`, `cleanup`,
+  `migrate` and the rest) now checks, before writing, that the new text reads
+  back as the change it made. If it would not, the command stops with
+  "refusing to write FILE: the edited file would not read back as the change
+  that was checked", writes nothing, and `migrate` rolls back the steps it had
+  already applied. Only `config add` and `config remove` had this check; the
+  others could write a changed or unreadable file and exit 0. A value
+  containing the Unicode "next line" character (U+0085), which YAML reads as a
+  line break, is one thing still refused this way.
+- Commands that edit `setforge.yaml` or `local.yaml` now handle a file whose
+  lists are indented differently from one another (one list's entries indented
+  under its key, another's level with it). A new entry is indented like the
+  list it joins. It used to be written in the style of the first list in the
+  file, which either joined it onto the entry above (`- keep.me` and
+  `- new.one` read back as the single entry `keep.me - new.one`) or left a file
+  that no longer parsed; `ext add`, `plugin add`, `cleanup` and
+  `migrate --apply` did this with no error, and `config add` refused the edit.
+  For the same reason `config add` no longer refuses an entry for a list that
+  another key reuses through a YAML alias (`&name` / `*name`): it is written
+  once, and every key that shares the list reads it.
+- Removing the only entry under a key that is followed by a blank line or a
+  comment (for example `binaries:`, an empty line, then `code: ...`) now leaves
+  `binaries: {}` with the blank line or comment after it. The `{}` or `[]` used
+  to be written on its own line below them, which does not parse: `ext remove`
+  left a broken `setforge.yaml`, and `config remove` refused the edit.
+- `config add --local` on a `local.yaml` that holds only comments keeps them
+  above the new setting; they used to be dropped. Blank lines at the very top
+  of a config file are also kept when it is edited.
+- A config file that uses a YAML merge key (`<<: *name`) can be edited again.
+  Every command that rewrites the file used to stop with `KeyError`.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register

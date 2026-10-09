@@ -796,7 +796,10 @@ def preview_capture_extensions(
     elif "packages" in profile_block:
         del profile_block["packages"]
     return render_yaml(
-        doc, config_path.read_bytes().decode("utf-8"), fallback=_EXT_YAML_INDENT
+        doc,
+        config_path.read_bytes().decode("utf-8"),
+        fallback=_EXT_YAML_INDENT,
+        path=config_path,
     )
 
 

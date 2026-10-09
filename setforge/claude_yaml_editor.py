@@ -185,7 +185,10 @@ def _atomic_yaml_dump(doc: CommentedMap, config_path: Path) -> None:
     # replace closes the TOCTOU window, matching deploy._atomic_write.
     original_mode = stat.S_IMODE(config_path.stat().st_mode)
     text = render_yaml(
-        doc, config_path.read_bytes().decode("utf-8"), fallback=(2, 4, 2)
+        doc,
+        config_path.read_bytes().decode("utf-8"),
+        fallback=(2, 4, 2),
+        path=config_path,
     )
     atomic_write_text(config_path, text, mode=original_mode)
 
