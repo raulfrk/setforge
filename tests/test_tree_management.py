@@ -309,6 +309,41 @@ def test_remove_owned_preserves_parent_of_unowned_descendant(tmp_path: Path) -> 
     }
 
 
+def test_plan_keeps_the_directories_around_a_path_the_scan_passed_over(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    live = tmp_path / "live"
+    prior_root = tmp_path / "prior"
+    for root in (source, live, prior_root):
+        root.mkdir()
+    for root in (live, prior_root):
+        (root / "a" / "b").mkdir(parents=True)
+        (root / "a" / "b" / "owned.txt").write_text("owned\n", encoding="utf-8")
+        (root / "a" / "sibling.txt").write_text("owned\n", encoding="utf-8")
+        (root / "z").mkdir()
+        (root / "z" / "c.txt").write_text("owned\n", encoding="utf-8")
+    (live / "a" / "b" / "mine.local").write_text("mine\n", encoding="utf-8")
+    policy = TreePolicy(orphans=TreeOrphanPolicy.REMOVE_OWNED, exclude=["*.local"])
+    desired = scan_tree(source, policy, capture_payloads=True)
+    current = scan_tree(live, policy).inventory
+    prior = scan_tree(prior_root, policy).inventory
+
+    plan = plan_tree(desired, current, prior, policy)
+
+    # The scan passed over the excluded file: it is no entry, yet it is there.
+    assert current.skipped == ("a/b/mine.local",)
+    assert "a/b/mine.local" not in {entry.path for entry in current.entries}
+    assert {action.path: action.kind for action in plan.actions} == {
+        "a": TreeActionKind.KEEP,
+        "a/b": TreeActionKind.KEEP,
+        "a/b/owned.txt": TreeActionKind.REMOVE,
+        "a/sibling.txt": TreeActionKind.REMOVE,
+        "z": TreeActionKind.REMOVE,
+        "z/c.txt": TreeActionKind.REMOVE,
+    }
+
+
 def test_apply_tree_preserves_unowned_and_removes_owned(tmp_path: Path) -> None:
     source = tmp_path / "source"
     live = tmp_path / "live"

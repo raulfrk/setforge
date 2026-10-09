@@ -74,11 +74,13 @@ def test_a_skipped_live_entry_keeps_the_removed_directory_it_sits_in(
             (live / rel).write_bytes(body)
     _drop_from_source(source)
 
+    before = tree(live)
+
     dry = host.proc_install("--dry-run")
 
     assert dry.returncode == 0, (dry.stdout, dry.stderr)
-    assert (live / "sub" / "a.txt").exists()
-    assert (live / "gone" / "c.txt").exists()
+    # The dry run itemises nothing below the tree and writes nothing in it.
+    assert tree(live) == before
     assert "WOULD update" in dry.stdout
 
     installed = host.proc_install()
@@ -158,6 +160,8 @@ def test_orphans_keep_leaves_the_directory_and_the_excluded_entry(
 def test_an_entry_setforge_cannot_manage_is_refused_by_name_in_a_dry_run_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocker: str
 ) -> None:
+    if blocker == "unreadable-directory" and os.geteuid() == 0:
+        pytest.skip("root reads a mode 000 directory")
     host, source, live = _host(tmp_path, monkeypatch)
     assert host.install().exit_code == 0
     entry = live / "sub" / "deep" / "blocker"
