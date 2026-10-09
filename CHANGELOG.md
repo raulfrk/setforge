@@ -33,12 +33,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   journal") and change nothing. A marketplace Claude lists with a `url` source
   (a link straight to a `marketplace.json`) is still not recorded.
 
-### Changed
-
-- `setforge recover` on a journal written by 1.3.8 to 1.5.1 now completes
-  where it used to stop because a marketplace of the same name as a recorded
-  one is currently registered from a git link: it is removed and the recorded
-  one registered again, like any other marketplace whose source changed.
 - Running `setforge revert` a second time now redoes the Claude plugin and
   marketplace changes the first revert undid: it registers the marketplaces
   again, reinstalls the plugins with the enabled or disabled state they had,
@@ -69,11 +63,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path and "Permission denied". It was reported as "changed while scanning".
 - `setforge config remove` of a key that ends on a list (for example
   `config remove --local plugins`) no longer deletes the comment above the next
-  key. Removing a key that follows a list or a mapping no longer moves that
+  key, as long as the removed key has another key beside it in its block.
+  Removing a key that follows a list or a mapping no longer moves that
   comment above the first entry of the list before it, and no longer
   re-indents that list when it is indented differently from the rest of the
   file. A comment inside the removed list is removed with it instead of being
-  left behind.
+  left behind. Below a list written on one line (`[a, b]`), removing a key no
+  longer deletes the comment or blank line above it, and removing the only
+  entry of a list no longer deletes the comment after that list. Removing the
+  only key of a block (for example `config remove --local tracked_files.foo`
+  when `foo` is the only entry under `tracked_files`) still deletes the comment
+  that follows the block, as it did before.
+
+### Changed
+
+- `setforge recover` on a journal written by 1.3.8 to 1.5.1 now completes
+  where it used to stop because a marketplace of the same name as a recorded
+  one is currently registered from a git link: it is removed and the recorded
+  one registered again, like any other marketplace whose source changed.
 
 ## [1.5.1] - 2026-10-09
 

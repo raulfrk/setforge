@@ -927,6 +927,12 @@ _AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"
             "plugins:\n  add:\n    - lint@team\n",
             id="own-inline-comment-goes-with-the-entry",
         ),
+        pytest.param(
+            "plugins:\n  remove: [old@team]\n\n  add:\n    - lint@team\n",
+            "lint@team",
+            "plugins:\n  remove: [old@team]\n\n  add: []\n",
+            id="only-entry-below-a-blank-line-after-an-inline-list",
+        ),
     ],
 )
 def test_config_remove_keeps_the_comments_that_follow_the_entry(
@@ -974,6 +980,13 @@ def test_config_remove_keeps_the_comments_that_follow_the_entry(
             "plugins",
             "provision_ignore:\n  - one\n",
             id="comment-inside-the-removed-list-goes-with-it",
+        ),
+        pytest.param(
+            "provision_ignore: [one]\n# about binaries\n"
+            "binaries:\n  code: /usr/bin/code\n",
+            "binaries",
+            "provision_ignore: [one]\n# about binaries\n",
+            id="comment-above-the-removed-key-after-an-inline-list-stays",
         ),
     ],
 )

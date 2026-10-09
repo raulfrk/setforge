@@ -5,9 +5,7 @@ indented its own way, blank lines and comments in every position, CRLF, a BOM,
 no final newline. One ``config add`` / ``config remove`` style edit is applied
 and the rendered text must parse to exactly the edited data, keep every comment
 outside the removed entry, and leave every line the edit did not own
-byte-identical. After a flow list (``[a, b]``) ruamel keeps the comments above a
-key with that key and loses the ones after a list emptied below it, so for those
-edits only the data and the lines with content are pinned.
+byte-identical.
 """
 
 from __future__ import annotations
@@ -171,23 +169,6 @@ def _container_region(doc: _Doc, path: _Path) -> range:
     return range(parent.first, _next_entry_line(doc, parent.last))
 
 
-def _follows_flow_list(doc: _Doc, path: _Path) -> bool:
-    """Whether the entry before ``path`` ends on a flow list (``[a, b]``).
-
-    ruamel keeps the comments above a key with that key when the value before
-    it is a flow list, and drops the ones after a list emptied below it. After
-    any other value the comments belong to what precedes the key and stay.
-    """
-    siblings = _siblings(doc, path)
-    index = siblings.index(path)
-    if not index:
-        return False
-    before = doc.entries[siblings[index - 1]]
-    while before.kind == "map":
-        before = doc.entries[before.children[-1]]
-    return before.kind == "flow"
-
-
 def _at(data: dict[str, Any], path: _Path) -> Any:
     node: Any = data
     for part in path:
@@ -196,13 +177,12 @@ def _at(data: dict[str, Any], path: _Path) -> Any:
 
 
 @st.composite
-def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
+def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range]:
     """A document with one edit applied to its round-trip tree.
 
-    Returns ``(doc, edited tree, removed, owned, comments_kept)``: ``removed``
-    are the lines of the entry the edit took out (its comments go with it),
-    ``owned`` the lines the edit may rewrite, and ``comments_kept`` whether the
-    comments around the entry are expected to stay (not after a flow list).
+    Returns ``(doc, edited tree, removed, owned)``: ``removed`` are the lines
+    of the entry the edit took out (its comments go with it) and ``owned`` the
+    lines the edit may rewrite.
     """
     doc = draw(_documents())
     by_kind: dict[str, list[_Path]] = {
@@ -218,7 +198,6 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
     tree = yaml_rt().load("\n".join(doc.lines) + "\n") or CommentedMap()
     removed: range = range(0)
     owned: range = range(0)
-    comments_kept = True
     if op in ("add_key", "add_list"):
         parent = draw(st.sampled_from([(), *by_kind["map"]]))
         extra = draw(st.sampled_from([(), ("n1",), ("n1", "n2")]))
@@ -240,7 +219,6 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
         line = entry.item_lines[index]
         removed = range(line, line + 1)
         if len(entry.item_lines) == 1:
-            comments_kept = not _follows_flow_list(doc, path)
             owned = range(entry.first, _next_entry_line(doc, line))
         elif index == 0:
             owned = range(entry.first + 1, entry.item_lines[1])
@@ -248,14 +226,13 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
             owned = removed
     else:
         path = draw(st.sampled_from(list(doc.entries)))
-        comments_kept = not _follows_flow_list(doc, path)
         apply_remove(tree, ".".join(path), None, is_list=False)
         owned = _container_region(doc, path)
         removed = range(doc.entries[path].first, doc.entries[path].last + 1)
         if len(_siblings(doc, path)) == 1:
             # The helpers have nowhere to re-attach an only key's comments.
             removed = owned
-    return doc, tree, removed, owned, comments_kept
+    return doc, tree, removed, owned
 
 
 def _plain(node: Any) -> Any:
@@ -271,19 +248,14 @@ _FRAMINGS = st.tuples(
 )
 
 
-def _code(line: str) -> str:
-    """A line without its comment; empty for a comment or blank line."""
-    return line.split("#")[0].rstrip()
-
-
 @pytest.mark.slow  # about 2.5s: 400 generated documents, each rendered and parsed
 @settings(max_examples=400)
 @given(case=_edits(), framing=_FRAMINGS)
 def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
-    case: tuple[_Doc, CommentedMap, range, range, bool],
+    case: tuple[_Doc, CommentedMap, range, range],
     framing: tuple[str, bool, str],
 ) -> None:
-    doc, tree, removed, owned, comments_kept = case
+    doc, tree, removed, owned = case
     eol, final_newline, bom = framing
     # A one-line file with no final newline has no line ending to carry over.
     assume(final_newline or len(doc.lines) > 1)
@@ -300,15 +272,12 @@ def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
     assert body.count("\n") == body.count(eol)
     assert YAML(typ="safe").load(body) == _plain(tree)
     out_lines = body.removesuffix(eol).split(eol)
-    if comments_kept:
-        for number, line in enumerate(doc.lines):
-            if number in removed:
-                continue
-            for part in line.split("# ")[1:]:
-                assert sum(f"# {part}" in out for out in out_lines) == 1, part
-    # Where an unset moves the comments, only the lines with content are pinned.
-    shown = (lambda line: line) if comments_kept else _code
-    remaining = iter(shown(line) for line in out_lines)
     for number, line in enumerate(doc.lines):
-        if number not in owned and (comments_kept or _code(line)):
-            assert shown(line) in remaining, (number, line)
+        if number in removed:
+            continue
+        for part in line.split("# ")[1:]:
+            assert sum(f"# {part}" in out for out in out_lines) == 1, part
+    remaining = iter(out_lines)
+    for number, line in enumerate(doc.lines):
+        if number not in owned:
+            assert line in remaining, (number, line)

@@ -397,15 +397,21 @@ def apply_remove(
         if tail:
             _keep_entry_tail(parent, leaf, index, tail)
     else:
-        # Scalar unset: pop the key (and its comment-association entry).
-        tail = _following_comment(parent, leaf)
-        keys = list(parent)
-        index = keys.index(leaf)
-        del parent[leaf]
-        parent.ca.items.pop(leaf, None)
-        if tail:
-            _keep_following_comment(parent, keys, index, tail)
+        _unset_key(parent, leaf)
     return doc
+
+
+def _unset_key(parent: CommentedMap, leaf: str) -> None:
+    """Pop ``leaf`` (and its comment-association entry), keeping what follows."""
+    tail = _following_comment(parent, leaf)
+    keys = list(parent)
+    index = keys.index(leaf)
+    if index:
+        tail = _comment_above(parent, leaf) + tail
+    del parent[leaf]
+    parent.ca.items.pop(leaf, None)
+    if tail:
+        _keep_following_comment(parent, keys, index, tail)
 
 
 def _entry_tail(seq: list[Any], index: int) -> str:
@@ -438,9 +444,14 @@ def _keep_entry_tail(parent: CommentedMap, leaf: str, index: int, tail: str) -> 
         slot = 2
     else:
         seq.fa.set_flow_style()
-        if seq.ca.comment is None:
-            seq.ca.comment = [None, None]
-        entry, slot = seq.ca.comment, 0
+        key_entry = parent.ca.items.get(leaf)
+        if key_entry is not None:
+            # ruamel writes the key's comment in place of the list's own.
+            entry, slot = key_entry, 2
+        else:
+            if seq.ca.comment is None:
+                seq.ca.comment = [None, None]
+            entry, slot = seq.ca.comment, 0
     if entry[slot] is None:
         entry[slot] = CommentToken("\n" + tail, CommentMark(0))
     else:
@@ -459,6 +470,20 @@ def _following_comment(node: CommentedMap, key: str) -> str:
     if token is None or "\n" not in token.value:
         return ""
     return token.value.split("\n", 1)[1]
+
+
+def _comment_above(node: CommentedMap, key: str) -> str:
+    """Comment and blank lines above ``key`` that ruamel stores with the key.
+
+    After a flow list (``[a, b]``) with no end-of-line comment they are kept
+    with the key that follows instead of in the tail of the one before.
+    """
+    entry = node.ca.items.get(key)
+    tokens = entry[1] if entry and entry[1] else []
+    return "".join(
+        " " * token.column + token.value if token.value.strip() else token.value
+        for token in tokens
+    )
 
 
 def _last_leaf(node: Any, key: Any) -> tuple[Any, Any]:  # noqa: ANN401

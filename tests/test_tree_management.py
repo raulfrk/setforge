@@ -783,6 +783,15 @@ def test_apply_tree_restores_directory_when_child_appears_after_isolation(
     [
         (1, "it still holds external-0"),
         (
+            5,
+            "it still holds external-0, external-1, external-2, external-3, external-4",
+        ),
+        (
+            6,
+            "it still holds external-0, external-1, external-2, external-3, "
+            "external-4 and 1 more",
+        ),
+        (
             7,
             "it still holds external-0, external-1, external-2, external-3, "
             "external-4 and 2 more",
@@ -824,6 +833,7 @@ def test_apply_tree_names_the_entries_that_appeared_before_removal(
         f"refusing unsafe managed tree removal: orphan: {holds}"
     )
     assert len(list((live / "orphan").iterdir())) == count
+    assert (live / "orphan" / "external-0").read_text(encoding="utf-8") == "keep\n"
     assert not _reserved_leftovers(live)
 
 
