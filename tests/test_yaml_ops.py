@@ -18,8 +18,12 @@ import io
 import os
 import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
+from ruamel.yaml import YAML
+from ruamel.yaml.constructor import SafeConstructor
+from ruamel.yaml.nodes import Node, ScalarNode, SequenceNode
 
 from setforge import atomicio
 from setforge.errors import SetforgeError
@@ -27,6 +31,7 @@ from setforge.migrations import _yaml_ops
 from setforge.migrations._yaml_ops import (
     atomic_write_yaml,
     rename_key,
+    render_yaml,
     yaml_rt,
 )
 
@@ -189,43 +194,195 @@ def test_atomic_write_yaml_refuses_text_that_would_not_read_back(
         assert target.read_text(encoding="utf-8") == existing
 
 
-_LEGITIMATE = [
-    pytest.param("base: &b\n  - one\nother: *b\n", id="alias"),
-    pytest.param("d: &d\n  a: 1\nm:\n  <<: *d\n  b: 2\n", id="merge-key"),
-    pytest.param("mode: 0o755\nold: 0755\nhex: 0x1F\n", id="integers"),
-    pytest.param("f: 1.50\ne: 1e3\nn: .nan\ni: -.inf\n", id="floats"),
-    pytest.param("a:\nb: ~\nc: null\nd: ''\n", id="nulls"),
-    pytest.param("t: yes\nf: off\nb: true\n", id="booleans"),
-    pytest.param("day: 2026-10-09\nat: 2026-10-09T10:00:00Z\n", id="dates"),
-    pytest.param("text: |\n  one\n\n  two\nfold: >-\n  a\n  b\n", id="blocks"),
-    pytest.param("q: \"a\\tb\\u0085c\"\ns: 'it''s'\n", id="quoted"),
-    pytest.param("flow: [a, {b: c}]\nempty: {}\nnone: []\n", id="flow"),
-    pytest.param("wrapped: [a,\n  b]\nk:\n  v\n", id="wrapped"),
-    pytest.param("? [a, b]\n: pair\n1: int-key\n", id="odd-keys"),
-    pytest.param("- a\n- b: 1\n  c:\n  - d\n", id="list-root"),
-    pytest.param("---\na: 1\n...\n", id="markers"),
-    pytest.param("caf\u00e9: \u65e5\u672c # \u2603\n", id="unicode"),
-]
-
-
-@pytest.mark.parametrize("text", _LEGITIMATE)
-@pytest.mark.parametrize("edit", [False, True], ids=["unchanged", "edited"])
-def test_atomic_write_yaml_accepts_every_document_that_reads_back(
-    tmp_path: Path, text: str, edit: bool
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("k1:\n\n  - k2: v3\n  - k7: v8\n    k9: v10\n", id="blank-line"),
+        pytest.param("k1:\n  # c\n  - k2: v3\n  - k7: v8\n    k9: v10\n", id="comment"),
+    ],
+)
+def test_atomic_write_yaml_refuses_to_empty_a_list_item_under_a_spaced_key(
+    tmp_path: Path, text: str
 ) -> None:
-    """The read-back check refuses only text that parses to something else."""
+    """Known limit: emptying the first item of such a list is refused.
+
+    With a blank line or comment between ``k1:`` and the list, ruamel writes the
+    next item's two keys on one line (``- k7: v8 k9: v10``), which is not YAML;
+    the previous renderer wrote that file. Without the blank line the same edit
+    writes ``- {}``.
+    """
     target = tmp_path / "setforge.yaml"
     target.write_text(text, encoding="utf-8")
     data = yaml_rt().load(text)
+    data["k1"][0].pop("k2")
+
+    with pytest.raises(SetforgeError, match="would not read back"):
+        atomic_write_yaml(target, data)
+
+    assert target.read_text(encoding="utf-8") == text
+    assert [path.name for path in tmp_path.iterdir()] == ["setforge.yaml"]
+
+
+def _document(
+    text: str,
+    rewritten: str | None = None,
+    *,
+    id: str,
+) -> object:
+    """A document and the bytes an unchanged write leaves (``text`` unless noted).
+
+    ruamel cannot keep every spelling: the ``rewritten`` ones are the few it
+    normalises, each to the same data.
+    """
+    return pytest.param(text, text if rewritten is None else rewritten, id=id)
+
+
+_LEGITIMATE = [
+    _document("base: &b\n  - one\nother: *b\n", id="alias"),
+    _document("d: &d\n  a: 1\nm:\n  <<: *d\n  b: 2\n", id="merge-key"),
+    _document("mode: 0o755\nold: 0755\nhex: 0x1F\n", id="integers"),
+    _document("f: 1.50\ne: 1e3\nn: .nan\ni: -.inf\n", id="floats"),
+    _document("a:\nb: ~\nc: null\nd: ''\n", id="nulls"),
+    _document("t: yes\nf: off\nb: true\n", id="booleans"),
+    _document("day: 2026-10-09\nat: 2026-10-09T10:00:00Z\n", id="dates"),
+    _document("text: |\n  one\n\n  two\nfold: >-\n  a\n  b\n", id="blocks"),
+    _document("q: \"a\\tb\\u0085c\"\ns: 'it''s'\n", id="quoted"),
+    _document("flow: [a, {b: c}]\nempty: {}\nnone: []\n", id="flow"),
+    _document("wrapped: [a,\n  b]\nk:\n  v\n", "wrapped: [a, b]\nk: v\n", id="wrapped"),
+    _document(
+        "? [a, b]\n: pair\n1: int-key\n", "[a, b]: pair\n1: int-key\n", id="odd-keys"
+    ),
+    _document("- a\n- b: 1\n  c:\n  - d\n", id="list-root"),
+    _document("---\na: 1\n...\n", "a: 1\n", id="markers"),
+    _document("caf\u00e9: \u65e5\u672c # \u2603\n", id="unicode"),
+    _document(
+        "bin: !!binary aGVsbG8=\nb: 2\n",
+        "bin: !!binary |\n  aGVsbG8=\nb: 2\n",
+        id="binary",
+    ),
+    _document("? .nan\n: 1\nb: 2\n", ".nan: 1\nb: 2\n", id="nan-key"),
+    _document(
+        "? [a, !!str 1]\n: v\nb: 2\n",
+        "[a, !!str 1]: v\nb: 2\n",
+        id="tag-in-complex-key",
+    ),
+    _document(
+        "a: !x 'multi\n  line'\nb: 2\n",
+        "a: !x 'multi line'\nb: 2\n",
+        id="tagged-multiline",
+    ),
+]
+
+
+class _TolerantConstructor(SafeConstructor):
+    """A safe constructor that reads an unknown tag as ``(tag, content)``."""
+
+
+def _keep_tag(loader: SafeConstructor, node: Node) -> tuple[str | None, object]:
+    if isinstance(node, ScalarNode):
+        content = loader.construct_scalar(node)
+    elif isinstance(node, SequenceNode):
+        content = loader.construct_sequence(node, deep=True)
+    else:
+        content = loader.construct_mapping(node, deep=True)
+    return (node.tag, content)
+
+
+_TolerantConstructor.add_constructor(None, _keep_tag)
+
+
+def _safe_parse(text: str) -> Any:
+    """Parse with a safe loader, which shares nothing with the renderer's check."""
+    loader = YAML(typ="safe", pure=True)
+    loader.Constructor = _TolerantConstructor
+    return _comparable(loader.load(text))
+
+
+def _comparable(node: object, *, key: bool = False) -> object:
+    """Make ``nan`` (never equal to itself) compare, whatever carries it."""
+    if isinstance(node, dict):
+        return {
+            _comparable(name, key=True): _comparable(value)
+            for name, value in node.items()
+        }
+    if isinstance(node, (list, tuple)):
+        items = [_comparable(item, key=key) for item in node]
+        return tuple(items) if key else items
+    return "nan" if isinstance(node, float) and node != node else node
+
+
+@pytest.mark.parametrize(("text", "unchanged"), _LEGITIMATE)
+@pytest.mark.parametrize("edit", [False, True], ids=["unchanged", "edited"])
+def test_atomic_write_yaml_accepts_every_document_that_reads_back(
+    tmp_path: Path, text: str, unchanged: str, edit: bool
+) -> None:
+    """A document that reads back writes: the same data, its lines kept."""
+    target = tmp_path / "setforge.yaml"
+    target.write_text(text, encoding="utf-8")
+    data = yaml_rt().load(text)
+    expected = _safe_parse(text)
     if edit and isinstance(data, dict):
         data["added"] = ["x", ("y", "z")]
+        expected["added"] = ["x", ["y", "z"]]
     elif edit:
         data.append("x")
+        expected.append("x")
 
     atomic_write_yaml(target, data)
 
     written = target.read_text(encoding="utf-8")
-    assert _yaml_ops._plain(yaml_rt().load(written)) == _yaml_ops._plain(data)
+    assert _safe_parse(written) == expected
+    if edit:
+        assert written.startswith(unchanged)
+    else:
+        assert written == unchanged
+
+
+# ruamel loads a tagged scalar as an object that compares by identity, and a
+# list that carries a tag has no recorded positions. Neither is a reason to
+# refuse a file: it must write, byte for byte, with or without an unrelated key.
+_TAGGED = [
+    pytest.param("a: !!str 1\nb: 2\n", id="str-tag"),
+    pytest.param("code: !!str /usr/bin/code\n", id="str-tag-path"),
+    pytest.param("a: !custom v\nb: 2\n", id="custom-tag"),
+    pytest.param("a: !!str 1\nb: !!str 1\n", id="same-tag-twice"),
+    pytest.param("l:\n  - !!str 1\n  - 2\n", id="tag-in-list"),
+    pytest.param("!!str 1: x\nb: 2\n", id="tag-on-key"),
+    pytest.param("s: !!set\n  ? !!str 1\n  ? b\nc: 2\n", id="tag-in-set"),
+    pytest.param("a: !x |\n  text\nb: 2\n", id="tag-on-block-scalar"),
+    pytest.param("a: !x\n  - 1\n  - 2\nb: 2\n", id="tagged-list"),
+    pytest.param("a: !x\n  k: 1\nb: 2\n", id="tagged-map"),
+    pytest.param(
+        "a: !!null\nb: !!int '5'\nc: !!float 5\nd: !!bool 'true'\n", id="core"
+    ),
+    pytest.param("a: !!timestamp 2026-01-01\nb: 2\n", id="timestamp-tag"),
+]
+
+
+@pytest.mark.parametrize("text", _TAGGED)
+@pytest.mark.parametrize("edit", [False, True], ids=["unchanged", "edited"])
+def test_render_yaml_writes_a_document_with_tags_and_keeps_its_lines(
+    text: str, edit: bool
+) -> None:
+    data = yaml_rt().load(text)
+    if edit:
+        data["added"] = "new"
+
+    assert render_yaml(data, text) == text + ("added: new\n" if edit else "")
+
+
+def test_atomic_write_yaml_keeps_a_tagged_scalar_in_a_local_config(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "local.yaml"
+    text = "# mine\nbinaries:\n  code: !!str /usr/bin/code\n"
+    target.write_text(text, encoding="utf-8")
+    data = yaml_rt().load(text)
+    data["orphan_ignore"] = ["tool"]
+
+    atomic_write_yaml(target, data)
+
+    assert target.read_text(encoding="utf-8") == text + "orphan_ignore:\n- tool\n"
 
 
 def test_atomic_write_yaml_fsyncs_tmp_fd_before_replace(

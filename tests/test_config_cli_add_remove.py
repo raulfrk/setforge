@@ -734,6 +734,10 @@ def test_config_add_to_the_first_list_of_a_mixed_indent_file(
     )
 
     assert result.exit_code == 0, result.output
+    entry = seed.splitlines(keepends=True)[2]  # "    - a" or "  - a"
+    assert seed_local.read_text(encoding="utf-8") == seed.replace(
+        entry, entry + entry.replace("a", "pub@team")
+    )
     assert _list_at(seed_local, "plugins.add") == ["a", "pub@team"]
     assert _list_at(seed_local, "extensions.remove") == ["e.two"]
 

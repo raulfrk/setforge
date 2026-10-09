@@ -22,11 +22,12 @@ import difflib
 import io
 import stat
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 from ruamel.yaml.error import CommentMark, YAMLError
 from ruamel.yaml.tokens import CommentToken
 
@@ -90,6 +91,7 @@ def _detect_indent(text: str) -> tuple[int, int, int] | None:
                     isinstance(value, CommentedSeq)
                     and value
                     and not value.fa.flow_style()
+                    and value.lc.data  # a list with a tag has no positions
                 ):
                     dash = value.lc.col
                     found.setdefault("offset", dash - key_col)
@@ -158,12 +160,27 @@ def render_yaml(
     return rendered
 
 
+def _plain_key(key: Any) -> Any:  # noqa: ANN401 — a mapping key of any YAML type
+    """Reduce a mapping key the way :func:`_plain` does, keeping it hashable."""
+    if isinstance(key, tuple):
+        return tuple(_plain_key(item) for item in key)
+    return _plain(key) if isinstance(key, TaggedScalar) else key
+
+
 def _plain(obj: Any) -> Any:  # noqa: ANN401 — recursive YAML coercion
-    """Reduce round-trip data to plain values that compare by meaning."""
+    """Reduce round-trip data to plain values that compare by meaning.
+
+    A scalar with a tag ruamel does not resolve (``!!str 1``, ``!custom v``)
+    loads as a ``TaggedScalar``, which compares by identity.
+    """
+    if isinstance(obj, TaggedScalar):
+        return (str(obj.tag), obj.value)
     if isinstance(obj, Mapping):
-        return {key: _plain(value) for key, value in obj.items()}
+        return {_plain_key(key): _plain(value) for key, value in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_plain(value) for value in obj]
+    if isinstance(obj, AbstractSet):
+        return frozenset(_plain_key(value) for value in obj)
     if isinstance(obj, float) and obj != obj:
         return "<nan>"
     return obj

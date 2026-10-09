@@ -58,6 +58,24 @@ def test_local_yaml_writer_uses_atomic_primitive(
     assert "tool" in text
 
 
+@pytest.mark.parametrize(
+    ("module", "writer"), [(cleanup_mod, _write_cleanup), (orphans_mod, _write_orphans)]
+)
+def test_local_yaml_writer_accepts_a_tagged_scalar(
+    module: object, writer: object
+) -> None:
+    del module
+    path = paths.local_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "binaries:\n  code: !!str /usr/bin/code\n"
+    path.write_text(text, encoding="utf-8")
+
+    writer(path)  # type: ignore[operator]
+
+    assert path.read_text(encoding="utf-8").startswith(text)
+    assert "tool" in path.read_text(encoding="utf-8")
+
+
 def test_orphans_writer_creates_missing_file(tmp_path: Path) -> None:
     path = paths.local_config_path()
     assert not path.exists()

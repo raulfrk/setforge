@@ -5,7 +5,9 @@ indented its own way, blank lines and comments in every position, CRLF, a BOM,
 no final newline. One ``config add`` / ``config remove`` style edit is applied
 and the rendered text must parse to exactly the edited data, keep every comment
 outside the removed entry, and leave every line the edit did not own
-byte-identical.
+byte-identical. Unsetting a key whose neighbours are a list or a mapping moves
+the comments around it before anything is rendered, so for that edit only the
+data, the lines with content and the absence of a whole-file re-dump are pinned.
 """
 
 from __future__ import annotations
@@ -13,9 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
 from setforge.cli._config_helpers import apply_add, apply_remove
 from setforge.migrations._yaml_ops import render_yaml, yaml_rt
@@ -62,12 +66,17 @@ def _eol(draw: st.DrawFn, doc: _Doc) -> str:
     return " " * draw(st.integers(1, 3)) + f"# {doc.name('c')}."
 
 
+def _quoted(draw: st.DrawFn, value: str) -> str:
+    quote = draw(st.sampled_from(["", "'", '"']))
+    return f"{quote}{value}{quote}"
+
+
 def _mapping(
     draw: st.DrawFn, doc: _Doc, col: int, path: _Path, depth: int
 ) -> tuple[dict[str, Any], list[_Path]]:
     data: dict[str, Any] = {}
     order: list[_Path] = []
-    kinds = ["scalar", "list"] + (["map"] if depth < 3 else [])
+    kinds = ["scalar", "list", "maplist", "flow"] + (["map"] if depth < 3 else [])
     for kind in draw(st.lists(st.sampled_from(kinds), min_size=1, max_size=3)):
         key = doc.name("k")
         here = (*path, key)
@@ -78,8 +87,12 @@ def _mapping(
         pad = " " * col
         if kind == "scalar":
             value = doc.name("v")
-            doc.lines.append(f"{pad}{key}: {value}{_eol(draw, doc)}")
+            doc.lines.append(f"{pad}{key}: {_quoted(draw, value)}{_eol(draw, doc)}")
             data[key] = value
+        elif kind == "flow":
+            items = [doc.name("v") for _ in range(draw(st.integers(1, 3)))]
+            doc.lines.append(f"{pad}{key}: [{', '.join(items)}]{_eol(draw, doc)}")
+            data[key] = items
         elif kind == "list":
             doc.lines.append(f"{pad}{key}:{_eol(draw, doc)}")
             dash = col + draw(st.sampled_from([0, 2, 3, 4]))
@@ -88,9 +101,24 @@ def _mapping(
                 _noise(draw, doc, dash)
                 value = doc.name("v")
                 entry.item_lines.append(len(doc.lines))
-                doc.lines.append(f"{' ' * dash}- {value}{_eol(draw, doc)}")
+                quoted = _quoted(draw, value)
+                doc.lines.append(f"{' ' * dash}- {quoted}{_eol(draw, doc)}")
                 items.append(value)
             data[key] = items
+        elif kind == "maplist":
+            doc.lines.append(f"{pad}{key}:{_eol(draw, doc)}")
+            dash = col + draw(st.sampled_from([0, 2, 3, 4]))
+            records = []
+            for _ in range(draw(st.integers(1, 2))):
+                _noise(draw, doc, dash)
+                record = {}
+                for lead in ["- ", "  "][: draw(st.integers(1, 2))]:
+                    name, value = doc.name("k"), doc.name("v")
+                    line = f"{' ' * dash}{lead}{name}: {value}{_eol(draw, doc)}"
+                    doc.lines.append(line)
+                    record[name] = value
+                records.append(record)
+            data[key] = records
         else:
             doc.lines.append(f"{pad}{key}:{_eol(draw, doc)}")
             step = draw(st.sampled_from([2, 3, 4]))
@@ -102,6 +130,11 @@ def _mapping(
 @st.composite
 def _documents(draw: st.DrawFn) -> _Doc:
     doc = _Doc()
+    if draw(st.integers(0, 9)) == 0:
+        # A file of only comments: the first edit must keep them.
+        for _ in range(draw(st.integers(1, 3))):
+            doc.lines.append(f"# {doc.name('c')}.")
+        return doc
     doc.data, doc.top = _mapping(draw, doc, 0, (), 1)
     _noise(draw, doc, 0)
     return doc
@@ -138,8 +171,8 @@ def _container_region(doc: _Doc, path: _Path) -> range:
     return range(parent.first, _next_entry_line(doc, parent.last))
 
 
-def _unsettable(doc: _Doc, path: _Path) -> bool:
-    """Whether unsetting ``path`` is an edit the helpers keep comments through.
+def _comments_survive(doc: _Doc, path: _Path) -> bool:
+    """Whether the helpers keep the comments around ``path`` when it is unset.
 
     ``apply_remove`` carries the comments after a removed key over only when
     the key's last line is a scalar entry and the key before it is a scalar;
@@ -163,25 +196,30 @@ def _at(data: dict[str, Any], path: _Path) -> Any:
 
 
 @st.composite
-def _edits(draw: st.DrawFn) -> tuple[_Doc, dict[str, Any], range, range]:
+def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
     """A document with one edit applied to its round-trip tree.
 
-    Returns ``(doc, edited tree, removed, owned)``: ``removed`` are the lines
-    of the entry the edit took out (its comments go with it) and ``owned`` the
-    lines the edit may rewrite.
+    Returns ``(doc, edited tree, removed, owned, comments_kept)``: ``removed``
+    are the lines of the entry the edit took out (its comments go with it),
+    ``owned`` the lines the edit may rewrite, and ``comments_kept`` whether the
+    edit helpers leave the comments where they were (an unset sometimes moves
+    or drops them before anything is rendered).
     """
     doc = draw(_documents())
-    by_kind: dict[str, list[_Path]] = {"scalar": [], "list": [], "map": []}
+    by_kind: dict[str, list[_Path]] = {
+        kind: [] for kind in ("scalar", "list", "maplist", "flow", "map")
+    }
     for path, entry in doc.entries.items():
         by_kind[entry.kind].append(path)
     ops = ["add_key", "add_list"]
-    ops += ["unset"] if any(_unsettable(doc, p) for p in doc.entries) else []
+    ops += ["unset"] if doc.entries else []
     ops += ["set"] if by_kind["scalar"] else []
     ops += ["append", "remove_item"] if by_kind["list"] else []
     op = draw(st.sampled_from(ops))
-    tree = yaml_rt().load("\n".join(doc.lines) + "\n")
+    tree = yaml_rt().load("\n".join(doc.lines) + "\n") or CommentedMap()
     removed: range = range(0)
     owned: range = range(0)
+    comments_kept = True
     if op in ("add_key", "add_list"):
         parent = draw(st.sampled_from([(), *by_kind["map"]]))
         extra = draw(st.sampled_from([(), ("n1",), ("n1", "n2")]))
@@ -209,14 +247,15 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, dict[str, Any], range, range]:
         else:
             owned = removed
     else:
-        path = draw(st.sampled_from([p for p in doc.entries if _unsettable(doc, p)]))
+        path = draw(st.sampled_from(list(doc.entries)))
+        comments_kept = _comments_survive(doc, path)
         apply_remove(tree, ".".join(path), None, is_list=False)
         owned = _container_region(doc, path)
         removed = range(doc.entries[path].first, doc.entries[path].last + 1)
         if len(_siblings(doc, path)) == 1:
             # The helpers have nowhere to re-attach an only key's comments.
             removed = owned
-    return doc, tree, removed, owned
+    return doc, tree, removed, owned, comments_kept
 
 
 def _plain(node: Any) -> Any:
@@ -232,12 +271,19 @@ _FRAMINGS = st.tuples(
 )
 
 
+def _code(line: str) -> str:
+    """A line without its comment; empty for a comment or blank line."""
+    return line.split("#")[0].rstrip()
+
+
+@pytest.mark.slow  # about 2.5s: 400 generated documents, each rendered and parsed
 @settings(max_examples=400)
 @given(case=_edits(), framing=_FRAMINGS)
 def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
-    case: tuple[_Doc, dict[str, Any], range, range], framing: tuple[str, bool, str]
+    case: tuple[_Doc, CommentedMap, range, range, bool],
+    framing: tuple[str, bool, str],
 ) -> None:
-    doc, tree, removed, owned = case
+    doc, tree, removed, owned, comments_kept = case
     eol, final_newline, bom = framing
     # A one-line file with no final newline has no line ending to carry over.
     assume(final_newline or len(doc.lines) > 1)
@@ -251,12 +297,15 @@ def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
     assert body.count("\n") == body.count(eol)
     assert YAML(typ="safe").load(body) == _plain(tree)
     out_lines = body.removesuffix(eol).split(eol)
+    if comments_kept:
+        for number, line in enumerate(doc.lines):
+            if number in removed:
+                continue
+            for part in line.split("# ")[1:]:
+                assert sum(f"# {part}" in out for out in out_lines) == 1, part
+    # Where an unset moves the comments, only the lines with content are pinned.
+    shown = (lambda line: line) if comments_kept else _code
+    remaining = iter(shown(line) for line in out_lines)
     for number, line in enumerate(doc.lines):
-        if number in removed:
-            continue
-        for part in line.split("# ")[1:]:
-            assert sum(f"# {part}" in out for out in out_lines) == 1, part
-    remaining = iter(out_lines)
-    for number, line in enumerate(doc.lines):
-        if number not in owned:
-            assert line in remaining, (number, line)
+        if number not in owned and (comments_kept or _code(line)):
+            assert shown(line) in remaining, (number, line)
