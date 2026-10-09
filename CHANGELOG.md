@@ -115,6 +115,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the excluded content is left untouched, and the other owned entries are
   removed. Delete the excluded content and the next `install` removes the
   directory.
+- An `install` killed while it was writing a file into a directory that the
+  same install had just created left its temporary file in that directory.
+  `setforge recover --apply` then stopped with `refusing to remove non-empty
+  recovery directory`, and every later command was refused until you deleted
+  the hidden file by hand. Recovery now removes the leftover (only regular
+  files named `.NAME.setforge-<16 hex digits>.tmp` directly inside a directory
+  the interrupted command created), prints the usual `warning: removed a
+  temporary file left by an interrupted setforge run: <path>`, and removes the
+  directory. If the directory holds anything else, recovery still stops and
+  removes nothing, and the message now names what is in the way (up to five
+  entries), so you can move it and run `setforge recover` again.
+
+- An `install` killed while it was deploying a tracked file with `symlink:`
+  could leave a hidden temporary symlink named
+  `.NAME.setforge-<16 hex digits>.tmp` beside the link, and nothing ever
+  removed it. The next `install` that deploys the same link now removes it and
+  prints the usual `warning: removed a temporary file left by an interrupted
+  setforge run: <path>`. Only the symlink itself is removed, never the file it
+  points at, and `--dry-run` removes nothing. A symlink with such a name that
+  no deploy removes is still listed by `cleanup-orphans --scan`, as before.
+
+- An `install` killed while it was deploying a tracked file with `symlink:`
+  into a directory that the same install had just created left its temporary
+  symlink there, and `setforge recover --apply` stopped with `refusing to
+  remove non-empty recovery directory`. Recovery now also removes a symlink
+  named `.NAME.setforge-<16 hex digits>.tmp` directly inside a directory the
+  interrupted command created, with the usual warning, and then the directory.
+  It removes the symlink only, never the file it points at. A symlink with any
+  other name, including one with `u` before the digits, still stops recovery
+  and is named in the message.
 
 ## [1.5.0] - 2026-10-09
 

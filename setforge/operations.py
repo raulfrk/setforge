@@ -1475,19 +1475,90 @@ def open_guarded_parent(  # noqa: C901
             os.close(descriptor)
 
 
-def _remove_replaceable_at(parent_fd: int, name: str, path: Path) -> None:
-    """Remove one final path component without following it."""
+# How many blocking entries a refusal to remove a directory names.
+_BLOCKING_NAMES_SHOWN = 5
+
+
+def _remove_created_directory(
+    name: str | Path, path: Path, *, dir_fd: int | None = None
+) -> tuple[str, ...]:
+    """Remove a directory this operation created; return the names blocking it.
+
+    A write killed inside the directory leaves its temp file there. Under the
+    mutation gate that writer is gone, so when every entry is a regular file
+    or a symlink with a gated temp name they are unlinked, each reported on
+    stderr, and the directory with them. Any other entry leaves the directory
+    and everything in it untouched. Nothing is followed or entered.
+    """
+    from setforge.locking import mutation_gate_held
+
+    try:
+        os.rmdir(name, dir_fd=dir_fd)
+    except OSError as exc:
+        if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise
+    else:
+        return ()
+    directory_fd = os.open(
+        name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd
+    )
+    try:
+        names = sorted(os.listdir(directory_fd))  # noqa: PTH208 - anchored dirfd
+        blocking = tuple(
+            entry
+            for entry in names
+            if not mutation_gate_held()
+            or not atomicio.is_gated_temp_name(entry)
+            or not _file_or_link_at(directory_fd, entry)
+        )
+        if blocking:
+            return blocking
+        for entry in names:
+            os.unlink(entry, dir_fd=directory_fd)
+            atomicio.report_removed_temp(path / entry)
+    finally:
+        os.close(directory_fd)
+    os.rmdir(name, dir_fd=dir_fd)
+    return ()
+
+
+def _file_or_link_at(directory_fd: int, name: str) -> bool:
+    """Whether ``name`` is a regular file or a symlink, without following it."""
+    mode = os.stat(name, dir_fd=directory_fd, follow_symlinks=False).st_mode
+    return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
+
+
+def _blocking_entries(blocking: tuple[str, ...]) -> str:
+    """Word the entries that keep a recovery directory from being removed."""
+    shown = ", ".join(blocking[:_BLOCKING_NAMES_SHOWN])
+    more = len(blocking) - _BLOCKING_NAMES_SHOWN
+    return f": it still holds {shown}" + (f" and {more} more" if more > 0 else "")
+
+
+def _remove_replaceable_at(
+    parent_fd: int, name: str, path: Path, *, created: bool = False
+) -> None:
+    """Remove one final path component without following it.
+
+    ``created`` says the journal recorded ``path`` as absent, so a directory
+    there is this operation's own: see :func:`_remove_created_directory`.
+    """
     try:
         info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
         return
     if stat.S_ISDIR(info.st_mode):
+        refusal = f"refusing to replace non-empty directory during recovery: {path}"
+        blocking: tuple[str, ...] = ()
         try:
-            os.rmdir(name, dir_fd=parent_fd)
+            if created:
+                blocking = _remove_created_directory(name, path, dir_fd=parent_fd)
+            else:
+                os.rmdir(name, dir_fd=parent_fd)
         except OSError as exc:
-            raise SetforgeError(
-                f"refusing to replace non-empty directory during recovery: {path}"
-            ) from exc
+            raise SetforgeError(refusal) from exc
+        if blocking:
+            raise SetforgeError(refusal + _blocking_entries(blocking))
     else:
         os.unlink(name, dir_fd=parent_fd)
 
@@ -1528,7 +1599,7 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
     """Publish one snapshot relative to an already-held parent descriptor."""
     name = snapshot.path.name
     if snapshot.kind is SnapshotKind.ABSENT:
-        _remove_replaceable_at(parent_fd, name, snapshot.path)
+        _remove_replaceable_at(parent_fd, name, snapshot.path, created=True)
         os.fsync(parent_fd)
         return None
     if snapshot.kind is SnapshotKind.DIRECTORY:
@@ -1674,12 +1745,13 @@ def _restore_absent(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
     elif path.is_dir():
+        refusal = f"refusing to remove non-empty recovery directory {path}"
         try:
-            path.rmdir()
+            blocking = _remove_created_directory(path, path)
         except OSError as exc:
-            raise SetforgeError(
-                f"refusing to remove non-empty recovery directory {path}"
-            ) from exc
+            raise SetforgeError(refusal) from exc
+        if blocking:
+            raise SetforgeError(refusal + _blocking_entries(blocking))
 
 
 def _restore_directory(snapshot: PathSnapshot) -> None:

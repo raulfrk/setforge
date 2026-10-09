@@ -344,7 +344,13 @@ Often that is the `setforge recover` or the repeated command that follows the
 interruption. It removes only regular files named
 `.NAME.setforge-<16 hex digits>.tmp` or `.NAME.bak.setforge-<16 hex digits>.tmp`
 in the directory of the file `NAME` it is writing; it never searches other
-directories and never removes a symlink or a directory. `--dry-run` writes
+directories and never removes a symlink or a directory. A tracked file with
+`symlink:` is deployed through a temporary symlink with the same kind of name;
+the next gated deploy of that link removes a leftover symlink named
+`.NAME.setforge-<16 hex digits>.tmp` beside the link `NAME`, with the same
+warning, and never touches what it points at. Only regular files are skipped
+by name: a symlink with such a name is still treated as yours everywhere else,
+so `cleanup-orphans --scan` lists one that no deploy removed. `--dry-run` writes
 nothing, so it removes nothing. Three kinds of leftover stay until you delete
 them: `setforge-u` names, because their writer may still be running; a leftover
 beside a file SetForge does not write again; and the
@@ -353,6 +359,17 @@ name does not prove the file is SetForge's. The gate is per user and cache
 root: two SetForge processes running under different `$HOME` or cache roots
 hold different gates, as for all SetForge locking, so do not point them at
 the same files.
+
+`setforge recover --apply` also removes such a leftover when it undoes a
+directory the interrupted command created: if everything directly inside that
+directory is a regular file or a symlink named
+`.NAME.setforge-<16 hex digits>.tmp`, it removes those entries with the same
+warning (a symlink is removed itself; what it points at is not touched), then
+the directory. If the directory holds anything else (your own file or symlink,
+a `setforge-u` name or a subdirectory), it removes nothing and stops with
+`refusing to remove non-empty recovery directory <dir>: it still holds <names>`,
+listing up to five entries. Move those entries away and run `setforge recover`
+again.
 
 A managed tree with `orphans: remove-owned` keeps a directory that still holds
 such a leftover, and the directories above it, even after the directory is

@@ -323,6 +323,7 @@ def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
     # Stage the link at a UNIQUE temp name (matching the regular atomic-write
     # path in atomicio) so a stale leftover of a fixed name — a directory or
     # foreign file from a crashed run — cannot wedge the swap.
+    atomicio.sweep_stale_temp_links(dst)
     tmp_link = dst.with_name(atomicio.temp_name(dst.name))
     try:
         # symlink_to flips arg order: link.symlink_to(t) == os.symlink(t, link).

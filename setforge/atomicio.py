@@ -36,7 +36,7 @@ import re
 import secrets
 import shutil
 import stat
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 import typer
@@ -54,6 +54,7 @@ RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}
 _GATED_TEMP = r"\.setforge-[0-9a-f]{16}\.tmp"
 TEMP_SUFFIX = r"\.setforge-u?[0-9a-f]{16}\.tmp"
 _TEMP_NAME_RE = re.compile(r"\..+" + TEMP_SUFFIX, re.DOTALL)
+_GATED_TEMP_NAME_RE = re.compile(r"\..+" + _GATED_TEMP, re.DOTALL)
 
 
 def temp_name(name: str) -> str:
@@ -74,6 +75,21 @@ def is_temp_name(name: str) -> bool:
     return _TEMP_NAME_RE.fullmatch(name) is not None
 
 
+def is_gated_temp_name(name: str) -> bool:
+    """Whether ``name`` is a temp name made while the mutation gate was held."""
+    return _GATED_TEMP_NAME_RE.fullmatch(name) is not None
+
+
+def report_removed_temp(path: Path) -> None:
+    """Tell the user on stderr that the leftover temp file ``path`` was removed."""
+    typer.secho(
+        "warning: removed a temporary file left by an interrupted "
+        f"setforge run: {path}",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
+
+
 def _sweep_stale_temp_files(path: Path) -> None:
     """Remove temp files a killed gate holder left for the destination ``path``.
 
@@ -81,9 +97,23 @@ def _sweep_stale_temp_files(path: Path) -> None:
     directory, and only the gated names of ``path`` and its ``.bak``. Each
     removal is reported on stderr; a failure is skipped, never raised.
     """
+    _sweep_stale(path, r"(?:\.bak)?", stat.S_ISREG)
+
+
+def sweep_stale_temp_links(path: Path) -> None:
+    """Remove staging symlinks a killed gate holder left for the link ``path``.
+
+    Only under the mutation gate, only symlinks in ``path``'s own directory,
+    and only the gated names of ``path``; a link is unlinked, never followed,
+    so its target is untouched. Reported and tolerated as for a temp file.
+    """
+    _sweep_stale(path, "", stat.S_ISLNK)
+
+
+def _sweep_stale(path: Path, infix: str, is_kind: Callable[[int], bool]) -> None:
     if not locking.mutation_gate_held():
         return
-    stale = re.compile(re.escape(f".{path.name}") + r"(?:\.bak)?" + _GATED_TEMP)
+    stale = re.compile(re.escape(f".{path.name}") + infix + _GATED_TEMP)
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
@@ -94,17 +124,12 @@ def _sweep_stale_temp_files(path: Path) -> None:
                 continue
             try:
                 info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
+                if not is_kind(info.st_mode):
                     continue
                 os.unlink(name, dir_fd=parent_fd)
             except OSError:
                 continue
-            typer.secho(
-                "warning: removed a temporary file left by an interrupted "
-                f"setforge run: {path.parent / name}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
+            report_removed_temp(path.parent / name)
     except OSError:
         return
     finally:
