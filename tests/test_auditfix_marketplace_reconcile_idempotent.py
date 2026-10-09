@@ -13,6 +13,10 @@ The fix matches each declared marketplace's source (``owner/repo`` slug or
 filesystem path) against the ``source`` field of each registered entry.
 """
 
+from pathlib import Path
+
+import pytest
+
 from setforge import reconcile_adapter
 from setforge.claude_plugins import reconcile
 from setforge.config import (
@@ -111,6 +115,91 @@ def test_reconcile_path_marketplace_matched_by_path(tmp_path, fake_claude) -> No
 
     assert fake.mp_add_args() == []
     assert report.marketplaces_added == []
+
+
+_GIT_LINK = "https://example.test/o/mp.git"
+
+
+@pytest.mark.parametrize(
+    ("declared", "listed"),
+    [
+        pytest.param(
+            MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="o/mp"),
+            {"source": "github", "repo": "o/mp"},
+            id="github",
+        ),
+        pytest.param(
+            MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=_GIT_LINK),
+            {"source": "git", "url": _GIT_LINK},
+            id="git-link",
+        ),
+        pytest.param(
+            MarketplaceSource(source=MarketplaceSourceKind.PATH, path=Path("/srv/mp")),
+            {"source": "directory", "path": "/srv/mp", "installLocation": "/srv/mp"},
+            id="directory",
+        ),
+        pytest.param(
+            MarketplaceSource(
+                source=MarketplaceSourceKind.PATH,
+                path=Path("/srv/mp/.claude-plugin/marketplace.json"),
+            ),
+            {
+                "source": "file",
+                "path": "/srv/mp/.claude-plugin/marketplace.json",
+                "installLocation": "/srv/mp",
+            },
+            id="file",
+        ),
+    ],
+)
+def test_reconcile_skips_add_for_a_marketplace_listed_as_the_tool_lists_it(
+    fake_claude, declared: MarketplaceSource, listed: dict[str, str]
+) -> None:
+    """The tool lists ``source`` as a kind word and the origin beside it."""
+    fake = fake_claude(marketplaces=[{"name": "tool-name", **listed}])
+    cfg = _make_config(marketplaces={"mine": declared})
+    profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
+
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
+
+    assert fake.mp_add_args() == []
+    assert report.marketplaces_added == []
+
+
+def test_reconcile_adds_a_directory_declared_beside_its_marketplace_file(
+    fake_claude,
+) -> None:
+    """A marketplace registered from its file is not the directory holding it."""
+    fake = fake_claude(
+        marketplaces=[
+            {
+                "name": "mp",
+                "source": "file",
+                "path": "/srv/mp/.claude-plugin/marketplace.json",
+                "installLocation": "/srv/mp",
+            }
+        ]
+    )
+    cfg = _make_config(
+        marketplaces={
+            "mine": MarketplaceSource(
+                source=MarketplaceSourceKind.PATH, path=Path("/srv/mp")
+            )
+        }
+    )
+    profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
+
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
+
+    assert fake.mp_add_args() == ["/srv/mp"]
 
 
 def test_reconcile_unregistered_marketplace_still_added(fake_claude) -> None:

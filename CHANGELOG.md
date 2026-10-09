@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `setforge install` and `plugin reconcile` no longer add a marketplace that is
+  already registered. Claude lists a registered marketplace by the kind of its
+  source (`github`, `git`, `directory` or `file`) with the repo, link or path
+  beside it, and setforge compared the kind word to the configured repo or
+  path, so it never matched: every run ran `claude plugin marketplace add`
+  again for every configured marketplace, and a `report` policy printed "would
+  add marketplace" for ones already there. Because each run then counted as a
+  plugin change, a host where Claude lists a plugin or marketplace setforge
+  cannot record was refused on every `install` ("install would change Claude
+  plugins or marketplaces, but could not undo that"), even with nothing to
+  change. Such a host is now refused only when the run really has a plugin or
+  marketplace to add, enable or disable.
+
 ## [1.5.1] - 2026-10-09
 
 ### Fixed
