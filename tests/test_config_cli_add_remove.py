@@ -437,3 +437,242 @@ def test_add_marketplace_refused_leaves_local_yaml_unchanged(
     assert result.exit_code != 0
     assert message in str(result.exception)
     assert seed_local.read_bytes() == before
+
+
+# The five host-local list keys: (path, entry already in local.yaml, next entry).
+# Every entry is valid for ``list_overlay_config`` below, in both orders.
+_LIST_KEYS = [
+    pytest.param("plugins.add", "lint@team", "fmt@team", id="plugins.add"),
+    pytest.param("plugins.remove", "review", "docs", id="plugins.remove"),
+    pytest.param(
+        "extensions.add", "ms-python.python", "rust-lang.rust-analyzer", id="ext.add"
+    ),
+    pytest.param(
+        "extensions.remove", "redhat.vscode-yaml", "rust-lang.rust", id="ext.remove"
+    ),
+    pytest.param("marketplaces.remove", "team", "spare", id="marketplaces.remove"),
+]
+
+
+@pytest.fixture
+def list_overlay_config(config_repo: ConfigRepo) -> Path:
+    """Profile ``base``: plugins from two marketplaces and two extensions."""
+    config_repo.write_tracked("d.txt", "x\n")
+    github = {"source": "github", "repo": "owner/mp"}
+    return config_repo.write_config(
+        profile="base",
+        tracked_files={"d": {"src": "d.txt", "dst": "~/.d"}},
+        profile_extra={"packages": ["review", "docs", "yaml-ext", "rust-ext"]},
+        extra={
+            "marketplaces": {"team": github, "spare": github},
+            "claude_plugins": {
+                "review": {"marketplace": "team"},
+                "docs": {"marketplace": "spare"},
+            },
+            "packages": {
+                "review": {"type": "plugin", "plugin": "review"},
+                "docs": {"type": "plugin", "plugin": "docs"},
+                "yaml-ext": {"type": "extension", "extension": "redhat.vscode-yaml"},
+                "rust-ext": {"type": "extension", "extension": "rust-lang.rust"},
+            },
+        },
+    )
+
+
+def _local_with_list(key: str, entries: list[str], *, as_scalar: bool = False) -> str:
+    """A local.yaml carrying comments and ``key`` set to ``entries``.
+
+    A marketplace can only be removed together with the plugins that use it, so
+    the ``marketplaces.remove`` seed also removes both plugins.
+    """
+    block, leaf = key.split(".")
+    head = "# keep this comment\nbinaries:\n  code: /usr/bin/code\n"
+    if block == "marketplaces":
+        head += "plugins:\n  remove: [review, docs]\n"
+    if not entries:
+        return head
+    if as_scalar:
+        body = f"  {leaf}: {entries[0]}\n"
+    else:
+        body = f"  # existing entries\n  {leaf}:\n" + "".join(
+            f"    - {entry}\n" for entry in entries
+        )
+    return f"{head}{block}:\n{body}"
+
+
+def _list_at(seed_local: Path, key: str) -> object:
+    from setforge.migrations._yaml_ops import load_yaml_mapping
+
+    block, leaf = key.split(".")
+    return load_yaml_mapping(seed_local)[block][leaf]
+
+
+def _write_local(seed_local: Path, text: str) -> None:
+    seed_local.write_text(text, encoding="utf-8")
+    seed_local.chmod(0o600)
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+def test_config_add_creates_the_list_entry(
+    runner: CliRunner,
+    seed_local: Path,
+    list_overlay_config: Path,
+    key: str,
+    existing: str,
+    new: str,
+) -> None:
+    """A local.yaml without the block gets ``<block>: {<leaf>: [value]}``.
+
+    The loader reads these keys as lists; a scalar there fails ``validate``
+    with "Input should be a valid list".
+    """
+    _write_local(seed_local, _local_with_list(key, []))
+
+    result = runner.invoke(app, ["config", "add", "--local", key, new, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert _list_at(seed_local, key) == [new]
+    _assert_profile_still_resolves(runner, list_overlay_config)
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+def test_config_add_appends_to_the_existing_list(
+    runner: CliRunner,
+    seed_local: Path,
+    list_overlay_config: Path,
+    key: str,
+    existing: str,
+    new: str,
+) -> None:
+    _write_local(seed_local, _local_with_list(key, [existing]))
+    _assert_profile_still_resolves(runner, list_overlay_config)
+
+    result = runner.invoke(app, ["config", "add", "--local", key, new, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert _list_at(seed_local, key) == [existing, new]
+    text = seed_local.read_text(encoding="utf-8")
+    assert "# keep this comment" in text
+    assert "# existing entries" in text
+    assert seed_local.stat().st_mode & 0o777 == 0o600
+    _assert_profile_still_resolves(runner, list_overlay_config)
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+def test_config_remove_drops_one_list_entry(
+    runner: CliRunner,
+    seed_local: Path,
+    list_overlay_config: Path,
+    key: str,
+    existing: str,
+    new: str,
+) -> None:
+    _write_local(seed_local, _local_with_list(key, [existing, new]))
+    _assert_profile_still_resolves(runner, list_overlay_config)
+
+    result = runner.invoke(app, ["config", "remove", "--local", key, new, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert _list_at(seed_local, key) == [existing]
+    text = seed_local.read_text(encoding="utf-8")
+    assert "# keep this comment" in text
+    assert "# existing entries" in text
+    assert seed_local.stat().st_mode & 0o777 == 0o600
+    _assert_profile_still_resolves(runner, list_overlay_config)
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+@pytest.mark.parametrize(
+    ("verb", "entry", "message"),
+    [
+        ("add", "existing", "already contains"),
+        ("remove", "new", "not in"),
+    ],
+    ids=["add-duplicate", "remove-absent"],
+)
+def test_config_list_edit_refused_leaves_local_yaml_unchanged(
+    runner: CliRunner,
+    seed_local: Path,
+    key: str,
+    existing: str,
+    new: str,
+    verb: str,
+    entry: str,
+    message: str,
+) -> None:
+    _write_local(seed_local, _local_with_list(key, [existing]))
+    before = seed_local.read_bytes()
+
+    value = {"existing": existing, "new": new}[entry]
+    result = runner.invoke(app, ["config", verb, "--local", key, value, "--yes"])
+
+    assert result.exit_code != 0
+    assert message in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+@pytest.mark.parametrize("verb", ["add", "remove"])
+def test_config_list_edit_refuses_a_scalar_left_by_hand_or_by_older_versions(
+    runner: CliRunner,
+    seed_local: Path,
+    key: str,
+    existing: str,
+    new: str,
+    verb: str,
+) -> None:
+    """A scalar under a list key is reported, not appended to or rewritten."""
+    _write_local(seed_local, _local_with_list(key, [existing], as_scalar=True))
+    before = seed_local.read_bytes()
+
+    result = runner.invoke(app, ["config", verb, "--local", key, existing, "--yes"])
+
+    assert result.exit_code != 0
+    assert "is a scalar, not a list" in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize(("key", "existing", "new"), _LIST_KEYS)
+def test_config_remove_list_key_without_an_entry_is_refused(
+    runner: CliRunner, seed_local: Path, key: str, existing: str, new: str
+) -> None:
+    """``remove`` takes one entry at a time; with none it refuses, not unsets."""
+    _write_local(seed_local, _local_with_list(key, [existing]))
+    before = seed_local.read_bytes()
+
+    result = runner.invoke(app, ["config", "remove", "--local", key, "--yes"])
+
+    assert result.exit_code != 0
+    assert "requires <value>" in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+def test_config_add_plugin_refuses_an_option_shaped_name(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """The overlay schema rejects ``-x@team``; nothing is written."""
+    _write_local(seed_local, _local_with_list("plugins.add", ["lint@team"]))
+    before = seed_local.read_bytes()
+
+    argv = ["config", "add", "--local", "plugins.add", "--yes", "--", "-bad@team"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code != 0
+    assert "must not begin with '-'" in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "path", ["plugins.typo", "extensions.ad", "marketplaces.removes"]
+)
+def test_config_add_refuses_an_unknown_overlay_key(
+    runner: CliRunner, seed_local: Path, path: str
+) -> None:
+    """A misspelled key under an overlay block is refused, not written."""
+    before = seed_local.read_bytes()
+
+    result = runner.invoke(app, ["config", "add", "--local", path, "x", "--yes"])
+
+    assert result.exit_code != 0
+    assert "unknown path" in str(result.exception)
+    assert seed_local.read_bytes() == before

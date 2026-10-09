@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Final, Literal
 
 import typer
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 from rich.panel import Panel
 from ruamel.yaml.comments import (
@@ -82,7 +82,9 @@ from setforge.local_config import LocalConfig
 from setforge.locking import mutation_locks
 from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
 from setforge.source import (
+    ExtensionOverlay,
     MarketplaceOverlay,
+    PluginOverlay,
     get_resolved_source,
     validate_source_dir,
 )
@@ -239,8 +241,23 @@ def _schema_tracked() -> dict[str, _FieldNode]:
     return _walk_model(Config)
 
 
+# The ``local.yaml`` blocks the loader reads through a strict add/remove model.
+# LocalConfig types them as free-form mappings, so its schema walk cannot tell
+# that e.g. ``plugins.add`` is a list; the overlay model is the authority.
+_LOCAL_OVERLAY_BLOCKS: Final[dict[str, type[BaseModel]]] = {
+    "plugins": PluginOverlay,
+    "extensions": ExtensionOverlay,
+    "marketplaces": MarketplaceOverlay,
+}
+
+
 def _resolve_path(scope: ConfigScope, dotted: str) -> _FieldNode | None:
     """Resolve a dotted path against the cached schema tree for ``scope``."""
+    if scope is ConfigScope.LOCAL:
+        block, _, rest = dotted.partition(".")
+        overlay = _LOCAL_OVERLAY_BLOCKS.get(block)
+        if overlay is not None and rest:
+            return _resolve_path_inner(_walk_model(overlay), rest)
     schema = _schema_local() if scope is ConfigScope.LOCAL else _schema_tracked()
     return _resolve_path_inner(schema, dotted)
 
@@ -284,6 +301,23 @@ def _validate_candidate(
             resolve_chain(candidate, name)
     else:
         raise SetforgeError(f"_validate_candidate: unexpected scope {scope!r}")
+
+
+def _validate_overlay_block(scope: ConfigScope, dotted: str, doc: CommentedMap) -> None:
+    """Check the overlay block (plugins, extensions, marketplaces) ``dotted`` touches.
+
+    The loader reads these blocks through strict overlay models, but
+    :class:`LocalConfig` only sees a free-form mapping, so a candidate it
+    accepts can still be rejected by ``validate`` and ``install``.
+    """
+    block = dotted.partition(".")[0]
+    overlay = _LOCAL_OVERLAY_BLOCKS.get(block)
+    if scope is not ConfigScope.LOCAL or overlay is None or block not in doc:
+        return
+    try:
+        overlay.model_validate(_to_plain(doc[block]))
+    except ValidationError as exc:
+        raise SetforgeError(f"local.yaml candidate failed validation:\n{exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +693,7 @@ def _mutate_and_write(
     else:
         _apply_remove(doc, dotted, op_value, is_list=is_list)
     _validate_candidate(scope, doc, yaml_path=yaml_path)
+    _validate_overlay_block(scope, dotted, doc)
     _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
 
 
@@ -730,12 +765,7 @@ def _add_marketplace(
     if name in doc["marketplaces"]["add"]:
         raise SetforgeError(f"marketplaces.add.{name} already exists")
     doc["marketplaces"]["add"][name] = _build_marketplace_entry(candidate)
-    # The loader reads this block through MarketplaceOverlay; LocalConfig only
-    # sees a free-form mapping, so check the overlay shape here.
-    try:
-        MarketplaceOverlay.model_validate(_to_plain(doc["marketplaces"]))
-    except ValidationError as exc:
-        raise SetforgeError(f"local.yaml candidate failed validation:\n{exc}") from exc
+    _validate_overlay_block(scope, "marketplaces.add", doc)
     _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
 
 

@@ -70,3 +70,17 @@ def test_value_completion_empty_for_scalar_with_no_enum() -> None:
     ctx = FakeCtx(path="binaries.code")
     out = _complete_value(cast(typer.Context, ctx), "")
     assert out == []
+
+
+@pytest.mark.parametrize("path", ["plugins.remove", "extensions.remove"])
+def test_value_completion_remove_lists_overlay_entries(
+    tmp_path: Path, path: str
+) -> None:
+    """``config remove --local plugins.remove <TAB>`` offers the listed entries."""
+    block, leaf = path.split(".")
+    (tmp_path / "local.yaml").write_text(
+        f"{block}:\n  {leaf}:\n    - alpha\n    - beta\n", encoding="utf-8"
+    )
+    ctx = FakeCtx(path=path, info_name="remove")
+
+    assert _complete_value(cast(typer.Context, ctx), "a") == ["alpha"]

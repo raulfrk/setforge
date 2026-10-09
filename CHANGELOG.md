@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `setforge config add --local` and `config remove --local` now treat
+  `plugins.add`, `plugins.remove`, `extensions.add`, `extensions.remove` and
+  `marketplaces.remove` as lists in `local.yaml`. `add` appends one entry
+  (creating the list when it is missing) and `remove` takes one entry out,
+  keeping your comments and the file's permissions. They used to write a single
+  value (`plugins:` then `add: foo`), which `validate`, `profile show`,
+  `compare` and `install` then rejected with "Input should be a valid list"
+  until you fixed `local.yaml` by hand. An entry that is already listed, one
+  the schema refuses (such as a plugin name beginning with `-`) and a
+  misspelled key under `plugins`, `extensions` or `marketplaces` (for example
+  `plugins.ad`) are now refused and leave `local.yaml` unchanged.
+  `config remove --local plugins.add` with no entry now asks for one instead of
+  deleting the whole list. A `local.yaml` already written with a single value
+  still has to be corrected by hand: make it a list.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed
