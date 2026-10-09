@@ -387,20 +387,18 @@ class FakeClaude:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
-        native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
-        fresh_install_enabled: bool = False,
+        fresh_install_enabled: bool = True,
     ) -> None:
         # Each marketplace entry: {"name": str, "source": str, ...}
         self._marketplaces: list[dict] = list(marketplaces or [])
-        # ``native_rows`` lists an added marketplace in the shape the real
-        # tool reports (see ``_native_marketplace_row``) instead of echoing
-        # the argument. ``marketplace_names`` maps an ``add`` argument to the
-        # name the marketplace declares, which need not match any config key.
-        self._native_rows = native_rows
+        # An added marketplace is listed in the shape the real tool reports
+        # (see ``_native_marketplace_row``). ``marketplace_names`` maps an
+        # ``add`` argument to the name the marketplace declares, which need
+        # not match any config key.
         self._marketplace_names = dict(marketplace_names or {})
-        # The real tool lists a freshly installed plugin as enabled; the fake
-        # lands it disabled unless ``fresh_install_enabled`` is set.
+        # The real tool lists a freshly installed plugin as enabled, and so
+        # does the fake; ``fresh_install_enabled=False`` lands it disabled.
         self._fresh_install_enabled = fresh_install_enabled
         # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
         self._plugins: list[dict] = list(plugins or [])
@@ -440,11 +438,7 @@ class FakeClaude:
             name = self._marketplace_names.get(
                 source_url, source_url.rsplit("/", 1)[-1]
             )
-            self._marketplaces.append(
-                _native_marketplace_row(name, source_url)
-                if self._native_rows
-                else {"name": name, "source": source_url}
-            )
+            self._marketplaces.append(_native_marketplace_row(name, source_url))
             return subprocess.CompletedProcess(args, 0, "", "")
         if (
             len(cmd) >= 3
@@ -466,9 +460,7 @@ class FakeClaude:
             plugin_arg = cmd[2]  # "name@marketplace" or similar
             # "--scope=user" may follow
             if not any(p["id"] == plugin_arg for p in self._plugins):
-                # Match production: install adds to installed_plugins.json
-                # without touching enabledPlugins. Plugin lands disabled
-                # until 'enable' runs.
+                # The real tool lists a fresh install as enabled.
                 self._plugins.append(
                     {
                         "id": plugin_arg,
@@ -477,8 +469,7 @@ class FakeClaude:
                     }
                 )
             # Re-install of an already-installed plugin: no-op on enabled
-            # state (production claude doesn't touch enabledPlugins on
-            # re-install).
+            # state.
             return subprocess.CompletedProcess(args, 0, "", "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "enable"]:
             name = cmd[2]
@@ -494,8 +485,14 @@ class FakeClaude:
             return subprocess.CompletedProcess(args, 0, "", "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "uninstall"]:
             # Mirror production: `claude plugin uninstall <id>` removes
-            # the plugin entry from installed_plugins.json entirely.
+            # the plugin entry from installed_plugins.json entirely, and
+            # exits 1 for a plugin that is not installed.
             name = cmd[2]
+            if not any(p["id"] == name for p in self._plugins):
+                stderr = f'Plugin "{name}" not found in installed plugins'
+                if kwargs.get("check"):
+                    raise subprocess.CalledProcessError(1, args, "", stderr)
+                return subprocess.CompletedProcess(args, 1, "", stderr)
             self._plugins = [p for p in self._plugins if p["id"] != name]
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(f"unexpected claude invocation: {args!r}")
@@ -563,14 +560,12 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
-        native_rows: bool = True,
         marketplace_names: dict[str, str] | None = None,
-        fresh_install_enabled: bool = False,
+        fresh_install_enabled: bool = True,
     ) -> FakeClaude:
         fake = FakeClaude(
             marketplaces=marketplaces,
             plugins=plugins,
-            native_rows=native_rows,
             marketplace_names=marketplace_names,
             fresh_install_enabled=fresh_install_enabled,
         )

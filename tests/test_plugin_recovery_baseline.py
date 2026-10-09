@@ -551,7 +551,7 @@ def test_recovery_registers_a_removed_path_marketplace_again_from_its_path(
 
     assert claude.mp_add_args() == [marketplace["path"]]
     assert claude.install_args() == ["tool@localmp"]
-    assert claude.enable_args() == ["tool@localmp"]
+    assert claude.installed_state()["tool@localmp"] == _TOOL
 
 
 @pytest.mark.parametrize("link_mp", _LINK_MARKETPLACES)
@@ -575,7 +575,7 @@ def test_recovery_registers_a_removed_link_marketplace_again_from_its_link(
 
     assert claude.mp_add_args() == [link_mp["url"]]
     assert claude.install_args() == ["tool@linkmp"]
-    assert claude.enable_args() == ["tool@linkmp"]
+    assert claude.installed_state()["tool@linkmp"] == _LINK_TOOL
     assert claude.marketplaces_state() == [_MP1, link_mp]
 
 
@@ -606,7 +606,6 @@ def test_recovery_puts_back_a_link_marketplace_now_listed_from_another_link(
         ("plugin", "marketplace", "remove", "linkmp"),
         ("plugin", "marketplace", "add", "--", link_mp["url"]),
         ("plugin", "install", "tool@linkmp", "--scope=user"),
-        ("plugin", "enable", "tool@linkmp"),
     ]
     assert claude.marketplaces_state() == [_MP1, link_mp]
 
@@ -623,7 +622,8 @@ def test_a_journal_listing_a_link_marketplace_without_its_link_is_refused(
 
 # A journal exactly as 1.3.8 to 1.5.0 wrote it (the tool's two listings, as
 # listed), the host an interrupted command left behind, and the commands those
-# releases ran to recover it.
+# releases ran to recover it against a plugin tool that lists a freshly
+# installed plugin as enabled, as the real one does.
 _OLD_JOURNALS = [
     pytest.param(
         {"plugins": {"review@mp1": _REVIEW}, "marketplaces": {"mp1": _MP1_BARE}},
@@ -646,6 +646,7 @@ _OLD_JOURNALS = [
         [
             ("plugin", "marketplace", "add", "--", "o/mp2"),
             ("plugin", "install", "extra@mp2", "--scope=user"),
+            ("plugin", "disable", "extra@mp2"),
             ("plugin", "enable", "review@mp1"),
         ],
         id="puts-back-what-was-removed",
@@ -669,7 +670,6 @@ _OLD_JOURNALS = [
             ("plugin", "marketplace", "remove", "urlmp"),
             ("plugin", "marketplace", "add", "--", "o/mp1"),
             ("plugin", "install", "review@mp1", "--scope=user"),
-            ("plugin", "enable", "review@mp1"),
         ],
         id="restores-the-whole-inventory",
     ),
@@ -706,7 +706,6 @@ def test_an_earlier_journal_recovers_over_a_same_named_link_marketplace(
         ("plugin", "marketplace", "remove", "mp1"),
         ("plugin", "marketplace", "add", "--", "o/mp1"),
         ("plugin", "install", "review@mp1", "--scope=user"),
-        ("plugin", "enable", "review@mp1"),
     ]
 
 

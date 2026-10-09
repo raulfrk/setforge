@@ -21,6 +21,8 @@ from typer.testing import CliRunner
 
 from setforge import codex_plugins, transitions
 from setforge.cli import app
+from setforge.cli._revert_confirm import PluginOperation
+from setforge.cli.revert import _build_revert_plan
 from setforge.config import MarketplaceSource, MarketplaceSourceKind
 from setforge.errors import InvalidTransitionRecord
 from tests.conftest import FakeClaude
@@ -100,6 +102,12 @@ def _state(claude: FakeClaude) -> _State:
     )
 
 
+def _newest_loaded() -> transitions.TransitionRecord:
+    newest = transitions.load_latest("p")
+    assert newest is not None
+    return transitions.load_record(newest)
+
+
 def _newest_record() -> Path:
     return Path(transitions.list_transitions(["p"], reverse=True)[0].directory)
 
@@ -142,7 +150,6 @@ def test_second_revert_redoes_the_install_and_third_undoes_it_again(
     claude = fake_claude(
         marketplaces=[dict(row) for row in marketplaces],
         plugins=[dict(row) for row in plugins],
-        native_rows=True,
         marketplace_names=_MP2_NAMES,
     )
     before_install = _state(claude)
@@ -174,7 +181,6 @@ def test_redo_leaves_a_plugin_that_was_installed_disabled_disabled(
 ) -> None:
     claude = fake_claude(
         marketplaces=[dict(_MP1), dict(_MP2)],
-        native_rows=True,
         fresh_install_enabled=fresh_install_enabled,
     )
     assert _install(tmp_path).exit_code == 0
@@ -191,7 +197,7 @@ def test_redo_leaves_a_plugin_that_was_installed_disabled_disabled(
 def test_redo_does_not_reinstall_a_plugin_removed_by_hand_before_the_revert(
     tmp_path: Path, fake_claude: Callable[..., FakeClaude]
 ) -> None:
-    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], native_rows=True)
+    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)])
     assert _install(tmp_path).exit_code == 0
     claude.run(["claude", "plugin", "uninstall", "extra@mp1"])
     installs_before = len(claude.install_args())
@@ -209,7 +215,7 @@ def test_plugin_that_fails_to_reinstall_on_redo_is_not_recorded_as_installed(
     fake_claude: Callable[..., FakeClaude],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], native_rows=True)
+    claude = fake_claude(marketplaces=[dict(_MP1), dict(_MP2)])
     assert _install(tmp_path).exit_code == 0
     assert _revert(tmp_path).exit_code == 0
 
@@ -223,6 +229,7 @@ def test_plugin_that_fails_to_reinstall_on_redo_is_not_recorded_as_installed(
     redo = _revert(tmp_path)
     monkeypatch.setattr("setforge.claude_plugins.subprocess.run", claude.run)
 
+    assert redo.exit_code == 0, (redo.output, redo.exception)
     assert "FAILED plugin install extra@mp1" in redo.output
     assert set(_state(claude)[0]) == {"review@mp1"}
     redo_record = json.loads(
@@ -238,10 +245,72 @@ def test_plugin_that_fails_to_reinstall_on_redo_is_not_recorded_as_installed(
     assert _state(claude)[0] == {}
 
 
+def test_marketplace_that_fails_to_register_on_redo_is_not_recorded_as_added(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude = fake_claude(marketplaces=[dict(_MP1)])
+    before_install = _state(claude)
+    assert _install(tmp_path).exit_code == 0
+    assert _revert(tmp_path).exit_code == 0
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if args[1:] == ["plugin", "marketplace", "add", "--", "o/mp2"]:
+            claude.calls.append(list(args))
+            raise subprocess.CalledProcessError(1, args, "", "add failed")
+        return claude.run(args, **kwargs)
+
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", run)
+    redo = _revert(tmp_path)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", claude.run)
+
+    assert redo.exit_code == 0, (redo.output, redo.exception)
+    assert "FAILED plugin marketplace add mp2" in redo.output
+    plugins, marketplaces = _state(claude)
+    assert (set(plugins), set(marketplaces)) == ({"extra@mp1", "review@mp1"}, {"mp1"})
+    redo_record = json.loads(
+        (_newest_record() / "plugins.json").read_text(encoding="utf-8")
+    )
+    assert redo_record["marketplaces_added"] == []
+    assert redo_record["installed"] == ["extra@mp1", "review@mp1"]
+    calls_before = len(claude.calls)
+
+    third = _revert(tmp_path)
+
+    assert third.exit_code == 0, (third.output, third.exception)
+    assert "FAILED" not in third.output
+    assert not [
+        call
+        for call in claude.calls[calls_before:]
+        if call[1:4] == ["plugin", "marketplace", "remove"]
+    ]
+    assert _state(claude) == before_install
+
+
+def test_revert_preview_lists_a_plugin_the_revert_will_reinstall(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    """The preview is shown only on a terminal, so its plan is read directly."""
+    fake_claude(marketplaces=[dict(_MP1), dict(_MP2)], plugins=[dict(_REVIEW)])
+    assert _install(tmp_path).exit_code == 0
+    install_plan = _build_revert_plan(_newest_loaded(), "p")
+    assert _revert(tmp_path).exit_code == 0
+
+    redo_plan = _build_revert_plan(_newest_loaded(), "p")
+
+    assert [
+        (row.plugin_id, row.operation) for row in install_plan.plugin_reconciles
+    ] == [("extra@mp1", PluginOperation.DISABLED)]
+    assert [(row.plugin_id, row.operation) for row in redo_plan.plugin_reconciles] == [
+        ("extra@mp1", PluginOperation.ENABLED)
+    ]
+
+
 def test_revert_record_lists_what_the_revert_itself_changed(
     tmp_path: Path, fake_claude: Callable[..., FakeClaude]
 ) -> None:
-    fake_claude(native_rows=True)
+    fake_claude()
     assert _install(tmp_path).exit_code == 0
     install_record = json.loads(
         (_newest_record() / "plugins.json").read_text(encoding="utf-8")
@@ -290,9 +359,7 @@ def test_revert_records_a_link_marketplace_in_the_form_releases_read(
     tmp_path: Path, fake_claude: Callable[..., FakeClaude], yaml: str, link: str
 ) -> None:
     """The record holds only the two source kinds every release accepts."""
-    claude = fake_claude(
-        marketplaces=[dict(_MP1)], native_rows=True, marketplace_names=_MP2_NAMES
-    )
+    claude = fake_claude(marketplaces=[dict(_MP1)], marketplace_names=_MP2_NAMES)
     assert _install(tmp_path, yaml=yaml).exit_code == 0
 
     assert _revert(tmp_path).exit_code == 0
@@ -325,7 +392,7 @@ def test_revert_record_written_by_a_released_version_reverts_as_it_did(
     Reverting such a record keeps doing what those versions did: it runs the
     same undo commands again and installs or registers nothing.
     """
-    claude = fake_claude(native_rows=True)
+    claude = fake_claude()
     assert _install(tmp_path).exit_code == 0
     assert _revert(tmp_path).exit_code == 0
     after_first_revert = _state(claude)
