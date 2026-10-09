@@ -76,6 +76,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A managed tree with `orphans: remove-owned` keeps a directory that still
   holds a leftover instead of removing it.
 
+- `setforge install` with a plugin policy of `report` now lists each marketplace
+  it would add, as `plugin would add marketplace NAME`, before the plugin lines.
+  When adding a marketplace was the only thing pending, it used to print no
+  plugin line at all and exit 0. The exit code, the output of other plugin
+  policies and a real run are unchanged.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

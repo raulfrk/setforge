@@ -348,6 +348,21 @@ def _abort_reverse_reconcile_extensions(
             )
 
 
+def _emit_marketplaces_to_add(
+    plugin_report: claude_plugins_mod.ReconcileReport, failed_ids: set[str]
+) -> None:
+    """List each marketplace a read-only report would add.
+
+    A live run has never printed them. A marketplace in ``failed_ids`` is left
+    to its ``FAILED plugin`` line.
+    """
+    if not plugin_report.dry_run:
+        return
+    for mp_name in plugin_report.marketplaces_added:
+        if mp_name not in failed_ids:
+            typer.echo(f"plugin {'would add marketplace':<13} {mp_name}")
+
+
 def _emit_plugin_report(
     plugin_report: claude_plugins_mod.ReconcileReport,
 ) -> None:
@@ -358,7 +373,8 @@ def _emit_plugin_report(
     install line never appears for a plugin whose subsequent step
     failed. Failed plugins surface as a separate ``FAILED plugin`` line
     written to stderr. Emits a single ``plugins: nothing to reconcile``
-    line when the report is empty.
+    line when the report is empty. A read-only report first lists each
+    marketplace it would add.
     """
     failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
     verbs = (
@@ -366,6 +382,7 @@ def _emit_plugin_report(
         if plugin_report.dry_run
         else ("installed", "enabled", "disabled")
     )
+    _emit_marketplaces_to_add(plugin_report, failed_plugin_ids)
     for name, mp in plugin_report.to_install:
         pid = f"{name}@{mp}"
         if pid not in failed_plugin_ids:

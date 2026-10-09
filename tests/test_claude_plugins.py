@@ -1978,6 +1978,31 @@ def test_reconcile_plugins_skips_global_marketplaces_without_profile_plugins(
     assert ph._reconcile_plugins(cfg, profile) == (None, ())
 
 
+def test_plugin_report_lists_marketplaces_to_add_only_when_read_only(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import setforge.cli._plugin_helpers as ph
+
+    def report(*, dry_run: bool) -> cp.ReconcileReport:
+        return cp.ReconcileReport(
+            to_install=[],
+            to_enable=[],
+            to_disable=[],
+            marketplaces_added=["mp1", "clash"],
+            dry_run=dry_run,
+            failed=[("clash", "cache directory holds another repo")],
+        )
+
+    ph._emit_plugin_report(report(dry_run=True))
+    read_only = capsys.readouterr()
+    ph._emit_plugin_report(report(dry_run=False))
+    live = capsys.readouterr()
+
+    assert read_only.out == "plugin would add marketplace mp1\n"
+    assert "FAILED plugin  clash" in read_only.err
+    assert live.out == ""
+
+
 @pytest.mark.parametrize(
     ("policy", "dry_run"),
     [
