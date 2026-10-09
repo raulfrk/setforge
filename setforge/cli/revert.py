@@ -148,6 +148,7 @@ def _plugin_reconciles_from_transition(
     - forward ``enabled``   → revert disables   → :attr:`PluginOperation.DISABLED`.
     - forward ``disabled``  → revert re-enables → :attr:`PluginOperation.ENABLED`
       (panel marker ``+``).
+    - forward ``uninstalled`` → revert reinstalls → :attr:`PluginOperation.ENABLED`.
 
     ``marketplaces_added`` / ``marketplaces_removed`` are intentionally
     NOT projected into the panel listing — the wizard's plugin section
@@ -174,7 +175,7 @@ def _plugin_reconciles_from_transition(
                 source=source,
             )
         )
-    for plugin_id in delta.disabled:
+    for plugin_id in (*delta.disabled, *(pid for pid, _ in delta.uninstalled)):
         reconciles.append(
             PluginReconcile(
                 plugin_id=plugin_id,
@@ -1115,6 +1116,8 @@ def _render_plugins_section_show(
         console.print(f"    + {plugin_id}  (enabled)")
     for plugin_id in delta.disabled:
         console.print(f"    - {plugin_id}  (disabled)")
+    for plugin_id, _was_enabled in delta.uninstalled:
+        console.print(f"    - {plugin_id}  (uninstalled)")
     for name in delta.marketplaces_added:
         console.print(f"    + marketplace:{name}")
     for name, _source in delta.marketplaces_removed:

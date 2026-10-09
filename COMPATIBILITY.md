@@ -111,6 +111,20 @@ records stop with an uncaught "path guards must be ancestors of journaled
 paths" error on a record whose files were written through a symlinked parent
 directory); nothing is changed in that case.
 
+From the release that follows 1.5.1, the `plugins.json` of a record written by
+`revert` lists each change under the name of what the revert itself did: a
+marketplace it removed under `marketplaces_removed` (with where it was added
+from), a plugin it enabled or disabled under `enabled` or `disabled`, and a
+plugin it uninstalled under a new optional key, `uninstalled` (each with
+whether it was enabled). Reverting such a record redoes the change. Records
+written by `install` are unchanged, and a record written by a `revert` of 1.5.1
+or earlier reverts as it did in those releases: it repeats the uninstall,
+removal, enable and disable commands of the revert that wrote it, and installs
+or registers nothing. Releases up to 1.5.1 ignore `uninstalled`: reverting a
+newer revert's record with one of them registers the marketplaces again and
+flips the enabled states back, but does not reinstall the plugins; run
+`setforge install` to put those back.
+
 ### Operation journals
 
 The journal of an unfinished `install` or `revert` is private state that

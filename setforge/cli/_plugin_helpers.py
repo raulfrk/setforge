@@ -6,10 +6,11 @@ Helpers do drive subprocesses (``claude`` / ``code``), write stderr via
 ``typer.secho``, and ``_write_reverse_transition`` persists a transition
 record. The split keeps the subcommand modules free of reconcile state
 machinery; the dispatch table here (``_REVERSE_PLUGIN_DISPATCH``) covers
-four of the five plugin-side inverse ops — ``marketplaces_removed`` is
+four of the six plugin-side inverse ops — ``marketplaces_removed`` is
 handled separately by :func:`_apply_marketplace_re_add` because it
 needs marketplace-source re-construction that the per-plugin dispatch
-shape doesn't fit.
+shape doesn't fit, and ``uninstalled`` by :func:`_apply_plugin_reinstall`
+because it restores each plugin's enabled state too.
 """
 
 import functools
@@ -1063,12 +1064,90 @@ def _apply_marketplace_re_add(
             )
 
 
+def _apply_plugin_reinstall(
+    items: Iterable[tuple[str, bool]],
+    success_list: list[str],
+    failed: list[tuple[str, str]],
+) -> None:
+    """Apply the inverse of ``uninstalled``: reinstall each plugin as it was.
+
+    The plugin tool decides whether a fresh install lands enabled, so each
+    plugin's state is read back and changed only where it differs from the
+    recorded one.
+    """
+    for plugin_id, was_enabled in items:
+        name, _separator, marketplace = plugin_id.rpartition("@")
+        try:
+            claude_plugins_mod.plugin_install(name, marketplace)
+            success_list.append(plugin_id)
+            row = claude_plugins_mod.list_installed().get(plugin_id, {})
+            if was_enabled and row.get("enabled") is not True:
+                claude_plugins_mod.plugin_enable(plugin_id)
+            elif not was_enabled and row.get("enabled") is True:
+                claude_plugins_mod.plugin_disable(plugin_id)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping install of {plugin_id} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            msg = str(exc)
+            failed.append((plugin_id, msg))
+            typer.secho(
+                f"FAILED plugin install {plugin_id} — {msg}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+
+
+def _plugin_state_before_reverse(
+    delta: transitions.PluginDelta,
+) -> tuple[dict[str, bool], dict[str, dict[str, str]]]:
+    """Read what reversing ``delta`` is about to remove, so it can be put back.
+
+    Returns the enabled state of each plugin the reversal uninstalls and the
+    source of each marketplace it removes. A marketplace whose source cannot
+    be read is left out; a revert has already refused by then when the plugin
+    tool lists one.
+    """
+    from setforge import operations
+
+    enabled: dict[str, bool] = {}
+    sources: dict[str, dict[str, str]] = {}
+    try:
+        if delta.installed:
+            listed = claude_plugins_mod.list_installed()
+            enabled = {
+                plugin_id: listed[plugin_id].get("enabled", True) is not False
+                for plugin_id in delta.installed
+                if plugin_id in listed
+            }
+        if delta.marketplaces_added:
+            rows = claude_plugins_mod.list_marketplaces()
+            for name in delta.marketplaces_added:
+                if name not in rows:
+                    continue
+                try:
+                    kind, value = operations._marketplace_source_identity(
+                        name, rows[name]
+                    )
+                except ValueError:
+                    continue
+                key = "repo" if kind == MarketplaceSourceKind.GITHUB else "path"
+                sources[name] = {"source": kind, key: value}
+    except PluginToolMissing:
+        # Every inverse op below then skips with its own warning.
+        pass
+    return enabled, sources
+
+
 @dataclass(frozen=True, slots=True)
 class _PluginReverseOp:
     """One uniform inverse op on a :class:`PluginDelta`.
 
-    Bundles the delta field name (which doubles as the
-    :class:`PluginDelta` kwarg used to assemble the reverse delta), the
+    Bundles the delta field name (which keys the list of items the
+    inverse succeeded for), the
     inverse function to call per item, and the verb shown in
     warning / failure log lines. Replaces an earlier 3-tuple +
     separate stringly-typed accumulator dict whose two key sets had
@@ -1082,9 +1161,9 @@ class _PluginReverseOp:
     verb: str
 
 
-# Dispatch table for the four uniform inverse ops on a PluginDelta. The
-# fifth field — marketplaces_removed — has a (name, dict) shape and is
-# handled outside this table by :func:`_apply_marketplace_re_add`.
+# Dispatch table for the four uniform inverse ops on a PluginDelta.
+# marketplaces_removed has a (name, dict) shape and uninstalled a
+# (plugin_id, was_enabled) shape; both are handled outside this table.
 _REVERSE_PLUGIN_DISPATCH: tuple[_PluginReverseOp, ...] = (
     _PluginReverseOp("installed", claude_plugins_mod.plugin_uninstall, "uninstall"),
     _PluginReverseOp("enabled", claude_plugins_mod.plugin_disable, "disable"),
@@ -1102,8 +1181,11 @@ def _reverse_plugins(
 ) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
     """Apply the inverse of a plugins.json delta.
 
-    Returns ``(reverse_delta, failed)``. ``reverse_delta`` reflects only
-    the inverse operations that succeeded (mirrors
+    Returns ``(reverse_delta, failed)``. ``reverse_delta`` describes what
+    the reversal itself changed, under the field that names that change (a
+    plugin it uninstalled is ``uninstalled``, a marketplace it removed is
+    ``marketplaces_removed``), so reversing it in turn redoes ``delta``. It
+    reflects only the inverse operations that succeeded (mirrors
     :func:`_reverse_extensions`'s exclusion of failed ops, so a
     revert-of-revert never re-applies a no-op). Per-op
     :class:`PluginToolMissing` surfaces as a warn-and-skip; subprocess
@@ -1112,26 +1194,41 @@ def _reverse_plugins(
     Four ops share the ``Iterable[str]`` shape and are driven by
     :data:`_REVERSE_PLUGIN_DISPATCH`; ``marketplaces_removed`` is
     handled separately because its entries round-trip through
-    :class:`MarketplaceSource`.
+    :class:`MarketplaceSource`, and ``uninstalled`` last because a plugin
+    is reinstalled from a marketplace that must be registered again first.
     """
+    enabled_before, sources_before = _plugin_state_before_reverse(delta)
     # Accumulator dict keyed by the same field names the dispatch ops
-    # carry, so the reverse-delta construction below pulls from the
-    # same source of truth as the loop. A typo in ``_PluginReverseOp``'s
-    # ``delta_field`` would surface immediately at the getattr call.
+    # carry: the items of each forward field whose inverse succeeded. A
+    # typo in ``_PluginReverseOp``'s ``delta_field`` would surface
+    # immediately at the getattr call.
     accumulators: dict[str, list[str]] = {
         op.delta_field: [] for op in _REVERSE_PLUGIN_DISPATCH
     }
-    reverse_mps_removed: list[tuple[str, dict[str, str]]] = []
+    readded_mps: list[tuple[str, dict[str, str]]] = []
+    reinstalled: list[str] = []
     failed: list[tuple[str, str]] = []
     for op in _REVERSE_PLUGIN_DISPATCH:
         items: Iterable[str] = getattr(delta, op.delta_field)
         _apply_inverse(
             items, op.inverse_fn, op.verb, accumulators[op.delta_field], failed
         )
-    _apply_marketplace_re_add(delta.marketplaces_removed, reverse_mps_removed, failed)
+    _apply_marketplace_re_add(delta.marketplaces_removed, readded_mps, failed)
+    _apply_plugin_reinstall(delta.uninstalled, reinstalled, failed)
     reverse_delta = transitions.PluginDelta(
-        marketplaces_removed=tuple(reverse_mps_removed),
-        **{field: tuple(items) for field, items in accumulators.items()},
+        installed=tuple(reinstalled),
+        enabled=tuple(accumulators["disabled"]),
+        disabled=tuple(accumulators["enabled"]),
+        marketplaces_added=tuple(name for name, _source in readded_mps),
+        marketplaces_removed=tuple(
+            (name, sources_before[name])
+            for name in accumulators["marketplaces_added"]
+            if name in sources_before
+        ),
+        uninstalled=tuple(
+            (plugin_id, enabled_before.get(plugin_id, True))
+            for plugin_id in accumulators["installed"]
+        ),
     )
     return reverse_delta, failed
 

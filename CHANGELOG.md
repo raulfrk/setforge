@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Running `setforge revert` a second time now redoes the Claude plugin and
+  marketplace changes the first revert undid: it registers the marketplaces
+  again, reinstalls the plugins with the enabled or disabled state they had,
+  and flips back any plugin the first revert enabled or disabled. It used to
+  repeat the first revert's uninstalls, removals and enable/disable commands,
+  so the files came back but the plugins and marketplaces did not. A third
+  revert undoes them again. This applies to reverts made from this release on:
+  a revert already recorded by 1.5.1 or earlier does not say what it removed,
+  so reverting it still leaves plugins and marketplaces as they are; run
+  `setforge install` to put them back. Codex plugins were not affected.
+
 ## [1.5.1] - 2026-10-09
 
 ### Fixed
