@@ -137,6 +137,7 @@ def test_plugin_reconcile_dry_run_reports_the_same_collision_as_a_live_run(
     dry = CliRunner().invoke(app, [*args, "--dry-run"])
 
     assert dry.exit_code == 1, dry.output
+    assert "would add marketplace" not in dry.output
     _assert_error_tells_the_user_what_to_do(dry.output, cache_dir)
     _assert_nothing_changed(fake, cache_dir)
     assert claude.mp_add_args() == []

@@ -724,11 +724,15 @@ def _render_reconcile_report(
 
     ``is_read_only`` toggles the verb between ``would <action>`` (dry-run /
     ``REPORT`` policy) and the past-tense action (PRUNE/ADDITIVE actually
-    ran). Plugin ids that landed in ``report.failed`` are suppressed from
-    the action lists so the user doesn't see "installed X" followed by
-    "FAILED X" for the same id.
+    ran). Marketplaces to add are listed only in the read-only case; a live run
+    has never printed them. Plugin ids and marketplace names that landed in
+    ``report.failed`` are suppressed from the action lists so the user doesn't
+    see "installed X" followed by "FAILED X" for the same id.
     """
     failed_ids = {pid for pid, _ in report.failed}
+    for mp_name in report.marketplaces_added if is_read_only else ():
+        if mp_name not in failed_ids:
+            typer.echo(f"would add marketplace  {mp_name}")
     for name, mp in report.to_install:
         pid = f"{name}@{mp}"
         verb = "would install" if is_read_only else "installed"

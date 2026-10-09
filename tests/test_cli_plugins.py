@@ -1097,6 +1097,114 @@ def test_codex_plugin_add_lets_another_profile_gain_a_declared_plugin(
     assert installed == ["review@mp1", "review@mp1"]
 
 
+_RECONCILE_MARKETPLACES_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: x
+    dst: ~/.setforge-test/y
+marketplaces:
+  mp1: {source: github, repo: o/mp1}
+  mp2: {source: github, repo: o/mp2}
+  mp3: {source: github, repo: o/mp3}
+claude_plugins:
+  review: {marketplace: mp1}
+  extra: {marketplace: mp1}
+packages:
+  review: {type: plugin, plugin: review}
+  extra: {type: plugin, plugin: extra}
+profiles:
+  p:
+    tracked_files: [d]
+    packages: [review]
+"""
+
+
+def _reconcile_with_missing_marketplaces(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude], *, policy: str = ""
+) -> tuple[Path, FakeClaude]:
+    """``mp2`` and ``mp3`` are declared but not registered; ``review`` is current."""
+    body = _RECONCILE_MARKETPLACES_YAML.replace(
+        "    packages: [review]\n", f"    packages: [review]\n{policy}"
+    )
+    claude = fake_claude(
+        marketplaces=[{"name": "mp1", "source": "o/mp1"}],
+        plugins=[{"id": "review@mp1", "enabled": True, "scope": "user"}],
+    )
+    return write_setforge_yaml(tmp_path, body), claude
+
+
+@pytest.mark.parametrize("report_policy", [False, True], ids=["dry-run", "report"])
+def test_plugin_reconcile_read_only_lists_each_marketplace_it_would_add(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    report_policy: bool,
+) -> None:
+    cfg, claude = _reconcile_with_missing_marketplaces(
+        tmp_path,
+        fake_claude,
+        policy="    reconcile: {plugins: {policy: report}}\n" if report_policy else "",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plugin",
+            "reconcile",
+            "--profile=p",
+            f"--config={cfg}",
+            *([] if report_policy else ["--dry-run"]),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    lines = [line for line in result.output.splitlines() if "would" in line]
+    assert lines == ["would add marketplace  mp2", "would add marketplace  mp3"]
+    assert "nothing to reconcile" not in result.output
+    assert claude.mp_add_args() == []
+    assert claude.install_args() == []
+
+
+def test_plugin_reconcile_dry_run_lists_marketplaces_before_plugins(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    cfg, _claude = _reconcile_with_missing_marketplaces(
+        tmp_path, fake_claude, policy="    reconcile: {plugins: {policy: report}}\n"
+    )
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(
+            "packages: [review]", "packages: [review, extra]"
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["plugin", "reconcile", "--profile=p", f"--config={cfg}", "--dry-run"]
+    )
+
+    assert result.exit_code == 1, result.output
+    lines = [line for line in result.output.splitlines() if "would" in line]
+    assert lines == [
+        "would add marketplace  mp2",
+        "would add marketplace  mp3",
+        "would install  extra@mp1",
+    ]
+
+
+def test_plugin_reconcile_live_run_adds_the_marketplaces_and_prints_no_would_lines(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    cfg, claude = _reconcile_with_missing_marketplaces(tmp_path, fake_claude)
+
+    result = CliRunner().invoke(
+        app, ["plugin", "reconcile", "--profile=p", f"--config={cfg}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert claude.mp_add_args() == ["o/mp2", "o/mp3"]
+    assert "would" not in result.output
+
+
 @pytest.mark.parametrize("local_clone", [False, True])
 @pytest.mark.parametrize("marketplace_declared", [False, True])
 def test_claude_plugin_add_no_install_makes_no_native_or_cache_changes(
