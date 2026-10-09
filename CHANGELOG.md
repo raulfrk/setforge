@@ -82,6 +82,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugin line at all and exit 0. The exit code, the output of other plugin
   policies and a real run are unchanged.
 
+- `setforge install` no longer stops with a Python traceback (`ValueError:
+  invalid plugin recovery entry`, present since 1.1.0) when the plugin tool
+  lists an installed plugin whose marketplace is not registered, whose id is not
+  `NAME@MARKETPLACE`, or that has no enabled state. An install that does not
+  change that plugin now goes ahead, and if it fails later the plugin is left
+  installed as it was while the plugins and marketplaces the install added are
+  removed again. An install that would change that plugin (for example a
+  `prune` plugin policy that would disable it) or would register its missing
+  marketplace now stops before changing anything, with an error naming the
+  plugin and saying to uninstall it or register that marketplace yourself.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed
