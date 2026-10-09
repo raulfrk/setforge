@@ -298,11 +298,11 @@ def _write_if_changed(src: Path, content: str | bytes) -> CaptureResult:
 
     Preserves the tracked file's existing permission bits across the atomic
     rewrite. ``atomic_write_text`` with no ``mode`` would let the 0600
-    ``mkstemp`` default ride in via ``os.replace`` — silently demoting an
+    temp-file default ride in via ``os.replace`` — silently demoting an
     executable hook (0o755) or a 0o644 config in the shared config repo and
     propagating that mode cross-host on the next deploy. On a fresh tracked
     file (``src`` absent) fall back to 0o644, the conventional non-executable
-    default, rather than the 0600 mkstemp leftover.
+    default, rather than the temp file's 0600.
     """
     src.parent.mkdir(parents=True, exist_ok=True)
     data = _content_bytes(content)

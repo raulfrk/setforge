@@ -8,7 +8,7 @@ import json
 import os
 import stat
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -92,6 +92,9 @@ class TreeInventory:
     entries: tuple[TreeEntry, ...]
     fingerprint: str
     owned_paths: tuple[str, ...] | None = None
+    # Temp files an interrupted write left, seen by this scan but never entries
+    # (and never persisted): a directory that holds one cannot be removed.
+    leftovers: tuple[str, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +249,7 @@ class _ScanContext:
     entries: list[TreeEntry]
     payloads: list[tuple[str, bytes]]
     skip: frozenset[Path] = frozenset()
+    leftovers: list[str] = field(default_factory=list)
 
 
 def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
@@ -271,6 +275,7 @@ def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
     if stat.S_ISREG(before.st_mode):
         if atomicio.is_temp_name(name):
             # Left by an interrupted write: never tree content.
+            context.leftovers.append(relative)
             return
         payload, stable = _stable_file_at(directory_fd, name, before, path)
         context.entries.append(
@@ -469,6 +474,7 @@ def _scan_tree_fd(
             root_mode=stat.S_IMODE(root_after.st_mode),
             entries=ordered,
         ),
+        leftovers=tuple(sorted(context.leftovers)),
     )
     return FrozenTree(inventory, tuple(sorted(context.payloads)))
 
@@ -512,7 +518,9 @@ def plan_tree(
     elif desired.inventory.root_mode != live.root_mode:
         actions.append(TreeAction(".", TreeActionKind.CHMOD, "tree root mode differs"))
     actions.extend(_plan_desired_entries(desired_by, live_by, held))
-    actions.extend(_plan_live_extras(desired_by, live_by, prior_by, policy, held))
+    actions.extend(
+        _plan_live_extras(desired_by, live_by, prior_by, policy, held, live.leftovers)
+    )
     return TreePlan(
         desired, live, prior, tuple(sorted(actions, key=lambda item: item.path))
     )
@@ -572,6 +580,7 @@ def _plan_live_extras(
     prior_by: dict[str, TreeEntry],
     policy: TreePolicy,
     held: ReconcileAuto | None,
+    leftovers: tuple[str, ...] = (),
 ) -> list[TreeAction]:
     drifted = "removed from tracked but changed live since the last install"
     actions: list[TreeAction] = []
@@ -599,7 +608,8 @@ def _plan_live_extras(
             )
         else:
             actions.append(TreeAction(path, TreeActionKind.HOLD, drifted))
-    retained = tuple(
+    # A skipped temp file is not an entry, yet its directory is not empty.
+    retained = leftovers + tuple(
         action.path
         for action in actions
         if action.kind

@@ -4,6 +4,7 @@ Only the gated names of the destination being written, only regular files,
 only in the destination's own directory, and only while the mutation gate is
 held."""
 
+import errno
 import os
 import threading
 from pathlib import Path
@@ -14,7 +15,7 @@ from setforge import atomicio
 from setforge.errors import SetforgeError
 from setforge.locking import mutation_locks
 
-HEX = "a" * 32
+HEX = "a" * 16
 
 
 def gated(name: str) -> str:
@@ -53,7 +54,7 @@ def test_gated_write_removes_and_reports_the_destinations_leftovers(
 @pytest.mark.parametrize(
     "name",
     [
-        ".settings.json.setforge-unlocked-" + HEX + ".tmp",  # may be a live writer
+        ".settings.json.setforge-u" + HEX + ".tmp",  # may be a live writer
         gated("other.json"),  # another destination's
         ".settings.json.abc12345.tmp",  # an earlier release's, or the user's
         "settings.json.tmp",
@@ -93,6 +94,58 @@ def test_gated_write_never_removes_a_symlink_or_directory(
     assert outside.read_bytes() == b"mine\n"
     assert (directory / "inner.txt").read_bytes() == b"mine\n"
     assert capsys.readouterr().err == ""
+
+
+def test_a_leftover_that_cannot_be_removed_is_skipped_and_the_write_completes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "settings.json"
+    # Sorted first, so the sweep meets the one it cannot remove first.
+    stale = tmp_path / gated("settings.json.bak")
+    stale.write_bytes(b"half\n")
+    removable = tmp_path / gated("settings.json")
+    removable.write_bytes(b"half\n")
+    real_unlink = os.unlink
+
+    def unlink(name: str, *, dir_fd: int | None = None) -> None:
+        if name == stale.name:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), name)
+        real_unlink(name, dir_fd=dir_fd)
+
+    monkeypatch.setattr(atomicio.os, "unlink", unlink)
+
+    with mutation_locks():
+        atomicio.atomic_write_bytes(target, b"new\n")
+
+    assert target.read_bytes() == b"new\n"
+    assert stale.read_bytes() == b"half\n"
+    # The failure is not reported as a removal; the next leftover still goes.
+    assert capsys.readouterr().err == (
+        "warning: removed a temporary file left by an interrupted "
+        f"setforge run: {removable}\n"
+    )
+    assert not removable.exists()
+
+
+def test_a_directory_that_cannot_be_listed_is_not_swept_and_the_write_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "settings.json"
+    stale = tmp_path / gated("settings.json")
+    stale.write_bytes(b"half\n")
+
+    def listdir(path: object) -> list[str]:
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES))
+
+    monkeypatch.setattr(atomicio.os, "listdir", listdir)
+
+    with mutation_locks():
+        atomicio.atomic_write_bytes(target, b"new\n")
+
+    assert target.read_bytes() == b"new\n"
+    assert stale.read_bytes() == b"half\n"
 
 
 def test_sweep_stays_in_the_destinations_own_directory(tmp_path: Path) -> None:
@@ -165,7 +218,8 @@ def test_no_second_gate_holder_can_sweep_while_a_gated_write_is_in_flight(
 
     def replace(src: Path, dst: Path) -> None:
         assert atomicio.is_temp_name(Path(src).name)
-        assert "unlocked" not in Path(src).name
+        assert Path(src).name.startswith(".settings.json.setforge-")
+        assert not Path(src).name.startswith(".settings.json.setforge-u")
         thread = threading.Thread(target=other_command)
         thread.start()
         thread.join()

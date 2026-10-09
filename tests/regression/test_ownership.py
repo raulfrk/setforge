@@ -657,6 +657,12 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
     # left; rewriting the claim removes the one a killed claim write left.
     kept = staged if step == "history-staged" else []
     assert sorted(_staged_files(host)) == kept
+    removal = "warning: removed a temporary file left by an interrupted setforge run: "
+    reported = recovered.stderr.replace("\n", "")
+    if step == "claim-staged":
+        assert f"{removal}{host.state / staged[0]}" in reported
+    else:
+        assert removal not in reported
     for rel in kept:
         del after[rel]
     assert after == before
