@@ -111,6 +111,17 @@ records stop with an uncaught "path guards must be ancestors of journaled
 paths" error on a record whose files were written through a symlinked parent
 directory); nothing is changed in that case.
 
+### Operation journals
+
+The journal of an unfinished `install` or `revert` is private state that
+`setforge recover` reads. From the release that follows 1.5.0, its plugin inventory may
+list a marketplace as the plugin tool reports one added from a path (`source`
+`directory` or `file`, with a `path`). Releases up to 1.5.0 could not write
+such a journal and refuse to read one ("invalid operation journal"), changing
+nothing; recover it with the release that wrote it. Every other journal is
+written as before, and a journal written by 1.3.8 to 1.5.0 recovers exactly as
+it did in those releases.
+
 ### Project injection records
 
 Project injection records are private state, not config, and carry their own
