@@ -11,7 +11,7 @@ from pathlib import Path
 
 from jinja2 import TemplateError
 
-from setforge import codex_lifecycle, operations, paths
+from setforge import atomicio, codex_lifecycle, operations, paths
 from setforge import compare as compare_mod
 from setforge.config import (
     Config,
@@ -468,6 +468,9 @@ def _inspect_child(
             return _WalkSkip.MOUNT
         return path, (*parent_identities, (path, identity))
     if path in attributed:
+        return None
+    if stat.S_ISREG(info.st_mode) and atomicio.is_temp_name(child.name):
+        # Left by an interrupted write: never the user's file.
         return None
     classified = _classify_leaf(path, info)
     if classified is None:

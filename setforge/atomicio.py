@@ -21,25 +21,94 @@ The recipe is the standard write-temp-then-rename dance:
 6. Best-effort ``fsync`` the parent directory so the rename itself is
    durable across a crash.
 
-On any failure the temp file is unlinked so no ``.tmp`` debris leaks.
+On any failure the temp file is unlinked so no ``.tmp`` debris leaks. A
+process killed between steps 1 and 5 cannot clean up, so every temp file is
+named by :func:`temp_name`: directory walks skip such names
+(:func:`is_temp_name`) and a later write of the same destination under the
+mutation gate removes them.
 """
 
 import contextlib
 import ctypes
 import errno
 import os
+import re
 import shutil
 import stat
-import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import typer
+
+from setforge import locking
 from setforge.errors import SetforgeError
 
 RENAME_NOREPLACE = 1
 RENAME_EXCHANGE = 2
 RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
+
+_GATED_TEMP = r"\.setforge-[0-9a-f]{32}\.tmp"
+_TEMP_NAME_RE = re.compile(r"\..+\.setforge-(?:unlocked-)?[0-9a-f]{32}\.tmp", re.DOTALL)
+
+
+def temp_name(name: str) -> str:
+    """Return a fresh temporary sibling name for the entry ``name``.
+
+    A name made while the mutation gate is held is ``.<name>.setforge-<hex>.tmp``;
+    one made outside it carries ``unlocked-`` before the hex. The gate is
+    exclusive and dies with its process, so a gate holder that meets the first
+    form knows its writer is gone; the second form may belong to a live writer
+    and is never removed.
+    """
+    marker = "setforge-" if locking.mutation_gate_held() else "setforge-unlocked-"
+    return f".{name}.{marker}{uuid4().hex}.tmp"
+
+
+def is_temp_name(name: str) -> bool:
+    """Whether ``name`` has either shape :func:`temp_name` produces."""
+    return _TEMP_NAME_RE.fullmatch(name) is not None
+
+
+def _sweep_stale_temp_files(path: Path) -> None:
+    """Remove temp files a killed gate holder left for the destination ``path``.
+
+    Only under the mutation gate, only regular files in ``path``'s own
+    directory, and only the gated names of ``path`` and its ``.bak``. Each
+    removal is reported on stderr; a failure is skipped, never raised.
+    """
+    if not locking.mutation_gate_held():
+        return
+    stale = re.compile(re.escape(f".{path.name}") + r"(?:\.bak)?" + _GATED_TEMP)
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        for name in sorted(os.listdir(parent_fd)):  # noqa: PTH208 - anchored dirfd
+            if stale.fullmatch(name) is None:
+                continue
+            try:
+                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                os.unlink(name, dir_fd=parent_fd)
+            except OSError:
+                continue
+            typer.secho(
+                "warning: removed a temporary file left by an interrupted "
+                f"setforge run: {path.parent / name}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    except OSError:
+        return
+    finally:
+        os.close(parent_fd)
+
+
+def _create_temp(path: Path) -> int:
+    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 
 
 def atomic_write_bytes(
@@ -62,7 +131,7 @@ def atomic_write_bytes(
     temp fd via ``os.fchmod`` BEFORE the data ``fsync`` (so the mode
     change is covered by the same fsync) and BEFORE the rename.
     ``None`` applies
-    nothing — the destination keeps the 0600 ``mkstemp`` default on a
+    nothing — the destination keeps the 0600 temp-file default on a
     fresh write. There is deliberately no shared fallback: the legacy
     writers disagree (deploy copies the SOURCE mode, the migration YAML
     writer preserves the DESTINATION mode), so each call site computes
@@ -85,10 +154,9 @@ def atomic_write_bytes(
     deploy contract).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    tmp_path = Path(tmp_name)
+    _sweep_stale_temp_files(path)
+    tmp_path = path.with_name(temp_name(path.name))
+    fd = _create_temp(tmp_path)
     backup_path: Path | None = None
     backup_temp: Path | None = None
     try:
@@ -101,11 +169,8 @@ def atomic_write_bytes(
                 os.fsync(fh.fileno())
         if backup:
             backup_path = path.with_name(path.name + ".bak")
-            backup_fd, backup_name = tempfile.mkstemp(
-                dir=str(path.parent), prefix=f".{path.name}.bak.", suffix=".tmp"
-            )
-            backup_temp = Path(backup_name)
-            with os.fdopen(backup_fd, "wb") as backup_file:
+            backup_temp = path.with_name(temp_name(backup_path.name))
+            with os.fdopen(_create_temp(backup_temp), "wb") as backup_file:
                 shutil.copy2(path, backup_temp)
                 if fsync:
                     os.fsync(backup_file.fileno())
@@ -247,7 +312,7 @@ def atomic_write_bytes_at(
     parent_fd: int, name: str, data: bytes, *, mode: int = 0o600
 ) -> None:
     """Atomically replace a regular leaf relative to a held directory fd."""
-    temporary = f".{name}.setforge-{uuid4().hex}.tmp"
+    temporary = temp_name(name)
     with staged_file_at(parent_fd, temporary, data, mode):
         os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
 

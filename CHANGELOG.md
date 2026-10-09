@@ -49,6 +49,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   listed, so fix the typo first if that matters. A typo in the profile you
   selected still stops the scan with the error naming the variable.
 
+- A `setforge` command killed while it was writing a file could leave a hidden
+  temporary file beside it. Nothing removed that file, and one left inside a
+  tracked directory was deployed to the live directory by the next `install`.
+  Temporary files are now named `.NAME.setforge-<32 hex digits>.tmp` (with
+  `unlocked-` before the digits when written outside the mutation gate), and
+  `install`, `sync`, `compare` and `cleanup-orphans --scan` skip files with
+  these names. Your own files, such as `foo.tmp` or `.foo.abc12345.tmp`, are
+  handled as before. The next command that writes the same file while holding
+  the mutation gate (often `setforge recover` or the repeated command) removes
+  the leftover and prints `warning: removed a temporary file left by an
+  interrupted setforge run: <path>`. `--dry-run` removes nothing. Leftovers
+  with `unlocked-` in the name, and the `.NAME.<8 characters>.tmp` files that
+  1.5.0 and earlier left, are not removed automatically; delete them by hand.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

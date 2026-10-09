@@ -345,8 +345,9 @@ def test_history_rejects_corrupt_and_cross_owner_state(tmp_path: Path) -> None:
         history.list(owner_id)
 
 
+@pytest.mark.parametrize("marker", ["", "setforge-", "setforge-unlocked-"])
 def test_history_ignores_interrupted_atomic_write_temporary_files(
-    tmp_path: Path,
+    tmp_path: Path, marker: str
 ) -> None:
     ledger = OwnershipStore(tmp_path / "ledger")
     history = OwnershipHistoryStore(tmp_path / "history")
@@ -358,7 +359,7 @@ def test_history_ignores_interrupted_atomic_write_temporary_files(
         )
 
     records = history.root / str(owner_id) / "transitions"
-    temporary = records / f".{transition.transition_id}.json.{'d' * 32}.tmp"
+    temporary = records / f".{transition.transition_id}.json.{marker}{'d' * 32}.tmp"
     temporary.write_text("partial", encoding="utf-8")
 
     restarted = OwnershipHistoryStore(tmp_path / "history")

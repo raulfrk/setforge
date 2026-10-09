@@ -356,16 +356,18 @@ def test_atomic_write_tempfile_in_target_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / "nested" / "file.bin"
-    real_mkstemp = atomicio.tempfile.mkstemp
-    seen_dirs: list[str] = []
+    real_replace = os.replace
+    staged: list[Path] = []
 
-    def spy_mkstemp(*, dir: str, prefix: str, suffix: str) -> tuple[int, str]:
-        seen_dirs.append(dir)
-        return real_mkstemp(dir=dir, prefix=prefix, suffix=suffix)
+    def spy_replace(src: Path, dst: Path) -> None:
+        staged.append(Path(src))
+        real_replace(src, dst)
 
-    monkeypatch.setattr(atomicio.tempfile, "mkstemp", spy_mkstemp)
+    monkeypatch.setattr(atomicio.os, "replace", spy_replace)
     atomicio.atomic_write_bytes(target, b"x")
-    assert seen_dirs == [str(target.parent)]
+    (temporary,) = staged
+    assert temporary.parent == target.parent
+    assert atomicio.is_temp_name(temporary.name)
 
 
 def test_atomic_write_cleans_temp_on_error(

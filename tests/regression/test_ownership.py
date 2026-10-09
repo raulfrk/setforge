@@ -653,9 +653,11 @@ def test_killed_release_or_revert_is_undone_by_recover_and_can_be_repeated(
 
     assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
     after = _ownership_state(host)
-    # Recovery keeps the one temporary file the kill left and adds none.
-    assert sorted(_staged_files(host)) == staged
-    for rel in staged:
+    # Recovery adds no temporary file and keeps the one a killed history write
+    # left; rewriting the claim removes the one a killed claim write left.
+    kept = staged if step == "history-staged" else []
+    assert sorted(_staged_files(host)) == kept
+    for rel in kept:
         del after[rel]
     assert after == before
     assert host.cli("ownership", "history", profile=False).exit_code == 0

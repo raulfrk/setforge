@@ -33,6 +33,7 @@ from jinja2 import TemplateError
 from rich.table import Table
 
 from setforge import (
+    atomicio,
     base_store,
     deploy,
     local_config,
@@ -710,12 +711,13 @@ def expand_tracked_file(
     """Expand a tracked_file into ``(name, src_file, dst_file)`` triples.
 
     Plain files yield a single triple; directories yield one triple per
-    contained file with a ``name/relpath`` synthetic name.
+    contained file with a ``name/relpath`` synthetic name. A temp file an
+    interrupted setforge write left behind is not tracked content.
     """
     if src.is_dir():
         triples: list[tuple[str, Path, Path]] = []
         for file in sorted(src.rglob("*")):
-            if file.is_file():
+            if file.is_file() and not atomicio.is_temp_name(file.name):
                 rel = file.relative_to(src)
                 triples.append((f"{name}/{rel}", file, dst / rel))
         return triples
