@@ -20,6 +20,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugins or marketplaces, but could not undo that"), even with nothing to
   change. Such a host is now refused only when the run really has a plugin or
   marketplace to add, enable or disable.
+- A marketplace added from a git link (a `repo:` such as
+  `https://example.com/team/plugins.git` in `setforge.yaml`, or
+  `claude plugin marketplace add <link>` by hand) no longer blocks `install` or
+  `revert`. setforge could not record such a marketplace, so any run that had a
+  plugin or marketplace to change stopped with "setforge cannot read where it
+  was added from" and advice to remove it; when the config declared it, the
+  next install put it back and the one after stopped again. It is now recorded
+  with its link, and a failed run that removed it registers it again from that
+  link. If an `install` or `revert` on such a host is interrupted, finish it
+  with this release: 1.5.1 and earlier refuse its journal ("invalid operation
+  journal") and change nothing. A marketplace Claude lists with a `url` source
+  (a link straight to a `marketplace.json`) is still not recorded.
+
+### Changed
+
+- `setforge recover` on a journal written by 1.3.8 to 1.5.1 now completes
+  where it used to stop because a marketplace of the same name as a recorded
+  one is currently registered from a git link: it is removed and the recorded
+  one registered again, like any other marketplace whose source changed.
 
 ## [1.5.1] - 2026-10-09
 
