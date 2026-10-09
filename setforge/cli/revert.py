@@ -12,7 +12,7 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 
 import difflib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -677,6 +677,9 @@ def _prepare_revert_journal(
     ] = {}
     has_extensions = False
     has_plugins = False
+    plugins_changed: set[str] = set()
+    marketplaces_registered: set[str] = set()
+    marketplaces_unregistered: set[str] = set()
     has_codex_plugins = False
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for record in chain:
@@ -689,7 +692,19 @@ def _prepare_revert_journal(
             identity = (snapshot.store, snapshot.profile, snapshot.key)
             state_keys[identity] = transitions.snapshot_store_state(*identity)
         has_extensions |= record.extensions is not None
-        has_plugins |= record.plugins is not None
+        if record.plugins is not None:
+            has_plugins = True
+            plugins_changed.update(
+                (
+                    *record.plugins.installed,
+                    *record.plugins.enabled,
+                    *record.plugins.disabled,
+                )
+            )
+            marketplaces_registered.update(
+                name for name, _source in record.plugins.marketplaces_removed
+            )
+            marketplaces_unregistered.update(record.plugins.marketplaces_added)
         has_codex_plugins |= record.codex_plugins is not None
         if record.mcp is not None:
             delta = record.mcp
@@ -710,6 +725,9 @@ def _prepare_revert_journal(
         adapters=_revert_adapter_snapshots(
             extensions=has_extensions,
             plugins=has_plugins,
+            plugins_changed=plugins_changed,
+            marketplaces_registered=marketplaces_registered,
+            marketplaces_unregistered=marketplaces_unregistered,
             codex_plugins=has_codex_plugins,
             mcp_endpoints=mcp_endpoints,
         ),
@@ -769,6 +787,9 @@ def _revert_adapter_snapshots(
     *,
     extensions: bool,
     plugins: bool,
+    plugins_changed: Collection[str],
+    marketplaces_registered: Collection[str],
+    marketplaces_unregistered: Collection[str],
     codex_plugins: bool,
     mcp_endpoints: dict[str, list[tuple[tuple[str, ...], str]]],
 ) -> tuple[operations.AdapterSnapshot, ...]:
@@ -788,10 +809,14 @@ def _revert_adapter_snapshots(
             operations.AdapterSnapshot(
                 operations.AdapterKind.PLUGINS,
                 json.dumps(
-                    {
-                        "plugins": claude_plugins.list_installed(),
-                        "marketplaces": claude_plugins.list_marketplaces(),
-                    },
+                    operations.plugin_recovery_baseline(
+                        claude_plugins.list_installed(),
+                        claude_plugins.list_marketplaces(),
+                        touched=plugins_changed,
+                        marketplaces_added=marketplaces_registered,
+                        marketplaces_removed=marketplaces_unregistered,
+                        operation="revert",
+                    ),
                     sort_keys=True,
                 ),
             )

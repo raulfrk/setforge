@@ -145,6 +145,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It removes the symlink only, never the file it points at. A symlink with any
   other name, including one with `u` before the digits, still stops recovery
   and is named in the message.
+- `setforge install` with a plugin policy of `report` now lists each marketplace
+  it would add, as `plugin would add marketplace NAME`, before the plugin lines.
+  When adding a marketplace was the only thing pending, it used to print no
+  plugin line at all and exit 0. The exit code, the output of other plugin
+  policies and a real run are unchanged.
+
+- `setforge install` and `setforge revert` no longer stop with a Python
+  traceback (`ValueError: invalid plugin recovery entry`, present since 1.1.0)
+  when the plugin tool lists an installed plugin whose marketplace is not
+  registered, whose id is not `NAME@MARKETPLACE`, or that has no enabled state.
+  An install or revert that does not change that plugin now goes ahead, and if
+  it fails later the plugin is left installed as it was while the plugins and
+  marketplaces an install added are removed again. An install or revert that
+  would change that plugin (for example a `prune` plugin policy that would
+  disable it, or a recorded install of it that revert would uninstall) or would
+  register its missing marketplace now stops before changing anything, with an
+  error naming the plugin and saying to uninstall it or register that
+  marketplace yourself. A marketplace the plugin tool reports from a local
+  directory or marketplace file (as it does for one added from a path) is now
+  read like any other, and one reported with a source SetForge cannot read back
+  (for example a URL; the error was `ValueError: marketplace '...' has no
+  recoverable source identity`) is left registered as it is: install and revert
+  go ahead, and a revert that would remove it stops first, with an error naming
+  the marketplace.
 
 ## [1.5.0] - 2026-10-09
 

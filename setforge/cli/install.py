@@ -3043,10 +3043,16 @@ def _install_adapter_snapshots(
             operations.AdapterSnapshot(
                 operations.AdapterKind.PLUGINS,
                 json.dumps(
-                    {
-                        "plugins": plan.plugins.pre_plugins,
-                        "marketplaces": plan.plugins.pre_marketplaces,
-                    },
+                    operations.plugin_recovery_baseline(
+                        plan.plugins.pre_plugins,
+                        plan.plugins.pre_marketplaces,
+                        touched={
+                            *plan.plugins.to_install,
+                            *plan.plugins.to_enable,
+                            *plan.plugins.to_disable,
+                        },
+                        marketplaces_added=plan.plugins.marketplaces_added,
+                    ),
                     sort_keys=True,
                 ),
             )

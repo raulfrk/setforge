@@ -13,7 +13,7 @@ import shutil
 import stat
 import struct
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -2346,19 +2346,102 @@ def _validate_plugin_payload(payload: object) -> None:
             raise ValueError("invalid marketplace recovery entry")
         _marketplace_source_identity(name, row)
     for plugin_id, row in plugins.items():
-        name, separator, marketplace = (
-            plugin_id.rpartition("@") if isinstance(plugin_id, str) else ("", "", "")
-        )
-        if (
-            not isinstance(plugin_id, str)
-            or not separator
-            or not name
-            or not marketplace
-            or marketplace not in marketplaces
-            or not isinstance(row, dict)
-            or not isinstance(row.get("enabled"), bool)
-        ):
+        if _plugin_entry_problem(plugin_id, row, marketplaces) is not None:
             raise ValueError("invalid plugin recovery entry")
+
+
+def _split_plugin_id(plugin_id: object) -> tuple[str, str] | None:
+    """Return ``(name, marketplace)`` of a ``name@marketplace`` id, else ``None``."""
+    if not isinstance(plugin_id, str):
+        return None
+    name, separator, marketplace = plugin_id.rpartition("@")
+    return (name, marketplace) if separator and name and marketplace else None
+
+
+def _plugin_entry_problem(
+    plugin_id: object, row: object, marketplaces: Mapping[str, object]
+) -> str | None:
+    """Say why recovery could not restore this baseline plugin, or ``None``.
+
+    Recovery reinstalls a plugin it finds missing as ``name@marketplace`` from a
+    marketplace it re-adds from the baseline, so the id must split that way and
+    its marketplace must be in the baseline too.
+    """
+    parts = _split_plugin_id(plugin_id)
+    if parts is None:
+        return "its id is not NAME@MARKETPLACE"
+    if parts[1] not in marketplaces:
+        return f"its marketplace {parts[1]!r} is not registered"
+    if not isinstance(row, dict) or not isinstance(row.get("enabled"), bool):
+        return "the plugin tool does not say whether it is enabled"
+    return None
+
+
+def plugin_recovery_baseline(
+    plugins: Mapping[str, dict[str, object]],
+    marketplaces: Mapping[str, dict[str, object]],
+    *,
+    touched: Collection[str],
+    marketplaces_added: Collection[str],
+    marketplaces_removed: Collection[str] = (),
+    operation: str = "install",
+) -> dict[str, object]:
+    """Build the plugin recovery baseline from the plugin tool's inventory.
+
+    A plugin recovery could not reinstall (see :func:`_plugin_entry_problem`)
+    would make the journal unreadable, so it is left out; recovery leaves such a
+    plugin alone, so it stays installed as it was. That holds only while its
+    marketplace stays unregistered, so a plugin the operation would change
+    (``touched``) or whose marketplace it would register (``marketplaces_added``)
+    cannot be left out: the operation stops with a :class:`SetforgeError` before
+    anything changes. A plugin with no ``enabled`` state is recorded as not
+    enabled, which is how recovery reads it on both sides.
+
+    A marketplace whose source shape recovery cannot read (see
+    :func:`_marketplace_source_identity`) is left out the same way, and so are
+    its plugins; recovery leaves both registered as they were. Recovery could
+    not register it again, so an operation that would remove it
+    (``marketplaces_removed``) stops too. ``operation`` names the command in
+    these errors.
+    """
+    readable = {
+        name: row
+        for name, row in marketplaces.items()
+        if _readable_marketplace_source(name, row) is not None
+    }
+    for name in sorted(set(marketplaces_removed) - set(readable)):
+        if name in marketplaces:
+            raise SetforgeError(
+                f"marketplace {name!r} is registered, but its source cannot be "
+                f"read, so a failed {operation} could not register it again. "
+                f"Remove it with `claude plugin marketplace remove {name}`, "
+                f"then run {operation} again."
+            )
+    recorded: dict[str, dict[str, object]] = {}
+    for plugin_id, row in plugins.items():
+        entry = {**row, "enabled": row.get("enabled") is True}
+        problem = _plugin_entry_problem(plugin_id, entry, readable)
+        if problem is None:
+            recorded[plugin_id] = entry
+            continue
+        parts = _split_plugin_id(plugin_id)
+        marketplace = parts[1] if parts is not None else None
+        unreadable = marketplace in marketplaces and marketplace not in readable
+        if unreadable:
+            problem = f"the source of its marketplace {marketplace!r} cannot be read"
+        if plugin_id in touched or marketplace in marketplaces_added:
+            remedy = (
+                ""
+                if unreadable
+                else " (or, if its marketplace is missing, register that marketplace)"
+            )
+            raise SetforgeError(
+                f"plugin {plugin_id!r} is installed, but {problem}, so a failed "
+                f"{operation} could not put it back as it was. Uninstall it with "
+                f"`claude plugin uninstall {plugin_id}`{remedy}, "
+                f"then run {operation} again."
+            )
+    return {"plugins": recorded, "marketplaces": readable}
 
 
 def _validate_mcp_registration(value: object) -> None:
@@ -2415,15 +2498,28 @@ def _recover_plugins(payload: object) -> None:
     typed_marketplaces = cast(dict[str, dict[str, object]], marketplaces)
     current = claude_plugins.list_installed()
     expected_ids = set(plugins)
+    current_marketplaces = claude_plugins.list_marketplaces()
     drifted_marketplaces = _drifted_marketplace_names(
-        typed_marketplaces, claude_plugins.list_marketplaces()
+        typed_marketplaces, current_marketplaces
     )
     source_drift_dependents = {
         plugin_id
         for plugin_id in expected_ids & set(current)
         if plugin_id.rpartition("@")[2] in drifted_marketplaces
     }
-    for plugin_id in sorted((set(current) - expected_ids) | source_drift_dependents):
+    # An install only adds plugins of marketplaces it can read back. A plugin
+    # outside the baseline whose marketplace is not registered, or whose source
+    # cannot be read, was already installed and was left out of the baseline on
+    # purpose (see ``plugin_recovery_baseline``).
+    added = {
+        plugin_id
+        for plugin_id in set(current) - expected_ids
+        if (parts := _split_plugin_id(plugin_id)) is not None
+        and parts[1] in current_marketplaces
+        and _readable_marketplace_source(parts[1], current_marketplaces[parts[1]])
+        is not None
+    }
+    for plugin_id in sorted(added | source_drift_dependents):
         claude_plugins.plugin_uninstall(plugin_id)
     _recover_marketplaces(marketplaces)
     current = claude_plugins.list_installed()
@@ -2446,7 +2542,14 @@ def _recover_marketplaces(marketplaces: dict[object, object]) -> None:
     typed = cast(dict[str, dict[str, object]], marketplaces)
     current = claude_plugins.list_marketplaces()
     drifted = _drifted_marketplace_names(typed, current)
-    for name in sorted((set(current) - set(typed)) | drifted):
+    # An install only adds marketplaces it can read back, so one outside the
+    # baseline that recovery cannot read was already registered.
+    added = {
+        name
+        for name in set(current) - set(typed)
+        if _readable_marketplace_source(name, current[name]) is not None
+    }
+    for name in sorted(added | drifted):
         claude_plugins.marketplace_remove(name)
     for name in sorted((set(typed) - set(current)) | drifted):
         row = typed[name]
@@ -2472,8 +2575,8 @@ def _drifted_marketplace_names(
     return {
         name
         for name in set(current) & set(expected)
-        if _marketplace_source_identity(name, current[name])
-        != _marketplace_source_identity(name, expected[name])
+        if _readable_marketplace_source(name, current[name])
+        != _readable_marketplace_source(name, expected[name])
     }
 
 
@@ -2485,6 +2588,9 @@ def _marketplace_source_identity(
     repo = row.get("repo")
     if raw_source == "github" and isinstance(repo, str) and repo:
         return "github", repo
+    path = row.get("path")
+    if raw_source in ("directory", "file") and isinstance(path, str) and path:
+        return "path", path
     if isinstance(raw_source, str) and raw_source.startswith("github:"):
         value = raw_source.removeprefix("github:")
         if value:
@@ -2499,6 +2605,16 @@ def _marketplace_source_identity(
         if "/" in raw_source:
             return "github", raw_source
     raise ValueError(f"marketplace {name!r} has no recoverable source identity")
+
+
+def _readable_marketplace_source(
+    name: str, row: Mapping[str, object]
+) -> tuple[str, str] | None:
+    """Return the normalized source of ``row``, or ``None`` if it is unreadable."""
+    try:
+        return _marketplace_source_identity(name, row)
+    except ValueError:
+        return None
 
 
 def _restore_plugin_enabled(

@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge import claude_plugins as claude_plugins_mod
@@ -1203,6 +1204,91 @@ def test_plugin_reconcile_live_run_adds_the_marketplaces_and_prints_no_would_lin
     assert result.exit_code == 0, result.output
     assert claude.mp_add_args() == ["o/mp2", "o/mp3"]
     assert "would" not in result.output
+
+
+def _install_with_missing_marketplaces(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    *,
+    policy: str,
+    declare_extra: bool = False,
+) -> tuple[Result, FakeClaude]:
+    cfg, claude = _reconcile_with_missing_marketplaces(
+        tmp_path, fake_claude, policy=policy
+    )
+    if declare_extra:
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace(
+                "packages: [review]", "packages: [review, extra]"
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "tracked").mkdir()
+    (tmp_path / "tracked" / "x").write_text("x\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={cfg}",
+            "--no-fetch",
+            "--no-secrets-scan",
+            "--no-git-check",
+            "--yes",
+        ],
+    )
+    return result, claude
+
+
+def test_install_report_policy_lists_each_marketplace_it_would_add(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    result, claude = _install_with_missing_marketplaces(
+        tmp_path,
+        fake_claude,
+        policy="    reconcile: {plugins: {policy: report}}\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if "plugin" in line]
+    assert lines == [
+        "plugin would add marketplace mp2",
+        "plugin would add marketplace mp3",
+    ]
+    assert "plugins: nothing to reconcile" not in result.output
+    assert claude.mp_add_args() == []
+    assert claude.install_args() == []
+
+
+def test_install_report_policy_lists_marketplaces_before_plugins(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    result, _claude = _install_with_missing_marketplaces(
+        tmp_path,
+        fake_claude,
+        policy="    reconcile: {plugins: {policy: report}}\n",
+        declare_extra=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if "plugin" in line]
+    assert lines == [
+        "plugin would add marketplace mp2",
+        "plugin would add marketplace mp3",
+        "plugin would install extra@mp1",
+    ]
+
+
+def test_install_live_run_adds_the_marketplaces_and_prints_no_would_lines(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    result, claude = _install_with_missing_marketplaces(
+        tmp_path, fake_claude, policy=""
+    )
+
+    assert result.exit_code == 0, result.output
+    assert claude.mp_add_args() == ["o/mp2", "o/mp3"]
+    assert "would add marketplace" not in result.output
 
 
 @pytest.mark.parametrize("local_clone", [False, True])
