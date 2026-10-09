@@ -490,7 +490,8 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
     """
     from setforge.claude_plugins import reconcile
 
-    fake = fake_claude()
+    # A fresh install that lands disabled is what makes the enable step run.
+    fake = fake_claude(fresh_install_enabled=False)
     real_run = fake.run
 
     def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
@@ -1489,7 +1490,8 @@ def test_install_records_plugin_delta_with_enable_failure(
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
-    fc = fake_claude()
+    # A fresh install that lands disabled is what makes the enable step run.
+    fc = fake_claude(fresh_install_enabled=False)
     real_run = fc.run
 
     # Fail ``plugin enable`` for the test-comprehensive plugin, letting

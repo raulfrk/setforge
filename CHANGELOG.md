@@ -10,9 +10,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `setforge install` and `plugin reconcile` no longer add a marketplace that is
   already registered. Claude lists a registered marketplace by the kind of its
-  source (`github`, `git`, `directory` or `file`) with the repo, link or path
-  beside it, and setforge compared the kind word to the configured repo or
-  path, so it never matched: every run ran `claude plugin marketplace add`
+  source (`github`, `git`, `url`, `directory` or `file`) with the repo, link or
+  path beside it, and setforge compared the kind word to the configured repo
+  or path, so it never matched: every run ran `claude plugin marketplace add`
   again for every configured marketplace, and a `report` policy printed "would
   add marketplace" for ones already there. Because each run then counted as a
   plugin change, a host where Claude lists a plugin or marketplace setforge
@@ -30,8 +30,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with its link, and a failed run that removed it registers it again from that
   link. If an `install` or `revert` on such a host is interrupted, finish it
   with this release: 1.5.1 and earlier refuse its journal ("invalid operation
-  journal") and change nothing. A marketplace Claude lists with a `url` source
-  (a link straight to a `marketplace.json`) is still not recorded.
+  journal") and change nothing. The same holds for a marketplace added from a
+  link straight to a `marketplace.json`, which Claude lists with a `url`
+  source. A `repo:` link that ends in `#<branch>` is now recognised as already
+  registered (Claude lists it without the branch, so every install added it
+  again); for the same reason setforge does not notice a change of branch
+  alone, and a marketplace it registers again after a failed run or on a
+  second `revert` comes from the link's default branch.
 
 - Running `setforge revert` a second time now redoes the Claude plugin and
   marketplace changes the first revert undid: it registers the marketplaces
