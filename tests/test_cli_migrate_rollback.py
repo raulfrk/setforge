@@ -205,6 +205,60 @@ class _RaisingStep:
         raise RuntimeError("terminal step deliberately fails")
 
 
+@dataclass(slots=True, frozen=True)
+class _UnreadableStep:
+    """Writes a value that YAML reads back differently (U+0085 is a line break)."""
+
+    from_version: str = "1.1"
+    to_version: str = "1.2"
+
+    @property
+    def reverse(self) -> _UnreadableStep:
+        return _UnreadableStep(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        return (
+            ManifestEntry(
+                type=ManifestType.ADD, description="note", affected_path=roots.cfg_path
+            ),
+        )
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+        data = yaml_rt().load(roots.cfg_path.read_text())
+        data["schema_version"] = self.to_version
+        data["note"] = "a\x85b"
+        atomic_write_yaml(roots.cfg_path, data)
+
+
+def test_step_whose_config_would_not_read_back_rolls_the_chain_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refused write leaves the earlier step's write undone too."""
+    cfg = write_setforge_yaml(tmp_path, "# mine\n" + _AT_1_0)
+    original = cfg.read_bytes()
+    monkeypatch.setattr(
+        "setforge.migrations.registry.MIGRATIONS", (_StampStep(), _UnreadableStep())
+    )
+
+    result = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "1.2", "--apply", "--yes"]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "would not read back" in result.output
+    assert "rolled back" in result.output
+    assert cfg.read_bytes() == original
+    assert not [path.name for path in tmp_path.iterdir() if "tmp" in path.name]
+    operations.refuse_pending()  # no journal is left for `recover`
+
+
 def test_keyboard_interrupt_mid_chain_rolls_back_and_reraises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

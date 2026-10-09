@@ -738,6 +738,23 @@ def test_config_add_to_the_first_list_of_a_mixed_indent_file(
     assert _list_at(seed_local, "extensions.remove") == ["e.two"]
 
 
+def test_config_add_to_a_list_shared_through_an_alias_writes_it_once(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """Every key sharing the list reads the new entry, as the file says."""
+    seed = "plugins:\n  add: &shared\n    - a.b\nextensions:\n  add: *shared\n"
+    _write_local(seed_local, seed)
+
+    argv = ["config", "add", "--local", "plugins.add", "c.d", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == seed.replace(
+        "    - a.b\n", "    - a.b\n    - c.d\n"
+    )
+    assert _list_at(seed_local, "extensions.add") == ["a.b", "c.d"]
+
+
 def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
     runner: CliRunner, seed_local: Path
 ) -> None:
@@ -752,10 +769,11 @@ def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
     result = runner.invoke(app, argv)
 
     assert result.exit_code != 0
-    message = str(result.exception)
-    assert "would not read back" in message
-    assert "nothing was written" in message
-    assert "Edit the file by hand" in message
+    assert str(result.exception) == (
+        f"refusing to write {seed_local}: the edited file would not read back "
+        f"as the change that was checked, so nothing was written. Edit the file "
+        f"by hand instead."
+    )
     assert seed_local.read_bytes() == before
 
 

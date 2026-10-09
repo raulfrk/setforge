@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from setforge import atomicio
+from setforge.errors import SetforgeError
 from setforge.migrations import _yaml_ops
 from setforge.migrations._yaml_ops import (
     atomic_write_yaml,
@@ -158,6 +159,73 @@ def test_atomic_write_yaml_round_trips_comments(tmp_path: Path) -> None:
     assert "# header" in out
     assert "# above" in out
     assert "# eol" in out
+
+
+_UNREADABLE = "a\x85b"  # U+0085 is a line break to YAML: reads back as "a b"
+
+
+@pytest.mark.parametrize("existing", ["# mine\nkey: value\n", None])
+def test_atomic_write_yaml_refuses_text_that_would_not_read_back(
+    tmp_path: Path, existing: str | None
+) -> None:
+    target = tmp_path / "setforge.yaml"
+    if existing is not None:
+        target.write_text(existing, encoding="utf-8")
+    data = yaml_rt().load(existing or "key: value\n")
+    data["note"] = _UNREADABLE
+
+    with pytest.raises(SetforgeError) as raised:
+        atomic_write_yaml(target, data)
+
+    assert str(raised.value) == (
+        f"refusing to write {target}: the edited file would not read back as "
+        f"the change that was checked, so nothing was written. Edit the file by "
+        f"hand instead."
+    )
+    assert [path.name for path in tmp_path.iterdir()] == (
+        ["setforge.yaml"] if existing is not None else []
+    )
+    if existing is not None:
+        assert target.read_text(encoding="utf-8") == existing
+
+
+_LEGITIMATE = [
+    pytest.param("base: &b\n  - one\nother: *b\n", id="alias"),
+    pytest.param("d: &d\n  a: 1\nm:\n  <<: *d\n  b: 2\n", id="merge-key"),
+    pytest.param("mode: 0o755\nold: 0755\nhex: 0x1F\n", id="integers"),
+    pytest.param("f: 1.50\ne: 1e3\nn: .nan\ni: -.inf\n", id="floats"),
+    pytest.param("a:\nb: ~\nc: null\nd: ''\n", id="nulls"),
+    pytest.param("t: yes\nf: off\nb: true\n", id="booleans"),
+    pytest.param("day: 2026-10-09\nat: 2026-10-09T10:00:00Z\n", id="dates"),
+    pytest.param("text: |\n  one\n\n  two\nfold: >-\n  a\n  b\n", id="blocks"),
+    pytest.param("q: \"a\\tb\\u0085c\"\ns: 'it''s'\n", id="quoted"),
+    pytest.param("flow: [a, {b: c}]\nempty: {}\nnone: []\n", id="flow"),
+    pytest.param("wrapped: [a,\n  b]\nk:\n  v\n", id="wrapped"),
+    pytest.param("? [a, b]\n: pair\n1: int-key\n", id="odd-keys"),
+    pytest.param("- a\n- b: 1\n  c:\n  - d\n", id="list-root"),
+    pytest.param("---\na: 1\n...\n", id="markers"),
+    pytest.param("caf\u00e9: \u65e5\u672c # \u2603\n", id="unicode"),
+]
+
+
+@pytest.mark.parametrize("text", _LEGITIMATE)
+@pytest.mark.parametrize("edit", [False, True], ids=["unchanged", "edited"])
+def test_atomic_write_yaml_accepts_every_document_that_reads_back(
+    tmp_path: Path, text: str, edit: bool
+) -> None:
+    """The read-back check refuses only text that parses to something else."""
+    target = tmp_path / "setforge.yaml"
+    target.write_text(text, encoding="utf-8")
+    data = yaml_rt().load(text)
+    if edit and isinstance(data, dict):
+        data["added"] = ["x", ("y", "z")]
+    elif edit:
+        data.append("x")
+
+    atomic_write_yaml(target, data)
+
+    written = target.read_text(encoding="utf-8")
+    assert _yaml_ops._plain(yaml_rt().load(written)) == _yaml_ops._plain(data)
 
 
 def test_atomic_write_yaml_fsyncs_tmp_fd_before_replace(

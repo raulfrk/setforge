@@ -31,7 +31,7 @@ from ruamel.yaml.error import CommentMark, YAMLError
 from ruamel.yaml.tokens import CommentToken
 
 from setforge import atomicio
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, SetforgeError
 
 __all__ = [
     "atomic_write_yaml",
@@ -76,8 +76,10 @@ def _detect_indent(text: str) -> tuple[int, int, int] | None:
 
     def walk(node: object) -> None:
         if isinstance(node, CommentedMap):
-            for key, value in node.items():
-                key_col = node.lc.data[key][1]
+            # ``lc.data`` holds the keys written here; one merged in with
+            # ``<<`` has no position of its own.
+            for key, position in (node.lc.data or {}).items():
+                value, key_col = node[key], position[1]
                 if (
                     isinstance(value, CommentedMap)
                     and value
@@ -111,6 +113,7 @@ def render_yaml(
     original: str | None,
     *,
     fallback: tuple[int, int, int] = _DEFAULT_INDENT,
+    path: Path | None = None,
 ) -> str:
     """Dump ``data`` in the indentation style of the ``original`` document.
 
@@ -126,19 +129,27 @@ def render_yaml(
     moved after the ``{}`` / ``[]`` in ``data`` itself: ruamel would write it
     before the brackets, which does not parse.
 
-    A rendering that would not parse back to ``data`` is passed over for
-    the plain dump in the original's first indent style.
+    Raises:
+        SetforgeError: The rendered text would not parse back to ``data``.
+            Every YAML writer renders through here, so none of them can put
+            a document on disk that reads as something else. ``path`` names
+            the file in the message.
     """
     text = (original or "").lstrip(_BOM).replace("\r\n", "\n")
     if text and not text.endswith("\n"):
         text += "\n"
     # ruamel drops blank lines above the first key; carry them over as they are.
     body = text.lstrip("\n")
-    candidates = _render_lf(data, body, fallback)
-    rendered = text[: len(text) - len(body)] + next(
-        (candidate for candidate in candidates if _reads_back(candidate, data)),
-        candidates[-1],
-    )
+    for candidate in _render_lf(data, body, fallback):
+        if _reads_back(candidate, data):
+            rendered = text[: len(text) - len(body)] + candidate
+            break
+    else:
+        raise SetforgeError(
+            f"refusing to write {path or 'the YAML file'}: the edited file would "
+            f"not read back as the change that was checked, so nothing was "
+            f"written. Edit the file by hand instead."
+        )
     if original is not None:
         if original.count("\r\n") * 2 > original.count("\n"):
             rendered = rendered.replace("\n", "\r\n")
@@ -438,6 +449,6 @@ def atomic_write_yaml(
             fsync, by contrast, swallows ``OSError``.
     """
     raw = yaml_path.read_bytes().decode("utf-8") if yaml_path.exists() else None
-    text = render_yaml(data, raw, fallback=fallback)
+    text = render_yaml(data, raw, fallback=fallback, path=yaml_path)
     dst_mode = stat.S_IMODE(yaml_path.stat().st_mode) if yaml_path.exists() else None
     atomicio.atomic_write_text(yaml_path, text, mode=dst_mode)
