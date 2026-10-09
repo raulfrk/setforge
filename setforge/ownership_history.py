@@ -51,7 +51,10 @@ _UUID_TEXT = (
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 )
 _UUID_FILE_RE = re.compile(rf"{_UUID_TEXT}\.json")
-_ATOMIC_TEMP_FILE_RE = re.compile(rf"\.{_UUID_TEXT}\.json\.[0-9a-f]{{32}}\.tmp")
+# Also the unmarked name releases before the shared naming helper wrote.
+_ATOMIC_TEMP_FILE_RE = re.compile(
+    rf"\.{_UUID_TEXT}\.json\.(?:setforge-(?:unlocked-)?)?[0-9a-f]{{32}}\.tmp"
+)
 
 
 class OwnershipTransitionAction(StrEnum):

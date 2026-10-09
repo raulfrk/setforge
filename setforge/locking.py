@@ -79,6 +79,11 @@ def _ranked(rank: LockRank, key: str) -> Iterator[None]:
         _HELD_RANKS.reset(token)
 
 
+def mutation_gate_held() -> bool:
+    """Whether the calling context runs inside the mutation gate."""
+    return any(rank is LockRank.MUTATION for rank, _ in _HELD_RANKS.get())
+
+
 def _user_global_locks_dir() -> Path:
     """Return the lock namespace shared by one user's external resources."""
     return cache_root() / "locks"

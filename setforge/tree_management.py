@@ -269,6 +269,9 @@ def _scan_entry(  # noqa: C901 - entry kinds require distinct no-follow handling
     if path in context.skip:
         return
     if stat.S_ISREG(before.st_mode):
+        if atomicio.is_temp_name(name):
+            # Left by an interrupted write: never tree content.
+            return
         payload, stable = _stable_file_at(directory_fd, name, before, path)
         context.entries.append(
             TreeEntry(

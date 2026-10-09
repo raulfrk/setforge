@@ -174,9 +174,9 @@ def test_deploy_symlink_noop_on_equal_target(tmp_path: Path) -> None:
 def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
     """No staging tmp entry survives the deploy.
 
-    The staging link uses a UNIQUE ``mkstemp`` name (not a fixed one), so
-    assert on the deploy result + final link and that no ``.setforge-symlink-tmp``
-    sibling lingers, rather than probing a hard-coded transient name.
+    The staging link uses a UNIQUE name (not a fixed one), so assert on the
+    deploy result + final link and that no sibling lingers, rather than
+    probing a hard-coded transient name.
     """
     src = tmp_path / "src"
     src.write_text("x\n")
@@ -188,8 +188,11 @@ def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
 
     assert dst.is_symlink()
     assert str(dst.readlink()) == str(target)
-    leftovers = list(dst.parent.glob("*.setforge-symlink-tmp"))
-    assert leftovers == []
+    assert sorted(path.name for path in dst.parent.iterdir()) == [
+        "link",
+        "src",
+        "target",
+    ]
 
 
 def test_deploy_symlink_survives_stale_tmp_collision(tmp_path: Path) -> None:
@@ -198,8 +201,8 @@ def test_deploy_symlink_survives_stale_tmp_collision(tmp_path: Path) -> None:
     A crashed run can leave a directory (or foreign file) at the would-be
     fixed staging name. With a fixed staging name, ``unlink`` raises an
     un-suppressed ``IsADirectoryError`` (or ``symlink_to`` raises
-    ``FileExistsError``), wedging the swap. The unique ``mkstemp`` staging
-    name sidesteps any such collision, so the deploy completes.
+    ``FileExistsError``), wedging the swap. The unique staging name
+    sidesteps any such collision, so the deploy completes.
     """
     src = tmp_path / "src"
     src.write_text("payload\n")

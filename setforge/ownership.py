@@ -1166,7 +1166,7 @@ def _read_regular_at(directory_fd: int, name: str) -> bytes | None:
 
 
 def _atomic_write_at(directory_fd: int, name: str, payload: bytes) -> None:
-    temporary = f".{name}.{uuid.uuid4().hex}.tmp"
+    temporary = atomicio.temp_name(name)
     with atomicio.staged_file_at(directory_fd, temporary, payload, _FILE_MODE):
         os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
 

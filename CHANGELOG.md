@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A `setforge` command killed while it was writing a file could leave a hidden
+  temporary file beside it. Nothing removed that file, and one left inside a
+  tracked directory was deployed to the live directory by the next `install`.
+  Temporary files are now named `.NAME.setforge-<32 hex digits>.tmp` (with
+  `unlocked-` before the digits when written outside the mutation gate), and
+  `install`, `sync`, `compare` and `cleanup-orphans --scan` skip files with
+  these names. Your own files, such as `foo.tmp` or `.foo.abc12345.tmp`, are
+  handled as before.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from setforge import codex_lifecycle, operations, paths
+from setforge import atomicio, codex_lifecycle, operations, paths
 from setforge import compare as compare_mod
 from setforge.config import Config, ResolvedProfile, resolve_effective_profile
 from setforge.errors import ConfigError, SetforgeError
@@ -365,6 +365,9 @@ def _inspect_child(
             return _WalkSkip.MOUNT
         return path, (*parent_identities, (path, identity))
     if path in attributed:
+        return None
+    if stat.S_ISREG(info.st_mode) and atomicio.is_temp_name(child.name):
+        # Left by an interrupted write: never the user's file.
         return None
     classified = _classify_leaf(path, info)
     if classified is None:

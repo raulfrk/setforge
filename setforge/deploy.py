@@ -10,9 +10,7 @@ and the reconcile layer overrides the resolved content before the write.
 
 import contextlib
 import logging
-import os
 import stat
-import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -322,18 +320,11 @@ def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
     if dst.is_symlink() and str(dst.readlink()) == raw_target:
         return DeployAction.NOOP
     dst_was_link = dst.is_symlink()
-    # Stage the link at a UNIQUE temp name (mkstemp, matching the regular
-    # atomic-write path in atomicio) so a stale leftover of a fixed name — a
-    # directory or foreign file from a crashed run — cannot wedge the swap.
-    # mkstemp creates a placeholder regular file; remove it, then symlink onto
-    # the now-free unique path before the atomic replace onto dst.
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(dst.parent), prefix=f".{dst.name}.", suffix=".setforge-symlink-tmp"
-    )
-    os.close(fd)
-    tmp_link = Path(tmp_name)
+    # Stage the link at a UNIQUE temp name (matching the regular atomic-write
+    # path in atomicio) so a stale leftover of a fixed name — a directory or
+    # foreign file from a crashed run — cannot wedge the swap.
+    tmp_link = dst.with_name(atomicio.temp_name(dst.name))
     try:
-        tmp_link.unlink()
         # symlink_to flips arg order: link.symlink_to(t) == os.symlink(t, link).
         tmp_link.symlink_to(raw_target)
         tmp_link.replace(dst)

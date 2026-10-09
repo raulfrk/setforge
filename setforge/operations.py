@@ -1565,7 +1565,7 @@ def _restore_path_at(  # noqa: C901 - closed typed filesystem publication
     _remove_replaceable_at(parent_fd, name, snapshot.path)
     if snapshot.kind is SnapshotKind.FILE:
         assert snapshot.payload is not None
-        temporary = f".{name}.setforge-{uuid4().hex}"
+        temporary = atomicio.temp_name(name)
         with atomicio.staged_file_at(
             parent_fd,
             temporary,

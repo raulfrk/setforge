@@ -328,6 +328,15 @@ the operator runs `setforge recover --profile=<name> --apply --yes` from the
 recorded transition-state root. Read-only commands stay usable. A begun package checkpoint is intentionally
 reported as uncertain/manual even if it did not reach its completion marker.
 
+SetForge writes a file by writing a temporary file beside it and renaming it
+into place. A command killed between the two leaves that temporary file
+behind, named `.NAME.setforge-<32 hex digits>.tmp` (or
+`.NAME.setforge-unlocked-<32 hex digits>.tmp` when the command ran outside the
+mutation gate, as `completion install` does). Files with these names are never
+deployed, captured by `sync`, reported by `compare` or offered by
+`cleanup-orphans --scan`; your own files with other names, such as `foo.tmp`,
+are handled as before.
+
 ## Package locks and Cargo
 
 `setforge lock --profile=<profile>` resolves all lockable entries selected by
