@@ -389,12 +389,12 @@ may contract the approved set but never expands it, and deletion never prunes
 parent directories. A managed root with a symlinked or non-directory parent is
 refused rather than traversed.
 
-When another profile has a bundle file component whose `dst` will not render
-(a misspelled variable), the scan still runs for the selected profile. It warns
-that the other profile could not be resolved, skips every directory only that
-profile uses, and treats the paths its installs and ownership claims recorded
-for that component as attributed. A `dst` that will not render in the selected
-profile stops the scan with the error.
+When another profile has a tracked file or bundle file component whose `dst`
+will not render (a misspelled variable), the scan still runs for the selected
+profile. It warns that the other profile could not be resolved, skips every
+directory only that profile uses, and treats the paths its installs and
+ownership claims recorded for that file as attributed. A `dst` that will not
+render in the selected profile stops the scan with the error.
 
 Reversible deletion stores typed absent/file/symlink images, including
 arbitrary bytes or link target, mode, and nanosecond mtime. Crash recovery

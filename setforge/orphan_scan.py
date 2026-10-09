@@ -111,10 +111,9 @@ def scan_unrecorded_managed_tree(
     host-local destination overrides contribute to the attribution set. The
     walker never follows symlinks and never crosses a filesystem boundary.
     A destination template that will not render is an error only in ``profile``
-    (the selected one); in any other profile that file is left out. A bundle
-    file component left out that way hides where the profile deployed it, so
-    the profile is reported as unresolved and no directory only that profile
-    uses is scanned.
+    (the selected one); in any other profile that file is left out. A file left
+    out that way hides where the profile deployed it, so the profile is
+    reported as unresolved and no directory only that profile uses is scanned.
     """
     inventory = _managed_inventory(
         config,
@@ -163,20 +162,22 @@ def _managed_inventory(
     lost_ids: set[str] = set()
     for profile_name in config.profiles:
         effective_config = config.model_copy(deep=True)
+        selected = profile_name == profile
         lost = (
-            _without_unrenderable_bundle_files(effective_config, profile_name)
-            if profile_name != profile
-            else {}
+            {}
+            if selected
+            else _without_unrenderable_bundle_files(effective_config, profile_name)
         )
+        effective = resolve_effective_profile(
+            effective_config, profile_name, repo_root
+        ).resolved
+        if not selected:
+            effective, lost_files = _without_unrenderable(effective, effective_config)
+            lost.update(lost_files)
         if lost:
             unresolved.append(UnresolvedProfile(profile_name, "; ".join(lost.values())))
             lost_ids.update(lost)
         profile_roots = unresolved_roots if lost else roots
-        effective = resolve_effective_profile(
-            effective_config, profile_name, repo_root
-        ).resolved
-        if profile_name != profile:
-            effective = _without_unrenderable(effective, effective_config)
         attributed.update(
             _norm(path)
             for path in codex_lifecycle.config_destinations(
@@ -263,30 +264,33 @@ def _ignored_destinations(
 
 def _without_unrenderable(
     effective: ResolvedProfile, config: Config
-) -> ResolvedProfile:
-    """Drop entries whose dst will not render, as they deploy nothing to scope.
+) -> tuple[ResolvedProfile, dict[str, str]]:
+    """Drop entries whose dst will not render, with each one's id and reason.
 
     Applied to every profile but the selected one: a typo in a file only
     another profile uses must not stop this scan, while the selected profile
-    keeps every entry and still raises on its own typo.
+    keeps every entry and still raises on its own typo. Where a dropped file
+    was deployed is unknown, so the caller reports the profile as unresolved.
     """
     renderable: list[str] = []
+    lost: dict[str, str] = {}
     for name in effective.tracked_files:
         try:
             compare_mod.resolve_dst(config.tracked_files[name])
-        except ConfigError:
+        except ConfigError as exc:
+            lost[name] = f"tracked file {name!r}: {exc}"
             continue
         renderable.append(name)
-    return effective.model_copy(update={"tracked_files": renderable})
+    return effective.model_copy(update={"tracked_files": renderable}), lost
 
 
 def _without_unrenderable_bundle_files(config: Config, profile: str) -> dict[str, str]:
     """Drop the profile's bundle file components whose dst will not render.
 
-    Returns each dropped component's synthetic tracked-file id with the reason.
-    Where such a file was deployed is not known without rendering the dst, so
-    the caller must not treat what it can no longer attribute as unrecorded.
-    The profile's other entries resolve as usual.
+    Returns each dropped component's synthetic tracked-file id with the reason,
+    like :func:`_without_unrenderable` does for plain tracked files, which only
+    runs once bundle components have been expanded. The profile's other entries
+    resolve as usual.
     """
     lost: dict[str, str] = {}
     for bundle_id in resolve_profile(config, profile).bundles:

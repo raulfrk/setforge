@@ -188,7 +188,9 @@ def test_scan_lists_the_same_files_when_another_profile_has_a_typo(
     result = _run_as("p", "cleanup-orphans", config, "--scan")
 
     assert result.exit_code == 0, result.output
-    assert result.output == baseline.output
+    listing = "=== unrecorded"
+    assert result.output.split(listing)[1:] == baseline.output.split(listing)[1:]
+    assert "profileqcouldnotberesolved" in "".join(result.output.split())
 
 
 @pytest.mark.parametrize(
@@ -236,20 +238,25 @@ def test_ownership_revert_ignores_a_typo_in_an_unrelated_file(
 
 
 _INSTALL_ARGS = ("--no-secrets-scan", "--no-git-check", "--yes")
-_BUNDLE_TYPO = "{{ hom }}/qdir/bundle.txt"
+_Q_TYPO = "{{ hom }}/qdir/q-file.txt"
 _QUIET_WARNING = "files it may manage are not listed"
 
 
-def _write_bundle_profile_config(
-    config_repo: ConfigRepo, *, bundle_dst: str | None, plain_in_qdir: bool = False
+def _write_q_file_config(
+    config_repo: ConfigRepo,
+    *,
+    q_dst: str | None,
+    kind: str = "bundle",
+    plain_in_qdir: bool = False,
 ) -> Path:
-    """Profile ``p`` owns ``~/out/ok.txt``; profile ``q`` deploys a bundle file.
+    """Profile ``p`` owns ``~/out/ok.txt``; profile ``q`` deploys one more file.
 
-    ``bundle_dst`` is the bundle file component's destination template; ``None``
-    leaves ``q`` out entirely. ``plain_in_qdir`` gives ``q`` an ordinary tracked
-    file next to the bundle file, so ``~/qdir`` is a directory only ``q`` uses.
+    ``q_dst`` is that file's destination template (``None`` leaves ``q`` out
+    entirely); ``kind`` makes it a bundle file component or a tracked file.
+    ``plain_in_qdir`` gives ``q`` an ordinary tracked file as well, so ``~/qdir``
+    is a directory only ``q`` uses.
     """
-    for name in ("ok.txt", "bundle.txt", "plain.txt"):
+    for name in ("ok.txt", "q-file.txt", "plain.txt"):
         config_repo.write_tracked(name, _BODY)
     plain = (
         "  plain:\n    src: plain.txt\n    dst: '{{ home }}/qdir/plain.txt'\n"
@@ -257,18 +264,23 @@ def _write_bundle_profile_config(
         if plain_in_qdir
         else ""
     )
-    bundle = (
-        "bundles:\n  tools:\n    components:\n      - id: bundle\n        file:\n"
-        f"          src: bundle.txt\n          dst: {bundle_dst!r}\n"
-        "          template: true\n"
-        if bundle_dst is not None
+    q_file = (
+        f"  q-file:\n    src: q-file.txt\n    dst: {q_dst!r}\n    template: true\n"
+        if q_dst is not None and kind == "tracked"
         else ""
     )
+    bundle = (
+        "bundles:\n  tools:\n    components:\n      - id: q-file\n        file:\n"
+        f"          src: q-file.txt\n          dst: {q_dst!r}\n"
+        "          template: true\n"
+        if q_dst is not None and kind == "bundle"
+        else ""
+    )
+    q_tracked = [*(["plain"] if plain_in_qdir else []), *(["q-file"] if q_file else [])]
     q = (
-        "  q:\n"
-        f"    tracked_files: [{'plain' if plain_in_qdir else ''}]\n"
-        "    bundles: [tools]\n"
-        if bundle_dst is not None
+        f"  q:\n    tracked_files: [{', '.join(q_tracked)}]\n"
+        + ("    bundles: [tools]\n" if bundle else "")
+        if q_dst is not None
         else ""
     )
     config_repo.config.write_text(
@@ -277,6 +289,7 @@ def _write_bundle_profile_config(
         "  good:\n    src: ok.txt\n    dst: '{{ home }}/out/ok.txt'\n"
         "    template: true\n"
         f"{plain}"
+        f"{q_file}"
         f"{bundle}"
         "profiles:\n  p:\n    tracked_files: [good]\n"
         f"{q}",
@@ -297,7 +310,7 @@ def _flat(result: Result) -> str:
 def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo(
     config_repo: ConfigRepo,
 ) -> None:
-    config = _write_bundle_profile_config(config_repo, bundle_dst=None)
+    config = _write_q_file_config(config_repo, q_dst=None)
     assert _run_as("p", "install", config, *_INSTALL_ARGS).exit_code == 0
     stray = Path.home() / "out" / "stray.txt"
     stray.write_text("not recorded\n", encoding="utf-8")
@@ -305,7 +318,7 @@ def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo
     assert baseline.exit_code == 0, baseline.output
     assert str(stray) in _flat(baseline)
 
-    _write_bundle_profile_config(config_repo, bundle_dst=_BUNDLE_TYPO)
+    _write_q_file_config(config_repo, q_dst=_Q_TYPO)
     result = _scan("p", config)
 
     assert result.exit_code == 0, result.output
@@ -314,21 +327,22 @@ def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo
     assert result.output.split(listing)[1:] == baseline.output.split(listing)[1:]
     warning = _flat(result)
     assert "profileqcouldnotberesolved" in warning
-    assert "tools.bundle" in warning
+    assert "tools.q-file" in warning
     assert "hom" in warning
     assert _QUIET_WARNING.replace(" ", "") in warning
     assert stray.read_text(encoding="utf-8") == "not recorded\n"
 
 
+@pytest.mark.parametrize("kind", ["bundle", "tracked"])
 def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
-    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch
+    config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    clean = _write_bundle_profile_config(
-        config_repo, bundle_dst="{{ home }}/qdir/bundle.txt", plain_in_qdir=True
+    clean = _write_q_file_config(
+        config_repo, kind=kind, q_dst="{{ home }}/qdir/q-file.txt", plain_in_qdir=True
     )
     for profile in ("p", "q"):
         assert _run_as(profile, "install", clean, *_INSTALL_ARGS).exit_code == 0
-    deployed = Path.home() / "qdir" / "bundle.txt"
+    deployed = Path.home() / "qdir" / "q-file.txt"
     q_stray = Path.home() / "qdir" / "stray.txt"
     p_stray = Path.home() / "out" / "stray.txt"
     q_stray.write_text("not recorded\n", encoding="utf-8")
@@ -338,8 +352,8 @@ def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     assert str(p_stray) in baseline
     assert str(deployed) not in baseline
 
-    config = _write_bundle_profile_config(
-        config_repo, bundle_dst=_BUNDLE_TYPO, plain_in_qdir=True
+    config = _write_q_file_config(
+        config_repo, kind=kind, q_dst=_Q_TYPO, plain_in_qdir=True
     )
     listed = _scan("p", config)
 
@@ -360,14 +374,15 @@ def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     assert deployed.exists()
 
 
-def test_scan_recognises_a_bundle_file_by_the_destination_an_install_recorded(
-    config_repo: ConfigRepo,
+@pytest.mark.parametrize("kind", ["bundle", "tracked"])
+def test_scan_recognises_a_file_by_the_destination_an_install_recorded(
+    config_repo: ConfigRepo, kind: str
 ) -> None:
     """The lost file shares ``p``'s directory and was already in place at install."""
-    clean = _write_bundle_profile_config(
-        config_repo, bundle_dst="{{ home }}/out/bundle.txt", plain_in_qdir=True
+    clean = _write_q_file_config(
+        config_repo, kind=kind, q_dst="{{ home }}/out/q-file.txt", plain_in_qdir=True
     )
-    deployed = Path.home() / "out" / "bundle.txt"
+    deployed = Path.home() / "out" / "q-file.txt"
     deployed.parent.mkdir()
     deployed.write_text(_BODY, encoding="utf-8")
     for profile in ("p", "q"):
@@ -375,8 +390,8 @@ def test_scan_recognises_a_bundle_file_by_the_destination_an_install_recorded(
     stray = Path.home() / "out" / "stray.txt"
     stray.write_text("not recorded\n", encoding="utf-8")
 
-    config = _write_bundle_profile_config(
-        config_repo, bundle_dst=_BUNDLE_TYPO, plain_in_qdir=True
+    config = _write_q_file_config(
+        config_repo, kind=kind, q_dst=_Q_TYPO, plain_in_qdir=True
     )
     listed = _scan("p", config)
 
@@ -385,24 +400,25 @@ def test_scan_recognises_a_bundle_file_by_the_destination_an_install_recorded(
     assert str(deployed) not in _flat(listed)
 
 
-def test_scan_recognises_a_bundle_file_by_its_ownership_claim(
-    config_repo: ConfigRepo, init_git_repo: Callable[[Path], Path]
+@pytest.mark.parametrize("kind", ["bundle", "tracked"])
+def test_scan_recognises_a_file_by_its_ownership_claim(
+    config_repo: ConfigRepo, init_git_repo: Callable[[Path], Path], kind: str
 ) -> None:
     """The lost file shares ``p``'s directory and the transition log is gone."""
     init_git_repo(config_repo.root)
-    clean = _write_bundle_profile_config(
-        config_repo, bundle_dst="{{ home }}/out/bundle.txt"
+    clean = _write_q_file_config(
+        config_repo, kind=kind, q_dst="{{ home }}/out/q-file.txt"
     )
     for profile in ("p", "q"):
         installed = _run_as(profile, "install", clean, *_INSTALL_ARGS, "--no-fetch")
         assert installed.exit_code == 0, installed.output
-    deployed = Path.home() / "out" / "bundle.txt"
+    deployed = Path.home() / "out" / "q-file.txt"
     stray = Path.home() / "out" / "stray.txt"
     stray.write_text("not recorded\n", encoding="utf-8")
     shutil.rmtree(transitions.transitions_root())
 
-    config = _write_bundle_profile_config(
-        config_repo, bundle_dst="{{ hom }}/out/bundle.txt"
+    config = _write_q_file_config(
+        config_repo, kind=kind, q_dst="{{ hom }}/out/q-file.txt"
     )
     listed = _scan("p", config)
 
@@ -411,16 +427,17 @@ def test_scan_recognises_a_bundle_file_by_its_ownership_claim(
     assert str(deployed) not in _flat(listed)
 
 
-def test_scan_output_is_unchanged_by_a_sibling_bundle_that_renders(
-    config_repo: ConfigRepo,
+@pytest.mark.parametrize("kind", ["bundle", "tracked"])
+def test_scan_output_is_unchanged_by_a_sibling_file_that_renders(
+    config_repo: ConfigRepo, kind: str
 ) -> None:
-    config = _write_bundle_profile_config(config_repo, bundle_dst=None)
+    config = _write_q_file_config(config_repo, q_dst=None)
     assert _run_as("p", "install", config, *_INSTALL_ARGS).exit_code == 0
     (Path.home() / "out" / "stray.txt").write_text("x\n", encoding="utf-8")
     baseline = _scan("p", config)
     assert baseline.exit_code == 0, baseline.output
 
-    _write_bundle_profile_config(config_repo, bundle_dst="{{ home }}/qdir/bundle.txt")
+    _write_q_file_config(config_repo, kind=kind, q_dst="{{ home }}/qdir/q-file.txt")
     result = _scan("p", config)
 
     assert result.exit_code == 0, result.output
@@ -430,7 +447,7 @@ def test_scan_output_is_unchanged_by_a_sibling_bundle_that_renders(
 def test_bundle_file_typo_in_this_profiles_own_bundle_is_still_refused(
     config_repo: ConfigRepo,
 ) -> None:
-    config = _write_bundle_profile_config(config_repo, bundle_dst=_BUNDLE_TYPO)
+    config = _write_q_file_config(config_repo, q_dst=_Q_TYPO)
 
     result = _scan("q", config)
 
