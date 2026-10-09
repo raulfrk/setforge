@@ -35,6 +35,7 @@ from ruamel.yaml.comments import (
 )
 from ruamel.yaml.error import CommentMark, YAMLError
 from ruamel.yaml.scalarint import OctalInt
+from ruamel.yaml.scalarstring import FoldedScalarString, LiteralScalarString
 from ruamel.yaml.tokens import CommentToken
 
 from setforge.errors import SetforgeError
@@ -475,8 +476,28 @@ def _following_comment(node: Any, key: Any) -> str:  # noqa: ANN401
     leaf, leaf_key = chain[-1]
     entry = leaf.ca.items.get(leaf_key)
     token = entry[_tail_slot(leaf)] if entry else None
-    tail = token.value.split("\n", 1)[1] if token and "\n" in token.value else ""
+    if token is None:
+        tail = ""
+    elif _is_block_scalar(leaf[leaf_key]):
+        tail = _after_block_scalar(token)
+    else:
+        tail = token.value.split("\n", 1)[1] if "\n" in token.value else ""
     return tail + "".join(_lines(inner.ca.end) for inner, _ in reversed(chain[1:]))
+
+
+def _is_block_scalar(value: Any) -> bool:  # noqa: ANN401
+    """Whether ``value`` is written as ``|`` or ``>`` text on its own lines."""
+    return isinstance(value, (LiteralScalarString, FoldedScalarString))
+
+
+def _after_block_scalar(token: CommentToken) -> str:
+    """The lines ruamel keeps after a ``|`` / ``>`` value: all belong to what follows.
+
+    The value has no end-of-line comment, so the token starts on the line
+    after the text; its first comment's indentation is in ``column``.
+    """
+    indent = "" if token.value.startswith("\n") else " " * token.column
+    return indent + str(token.value)
 
 
 def _comment_above(node: Any, key: Any) -> str:  # noqa: ANN401
@@ -532,6 +553,12 @@ def _keep_after(node: Any, key: Any, kept: str) -> None:  # noqa: ANN401
     entry = leaf.ca.items.setdefault(leaf_key, [None, None, None, None])
     if entry[slot] is not None:
         entry[slot].value += kept
+    elif _is_block_scalar(leaf[leaf_key]):
+        if leaf[leaf_key].endswith("\n\n") or leaf[leaf_key] == "\n":
+            # Written ``|+``: a blank line straight after it would join its text.
+            kept = kept[len(kept) - len(kept.lstrip("\n")) :]
+        if kept:
+            entry[slot] = CommentToken(kept, CommentMark(0))
     elif not isinstance(leaf, CommentedSeq) or not isinstance(
         leaf[leaf_key], (CommentedMap, CommentedSeq)
     ):

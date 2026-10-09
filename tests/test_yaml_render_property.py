@@ -296,3 +296,91 @@ def test_removing_an_entry_below_a_one_line_entry_keeps_the_comment_above_it(
     apply_remove(tree, "k", "b", is_list=True)
 
     assert render_yaml(tree, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "expected"),
+    [
+        pytest.param(
+            "a: 1\nk1: |\n  text\n# about k2\nk2: 1\n",
+            "k1",
+            "a: 1\n# about k2\nk2: 1\n",
+            id="comment-after-the-removed-text",
+        ),
+        pytest.param(
+            "p:\n  k1: >-\n    text\n\n  # about k2\n\n  k2: 1\n",
+            "p.k1",
+            "p:\n\n  # about k2\n\n  k2: 1\n",
+            id="first-key-blank-lines-around-the-comment",
+        ),
+        pytest.param(
+            "a: 1\nk1:\n  - x\n  - |\n    text\n# one\n# two\n",
+            "k1",
+            "a: 1\n# one\n# two\n",
+            id="removed-list-ends-on-text",
+        ),
+        pytest.param(
+            "a: |\n  text\nb: 1\n\nc: 2\n",
+            "b",
+            "a: |\n  text\n\nc: 2\n",
+            id="blank-line-after-the-key-below-text",
+        ),
+        pytest.param(
+            "a: |-\n  text\n# about b\nb: 1  # gone\n  # about c\nc: 2\n",
+            "b",
+            "a: |-\n  text\n# about b\n  # about c\nc: 2\n",
+            id="comments-on-both-sides-of-the-key-below-text",
+        ),
+    ],
+)
+def test_removing_a_key_keeps_the_lines_around_text_written_on_its_own_lines(
+    text: str, key: str, expected: str
+) -> None:
+    """The lines after ``|`` / ``>`` text belong to the key that follows it.
+
+    The first comment after removed text used to be deleted with it, and a key
+    removed below such text left one blank line too many.
+    """
+    tree = yaml_rt().load(text)
+
+    apply_remove(tree, key, None, is_list=False)
+
+    assert render_yaml(tree, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "expected"),
+    [
+        pytest.param(
+            "k1: |+\n  text\n\nk2:\n  - [f]\n\nk3: 1\n",
+            "k2",
+            "k1: |+\n  text\n\nk3: 1\n",
+            id="top-level",
+        ),
+        pytest.param(
+            "p:\n  k1: |+\n    text\n\n  k2:\n    - [f]\n\n  k3: 1\n",
+            "p.k2",
+            "p:\n  k1: |+\n    text\n\n  k3: 1\n",
+            id="nested",
+        ),
+        pytest.param(
+            "k1: |+\n  text\n\nk2: 1\n\n# about k3\n\nk3: 1\n",
+            "k2",
+            "k1: |+\n  text\n\n# about k3\n\nk3: 1\n",
+            id="comment-after-the-blank-line",
+        ),
+    ],
+)
+def test_removing_a_key_below_text_that_keeps_its_blank_lines_is_written(
+    text: str, key: str, expected: str
+) -> None:
+    """A blank line straight after ``|+`` text would become part of that text.
+
+    The one that followed the removed key is dropped, so the text reads back
+    unchanged; keeping it made the edit be refused.
+    """
+    tree = yaml_rt().load(text)
+
+    apply_remove(tree, key, None, is_list=False)
+
+    assert render_yaml(tree, text) == expected

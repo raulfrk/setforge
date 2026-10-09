@@ -1179,11 +1179,15 @@ def test_config_remove_of_the_first_of_several_entries_keeps_the_order_of_commen
     assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
 
 
+@pytest.mark.parametrize("blank_lines", [2, 3, 5])
 def test_config_edit_keeps_the_blank_lines_at_the_top_of_the_file(
-    runner: CliRunner, seed_local: Path
+    runner: CliRunner, seed_local: Path, blank_lines: int
 ) -> None:
-    """Two or more blank lines at the top used to gain one with every edit."""
-    seed = "\n\n# this host\nbinaries:\n  code: /usr/bin/code\n  gh: /usr/bin/gh\n"
+    """Two or more blank lines at the top used to gain more with every edit."""
+    seed = (
+        "\n" * blank_lines
+        + "# this host\nbinaries:\n  code: /usr/bin/code\n  gh: /usr/bin/gh\n"
+    )
     _write_local(seed_local, seed)
 
     result = runner.invoke(app, ["config", "remove", "--local", "binaries.gh", "--yes"])
@@ -1191,4 +1195,37 @@ def test_config_edit_keeps_the_blank_lines_at_the_top_of_the_file(
     assert result.exit_code == 0, result.output
     assert seed_local.read_text(encoding="utf-8") == seed.replace(
         "  gh: /usr/bin/gh\n", ""
+    )
+
+
+_TWO_SERVERS = """\
+mcp_servers:
+  one:
+    command:
+      - run-one
+      - |
+        first line
+        second line
+  # the second server
+
+  two:
+    command:
+      - run-two
+"""
+
+
+def test_config_remove_keeps_the_comment_after_text_written_on_its_own_lines(
+    runner: CliRunner, seed_tracked: Path
+) -> None:
+    """A key that ends on ``|`` text used to take the comment below it along."""
+    before = seed_tracked.read_text(encoding="utf-8")
+    seed_tracked.write_text(before + _TWO_SERVERS, encoding="utf-8")
+
+    argv = ["config", "remove", "--tracked", "mcp_servers.one", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_tracked.read_text(encoding="utf-8") == (
+        before + "mcp_servers:\n  # the second server\n\n"
+        "  two:\n    command:\n      - run-two\n"
     )

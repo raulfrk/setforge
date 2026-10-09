@@ -66,9 +66,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A file or directory in a managed tree that `install` cannot read, such as
   one with permissions `000`, is now reported as "could not be read" with the
   path and "Permission denied". It was reported as "changed while scanning".
-- `setforge config remove` now keeps every comment and blank line that is not
-  part of what it removes, in the order they were written, and leaves every
-  other line of the file as it was. What goes with a removed key or list entry
+- `setforge config remove` now keeps the comments and blank lines that are not
+  part of what it removes, in the order they were written, and leaves the
+  other lines of the file as they were (the two exceptions are at the end of
+  this entry). What goes with a removed key or list entry
   is its own lines only: the comment on its line and, for a key, the comments
   inside its value. The comments and blank lines above it and after it stay.
   Before, removing a key that ends on a list (for example `config remove
@@ -80,9 +81,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first entry of that list and could re-indent it. Removing the first of
   several list entries moved the comment under the key below the one above
   the next entry. Next to a list or an entry written on one line (`[a, b]`,
-  `- {x: 1}`) comments were deleted or changed places.
+  `- {x: 1}`) comments were deleted or changed places. Removing a key whose
+  value ends in text written on its own lines (`|` or `>`) deleted the comment
+  below that text, and removing the key below such text added a blank line.
+  Two things are still not kept. A blank line that followed a key removed
+  directly below `|+` text is dropped, because there it would become part of
+  that text. And a file with a layout that no setforge edit keeps is still
+  rewritten there: for example a `---` line at the top is removed, a list
+  that starts on the line after the `-` of the list holding it is re-indented,
+  and a comment or blank line between two list entries written on one line
+  (`- {x: 1}`, `- [b]`) is deleted when the second has a comment at its end.
 - Editing a `setforge.yaml` or `local.yaml` that starts with two or more blank
-  lines no longer adds one more blank line at the top with every edit.
+  lines no longer adds more blank lines at the top with every edit.
 
 ### Changed
 

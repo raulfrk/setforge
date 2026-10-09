@@ -194,7 +194,7 @@ binaries:
         ),
         (
             _BEFORE_NEXT.replace("  code: /a\n", ""),
-            "binaries:\n  # patch is special\n  patch: /usr/bin/patch\n",
+            "binaries:\n\n  # patch is special\n  patch: /usr/bin/patch\n",
         ),
     ],
     ids=["middle", "first"],
