@@ -391,7 +391,11 @@ def apply_remove(
             )
         if value not in existing:
             raise SetforgeError(f"{value!r} not in {dotted!r}")
-        existing.remove(value)
+        index = existing.index(value)
+        tail = _entry_tail(existing, index)
+        del existing[index]
+        if tail:
+            _keep_entry_tail(parent, leaf, index, tail)
     else:
         # Scalar unset: pop the key (and its comment-association entry).
         tail = _following_comment(parent, leaf)
@@ -402,6 +406,45 @@ def apply_remove(
         if tail:
             _keep_following_comment(parent, keys, index, tail)
     return doc
+
+
+def _entry_tail(seq: list[Any], index: int) -> str:
+    """Comment and blank lines after list entry ``index``'s own line.
+
+    Like :func:`_following_comment`: ruamel keeps them in the same token as the
+    entry's end-of-line comment, but they belong to what follows the entry.
+    """
+    if not isinstance(seq, CommentedSeq):
+        return ""
+    entry = seq.ca.items.get(index)
+    token = entry[0] if entry else None
+    if token is None or "\n" not in token.value:
+        return ""
+    return token.value.split("\n", 1)[1]
+
+
+def _keep_entry_tail(parent: CommentedMap, leaf: str, index: int, tail: str) -> None:
+    """Re-attach ``tail`` of the removed entry ``index`` of ``parent[leaf]``.
+
+    It goes after the entry before it, after the key when the removed entry was
+    the first of several, or after the ``[]`` the list now renders as.
+    """
+    seq = parent[leaf]
+    if index:
+        entry = seq.ca.items.setdefault(index - 1, [None, None, None, None])
+        slot = 0
+    elif seq:
+        entry = parent.ca.items.setdefault(leaf, [None, None, None, None])
+        slot = 2
+    else:
+        seq.fa.set_flow_style()
+        if seq.ca.comment is None:
+            seq.ca.comment = [None, None]
+        entry, slot = seq.ca.comment, 0
+    if entry[slot] is None:
+        entry[slot] = CommentToken("\n" + tail, CommentMark(0))
+    else:
+        entry[slot].value += tail
 
 
 def _following_comment(node: CommentedMap, key: str) -> str:

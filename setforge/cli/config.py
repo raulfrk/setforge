@@ -36,6 +36,7 @@ from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )
+from ruamel.yaml.error import YAMLError
 
 from setforge import paths
 from setforge.binaries import ensure_local_config_stub
@@ -701,6 +702,26 @@ def _read_raw(yaml_path: Path) -> str:
     return yaml_path.read_bytes().decode("utf-8") if yaml_path.exists() else ""
 
 
+def _require_text_reads_back(text: str, doc: CommentedMap, yaml_path: Path) -> None:
+    """Refuse ``text`` unless it parses back to the validated candidate ``doc``.
+
+    The renderer keeps the lines an edit did not touch and writes the new ones
+    in the file's first list style, so a file whose lists are indented
+    differently can come out reading as another document, or not at all.
+    """
+    try:
+        read_back = _to_plain(yaml_rt().load(text))
+    except YAMLError:
+        read_back = None
+    if read_back != _to_plain(doc):
+        raise SetforgeError(
+            f"refusing to write {yaml_path}: the edited file would not read back "
+            f"as the change that was checked (lists indented differently from "
+            f"one another can cause this). The file was not changed; give its "
+            f"lists the same indentation and retry."
+        )
+
+
 def _preview_and_write(
     *, yaml_path: Path, doc: CommentedMap, before_text: str, yes: bool
 ) -> None:
@@ -712,6 +733,7 @@ def _preview_and_write(
     ``False``); the file is untouched.
     """
     after_text = render_yaml(doc, before_text or None)
+    _require_text_reads_back(after_text, doc, yaml_path)
     diff_text = _render_diff(before_text, after_text, yaml_path)
     console = make_console(stderr=True)
     if not _prompt_confirm(
