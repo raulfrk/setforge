@@ -381,6 +381,7 @@ def apply_remove(
         raise SetforgeError(f"parent of {dotted!r} is not a mapping")
     if leaf not in parent:
         raise SetforgeError(f"{dotted!r} not present in YAML")
+    holder = navigate(doc, parts[:-2]) if len(parts) > 1 else None
     if is_list:
         if value is None:
             raise SetforgeError(f"remove from list {dotted!r} requires <value>")
@@ -391,114 +392,121 @@ def apply_remove(
             )
         if value not in existing:
             raise SetforgeError(f"{value!r} not in {dotted!r}")
-        index = existing.index(value)
-        tail = _entry_tail(existing, index)
-        del existing[index]
-        if tail:
-            _keep_entry_tail(parent, leaf, index, tail)
+        if isinstance(existing, CommentedSeq):
+            _remove_entry(parent, leaf, existing, existing.index(value))
+        else:
+            existing.remove(value)
     else:
-        _unset_key(parent, leaf)
+        _remove_entry(holder, parts[-2] if holder is not None else None, parent, leaf)
     return doc
 
 
-def _unset_key(parent: CommentedMap, leaf: str) -> None:
-    """Pop ``leaf`` (and its comment-association entry), keeping what follows."""
-    tail = _following_comment(parent, leaf)
-    keys = list(parent)
-    index = keys.index(leaf)
-    if index:
-        tail = _comment_above(parent, leaf) + tail
-    del parent[leaf]
-    parent.ca.items.pop(leaf, None)
-    if tail:
-        _keep_following_comment(parent, keys, index, tail)
+def _remove_entry(
+    holder: CommentedMap | None,
+    holder_key: str | None,
+    node: Any,  # noqa: ANN401 — a CommentedMap or CommentedSeq
+    key: Any,  # noqa: ANN401 — a mapping key or a list index
+) -> None:
+    """Delete ``node[key]``, keeping the comment and blank lines around it.
 
-
-def _entry_tail(seq: list[Any], index: int) -> str:
-    """Comment and blank lines after list entry ``index``'s own line.
-
-    Like :func:`_following_comment`: ruamel keeps them in the same token as the
-    entry's end-of-line comment, but they belong to what follows the entry.
+    ``node`` is ``holder[holder_key]`` (the document itself when ``holder`` is
+    ``None``). The lines above the entry and the lines after it belong to its
+    neighbours, wherever ruamel stored them; only the entry's own lines go.
     """
-    if not isinstance(seq, CommentedSeq):
-        return ""
-    entry = seq.ca.items.get(index)
-    token = entry[0] if entry else None
-    if token is None or "\n" not in token.value:
-        return ""
-    return token.value.split("\n", 1)[1]
+    kept = _comment_above(node, key) + _following_comment(node, key)
+    position = list(node).index(key) if isinstance(node, CommentedMap) else key
+    del node[key]
+    if isinstance(node, CommentedMap):
+        node.ca.items.pop(key, None)
+    if not node:
+        _keep_after_emptied(holder, holder_key, node, kept)
+    elif kept and position:
+        before = list(node)[position - 1] if isinstance(node, CommentedMap) else key - 1
+        _keep_after(node, before, kept)
+    elif kept:
+        _keep_above(
+            node, next(iter(node)) if isinstance(node, CommentedMap) else 0, kept
+        )
 
 
-def _keep_entry_tail(parent: CommentedMap, leaf: str, index: int, tail: str) -> None:
-    """Re-attach ``tail`` of the removed entry ``index`` of ``parent[leaf]``.
-
-    It goes after the entry before it, after the key when the removed entry was
-    the first of several, or after the ``[]`` the list now renders as.
-    """
-    seq = parent[leaf]
-    if index:
-        entry = seq.ca.items.setdefault(index - 1, [None, None, None, None])
-        slot = 0
-    elif seq:
-        entry = parent.ca.items.setdefault(leaf, [None, None, None, None])
-        slot = 2
+def _keep_after_emptied(
+    holder: CommentedMap | None,
+    holder_key: str | None,
+    node: Any,  # noqa: ANN401 — a CommentedMap or CommentedSeq
+    kept: str,
+) -> None:
+    """Attach ``kept`` after the ``{}`` / ``[]`` the emptied ``node`` renders as."""
+    node.fa.set_flow_style()
+    kept += _lines(node.ca.end)
+    node.ca.end.clear()
+    if not kept:
+        return
+    key_entry = holder.ca.items.get(holder_key) if holder is not None else None
+    if key_entry is not None and not key_entry[3]:
+        # ruamel writes the key's comment in place of the collection's own.
+        entry, slot = key_entry, 2
     else:
-        seq.fa.set_flow_style()
-        key_entry = parent.ca.items.get(leaf)
-        if key_entry is not None and not key_entry[3]:
-            # ruamel writes the key's comment in place of the list's own.
-            entry, slot = key_entry, 2
-        else:
-            if seq.ca.comment is None:
-                seq.ca.comment = [None, None]
-            entry, slot = seq.ca.comment, 0
+        if node.ca.comment is None:
+            node.ca.comment = [None, None]
+        entry, slot = node.ca.comment, 0
     if entry[slot] is None:
-        entry[slot] = CommentToken("\n" + tail, CommentMark(0))
+        entry[slot] = CommentToken("\n" + kept, CommentMark(0))
     else:
-        entry[slot].value += tail
+        entry[slot].value += kept
 
 
-def _following_comment(node: CommentedMap, key: str) -> str:
-    """Comment and blank lines after ``key``'s line that belong to what follows.
-
-    ruamel stores them in the same token as the end-of-line comment of the
-    key's last line (the last entry's, when the value is a block mapping or list).
-    """
-    leaf, leaf_key = _last_leaf(node, key)
-    entry = leaf.ca.items.get(leaf_key)
-    token = entry[_tail_slot(leaf)] if entry else None
-    if token is None or "\n" not in token.value:
-        return ""
-    return token.value.split("\n", 1)[1]
-
-
-def _comment_above(node: CommentedMap, key: str) -> str:
-    """Comment and blank lines above ``key`` that ruamel stores with the key.
-
-    After a flow list (``[a, b]``) with no end-of-line comment they are kept
-    with the key that follows instead of in the tail of the one before.
-    """
-    entry = node.ca.items.get(key)
-    tokens = entry[1] if entry and entry[1] else []
+def _lines(tokens: list[CommentToken] | None) -> str:
+    """The text of comment tokens ruamel keeps one per line, indentation included."""
     return "".join(
         " " * token.column + token.value if token.value.strip() else token.value
-        for token in tokens
+        for token in tokens or []
     )
 
 
-def _last_leaf(node: Any, key: Any) -> tuple[Any, Any]:  # noqa: ANN401
-    """The collection and key (or index) whose comment follows ``node[key]``.
+def _following_comment(node: Any, key: Any) -> str:  # noqa: ANN401
+    """Comment and blank lines after ``node[key]`` that belong to what follows.
+
+    ruamel stores them in the same token as the end-of-line comment of the
+    entry's last line (the last entry's, when the value is a block mapping or
+    list), and after a one-line last entry (``- {x: 1}``) with no end-of-line
+    comment, at the end of the list or mapping that entry is in.
+    """
+    chain = _last_chain(node, key)
+    leaf, leaf_key = chain[-1]
+    entry = leaf.ca.items.get(leaf_key)
+    token = entry[_tail_slot(leaf)] if entry else None
+    tail = token.value.split("\n", 1)[1] if token and "\n" in token.value else ""
+    return tail + "".join(_lines(inner.ca.end) for inner, _ in reversed(chain[1:]))
+
+
+def _comment_above(node: Any, key: Any) -> str:  # noqa: ANN401
+    """Comment and blank lines above ``node[key]`` that ruamel stores with it.
+
+    After a one-line list or mapping (``[a, b]``) with no end-of-line comment
+    they are kept with the entry that follows instead of in the tail of the
+    one before.
+    """
+    entry = node.ca.items.get(key)
+    return _lines(entry[1]) if entry else ""
+
+
+def _last_chain(node: Any, key: Any) -> list[tuple[Any, Any]]:  # noqa: ANN401
+    """``(node, key)`` and each last entry below it, down to its last line.
 
     A block mapping or list ends on its last entry's line, so the comment after
     the whole value is stored with that entry, however deep.
     """
+    chain = [(node, key)]
     value = node[key]
-    if not isinstance(value, (CommentedMap, CommentedSeq)):
-        return node, key
-    if not value or value.fa.flow_style():
-        return node, key
-    last = list(value)[-1] if isinstance(value, CommentedMap) else len(value) - 1
-    return _last_leaf(value, last)
+    while (
+        isinstance(value, (CommentedMap, CommentedSeq))
+        and value
+        and not value.fa.flow_style()
+    ):
+        last = list(value)[-1] if isinstance(value, CommentedMap) else len(value) - 1
+        chain.append((value, last))
+        value = value[last]
+    return chain
 
 
 def _tail_slot(leaf: Any) -> int:  # noqa: ANN401
@@ -506,26 +514,36 @@ def _tail_slot(leaf: Any) -> int:  # noqa: ANN401
     return 2 if isinstance(leaf, CommentedMap) else 0
 
 
-def _keep_following_comment(
-    node: CommentedMap, keys: list[str], index: int, tail: str
-) -> None:
-    """Re-attach ``tail`` of the removed ``keys[index]`` to its neighbour."""
-    if index > 0:
-        leaf, leaf_key = _last_leaf(node, keys[index - 1])
-        slot = _tail_slot(leaf)
-        entry = leaf.ca.items.setdefault(leaf_key, [None, None, None, None])
-        if entry[slot] is None:
-            entry[slot] = CommentToken("\n" + tail, CommentMark(0))
-        else:
-            entry[slot].value += tail
-    elif index + 1 < len(keys):
-        following = keys[index + 1]
-        lines = [line.strip().removeprefix("#").strip() for line in tail.split("\n")]
-        node.yaml_set_comment_before_after_key(
-            following,
-            before="\n".join(lines).strip("\n"),
-            indent=node.lc.data[following][1],
-        )
+def _keep_above(node: Any, key: Any, kept: str) -> None:  # noqa: ANN401
+    """Attach ``kept`` above ``node[key]``, before what is stored there already."""
+    entry = node.ca.items.setdefault(key, [None, None, None, None])
+    entry[1] = [CommentToken(kept, CommentMark(0)), *(entry[1] or [])]
+
+
+def _keep_after(node: Any, key: Any, kept: str) -> None:  # noqa: ANN401
+    """Attach ``kept`` after everything stored after ``node[key]``."""
+    chain = _last_chain(node, key)
+    for inner, _ in chain[1:]:
+        if inner.ca.end:
+            inner.ca.end.append(CommentToken(kept, CommentMark(0)))
+            return
+    leaf, leaf_key = chain[-1]
+    slot = _tail_slot(leaf)
+    entry = leaf.ca.items.setdefault(leaf_key, [None, None, None, None])
+    if entry[slot] is not None:
+        entry[slot].value += kept
+    elif not isinstance(leaf, CommentedSeq) or not isinstance(
+        leaf[leaf_key], (CommentedMap, CommentedSeq)
+    ):
+        entry[slot] = CommentToken("\n" + kept, CommentMark(0))
+    elif leaf_key + 1 < len(leaf):
+        # Where ruamel itself keeps the lines after a one-line list entry: it
+        # can join later lines when that entry carries them.
+        _keep_above(leaf, leaf_key + 1, kept)
+    else:
+        if leaf.ca.comment is None:
+            leaf.ca.comment = [None, None]
+        leaf.ca.end.append(CommentToken(kept, CommentMark(0)))
 
 
 def to_plain(obj: Any) -> Any:  # noqa: ANN401 — recursive YAML coercion

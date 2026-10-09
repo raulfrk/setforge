@@ -4,8 +4,8 @@ Documents are generated with what people really write: every list and mapping
 indented its own way, blank lines and comments in every position, CRLF, a BOM,
 no final newline. One ``config add`` / ``config remove`` style edit is applied
 and the rendered text must parse to exactly the edited data, keep every comment
-outside the removed entry, and leave every line the edit did not own
-byte-identical.
+and blank line outside the removed entry exactly once and in its original order,
+and leave every line the edit did not own byte-identical.
 """
 
 from __future__ import annotations
@@ -142,33 +142,6 @@ def _siblings(doc: _Doc, path: _Path) -> list[_Path]:
     return doc.entries[path[:-1]].children if len(path) > 1 else doc.top
 
 
-def _next_entry_line(doc: _Doc, after: int) -> int:
-    starts = [e.first for e in doc.entries.values()]
-    starts += [line for e in doc.entries.values() for line in e.item_lines]
-    return min((line for line in starts if line > after), default=len(doc.lines))
-
-
-def _container_region(doc: _Doc, path: _Path) -> range:
-    """Lines an emptied or beheaded container may rewrite.
-
-    Removing the first entry of a mapping or list moves the comments that
-    followed it (the edit helpers re-attach them, not byte-for-byte), and
-    removing the only entry rewrites the parent line as ``key: {}``.
-    """
-    siblings = _siblings(doc, path)
-    index = siblings.index(path)
-    if len(siblings) > 1:
-        start = doc.entries[path[:-1]].first + 1 if len(path) > 1 else 0
-        following = siblings[index + 1] if index == 0 else None
-        if following is None:
-            return range(doc.entries[path].first, doc.entries[path].last + 1)
-        return range(start, doc.entries[following].first)
-    if len(path) == 1:
-        return range(len(doc.lines))
-    parent = doc.entries[path[:-1]]
-    return range(parent.first, _next_entry_line(doc, parent.last))
-
-
 def _at(data: dict[str, Any], path: _Path) -> Any:
     node: Any = data
     for part in path:
@@ -177,12 +150,13 @@ def _at(data: dict[str, Any], path: _Path) -> Any:
 
 
 @st.composite
-def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range]:
+def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, list[int]]:
     """A document with one edit applied to its round-trip tree.
 
     Returns ``(doc, edited tree, removed, owned)``: ``removed`` are the lines
     of the entry the edit took out (its comments go with it) and ``owned`` the
-    lines the edit may rewrite.
+    lines the edit may rewrite: those, and the line of a key whose value the
+    edit emptied (it becomes ``key: {}`` or ``key: []``).
     """
     doc = draw(_documents())
     by_kind: dict[str, list[_Path]] = {
@@ -197,7 +171,7 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range]:
     op = draw(st.sampled_from(ops))
     tree = yaml_rt().load("\n".join(doc.lines) + "\n") or CommentedMap()
     removed: range = range(0)
-    owned: range = range(0)
+    owned: list[int] = []
     if op in ("add_key", "add_list"):
         parent = draw(st.sampled_from([(), *by_kind["map"]]))
         extra = draw(st.sampled_from([(), ("n1",), ("n1", "n2")]))
@@ -206,7 +180,7 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range]:
     elif op == "set":
         path = draw(st.sampled_from(by_kind["scalar"]))
         apply_add(tree, ".".join(path), "fresh", is_list=False)
-        owned = range(doc.entries[path].first, doc.entries[path].first + 1)
+        owned = [doc.entries[path].first]
     elif op == "append":
         path = draw(st.sampled_from(by_kind["list"]))
         apply_add(tree, ".".join(path), "fresh", is_list=True)
@@ -218,21 +192,25 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range]:
         apply_remove(tree, ".".join(path), value, is_list=True)
         line = entry.item_lines[index]
         removed = range(line, line + 1)
-        if len(entry.item_lines) == 1:
-            owned = range(entry.first, _next_entry_line(doc, line))
-        elif index == 0:
-            owned = range(entry.first + 1, entry.item_lines[1])
-        else:
-            owned = removed
+        emptied = [entry.first] if len(entry.item_lines) == 1 else []
+        owned = [*removed, *emptied]
     else:
         path = draw(st.sampled_from(list(doc.entries)))
         apply_remove(tree, ".".join(path), None, is_list=False)
-        owned = _container_region(doc, path)
         removed = range(doc.entries[path].first, doc.entries[path].last + 1)
-        if len(_siblings(doc, path)) == 1:
-            # The helpers have nowhere to re-attach an only key's comments.
-            removed = owned
+        only = len(_siblings(doc, path)) == 1 and len(path) > 1
+        owned = [*removed, *([doc.entries[path[:-1]].first] if only else [])]
     return doc, tree, removed, owned
+
+
+def _notes(lines: list[str]) -> list[str]:
+    """Every comment and blank line of ``lines``, in order."""
+    notes: list[str] = []
+    for line in lines:
+        notes += (
+            [f"# {part}" for part in line.split("# ")[1:]] if line.strip() else [""]
+        )
+    return notes
 
 
 def _plain(node: Any) -> Any:
@@ -252,7 +230,7 @@ _FRAMINGS = st.tuples(
 @settings(max_examples=400)
 @given(case=_edits(), framing=_FRAMINGS)
 def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
-    case: tuple[_Doc, CommentedMap, range, range],
+    case: tuple[_Doc, CommentedMap, range, list[int]],
     framing: tuple[str, bool, str],
 ) -> None:
     doc, tree, removed, owned = case
@@ -277,7 +255,44 @@ def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
             continue
         for part in line.split("# ")[1:]:
             assert sum(f"# {part}" in out for out in out_lines) == 1, part
+    left = [line for number, line in enumerate(doc.lines) if number not in removed]
+    assert _notes(out_lines) == _notes(left)
     remaining = iter(out_lines)
     for number, line in enumerate(doc.lines):
         if number not in owned:
             assert line in remaining, (number, line)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param(
+            "k:\n  - {x: 1}\n  # about b\n  - b\n  - c\n",
+            "k:\n  - {x: 1}\n  # about b\n  - c\n",
+            id="between-two-entries",
+        ),
+        pytest.param(
+            "k:\n  - [a]\n  # about b\n  - b\n# after\nz: 1\n",
+            "k:\n  - [a]\n  # about b\n# after\nz: 1\n",
+            id="last-entry",
+        ),
+        pytest.param(
+            "k:  # mine\n  - {x: 1, y: 2}\n  # about b\n  - b  # gone\n"
+            "  - p: 1\n    q: 2\n",
+            "k:  # mine\n  - {x: 1, y: 2}\n  # about b\n  - p: 1\n    q: 2\n",
+            id="before-a-mapping-entry-under-a-commented-key",
+        ),
+    ],
+)
+def test_removing_an_entry_below_a_one_line_entry_keeps_the_comment_above_it(
+    text: str, expected: str
+) -> None:
+    """No list ``config remove`` edits may hold ``- {x: 1}``, so this is direct.
+
+    The comment used to be deleted with the entry.
+    """
+    tree = yaml_rt().load(text)
+
+    apply_remove(tree, "k", "b", is_list=True)
+
+    assert render_yaml(tree, text) == expected
