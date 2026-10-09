@@ -29,6 +29,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by hand; lists indented differently from one another in the same file are a
   common cause. A `local.yaml` with no final newline now takes an add, and the
   file gains the newline; the new line used to be joined onto the last one.
+- Commands that edit `setforge.yaml` or `local.yaml` now handle a file whose
+  lists are indented differently from one another (one list's entries indented
+  under its key, another's level with it). A new entry is indented like the
+  list it joins. It used to be written in the style of the first list in the
+  file, which either joined it onto the
+  entry above (`- keep.me` and `- new.one` read back as the single entry
+  `keep.me - new.one`) or left a file that no longer parsed; `ext add`,
+  `plugin add`, `cleanup` and `migrate --apply` did this with no error, and
+  `config add` refused the edit.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register

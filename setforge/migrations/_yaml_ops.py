@@ -116,11 +116,19 @@ def render_yaml(
     The mapping indent and sequence indent/offset are taken from
     ``original`` (``fallback`` when it has none to learn from). When the
     original mixes styles, the lines the edit did not touch are kept
-    byte-for-byte rather than normalised. The original's BOM and CRLF
-    line ends are carried over.
+    byte-for-byte rather than normalised, and each new line is indented like
+    the entries it joins. The original's BOM and CRLF line ends are carried
+    over.
+
+    A rendering that would not parse back to ``data`` is passed over for
+    the plain dump in the original's first indent style.
     """
     text = (original or "").lstrip(_BOM).replace("\r\n", "\n")
-    rendered = _render_lf(data, text, fallback)
+    candidates = _render_lf(data, text, fallback)
+    rendered = next(
+        (candidate for candidate in candidates if _reads_back(candidate, data)),
+        candidates[-1],
+    )
     if original is not None:
         if original.count("\r\n") * 2 > original.count("\n"):
             rendered = rendered.replace("\n", "\r\n")
@@ -129,11 +137,33 @@ def render_yaml(
     return rendered
 
 
+def _plain(obj: Any) -> Any:  # noqa: ANN401 — recursive YAML coercion
+    """Reduce round-trip data to plain values that compare by meaning."""
+    if isinstance(obj, Mapping):
+        return {key: _plain(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_plain(value) for value in obj]
+    if isinstance(obj, float) and obj != obj:
+        return "<nan>"
+    return obj
+
+
+def _reads_back(text: str, data: Any) -> bool:  # noqa: ANN401
+    try:
+        return bool(_plain(yaml_rt().load(text)) == _plain(data))
+    except YAMLError:
+        return False
+
+
 def _render_lf(
     data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
     text: str,
     fallback: tuple[int, int, int],
-) -> str:
+) -> list[str]:
+    """Return the renderings of ``data`` to try, the most faithful first.
+
+    The last is always the plain dump in the original's first indent style.
+    """
     indent = (_detect_indent(text) if text.strip() else None) or fallback
 
     def dump(value: Any) -> str:  # noqa: ANN401
@@ -145,22 +175,104 @@ def _render_lf(
 
     new = dump(data)
     if not text.strip():
-        return new
+        return [new]
     try:
-        baseline = dump(yaml_rt().load(text))
+        loaded = yaml_rt().load(text)
     except YAMLError:
-        return new
+        return [new]
+    baseline = dump(loaded)
     if baseline == text:
-        return new
+        return [new]
+    spliced = _keep_original_lines(text, baseline, new)
+    return [new] if spliced is None else [spliced, new]
+
+
+def _leading(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _entry_lines(new: str) -> tuple[dict[int, int], dict[int, int | None]] | None:
+    """Map each line of the dump ``new`` that starts an entry to its collection.
+
+    Returns ``(owner, holder)``: ``owner[line]`` is the id of the outermost
+    block mapping or sequence with a key or item starting on ``line``, and
+    ``holder[id]`` is the line of the entry that collection is the value of
+    (``None`` for the document root).
+    """
+    try:
+        root = yaml_rt().load(new)
+    except YAMLError:
+        return None
+    lines = new.splitlines()
+    owner: dict[int, int] = {}
+    holder: dict[int, int | None] = {}
+
+    def walk(node: object, held_by: int | None) -> None:
+        if not isinstance(node, (CommentedMap, CommentedSeq)):
+            return
+        if not node or node.fa.flow_style():
+            return
+        holder[id(node)] = held_by
+        children = node.items() if isinstance(node, CommentedMap) else enumerate(node)
+        for key, value in children:
+            position = (node.lc.data or {}).get(key)
+            if position is None:
+                continue
+            line = position[0]
+            is_dash = lines[line].lstrip(" ").startswith("-")
+            if isinstance(node, CommentedMap) or is_dash:
+                owner.setdefault(line, id(node))
+            walk(value, line if line in owner else held_by)
+
+    walk(root, None)
+    return owner, holder
+
+
+def _keep_original_lines(text: str, baseline: str, new: str) -> str | None:
+    """Splice ``new`` into ``text``, keeping the lines the edit did not touch.
+
+    ``baseline`` is the unedited document dumped the way ``new`` was, so a
+    line the two share stands for the original line at the same position.
+    Every other line of ``new`` is shifted by the difference between the
+    original and the dumped indentation of the entries it sits among: its
+    collection's other entries, else the entry holding that collection. A
+    line that starts no entry moves with the entry above it.
+    Returns ``None`` when the lines cannot be paired or shifted.
+    """
     base_lines = baseline.splitlines(keepends=True)
     orig_lines = text.splitlines(keepends=True)
-    if len(base_lines) != len(orig_lines):
-        return new
+    entries = _entry_lines(new)
+    if len(base_lines) != len(orig_lines) or entries is None:
+        return None
+    owner, holder = entries
     new_lines = new.splitlines(keepends=True)
-    out: list[str] = []
     matcher = difflib.SequenceMatcher(None, base_lines, new_lines, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        out.extend(orig_lines[i1:i2] if tag == "equal" else new_lines[j1:j2])
+    kept = {
+        j1 + step: orig_lines[i1 + step]
+        for tag, i1, i2, j1, _j2 in matcher.get_opcodes()
+        if tag == "equal"
+        for step in range(i2 - i1)
+    }
+    # One kept entry per collection: its entries share a column in both texts.
+    peer = {owner[line]: line for line in kept if line in owner}
+
+    def shift_at(at: int | None) -> int:
+        while at is not None and at not in kept:
+            at = peer.get(owner[at], holder[owner[at]])
+        return 0 if at is None else _leading(kept[at]) - _leading(new_lines[at])
+
+    out: list[str] = []
+    entry_above: int | None = None
+    for line, dumped in enumerate(new_lines):
+        if line in owner:
+            entry_above = line
+        if line in kept or not dumped.strip():
+            out.append(kept.get(line, dumped))
+            continue
+        shift = shift_at(entry_above)
+        if _leading(dumped) + shift < 0:
+            return None
+        out.append(" " * shift + dumped if shift > 0 else dumped[-shift:])
     return "".join(out)
 
 
