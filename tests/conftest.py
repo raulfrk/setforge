@@ -356,11 +356,14 @@ def _native_marketplace_row(name: str, source: str) -> dict[str, str]:
 
     ``owner/repo`` is listed as a ``github`` source, a link ending in ``.git``
     as ``git``, any other link as ``url``, and a local path as ``file`` (a
-    ``.json`` file) or ``directory``.
+    ``.json`` file) or ``directory``. A git link added as ``<link>#<ref>`` is
+    listed without the ref.
     """
     if "://" in source or source.startswith("git@"):
-        kind = "git" if source.endswith(".git") else "url"
-        return {"name": name, "source": kind, "url": source}
+        link, _, _ref = source.partition("#")
+        if link.endswith(".git"):
+            return {"name": name, "source": "git", "url": link}
+        return {"name": name, "source": "url", "url": source}
     if source.startswith("/"):
         kind = "file" if source.endswith(".json") else "directory"
         return {"name": name, "source": kind, "path": source}

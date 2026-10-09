@@ -4,7 +4,8 @@ Before changing Claude plugins, ``install`` and ``revert`` journal the plugin
 tool's whole inventory, and a rollback puts back everything that differs from
 it. The journal can only hold a plugin recovery could reinstall (an id of the
 form ``NAME@MARKETPLACE``, a registered marketplace, a known enabled state) and
-a marketplace it could register again (a GitHub repo, a git link or a path).
+a marketplace it could register again (a GitHub repo, a git link, a link to a
+``marketplace.json`` or a path).
 When the tool listed anything else, both commands used to stop with a raw
 ``ValueError``.
 
@@ -132,9 +133,9 @@ _UNRECORDABLE = [
     ),
     pytest.param(
         "marketplace",
-        {"name": "urlmp", "source": "url", "url": "http://example.test/mp.json"},
-        "marketplace 'urlmp': setforge cannot read where it was added from",
-        id="url-marketplace",
+        {"name": "npmmp", "source": "npm", "package": "@o/mp"},
+        "marketplace 'npmmp': setforge cannot read where it was added from",
+        id="marketplace-of-an-unknown-kind",
     ),
 ]
 _STRAY = ("plugin", {"id": "stray@ghost", "enabled": True})
@@ -314,7 +315,7 @@ def test_refusal_names_every_item_and_what_to_do_about_it(
     fake_claude(
         marketplaces=[
             _MP1,
-            {"name": "urlmp", "source": "url", "url": "http://example.test/mp.json"},
+            {"name": "npmmp", "source": "npm", "package": "@o/mp"},
         ],
         plugins=[
             _REVIEW,
@@ -328,9 +329,9 @@ def test_refusal_names_every_item_and_what_to_do_about_it(
 
     assert isinstance(result.exception, SetforgeError), result.exception
     assert str(result.exception).splitlines()[1:-1] == [
-        "  - marketplace 'urlmp': setforge cannot read where it was added from "
-        "(the plugin tool reports source 'url'). Remove it with "
-        "`claude plugin marketplace remove urlmp`.",
+        "  - marketplace 'npmmp': setforge cannot read where it was added from "
+        "(the plugin tool reports source 'npm'). Remove it with "
+        "`claude plugin marketplace remove npmmp`.",
         "  - plugin 'silent@mp1': the plugin tool does not say whether it is "
         "enabled. Run `claude plugin enable silent@mp1` or "
         "`claude plugin disable silent@mp1`.",
@@ -367,37 +368,53 @@ _GIT_URL = "https://github.com/o/mp2.git"
 _GIT_YAML = _YAML.replace("repo: o/mp2", f"repo: {_GIT_URL}").replace(
     "extra: {marketplace: mp1}", "extra: {marketplace: mp2}"
 )
+# ``mp2`` declared with a branch, which the tool does not list, and as a link
+# straight to a ``marketplace.json``.
+_REF_YAML = _GIT_YAML.replace(_GIT_URL, f"{_GIT_URL}#main")
+_JSON_URL = "https://example.test/o/mp2/marketplace.json"
+_JSON_YAML = _GIT_YAML.replace(_GIT_URL, _JSON_URL)
+_MP2_NAMES = {_GIT_URL: "mp2", f"{_GIT_URL}#main": "mp2", _JSON_URL: "mp2"}
 
 
+@pytest.mark.parametrize(
+    ("yaml", "link"),
+    [(_GIT_YAML, _GIT_URL), (_JSON_YAML, _JSON_URL)],
+    ids=["git-link", "json-link"],
+)
 def test_failed_install_removes_a_marketplace_it_added_that_is_listed_as_a_link(
     tmp_path: Path,
     fake_claude: Callable[..., FakeClaude],
     monkeypatch: pytest.MonkeyPatch,
+    yaml: str,
+    link: str,
 ) -> None:
     claude = fake_claude(
         marketplaces=[_MP1],
         plugins=[_REVIEW],
-        native_rows=True,
-        marketplace_names={_GIT_URL: "mp2"},
+        marketplace_names=_MP2_NAMES,
     )
     _fail_after_plugins(monkeypatch)
 
-    result = _install(tmp_path, yaml=_GIT_YAML)
+    result = _install(tmp_path, yaml=yaml)
 
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, RuntimeError), result.exception
-    assert claude.mp_add_args() == [_GIT_URL]
+    assert claude.mp_add_args() == [link]
     assert claude.install_args() == ["extra@mp2"]
     assert claude.installed_state() == {"review@mp1": _REVIEW}
     assert claude.marketplaces_state() == [_MP1]
     assert operations.active("p") is None
 
 
-@pytest.mark.parametrize("yaml", [_YAML, _GIT_YAML], ids=["github", "git-link"])
+@pytest.mark.parametrize(
+    "yaml",
+    [_YAML, _GIT_YAML, _REF_YAML, _JSON_YAML],
+    ids=["github", "git-link", "git-link-with-a-branch", "json-link"],
+)
 def test_second_install_on_a_host_the_first_set_up_runs_no_plugin_command(
     tmp_path: Path, fake_claude: Callable[..., FakeClaude], yaml: str
 ) -> None:
-    claude = fake_claude(marketplace_names={_GIT_URL: "mp2"})
+    claude = fake_claude(marketplace_names=_MP2_NAMES)
     first = _install(tmp_path, yaml=yaml)
     assert first.exit_code == 0, (first.output, first.exception)
     assert len(claude.mp_add_args()) == 2
@@ -445,21 +462,33 @@ def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_path(
     assert operations.active("p") is None
 
 
-_GIT_MP: dict[str, object] = {
-    "name": "gitmp",
-    "source": "git",
-    "url": "https://example.test/o/gitmp.git",
-}
-_GIT_TOOL: dict[str, object] = {"id": "tool@gitmp", "enabled": True, "scope": "user"}
-_GIT_MP_NAMES = {"https://example.test/o/gitmp.git": "gitmp"}
+# A marketplace added from a git link, and from a link straight to a
+# ``marketplace.json``, as the plugin tool lists each.
+_LINK_MARKETPLACES = [
+    pytest.param(
+        {"name": "linkmp", "source": "git", "url": "https://example.test/o/linkmp.git"},
+        id="git",
+    ),
+    pytest.param(
+        {
+            "name": "linkmp",
+            "source": "url",
+            "url": "http://example.test/o/marketplace.json",
+        },
+        id="url",
+    ),
+]
+_LINK_TOOL: dict[str, object] = {"id": "tool@linkmp", "enabled": True, "scope": "user"}
 
 
-def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_git_link(
+@pytest.mark.parametrize("link_mp", _LINK_MARKETPLACES)
+def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_link(
     tmp_path: Path,
     fake_claude: Callable[..., FakeClaude],
     monkeypatch: pytest.MonkeyPatch,
+    link_mp: dict[str, object],
 ) -> None:
-    claude = fake_claude(marketplaces=[_MP1, _GIT_MP], plugins=[_REVIEW, _GIT_TOOL])
+    claude = fake_claude(marketplaces=[_MP1, link_mp], plugins=[_REVIEW, _LINK_TOOL])
     journaled = _fail_after_plugins(monkeypatch)
 
     result = _install(tmp_path)
@@ -469,8 +498,11 @@ def test_failed_install_rolls_back_beside_a_marketplace_added_from_a_git_link(
     assert journaled == [True]
     assert claude.install_args() == ["extra@mp1"]
     assert claude.uninstall_args() == ["extra@mp1"]
-    assert claude.installed_state() == {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL}
-    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
+    assert claude.installed_state() == {
+        "review@mp1": _REVIEW,
+        "tool@linkmp": _LINK_TOOL,
+    }
+    assert claude.marketplaces_state() == [_MP1, link_mp]
     assert operations.active("p") is None
 
 
@@ -522,43 +554,47 @@ def test_recovery_registers_a_removed_path_marketplace_again_from_its_path(
     assert claude.enable_args() == ["tool@localmp"]
 
 
-def test_recovery_registers_a_removed_git_link_marketplace_again_from_its_link(
-    fake_claude: Callable[..., FakeClaude],
+@pytest.mark.parametrize("link_mp", _LINK_MARKETPLACES)
+def test_recovery_registers_a_removed_link_marketplace_again_from_its_link(
+    fake_claude: Callable[..., FakeClaude], link_mp: dict[str, object]
 ) -> None:
     claude = fake_claude(
-        marketplaces=[_MP1], plugins=[_REVIEW], marketplace_names=_GIT_MP_NAMES
+        marketplaces=[_MP1],
+        plugins=[_REVIEW],
+        marketplace_names={str(link_mp["url"]): "linkmp"},
     )
 
     operations.recover_adapters(
         _plugin_journal(
             {
-                "plugins": {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL},
-                "marketplaces": {"mp1": _MP1, "gitmp": _GIT_MP},
+                "plugins": {"review@mp1": _REVIEW, "tool@linkmp": _LINK_TOOL},
+                "marketplaces": {"mp1": _MP1, "linkmp": link_mp},
             }
         )
     )
 
-    assert claude.mp_add_args() == [_GIT_MP["url"]]
-    assert claude.install_args() == ["tool@gitmp"]
-    assert claude.enable_args() == ["tool@gitmp"]
-    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
+    assert claude.mp_add_args() == [link_mp["url"]]
+    assert claude.install_args() == ["tool@linkmp"]
+    assert claude.enable_args() == ["tool@linkmp"]
+    assert claude.marketplaces_state() == [_MP1, link_mp]
 
 
-def test_recovery_puts_back_a_git_link_marketplace_now_listed_from_another_link(
-    fake_claude: Callable[..., FakeClaude],
+@pytest.mark.parametrize("link_mp", _LINK_MARKETPLACES)
+def test_recovery_puts_back_a_link_marketplace_now_listed_from_another_link(
+    fake_claude: Callable[..., FakeClaude], link_mp: dict[str, object]
 ) -> None:
-    moved = {**_GIT_MP, "url": "https://example.test/fork/gitmp.git"}
+    moved = {**link_mp, "url": str(link_mp["url"]).replace("/o/", "/fork/")}
     claude = fake_claude(
         marketplaces=[_MP1, moved],
-        plugins=[_REVIEW, _GIT_TOOL],
-        marketplace_names=_GIT_MP_NAMES,
+        plugins=[_REVIEW, _LINK_TOOL],
+        marketplace_names={str(link_mp["url"]): "linkmp"},
     )
 
     operations.recover_adapters(
         _plugin_journal(
             {
-                "plugins": {"review@mp1": _REVIEW, "tool@gitmp": _GIT_TOOL},
-                "marketplaces": {"mp1": _MP1, "gitmp": _GIT_MP},
+                "plugins": {"review@mp1": _REVIEW, "tool@linkmp": _LINK_TOOL},
+                "marketplaces": {"mp1": _MP1, "linkmp": link_mp},
             }
         )
     )
@@ -566,19 +602,22 @@ def test_recovery_puts_back_a_git_link_marketplace_now_listed_from_another_link(
     assert [
         tuple(call[1:]) for call in claude.calls if tuple(call[1:]) not in _LIST_ONLY
     ] == [
-        ("plugin", "uninstall", "tool@gitmp"),
-        ("plugin", "marketplace", "remove", "gitmp"),
-        ("plugin", "marketplace", "add", "--", _GIT_MP["url"]),
-        ("plugin", "install", "tool@gitmp", "--scope=user"),
-        ("plugin", "enable", "tool@gitmp"),
+        ("plugin", "uninstall", "tool@linkmp"),
+        ("plugin", "marketplace", "remove", "linkmp"),
+        ("plugin", "marketplace", "add", "--", link_mp["url"]),
+        ("plugin", "install", "tool@linkmp", "--scope=user"),
+        ("plugin", "enable", "tool@linkmp"),
     ]
-    assert claude.marketplaces_state() == [_MP1, _GIT_MP]
+    assert claude.marketplaces_state() == [_MP1, link_mp]
 
 
-def test_a_journal_listing_a_git_link_marketplace_without_its_link_is_refused() -> None:
+@pytest.mark.parametrize("kind", ["git", "url"])
+def test_a_journal_listing_a_link_marketplace_without_its_link_is_refused(
+    kind: str,
+) -> None:
     with pytest.raises(ValueError, match="no recoverable source identity"):
         operations._validate_plugin_payload(
-            {"plugins": {}, "marketplaces": {"gitmp": {"source": "git"}}}
+            {"plugins": {}, "marketplaces": {"linkmp": {"source": kind}}}
         )
 
 
@@ -643,8 +682,9 @@ _OLD_JOURNALS = [
 ]
 
 
-def test_an_earlier_journal_recovers_over_a_same_named_git_link_marketplace(
-    fake_claude: Callable[..., FakeClaude],
+@pytest.mark.parametrize("link_mp", _LINK_MARKETPLACES)
+def test_an_earlier_journal_recovers_over_a_same_named_link_marketplace(
+    fake_claude: Callable[..., FakeClaude], link_mp: dict[str, object]
 ) -> None:
     """Earlier releases stopped here: they could not read the listed row."""
     payload: dict[str, object] = {
@@ -652,7 +692,7 @@ def test_an_earlier_journal_recovers_over_a_same_named_git_link_marketplace(
         "marketplaces": {"mp1": _MP1_BARE},
     }
     claude = fake_claude(
-        marketplaces=[{**_GIT_MP, "name": "mp1"}],
+        marketplaces=[{**link_mp, "name": "mp1"}],
         plugins=[_REVIEW],
         marketplace_names={"o/mp1": "mp1"},
     )

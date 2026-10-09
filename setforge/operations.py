@@ -2534,8 +2534,8 @@ def _recover_marketplaces(marketplaces: dict[object, object]) -> None:
     for name in sorted((set(typed) - set(current)) | drifted):
         row = typed[name]
         source_kind, source_value = _marketplace_source_identity(name, row)
-        if source_kind in ("github", "git"):
-            # ``marketplace add`` takes a git link where it takes a repo slug.
+        if source_kind in ("github", "git", "url"):
+            # ``marketplace add`` takes a link where it takes a repo slug.
             source = MarketplaceSource(
                 source=MarketplaceSourceKind.GITHUB,
                 repo=source_value,
@@ -2568,6 +2568,7 @@ _NATIVE_MARKETPLACE_ORIGIN: Final[Mapping[str, tuple[str, str]]] = {
     "directory": ("path", "path"),
     "file": ("path", "path"),
     "git": ("git", "url"),
+    "url": ("url", "url"),
 }
 
 
@@ -2576,9 +2577,9 @@ def _marketplace_source_identity(
 ) -> tuple[str, str]:
     """Normalize Claude's accepted marketplace source JSON representations.
 
-    Returns the kind (``github``, ``path`` or ``git``) and the origin a
-    marketplace can be registered again from. Releases up to 1.5.1 raise for a
-    ``git`` row, so they refuse a journal that holds one.
+    Returns the kind (``github``, ``path``, ``git`` or ``url``) and the origin
+    a marketplace can be registered again from. Releases up to 1.5.1 raise for
+    a ``git`` or ``url`` row, so they refuse a journal that holds one.
     """
     raw_source = row.get("source")
     native = (

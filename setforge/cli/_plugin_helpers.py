@@ -1134,8 +1134,9 @@ def _plugin_state_before_reverse(
                     )
                 except ValueError:
                     continue
-                # ``marketplace add`` takes a git link where it takes a repo
-                # slug, so both are recorded as a ``github`` source.
+                # ``marketplace add`` takes a link (to a git repo or to a
+                # ``marketplace.json``) where it takes a repo slug, so all
+                # three are recorded as a ``github`` source.
                 sources[name] = (
                     {"source": MarketplaceSourceKind.PATH.value, "path": value}
                     if kind == "path"

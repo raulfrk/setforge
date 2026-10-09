@@ -505,6 +505,9 @@ def _source_identity(
     sidecar. The alias is consulted first so the declared identity resolves
     to that subdir rather than the (colliding) basename dir; absent/legacy
     sidecar degrades to plain basename resolution.
+
+    A ``#ref`` on the declared repo is left out: the tool lists a
+    marketplace added as ``<link>#<ref>`` under the bare link.
     """
     if src.source is MarketplaceSourceKind.GITHUB:
         if install_mode is ClaudeInstallMode.LOCAL_CLONE and src.repo:
@@ -517,7 +520,7 @@ def _source_identity(
             subdir = alias if alias is not None else src.repo.rsplit("/", 1)[-1]
             cache_dir = _mp_cache._safe_cache_dir(root, subdir)
             return str(cache_dir.expanduser())
-        return _normalize_github_source(src.repo or "")
+        return _normalize_github_source(src.repo or "").partition("#")[0]
     return str(Path(src.path or "").expanduser())
 
 

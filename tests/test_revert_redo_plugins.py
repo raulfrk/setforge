@@ -47,9 +47,13 @@ profiles:
     packages: [review, extra]
 """
 _PRUNE = "    reconcile: {plugins: {policy: prune}}\n"
-# The same config with ``mp2`` added from a git link, and from a directory.
+# The same config with ``mp2`` added from a git link, from a link straight to
+# a ``marketplace.json``, and from a directory.
 _GIT_URL = "https://example.com/team/mp2.git"
 _GIT_YAML = _YAML.replace("repo: o/mp2", f"repo: {_GIT_URL}")
+_JSON_URL = "https://example.com/team/mp2/marketplace.json"
+_JSON_YAML = _YAML.replace("repo: o/mp2", f"repo: {_JSON_URL}")
+_MP2_NAMES = {_GIT_URL: "mp2", _JSON_URL: "mp2"}
 _PATH_YAML = _YAML.replace(
     "mp2: {source: github, repo: o/mp2}", "mp2: {source: path, path: /srv/mp2}"
 )
@@ -121,6 +125,7 @@ _HOSTS = [
     ),
     pytest.param([_MP1], [], "", _YAML, id="adds-one-marketplace"),
     pytest.param([_MP1], [], "", _GIT_YAML, id="adds-a-marketplace-from-a-git-link"),
+    pytest.param([_MP1], [], "", _JSON_YAML, id="adds-a-marketplace-from-a-json-link"),
     pytest.param([_MP1], [], "", _PATH_YAML, id="adds-a-marketplace-from-a-directory"),
 ]
 
@@ -138,7 +143,7 @@ def test_second_revert_redoes_the_install_and_third_undoes_it_again(
         marketplaces=[dict(row) for row in marketplaces],
         plugins=[dict(row) for row in plugins],
         native_rows=True,
-        marketplace_names={_GIT_URL: "mp2"},
+        marketplace_names=_MP2_NAMES,
     )
     before_install = _state(claude)
     assert _install(tmp_path, policy, yaml).exit_code == 0
@@ -276,21 +281,29 @@ def test_revert_record_lists_what_the_revert_itself_changed(
     assert [row.plugin_count for row in transitions.list_transitions(["p"])] == [4, 4]
 
 
-def test_revert_records_a_git_link_marketplace_in_the_form_releases_read(
-    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+@pytest.mark.parametrize(
+    ("yaml", "link"),
+    [(_GIT_YAML, _GIT_URL), (_JSON_YAML, _JSON_URL)],
+    ids=["git-link", "json-link"],
+)
+def test_revert_records_a_link_marketplace_in_the_form_releases_read(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude], yaml: str, link: str
 ) -> None:
     """The record holds only the two source kinds every release accepts."""
-    fake_claude(
-        marketplaces=[dict(_MP1)], native_rows=True, marketplace_names={_GIT_URL: "mp2"}
+    claude = fake_claude(
+        marketplaces=[dict(_MP1)], native_rows=True, marketplace_names=_MP2_NAMES
     )
-    assert _install(tmp_path, yaml=_GIT_YAML).exit_code == 0
+    assert _install(tmp_path, yaml=yaml).exit_code == 0
 
     assert _revert(tmp_path).exit_code == 0
 
     record = json.loads((_newest_record() / "plugins.json").read_text(encoding="utf-8"))
     assert record["marketplaces_removed"] == [
-        ["mp2", {"source": "github", "repo": _GIT_URL}]
+        ["mp2", {"source": "github", "repo": link}]
     ]
+    # Every release registers it again with the link itself as the argument.
+    assert _revert(tmp_path).exit_code == 0
+    assert claude.mp_add_args() == [link, link]
 
 
 @pytest.mark.parametrize(
