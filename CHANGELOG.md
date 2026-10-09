@@ -15,7 +15,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `unlocked-` before the digits when written outside the mutation gate), and
   `install`, `sync`, `compare` and `cleanup-orphans --scan` skip files with
   these names. Your own files, such as `foo.tmp` or `.foo.abc12345.tmp`, are
-  handled as before.
+  handled as before. The next command that writes the same file while holding
+  the mutation gate (often `setforge recover` or the repeated command) removes
+  the leftover and prints `warning: removed a temporary file left by an
+  interrupted setforge run: <path>`. `--dry-run` removes nothing. Leftovers
+  with `unlocked-` in the name, and the `.NAME.<8 characters>.tmp` files that
+  1.5.0 and earlier left, are not removed automatically; delete them by hand.
 
 ## [1.5.0] - 2026-10-09
 

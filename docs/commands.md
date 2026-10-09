@@ -337,6 +337,20 @@ deployed, captured by `sync`, reported by `compare` or offered by
 `cleanup-orphans --scan`; your own files with other names, such as `foo.tmp`,
 are handled as before.
 
+The next command that holds the mutation gate and writes the same file removes
+the leftover and says so on standard error:
+`warning: removed a temporary file left by an interrupted setforge run: <path>`.
+Often that is the `setforge recover` or the repeated command that follows the
+interruption. It removes only regular files named
+`.NAME.setforge-<32 hex digits>.tmp` or `.NAME.bak.setforge-<32 hex digits>.tmp`
+in the directory of the file `NAME` it is writing; it never searches other
+directories and never removes a symlink or a directory. `--dry-run` writes
+nothing, so it removes nothing. Three kinds of leftover stay until you delete
+them: `unlocked-` names, because their writer may still be running; a leftover
+beside a file SetForge does not write again; and the
+`.NAME.<8 characters>.tmp` files that earlier releases left, because that
+name does not prove the file is SetForge's.
+
 ## Package locks and Cargo
 
 `setforge lock --profile=<profile>` resolves all lockable entries selected by

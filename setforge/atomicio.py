@@ -23,8 +23,9 @@ The recipe is the standard write-temp-then-rename dance:
 
 On any failure the temp file is unlinked so no ``.tmp`` debris leaks. A
 process killed between steps 1 and 5 cannot clean up, so every temp file is
-named by :func:`temp_name` and directory walks skip such names
-(:func:`is_temp_name`).
+named by :func:`temp_name`: directory walks skip such names
+(:func:`is_temp_name`) and a later write of the same destination under the
+mutation gate removes them.
 """
 
 import contextlib
@@ -38,6 +39,8 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import typer
+
 from setforge import locking
 from setforge.errors import SetforgeError
 
@@ -45,6 +48,7 @@ RENAME_NOREPLACE = 1
 RENAME_EXCHANGE = 2
 RENAME_FLAGS_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS})
 
+_GATED_TEMP = r"\.setforge-[0-9a-f]{32}\.tmp"
 _TEMP_NAME_RE = re.compile(r"\..+\.setforge-(?:unlocked-)?[0-9a-f]{32}\.tmp", re.DOTALL)
 
 
@@ -54,7 +58,8 @@ def temp_name(name: str) -> str:
     A name made while the mutation gate is held is ``.<name>.setforge-<hex>.tmp``;
     one made outside it carries ``unlocked-`` before the hex. The gate is
     exclusive and dies with its process, so a gate holder that meets the first
-    form knows its writer is gone; the second form may belong to a live writer.
+    form knows its writer is gone; the second form may belong to a live writer
+    and is never removed.
     """
     marker = "setforge-" if locking.mutation_gate_held() else "setforge-unlocked-"
     return f".{name}.{marker}{uuid4().hex}.tmp"
@@ -63,6 +68,43 @@ def temp_name(name: str) -> str:
 def is_temp_name(name: str) -> bool:
     """Whether ``name`` has either shape :func:`temp_name` produces."""
     return _TEMP_NAME_RE.fullmatch(name) is not None
+
+
+def _sweep_stale_temp_files(path: Path) -> None:
+    """Remove temp files a killed gate holder left for the destination ``path``.
+
+    Only under the mutation gate, only regular files in ``path``'s own
+    directory, and only the gated names of ``path`` and its ``.bak``. Each
+    removal is reported on stderr; a failure is skipped, never raised.
+    """
+    if not locking.mutation_gate_held():
+        return
+    stale = re.compile(re.escape(f".{path.name}") + r"(?:\.bak)?" + _GATED_TEMP)
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        for name in sorted(os.listdir(parent_fd)):  # noqa: PTH208 - anchored dirfd
+            if stale.fullmatch(name) is None:
+                continue
+            try:
+                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                os.unlink(name, dir_fd=parent_fd)
+            except OSError:
+                continue
+            typer.secho(
+                "warning: removed a temporary file left by an interrupted "
+                f"setforge run: {path.parent / name}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    except OSError:
+        return
+    finally:
+        os.close(parent_fd)
 
 
 def _create_temp(path: Path) -> int:
@@ -112,6 +154,7 @@ def atomic_write_bytes(
     deploy contract).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    _sweep_stale_temp_files(path)
     tmp_path = path.with_name(temp_name(path.name))
     fd = _create_temp(tmp_path)
     backup_path: Path | None = None
