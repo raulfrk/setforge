@@ -393,7 +393,8 @@ When another profile has a tracked file or bundle file component whose `dst`
 will not render (a misspelled variable), the scan still runs for the selected
 profile. It warns that the other profile could not be resolved, skips every
 directory only that profile uses, and treats the paths its installs and
-ownership claims recorded for that file as attributed. A `dst` that will not
+ownership claims recorded for that file as attributed, skipping a managed tree
+whole by its claimed root. A `dst` that will not
 render in the selected profile stops the scan with the error.
 
 Reversible deletion stores typed absent/file/symlink images, including

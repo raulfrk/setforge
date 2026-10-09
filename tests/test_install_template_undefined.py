@@ -286,8 +286,13 @@ def _write_q_file_config(
         if q_dst is not None
         else ""
     )
+    header = (
+        'schema_version: "6.2"\nminimum_version: "6.2"\n'
+        if kind == "tree"
+        else "version: 1\n"
+    )
     config_repo.config.write_text(
-        "version: 1\n"
+        f"{header}"
         "tracked_files:\n"
         "  good:\n    src: ok.txt\n    dst: '{{ home }}/out/ok.txt'\n"
         "    template: true\n"
@@ -474,3 +479,36 @@ def test_bundle_file_typo_in_this_profiles_own_bundle_is_still_refused(
     assert result.exit_code != 0, result.output
     assert isinstance(result.exception, ConfigError)
     assert "hom" in str(result.exception)
+
+
+def test_scan_leaves_a_managed_tree_alone_when_only_its_root_claim_remains(
+    config_repo: ConfigRepo,
+    init_git_repo: Callable[[Path], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lost tree sits inside ``p``'s directory and the transition log is gone."""
+    init_git_repo(config_repo.root)
+    clean = _write_q_file_config(config_repo, kind="tree", q_dst="{{ home }}/out/sub")
+    for profile in ("p", "q"):
+        installed = _run_as(profile, "install", clean, *_INSTALL_ARGS, "--no-fetch")
+        assert installed.exit_code == 0, installed.output
+    deployed = Path.home() / "out" / "sub" / "inner.txt"
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+    shutil.rmtree(transitions.transitions_root())
+
+    config = _write_q_file_config(config_repo, kind="tree", q_dst="{{ hom }}/out/sub")
+    listed = _scan("p", config)
+
+    assert listed.exit_code == 0, listed.output
+    assert str(stray) in _flat(listed)
+    assert str(deployed) not in _flat(listed)
+
+    monkeypatch.setattr(
+        orphans_mod, "_confirm_scan_entries", lambda entries, _console: entries
+    )
+    applied = _scan("p", config, "--apply")
+
+    assert applied.exit_code == 0, applied.output
+    assert not stray.exists()
+    assert deployed.read_text(encoding="utf-8") == _BODY

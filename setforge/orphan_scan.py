@@ -20,6 +20,7 @@ from setforge.config import (
     resolve_effective_profile,
 )
 from setforge.errors import ConfigError, SetforgeError
+from setforge.ownership import OwnershipStore
 from setforge.paths import journals_root, snapshots_root, state_root
 
 
@@ -214,7 +215,7 @@ def _managed_inventory(
                 snapshots_root(),
             )
         ),
-        *sorted(unresolved_roots - roots, key=str),
+        *sorted((unresolved_roots - roots) | _claimed_directories(lost_ids), key=str),
     )
     roots |= unresolved_roots
     bounded_roots = tuple(
@@ -359,6 +360,26 @@ def _recorded_destinations(ids: set[str], transitions_dir: Path) -> set[Path]:
             for tracked_id in ids
         )
         for path in destinations
+    }
+
+
+def _claimed_directories(ids: set[str]) -> set[Path]:
+    """Directories an ownership claim records as the root of these tracked ids.
+
+    A managed tree is claimed by its root alone, which names none of the files
+    under it, so the whole directory is left out of the scan.
+    """
+    if not ids:
+        return set()
+    references = {f"tracked_files.{tracked_id}" for tracked_id in ids}
+    return {
+        _norm(Path(claim.locator))
+        for claim in OwnershipStore().list_claims()
+        if claim.resource_id.kind == "file"
+        and claim.resource_id.provider == "tracked"
+        and Path(claim.locator).is_absolute()
+        and Path(claim.locator).is_dir()
+        and references.intersection(claim.declaration_refs)
     }
 
 
