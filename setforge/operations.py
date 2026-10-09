@@ -2311,6 +2311,7 @@ def plugin_recovery_baseline(
     *,
     touched: Collection[str],
     marketplaces_added: Collection[str],
+    operation: str = "install",
 ) -> dict[str, object]:
     """Build the plugin recovery baseline from the plugin tool's inventory.
 
@@ -2321,7 +2322,8 @@ def plugin_recovery_baseline(
     (``touched``) or whose marketplace it would register (``marketplaces_added``)
     cannot be left out: the operation stops with a :class:`SetforgeError` before
     anything changes. A plugin with no ``enabled`` state is recorded as not
-    enabled, which is how recovery reads it on both sides.
+    enabled, which is how recovery reads it on both sides. ``operation`` names
+    the command in that error.
     """
     recorded: dict[str, dict[str, object]] = {}
     for plugin_id, row in plugins.items():
@@ -2336,9 +2338,9 @@ def plugin_recovery_baseline(
         ):
             raise SetforgeError(
                 f"plugin {plugin_id!r} is installed, but {problem}, so a failed "
-                "install could not put it back as it was. Uninstall it with "
+                f"{operation} could not put it back as it was. Uninstall it with "
                 f"`claude plugin uninstall {plugin_id}` (or, if its marketplace "
-                "is missing, register that marketplace), then run install again."
+                f"is missing, register that marketplace), then run {operation} again."
             )
     return {"plugins": recorded, "marketplaces": dict(marketplaces)}
 

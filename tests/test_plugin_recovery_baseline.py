@@ -8,6 +8,11 @@ install with a raw ``ValueError``. Now an install that does not touch the plugin
 goes ahead and a rollback leaves the plugin installed; one that would change it,
 or register its marketplace, stops before changing anything, with an error that
 names the plugin.
+
+``revert`` records the same inventory before it changes anything, so it follows
+the same rules: a revert whose recorded transition does not involve the plugin
+goes ahead and leaves the plugin alone, and one that would have to change it
+stops first.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import operations
+from setforge import operations, transitions
 from setforge.cli import app
 from setforge.errors import SetforgeError
 from tests.conftest import FakeClaude
@@ -82,6 +87,28 @@ def _claude(
         marketplaces=[{"name": "mp1", "source": "o/mp1"}],
         plugins=[{"id": "review@mp1", "enabled": True, "scope": "user"}, dict(odd)],
     )
+
+
+def _revert(tmp_path: Path) -> Result:
+    return CliRunner().invoke(
+        app,
+        [
+            "revert",
+            "--profile=p",
+            f"--config={tmp_path / 'setforge.yaml'}",
+            "--yes",
+        ],
+    )
+
+
+def _claude_calls_after(claude: FakeClaude, start: int) -> set[tuple[str, ...]]:
+    return {tuple(call[1:]) for call in claude.calls[start:]}
+
+
+_LIST_ONLY = {
+    ("plugin", "list", "--json"),
+    ("plugin", "marketplace", "list", "--json"),
+}
 
 
 @pytest.mark.parametrize("odd", _ODD_PLUGINS)
@@ -281,3 +308,125 @@ def test_recovery_uninstalls_what_the_install_added_but_spares_such_a_plugin(
 
     assert uninstalled == ["added@mp2"]
     assert list(marketplaces) == ["mp1"]
+
+
+@pytest.mark.parametrize("odd", _ODD_PLUGINS)
+def test_revert_that_does_not_involve_the_plugin_leaves_it_alone(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude], odd: dict[str, object]
+) -> None:
+    claude = _claude(fake_claude, odd)
+    assert _install(tmp_path).exit_code == 0
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert claude.uninstall_args() == ["extra@mp1"]
+    assert claude.install_args() == ["extra@mp1"]
+    assert claude.installed_state()[str(odd["id"])] == odd
+    assert not (Path.home() / ".setforge-test" / "y").exists()
+
+
+@pytest.mark.parametrize("odd", _ODD_PLUGINS)
+def test_revert_of_the_revert_leaves_the_plugin_alone_too(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude], odd: dict[str, object]
+) -> None:
+    claude = _claude(fake_claude, odd)
+    assert _install(tmp_path).exit_code == 0
+    assert _revert(tmp_path).exit_code == 0
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert claude.installed_state()[str(odd["id"])] == odd
+    assert str(odd["id"]) not in claude.uninstall_args()
+
+
+@pytest.mark.parametrize("odd", _ODD_PLUGINS)
+def test_failed_revert_puts_its_plugin_changes_back_and_keeps_the_plugin(
+    tmp_path: Path,
+    fake_claude: Callable[..., FakeClaude],
+    monkeypatch: pytest.MonkeyPatch,
+    odd: dict[str, object],
+) -> None:
+    from setforge.cli import revert as revert_cli
+
+    claude = _claude(fake_claude, odd)
+    assert _install(tmp_path).exit_code == 0
+    reverse_and_record = revert_cli._write_reverse_transition
+
+    def fail_after_plugins(*args: object, **kwargs: object) -> Path:
+        reverse_and_record(*args, **kwargs)  # type: ignore[arg-type]
+        raise RuntimeError("write failed after the plugins were reversed")
+
+    monkeypatch.setattr(revert_cli, "_write_reverse_transition", fail_after_plugins)
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert claude.uninstall_args() == ["extra@mp1"]
+    installed = claude.installed_state()
+    assert installed["extra@mp1"]["id"] == "extra@mp1"
+    assert installed[str(odd["id"])] == odd
+    assert [m["name"] for m in claude.marketplaces_state()] == ["mp1", "mp2"]
+    assert operations.active("p") is None
+
+
+def test_revert_that_would_change_the_plugin_stops_before_changing_anything(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    claude = fake_claude(
+        marketplaces=[{"name": "mp1", "source": "o/mp1"}],
+        plugins=[{"id": "review@mp1", "enabled": True, "scope": "user"}],
+    )
+    assert _install(tmp_path).exit_code == 0
+    # The user drops the marketplace outside setforge: the plugin the install
+    # added stays installed, but recovery could no longer reinstall it.
+    claude.run(["claude", "plugin", "marketplace", "remove", "mp1"])
+    calls_before = len(claude.calls)
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SetforgeError), result.exception
+    assert "plugin 'extra@mp1' is installed" in str(result.exception)
+    assert "'mp1' is not registered" in str(result.exception)
+    assert "then run revert again" in str(result.exception)
+    assert _claude_calls_after(claude, calls_before) <= _LIST_ONLY
+    assert "extra@mp1" in claude.installed_state()
+    assert operations.active("p") is None
+    assert (Path.home() / ".setforge-test" / "y").exists()
+
+
+def test_revert_that_would_register_the_plugins_marketplace_stops_first(
+    tmp_path: Path, fake_claude: Callable[..., FakeClaude]
+) -> None:
+    claude = fake_claude(
+        marketplaces=[{"name": "mp1", "source": "o/mp1"}],
+        plugins=[{"id": "stray@mp2", "enabled": True}],
+    )
+    write_setforge_yaml(tmp_path, _YAML)
+    # A record of a marketplace removal: reverting it registers mp2 again.
+    transitions.write_transition(
+        transitions.make_meta(transitions.TransitionCommand.INSTALL, "p"),
+        {},
+        {},
+        None,
+        plugin_delta=transitions.PluginDelta(
+            installed=(),
+            enabled=(),
+            disabled=(),
+            marketplaces_added=(),
+            marketplaces_removed=(("mp2", {"source": "github", "repo": "o/mp2"}),),
+        ),
+    )
+    calls_before = len(claude.calls)
+
+    result = _revert(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SetforgeError), result.exception
+    assert "plugin 'stray@mp2' is installed" in str(result.exception)
+    assert "'mp2' is not registered" in str(result.exception)
+    assert _claude_calls_after(claude, calls_before) <= _LIST_ONLY
+    assert [m["name"] for m in claude.marketplaces_state()] == ["mp1"]
+    assert operations.active("p") is None
