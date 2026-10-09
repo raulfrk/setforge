@@ -3039,24 +3039,20 @@ def _install_adapter_snapshots(
             )
         )
     if plan.plugins is not None:
-        snapshots.append(
-            operations.AdapterSnapshot(
-                operations.AdapterKind.PLUGINS,
-                json.dumps(
-                    operations.plugin_recovery_baseline(
-                        plan.plugins.pre_plugins,
-                        plan.plugins.pre_marketplaces,
-                        touched={
-                            *plan.plugins.to_install,
-                            *plan.plugins.to_enable,
-                            *plan.plugins.to_disable,
-                        },
-                        marketplaces_added=plan.plugins.marketplaces_added,
-                    ),
-                    sort_keys=True,
-                ),
-            )
+        plugin_snapshot = operations.plugin_recovery_snapshot(
+            plan.plugins.pre_plugins,
+            plan.plugins.pre_marketplaces,
+            changes_plugins=plan.plugins.policy is not ReconcilePolicy.REPORT
+            and bool(
+                plan.plugins.to_install
+                or plan.plugins.to_enable
+                or plan.plugins.to_disable
+                or plan.plugins.marketplaces_added
+            ),
+            operation="install",
         )
+        if plugin_snapshot is not None:
+            snapshots.append(plugin_snapshot)
     if plan.codex_plugins is not None:
         snapshots.append(
             operations.AdapterSnapshot(

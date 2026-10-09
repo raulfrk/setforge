@@ -351,6 +351,22 @@ def _make_resolved(
 # ---------------------------------------------------------------------------
 
 
+def _native_marketplace_row(name: str, source: str) -> dict[str, str]:
+    """Return the row the real tool lists for a marketplace added from ``source``.
+
+    ``owner/repo`` is listed as a ``github`` source, a link ending in ``.git``
+    as ``git``, any other link as ``url``, and a local path as ``file`` (a
+    ``.json`` file) or ``directory``.
+    """
+    if "://" in source or source.startswith("git@"):
+        kind = "git" if source.endswith(".git") else "url"
+        return {"name": name, "source": kind, "url": source}
+    if source.startswith("/"):
+        kind = "file" if source.endswith(".json") else "directory"
+        return {"name": name, "source": kind, "path": source}
+    return {"name": name, "source": "github", "repo": source}
+
+
 class FakeClaude:
     """In-memory simulation of ``claude plugin`` commands.
 
@@ -368,9 +384,17 @@ class FakeClaude:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
+        native_rows: bool = False,
+        marketplace_names: dict[str, str] | None = None,
     ) -> None:
         # Each marketplace entry: {"name": str, "source": str, ...}
         self._marketplaces: list[dict] = list(marketplaces or [])
+        # ``native_rows`` lists an added marketplace in the shape the real
+        # tool reports (see ``_native_marketplace_row``) instead of echoing
+        # the argument. ``marketplace_names`` maps an ``add`` argument to the
+        # name the marketplace declares, which need not match any config key.
+        self._native_rows = native_rows
+        self._marketplace_names = dict(marketplace_names or {})
         # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
         self._plugins: list[dict] = list(plugins or [])
         self.calls: list[list[str]] = []
@@ -406,8 +430,14 @@ class FakeClaude:
             # ``marketplace remove <name>`` matches the entry recorded
             # here (revert flow uses the declared YAML name).
             source_url = cmd[4] if len(cmd) > 3 and cmd[3] == "--" else cmd[3]
-            name = source_url.rsplit("/", 1)[-1]
-            self._marketplaces.append({"name": name, "source": source_url})
+            name = self._marketplace_names.get(
+                source_url, source_url.rsplit("/", 1)[-1]
+            )
+            self._marketplaces.append(
+                _native_marketplace_row(name, source_url)
+                if self._native_rows
+                else {"name": name, "source": source_url}
+            )
             return subprocess.CompletedProcess(args, 0, "", "")
         if (
             len(cmd) >= 3
@@ -479,6 +509,12 @@ class FakeClaude:
             if len(c) > 5 and c[1:5] == ["plugin", "marketplace", "add", "--"]
         ]
 
+    def drop_plugin_field(self, plugin_id: str, field: str) -> None:
+        """Stop listing ``field`` for one installed plugin."""
+        for plugin in self._plugins:
+            if plugin["id"] == plugin_id:
+                del plugin[field]
+
     def installed_state(self) -> dict[str, dict]:
         """Snapshot of installed plugins keyed by plugin id.
 
@@ -516,8 +552,15 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
+        native_rows: bool = False,
+        marketplace_names: dict[str, str] | None = None,
     ) -> FakeClaude:
-        fake = FakeClaude(marketplaces=marketplaces, plugins=plugins)
+        fake = FakeClaude(
+            marketplaces=marketplaces,
+            plugins=plugins,
+            native_rows=native_rows,
+            marketplace_names=marketplace_names,
+        )
         # Snapshot the pre-monkeypatch ``subprocess.run`` so FakeClaude
         # can forward non-claude argv (git etc.) to the real function.
         # Capturing ``subprocess.run`` here — before the

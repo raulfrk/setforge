@@ -149,23 +149,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   policies and a real run are unchanged.
 
 - `setforge install` and `setforge revert` no longer stop with a Python
-  traceback (`ValueError: invalid plugin recovery entry`, present since 1.1.0)
-  when the plugin tool lists an installed plugin whose marketplace is not
-  registered, whose id is not `NAME@MARKETPLACE`, or that has no enabled state.
-  An install or revert that does not change that plugin now goes ahead, and if
-  it fails later the plugin is left installed as it was while the plugins and
-  marketplaces an install added are removed again. An install or revert that
-  would change that plugin (for example a `prune` plugin policy that would
-  disable it, or a recorded install of it that revert would uninstall) or would
-  register its missing marketplace now stops before changing anything, with an
-  error naming the plugin and saying to uninstall it or register that
-  marketplace yourself. A marketplace the plugin tool reports from a local
-  directory or marketplace file (as it does for one added from a path) is now
-  read like any other, and one reported with a source SetForge cannot read back
-  (for example a URL; the error was `ValueError: marketplace '...' has no
-  recoverable source identity`) is left registered as it is: install and revert
-  go ahead, and a revert that would remove it stops first, with an error naming
-  the marketplace.
+  traceback (`ValueError: invalid plugin recovery entry` or `ValueError:
+  marketplace '...' has no recoverable source identity`, present since 1.1.0)
+  when the plugin tool lists something a rollback could not put back: an
+  installed plugin whose marketplace is not registered, whose id is not
+  `NAME@MARKETPLACE` or that has no enabled state, or a marketplace reported
+  with a source other than a GitHub repo or a local path (for example a URL).
+  An install or revert that changes no Claude plugin or marketplace, which
+  includes every install with a plugin policy of `report`, now goes ahead; it
+  records no plugin inventory, so if it fails later its rollback runs no plugin
+  command. An install or revert that would change a plugin or marketplace stops
+  before changing anything, with an error that names each such item and the
+  `claude plugin` command that clears it. A marketplace the plugin tool reports
+  from a local directory or marketplace file (as it does for one added from a
+  path) is now recorded like any other, so it no longer stops either command.
+  What a rollback does is unchanged: it removes the plugins and marketplaces
+  the failed command added and restores the ones it removed.
 
 ## [1.5.0] - 2026-10-09
 
