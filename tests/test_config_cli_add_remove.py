@@ -1046,3 +1046,149 @@ def test_config_remove_keeps_the_comment_above_the_next_key(
 
     assert result.exit_code == 0, result.output
     assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+@pytest.mark.parametrize(
+    ("seed", "path", "expected"),
+    [
+        pytest.param(
+            "tracked_files:\n  foo:\n    preserve_user_keys:\n      - a\n",
+            "tracked_files.foo",
+            "tracked_files: {}\n",
+            id="ends-on-a-list",
+        ),
+        pytest.param(
+            "binaries:\n  code: /usr/bin/code\n",
+            "binaries.code",
+            "binaries: {}\n",
+            id="scalar",
+        ),
+        pytest.param(
+            "claude:  # this host\n  # how plugins land\n  install_mode: copy\n\n",
+            "claude.install_mode",
+            "claude: {} # this host\n  # how plugins land\n\n",
+            id="comments-and-blank-line-around-it",
+        ),
+        pytest.param(
+            "tracked_files:\n  foo:\n    preserve_user_keys: [a]\n  # more to come\n",
+            "tracked_files.foo",
+            "tracked_files: {}\n  # more to come\n",
+            id="ends-on-an-inline-list",
+        ),
+    ],
+)
+def test_config_remove_of_the_only_key_of_a_block_keeps_the_comment_after_it(
+    runner: CliRunner, seed_local: Path, seed: str, path: str, expected: str
+) -> None:
+    """The comment above the next block survives emptying the one before it."""
+    _write_local(seed_local, seed + _AFTER)
+
+    result = runner.invoke(app, ["config", "remove", "--local", path, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+def test_config_remove_of_the_only_key_of_a_file_keeps_its_comments(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    _write_local(seed_local, "# this host\nbinaries:\n  code: /usr/bin/code\n\n# end\n")
+
+    result = runner.invoke(app, ["config", "remove", "--local", "binaries", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == "# this host\n{}\n\n# end\n"
+
+
+@pytest.mark.parametrize(
+    ("seed", "path", "expected"),
+    [
+        pytest.param(
+            "binaries:\n  code: /usr/bin/code\n"
+            "tracked_files:\n  foo:\n    preserve_user_keys:\n      - one\n"
+            "      - {x: 1}\n",
+            "tracked_files",
+            "binaries:\n  code: /usr/bin/code\n",
+            id="removed-list-ends-on-an-inline-mapping",
+        ),
+        pytest.param(
+            "binaries:\n  code: /usr/bin/code\n"
+            "tracked_files:\n  foo:\n    preserve_user_keys:\n      - one\n"
+            "      - [two]\n",
+            "tracked_files",
+            "binaries:\n  code: /usr/bin/code\n",
+            id="removed-list-ends-on-an-inline-list",
+        ),
+        pytest.param(
+            "tracked_files:\n  foo:\n    preserve_user_keys:\n      - a\n"
+            "      - [b]\n# about binaries\nbinaries:\n  code: /usr/bin/code\n",
+            "binaries",
+            "tracked_files:\n  foo:\n    preserve_user_keys:\n      - a\n"
+            "      - [b]\n# about binaries\n",
+            id="list-before-the-removed-key-ends-on-an-inline-list",
+        ),
+    ],
+)
+def test_config_remove_keeps_comments_in_order_around_a_list_ending_on_one_line(
+    runner: CliRunner, seed_local: Path, seed: str, path: str, expected: str
+) -> None:
+    """A list whose last entry is ``- {x: 1}`` or ``- [b]`` keeps what follows it.
+
+    The comment above the next key used to vanish with the removed list, and
+    to move above the removed key's own comment when the list came before it.
+    """
+    _write_local(seed_local, seed + _AFTER)
+
+    result = runner.invoke(app, ["config", "remove", "--local", path, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    [
+        pytest.param(
+            "orphan_ignore:\n  # caches\n  - one\n  # logs\n  - two\n",
+            "orphan_ignore:\n  # caches\n  # logs\n  - two\n",
+            id="comment-under-the-key",
+        ),
+        pytest.param(
+            "orphan_ignore:\n\n  - one\n  # logs\n  - two\n",
+            "orphan_ignore:\n\n  # logs\n  - two\n",
+            id="blank-line-under-the-key",
+        ),
+        pytest.param(
+            "orphan_ignore:  # mine\n  # caches\n  - one  # gone\n\n"
+            "  # logs\n  - two\n",
+            "orphan_ignore:  # mine\n  # caches\n\n  # logs\n  - two\n",
+            id="comment-on-the-key-line-too",
+        ),
+    ],
+)
+def test_config_remove_of_the_first_of_several_entries_keeps_the_order_of_comments(
+    runner: CliRunner, seed_local: Path, seed: str, expected: str
+) -> None:
+    """The lines under the key stay above the ones that followed the entry."""
+    _write_local(seed_local, seed + _AFTER)
+
+    argv = ["config", "remove", "--local", "orphan_ignore", "one", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+def test_config_edit_keeps_the_blank_lines_at_the_top_of_the_file(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """Two or more blank lines at the top used to gain one with every edit."""
+    seed = "\n\n# this host\nbinaries:\n  code: /usr/bin/code\n  gh: /usr/bin/gh\n"
+    _write_local(seed_local, seed)
+
+    result = runner.invoke(app, ["config", "remove", "--local", "binaries.gh", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == seed.replace(
+        "  gh: /usr/bin/gh\n", ""
+    )

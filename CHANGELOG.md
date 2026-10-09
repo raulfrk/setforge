@@ -61,21 +61,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A file or directory in a managed tree that `install` cannot read, such as
   one with permissions `000`, is now reported as "could not be read" with the
   path and "Permission denied". It was reported as "changed while scanning".
-- `setforge config remove` of a key that ends on a list (for example
-  `config remove --local plugins`) no longer deletes the comment above the next
-  key, as long as the removed key has another key beside it in its block.
-  Removing a key that follows a list or a mapping no longer moves that
-  comment above the first entry of the list before it, and no longer
-  re-indents that list when it is indented differently from the rest of the
-  file. A comment inside the removed list is removed with it instead of being
-  left behind. Below a list written on one line (`[a, b]`), removing a key no
-  longer deletes the comment or blank line above it, and removing the only
-  entry of a list no longer deletes the comment after that list. Removing the
+- `setforge config remove` now keeps every comment and blank line that is not
+  part of what it removes, in the order they were written, and leaves every
+  other line of the file as it was. What goes with a removed key or list entry
+  is its own lines only: the comment on its line and, for a key, the comments
+  inside its value. The comments and blank lines above it and after it stay.
+  Before, removing a key that ends on a list (for example `config remove
+  --local plugins`) deleted the comment above the next key; so did removing the
   only key of a block (for example `config remove --local tracked_files.foo`
-  when `foo` is the only entry under `tracked_files`) still deletes the comment
-  that follows the block, as it did before. So does removing a key whose list
-  ends on an entry written on one line (`- {x: 1}` or `- [b]`): the comment
-  above the next key is still deleted.
+  when `foo` is the only entry under `tracked_files`), and removing the first
+  key of a block rewrote that comment and dropped the blank lines around it.
+  Removing a key that follows a list or a mapping moved the comment above the
+  first entry of that list and could re-indent it. Removing the first of
+  several list entries moved the comment under the key below the one above
+  the next entry. Next to a list or an entry written on one line (`[a, b]`,
+  `- {x: 1}`) comments were deleted or changed places.
+- Editing a `setforge.yaml` or `local.yaml` that starts with two or more blank
+  lines no longer adds one more blank line at the top with every edit.
 
 ### Changed
 

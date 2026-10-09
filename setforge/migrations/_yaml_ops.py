@@ -140,9 +140,11 @@ def render_yaml(
     text = (original or "").lstrip(_BOM).replace("\r\n", "\n")
     if text and not text.endswith("\n"):
         text += "\n"
-    # ruamel drops blank lines above the first key; carry them over as they are.
+    # ruamel drops the first blank line above the first key; carry them all
+    # over as they are, and drop the ones it kept in ``data``.
     body = text.lstrip("\n")
-    for candidate in _render_lf(data, body, fallback):
+    carried = max(len(text) - len(body) - 1, 0)
+    for candidate in _render_lf(data, body, fallback, carried):
         if _reads_back(candidate, data):
             rendered = text[: len(text) - len(body)] + candidate
             break
@@ -236,10 +238,13 @@ def _render_lf(
     data: Any,  # noqa: ANN401 — ruamel round-trip data is untyped
     text: str,
     fallback: tuple[int, int, int],
+    carried: int = 0,
 ) -> list[str]:
     """Return the renderings of ``data`` to try, the most faithful first.
 
     The last is always the plain dump in the original's first indent style.
+    ``carried`` leading blank lines of the dump are left out: the caller
+    writes the original's own.
     """
     indent = (_detect_indent(text) if text.strip() else None) or fallback
 
@@ -252,6 +257,7 @@ def _render_lf(
 
     _rehome_comments_of_emptied(data)
     new = dump(data)
+    new = new[min(carried, len(new) - len(new.lstrip("\n"))) :]
     if not text.strip():
         return [new]
     try:
