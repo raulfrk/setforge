@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
+  `NAME` is already declared under a different marketplace. It used to register
+  the new marketplace and install the plugin from it while `setforge.yaml` kept
+  naming the old one, and exited 0. It now stops before changing anything, names
+  the marketplace the plugin is already declared under, and leaves
+  `setforge.yaml` and the plugin tool untouched. Adding the plugin again under
+  the marketplace it is declared under, or to another profile, works as before.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

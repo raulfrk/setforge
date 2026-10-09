@@ -13,6 +13,7 @@ Round-trip preserves comments and key ordering via ruamel.yaml's ``rt`` mode.
 from __future__ import annotations
 
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 
 from ruamel.yaml.comments import (
@@ -22,6 +23,8 @@ from ruamel.yaml.comments import (
 
 from setforge.atomicio import atomic_write_text
 from setforge.config import (
+    ClaudePluginRef,
+    CodexPluginRef,
     Config,
     MarketplaceSource,
     MarketplaceSourceKind,
@@ -33,6 +36,7 @@ from setforge.errors import ConfigError, ProfileNotFound
 from setforge.migrations._yaml_ops import render_yaml, yaml_rt
 
 __all__ = [
+    "require_plugin_marketplace_available",
     "require_plugin_package_available",
     "yaml_add_codex_marketplace",
     "yaml_add_codex_plugin",
@@ -319,6 +323,31 @@ def require_plugin_package_available(
         f"package {plugin_ref!r} already exists ({detail}), so plugin "
         f"{plugin_ref!r} cannot be added to profile {profile_name!r} under that "
         "name; rename or remove that package first"
+    )
+
+
+def require_plugin_marketplace_available(
+    declared: Mapping[str, ClaudePluginRef | CodexPluginRef],
+    plugin_name: str,
+    marketplace: str,
+) -> None:
+    """Raise :class:`ConfigError` if ``plugin_name`` is declared elsewhere.
+
+    "Elsewhere" means under another marketplace. ``declared`` is the
+    ``claude_plugins`` (or ``codex.plugins``) registry. A plugin has one
+    declaration there; :func:`yaml_add_plugin` and
+    :func:`yaml_add_codex_plugin` keep an existing one untouched, so adding the
+    plugin from a different marketplace would install it from that marketplace
+    while the config still names the old one. Re-adding it under the marketplace
+    it is already declared under is fine.
+    """
+    existing = declared.get(plugin_name)
+    if existing is None or existing.marketplace == marketplace:
+        return
+    raise ConfigError(
+        f"plugin {plugin_name!r} is already declared under marketplace "
+        f"{existing.marketplace!r}, so it cannot be added from marketplace "
+        f"{marketplace!r}; change or remove that declaration in setforge.yaml first"
     )
 
 
