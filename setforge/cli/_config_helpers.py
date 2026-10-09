@@ -450,16 +450,35 @@ def _keep_entry_tail(parent: CommentedMap, leaf: str, index: int, tail: str) -> 
 def _following_comment(node: CommentedMap, key: str) -> str:
     """Comment and blank lines after ``key``'s line that belong to what follows.
 
-    ruamel stores them in the same token as the key's end-of-line comment.
+    ruamel stores them in the same token as the end-of-line comment of the
+    key's last line (the last entry's, when the value is a block mapping or list).
     """
-    value = node[key]
-    if isinstance(value, CommentedMap) and value:
-        return _following_comment(value, list(value)[-1])
-    entry = node.ca.items.get(key)
-    token = entry[2] if entry else None
+    leaf, leaf_key = _last_leaf(node, key)
+    entry = leaf.ca.items.get(leaf_key)
+    token = entry[_tail_slot(leaf)] if entry else None
     if token is None or "\n" not in token.value:
         return ""
     return token.value.split("\n", 1)[1]
+
+
+def _last_leaf(node: Any, key: Any) -> tuple[Any, Any]:  # noqa: ANN401
+    """The collection and key (or index) whose comment follows ``node[key]``.
+
+    A block mapping or list ends on its last entry's line, so the comment after
+    the whole value is stored with that entry, however deep.
+    """
+    value = node[key]
+    if not isinstance(value, (CommentedMap, CommentedSeq)):
+        return node, key
+    if not value or value.fa.flow_style():
+        return node, key
+    last = list(value)[-1] if isinstance(value, CommentedMap) else len(value) - 1
+    return _last_leaf(value, last)
+
+
+def _tail_slot(leaf: Any) -> int:  # noqa: ANN401
+    """Which comment slot a mapping key (2) or a list item (0) keeps its tail in."""
+    return 2 if isinstance(leaf, CommentedMap) else 0
 
 
 def _keep_following_comment(
@@ -467,12 +486,13 @@ def _keep_following_comment(
 ) -> None:
     """Re-attach ``tail`` of the removed ``keys[index]`` to its neighbour."""
     if index > 0:
-        prev = keys[index - 1]
-        entry = node.ca.items.setdefault(prev, [None, None, None, None])
-        if entry[2] is None:
-            entry[2] = CommentToken("\n" + tail, CommentMark(0))
+        leaf, leaf_key = _last_leaf(node, keys[index - 1])
+        slot = _tail_slot(leaf)
+        entry = leaf.ca.items.setdefault(leaf_key, [None, None, None, None])
+        if entry[slot] is None:
+            entry[slot] = CommentToken("\n" + tail, CommentMark(0))
         else:
-            entry[2].value += tail
+            entry[slot].value += tail
     elif index + 1 < len(keys):
         following = keys[index + 1]
         lines = [line.strip().removeprefix("#").strip() for line in tail.split("\n")]
