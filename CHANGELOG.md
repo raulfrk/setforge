@@ -97,6 +97,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   points at, and `--dry-run` removes nothing. A symlink with such a name that
   no deploy removes is still listed by `cleanup-orphans --scan`, as before.
 
+- An `install` killed while it was deploying a tracked file with `symlink:`
+  into a directory that the same install had just created left its temporary
+  symlink there, and `setforge recover --apply` stopped with `refusing to
+  remove non-empty recovery directory`. Recovery now also removes a symlink
+  named `.NAME.setforge-<16 hex digits>.tmp` directly inside a directory the
+  interrupted command created, with the usual warning, and then the directory.
+  It removes the symlink only, never the file it points at. A symlink with any
+  other name, including one with `u` before the digits, still stops recovery
+  and is named in the message.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

@@ -362,10 +362,11 @@ the same files.
 
 `setforge recover --apply` also removes such a leftover when it undoes a
 directory the interrupted command created: if everything directly inside that
-directory is a regular file named `.NAME.setforge-<16 hex digits>.tmp`, it
-removes those files with the same warning, then the directory. If the
-directory holds anything else (your own file, a `setforge-u` name, a symlink
-or a subdirectory), it removes nothing and stops with
+directory is a regular file or a symlink named
+`.NAME.setforge-<16 hex digits>.tmp`, it removes those entries with the same
+warning (a symlink is removed itself; what it points at is not touched), then
+the directory. If the directory holds anything else (your own file or symlink,
+a `setforge-u` name or a subdirectory), it removes nothing and stops with
 `refusing to remove non-empty recovery directory <dir>: it still holds <names>`,
 listing up to five entries. Move those entries away and run `setforge recover`
 again.

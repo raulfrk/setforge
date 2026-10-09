@@ -1486,9 +1486,9 @@ def _remove_created_directory(
 
     A write killed inside the directory leaves its temp file there. Under the
     mutation gate that writer is gone, so when every entry is a regular file
-    with a gated temp name they are removed, each reported on stderr, and the
-    directory with them. Any other entry leaves the directory and everything
-    in it untouched. Nothing is followed or entered.
+    or a symlink with a gated temp name they are unlinked, each reported on
+    stderr, and the directory with them. Any other entry leaves the directory
+    and everything in it untouched. Nothing is followed or entered.
     """
     from setforge.locking import mutation_gate_held
 
@@ -1509,9 +1509,7 @@ def _remove_created_directory(
             for entry in names
             if not mutation_gate_held()
             or not atomicio.is_gated_temp_name(entry)
-            or not stat.S_ISREG(
-                os.stat(entry, dir_fd=directory_fd, follow_symlinks=False).st_mode
-            )
+            or not _file_or_link_at(directory_fd, entry)
         )
         if blocking:
             return blocking
@@ -1522,6 +1520,12 @@ def _remove_created_directory(
         os.close(directory_fd)
     os.rmdir(name, dir_fd=dir_fd)
     return ()
+
+
+def _file_or_link_at(directory_fd: int, name: str) -> bool:
+    """Whether ``name`` is a regular file or a symlink, without following it."""
+    mode = os.stat(name, dir_fd=directory_fd, follow_symlinks=False).st_mode
+    return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
 
 
 def _blocking_entries(blocking: tuple[str, ...]) -> str:
