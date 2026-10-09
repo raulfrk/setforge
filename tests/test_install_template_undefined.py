@@ -252,12 +252,15 @@ def _write_q_file_config(
     """Profile ``p`` owns ``~/out/ok.txt``; profile ``q`` deploys one more file.
 
     ``q_dst`` is that file's destination template (``None`` leaves ``q`` out
-    entirely); ``kind`` makes it a bundle file component or a tracked file.
+    entirely); ``kind`` makes it a bundle file component, a tracked file, or a
+    tracked directory (or managed tree) holding ``inner.txt``.
     ``plain_in_qdir`` gives ``q`` an ordinary tracked file as well, so ``~/qdir``
     is a directory only ``q`` uses.
     """
-    for name in ("ok.txt", "q-file.txt", "plain.txt"):
+    for name in ("ok.txt", "q-file.txt", "plain.txt", "q-tree/inner.txt"):
         config_repo.write_tracked(name, _BODY)
+    src = "q-file.txt" if kind in ("bundle", "tracked") else "q-tree"
+    tree = "    tree: {}\n" if kind == "tree" else ""
     plain = (
         "  plain:\n    src: plain.txt\n    dst: '{{ home }}/qdir/plain.txt'\n"
         "    template: true\n"
@@ -265,8 +268,8 @@ def _write_q_file_config(
         else ""
     )
     q_file = (
-        f"  q-file:\n    src: q-file.txt\n    dst: {q_dst!r}\n    template: true\n"
-        if q_dst is not None and kind == "tracked"
+        f"  q-file:\n    src: {src}\n    dst: {q_dst!r}\n    template: true\n{tree}"
+        if q_dst is not None and kind != "bundle"
         else ""
     )
     bundle = (
@@ -283,8 +286,13 @@ def _write_q_file_config(
         if q_dst is not None
         else ""
     )
+    header = (
+        'schema_version: "6.2"\nminimum_version: "6.2"\n'
+        if kind == "tree"
+        else "version: 1\n"
+    )
     config_repo.config.write_text(
-        "version: 1\n"
+        f"{header}"
         "tracked_files:\n"
         "  good:\n    src: ok.txt\n    dst: '{{ home }}/out/ok.txt'\n"
         "    template: true\n"
@@ -333,6 +341,20 @@ def test_scan_completes_when_another_profiles_bundle_file_destination_has_a_typo
     assert stray.read_text(encoding="utf-8") == "not recorded\n"
 
 
+def test_scan_reports_a_profile_that_inherits_the_misspelled_bundle_file(
+    config_repo: ConfigRepo,
+) -> None:
+    config = _write_q_file_config(config_repo, q_dst=_Q_TYPO)
+    with config.open("a", encoding="utf-8") as handle:
+        handle.write("  r:\n    extends: q\n")
+
+    result = _scan("p", config)
+
+    assert result.exit_code == 0, result.output
+    assert "profileqcouldnotberesolved" in _flat(result)
+    assert "profilercouldnotberesolved" in _flat(result)
+
+
 @pytest.mark.parametrize("kind", ["bundle", "tracked"])
 def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     config_repo: ConfigRepo, monkeypatch: pytest.MonkeyPatch, kind: str
@@ -369,12 +391,13 @@ def test_scan_does_not_offer_files_of_a_profile_it_could_not_resolve(
     applied = _scan("p", config, "--apply")
 
     assert applied.exit_code == 0, applied.output
+    assert "profileqcouldnotberesolved" in _flat(applied)
     assert not p_stray.exists()
     assert q_stray.exists()
     assert deployed.exists()
 
 
-@pytest.mark.parametrize("kind", ["bundle", "tracked"])
+@pytest.mark.parametrize("kind", ["bundle", "tracked", "directory"])
 def test_scan_recognises_a_file_by_the_destination_an_install_recorded(
     config_repo: ConfigRepo, kind: str
 ) -> None:
@@ -383,7 +406,9 @@ def test_scan_recognises_a_file_by_the_destination_an_install_recorded(
         config_repo, kind=kind, q_dst="{{ home }}/out/q-file.txt", plain_in_qdir=True
     )
     deployed = Path.home() / "out" / "q-file.txt"
-    deployed.parent.mkdir()
+    if kind == "directory":
+        deployed = deployed / "inner.txt"
+    deployed.parent.mkdir(parents=True)
     deployed.write_text(_BODY, encoding="utf-8")
     for profile in ("p", "q"):
         assert _run_as(profile, "install", clean, *_INSTALL_ARGS).exit_code == 0
@@ -454,3 +479,36 @@ def test_bundle_file_typo_in_this_profiles_own_bundle_is_still_refused(
     assert result.exit_code != 0, result.output
     assert isinstance(result.exception, ConfigError)
     assert "hom" in str(result.exception)
+
+
+def test_scan_leaves_a_managed_tree_alone_when_only_its_root_claim_remains(
+    config_repo: ConfigRepo,
+    init_git_repo: Callable[[Path], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lost tree sits inside ``p``'s directory and the transition log is gone."""
+    init_git_repo(config_repo.root)
+    clean = _write_q_file_config(config_repo, kind="tree", q_dst="{{ home }}/out/sub")
+    for profile in ("p", "q"):
+        installed = _run_as(profile, "install", clean, *_INSTALL_ARGS, "--no-fetch")
+        assert installed.exit_code == 0, installed.output
+    deployed = Path.home() / "out" / "sub" / "inner.txt"
+    stray = Path.home() / "out" / "stray.txt"
+    stray.write_text("not recorded\n", encoding="utf-8")
+    shutil.rmtree(transitions.transitions_root())
+
+    config = _write_q_file_config(config_repo, kind="tree", q_dst="{{ hom }}/out/sub")
+    listed = _scan("p", config)
+
+    assert listed.exit_code == 0, listed.output
+    assert str(stray) in _flat(listed)
+    assert str(deployed) not in _flat(listed)
+
+    monkeypatch.setattr(
+        orphans_mod, "_confirm_scan_entries", lambda entries, _console: entries
+    )
+    applied = _scan("p", config, "--apply")
+
+    assert applied.exit_code == 0, applied.output
+    assert not stray.exists()
+    assert deployed.read_text(encoding="utf-8") == _BODY

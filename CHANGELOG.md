@@ -50,7 +50,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the scan now warns that the other profile could not be resolved, skips every
   directory only that profile uses, and does not list a file an earlier install
   or ownership claim recorded for that file, so files it deployed are not
-  offered for deletion. A file in a directory other profiles share that no
+  offered for deletion; a managed tree is skipped whole by its claimed root. A
+  file in a directory other profiles share that no
   install or claim recorded for it cannot be told from a stray file and is still
   listed, so fix the typo first if that matters. A typo in the profile you
   selected still stops the scan with the error naming the variable.
