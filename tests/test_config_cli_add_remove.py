@@ -759,6 +759,23 @@ def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
     assert seed_local.read_bytes() == before
 
 
+@pytest.mark.parametrize("seed", ["# notes\n", "# notes", "\n# notes\n\n"])
+def test_config_add_keeps_the_comments_of_a_file_that_holds_nothing_else(
+    runner: CliRunner, seed_local: Path, seed: str
+) -> None:
+    """A ``local.yaml`` of only comments used to lose them on the first add."""
+    _write_local(seed_local, seed)
+
+    argv = ["config", "add", "--local", "binaries.code", "/usr/bin/code", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    kept = seed if seed.endswith("\n") else seed + "\n"
+    assert seed_local.read_text(encoding="utf-8") == (
+        kept + "binaries:\n  code: /usr/bin/code\n"
+    )
+
+
 # An editor may leave out the final newline. The renderer used to join the new
 # line onto the last one, so every add to such a file was refused; it now reads
 # the file as newline-terminated and the written file gains the newline.

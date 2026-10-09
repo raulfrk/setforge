@@ -43,6 +43,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `binaries: {}` with the blank line or comment after it. The `{}` or `[]` used
   to be written on its own line below them, which does not parse: `ext remove`
   left a broken `setforge.yaml`, and `config remove` refused the edit.
+- `config add --local` on a `local.yaml` that holds only comments keeps them
+  above the new setting; they used to be dropped. Blank lines at the very top
+  of a config file are also kept when it is edited.
 
 - `setforge plugin add NAME@other-marketplace` (Claude or Codex) now refuses when
   `NAME` is already declared under a different marketplace. It used to register

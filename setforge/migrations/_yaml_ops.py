@@ -119,7 +119,8 @@ def render_yaml(
     original mixes styles, the lines the edit did not touch are kept
     byte-for-byte rather than normalised, and each new line is indented like
     the entries it joins. The original's BOM and CRLF line ends are carried
-    over.
+    over. An original without a final newline is read as if it had one
+    (editors often omit it), so the result gains it.
 
     A comment that sat between a key and a block value that is now empty is
     moved after the ``{}`` / ``[]`` in ``data`` itself: ruamel would write it
@@ -129,8 +130,12 @@ def render_yaml(
     the plain dump in the original's first indent style.
     """
     text = (original or "").lstrip(_BOM).replace("\r\n", "\n")
-    candidates = _render_lf(data, text, fallback)
-    rendered = next(
+    if text and not text.endswith("\n"):
+        text += "\n"
+    # ruamel drops blank lines above the first key; carry them over as they are.
+    body = text.lstrip("\n")
+    candidates = _render_lf(data, body, fallback)
+    rendered = text[: len(text) - len(body)] + next(
         (candidate for candidate in candidates if _reads_back(candidate, data)),
         candidates[-1],
     )
@@ -225,6 +230,9 @@ def _render_lf(
         loaded = yaml_rt().load(text)
     except YAMLError:
         return [new]
+    if loaded is None:
+        # Only comments and blank lines: keep them above the new content.
+        return [text + new, new]
     baseline = dump(loaded)
     if baseline == text:
         return [new]
