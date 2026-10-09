@@ -9,9 +9,8 @@ Three verbs operate on either the host-local ``~/.config/setforge/local.yaml``
 
 Mutations parse the current YAML in round-trip mode, apply the dotted-path
 change in-memory, run the appropriate schema validation against the candidate
-document, diff-preview the change, then atomic-write via
-:func:`setforge.migrations._yaml_ops.atomic_write_yaml`. Comment + key-order
-+ whitespace preservation is non-negotiable.
+document, diff-preview the change, then atomic-write the previewed text.
+Comment + key-order + whitespace preservation is non-negotiable.
 
 List-vs-scalar dispatch comes from Pydantic ``model_fields`` introspection,
 never a user flag. Shell tab-completion on both the ``<dotted-path>`` and
@@ -23,6 +22,7 @@ from __future__ import annotations
 import difflib
 import functools
 import io
+import stat
 import sys
 from enum import StrEnum
 from pathlib import Path
@@ -38,7 +38,7 @@ from ruamel.yaml.comments import (
 )
 from ruamel.yaml.error import YAMLError
 
-from setforge import paths
+from setforge import atomicio, paths
 from setforge.binaries import ensure_local_config_stub
 from setforge.cli import (
     _require_output_condition,
@@ -81,7 +81,7 @@ from setforge.config import (
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
 from setforge.locking import mutation_locks
-from setforge.migrations._yaml_ops import atomic_write_yaml, render_yaml, yaml_rt
+from setforge.migrations._yaml_ops import render_yaml, yaml_rt
 from setforge.source import (
     ExtensionOverlay,
     MarketplaceOverlay,
@@ -716,9 +716,9 @@ def _require_text_reads_back(text: str, doc: CommentedMap, yaml_path: Path) -> N
     if read_back != _to_plain(doc):
         raise SetforgeError(
             f"refusing to write {yaml_path}: the edited file would not read back "
-            f"as the change that was checked (lists indented differently from "
-            f"one another can cause this). The file was not changed; give its "
-            f"lists the same indentation and retry."
+            f"as the change that was checked, so nothing was written. Edit the "
+            f"file by hand instead. Lists indented differently from one another "
+            f"are a common cause."
         )
 
 
@@ -731,8 +731,15 @@ def _preview_and_write(
     marketplaces.add-specific ``_add_marketplace`` flow. Returns
     silently when the user declines (``_prompt_confirm`` returns
     ``False``); the file is untouched.
+
+    The text that is checked, previewed and written is one string. A file
+    without a final newline is rendered as if it had one (editors often omit
+    it), so the written file gains it.
     """
-    after_text = render_yaml(doc, before_text or None)
+    render_from = before_text
+    if before_text and not before_text.endswith("\n"):
+        render_from += "\r\n" if "\r\n" in before_text else "\n"
+    after_text = render_yaml(doc, render_from or None)
     _require_text_reads_back(after_text, doc, yaml_path)
     diff_text = _render_diff(before_text, after_text, yaml_path)
     console = make_console(stderr=True)
@@ -740,7 +747,8 @@ def _preview_and_write(
         yaml_path=yaml_path, diff_text=diff_text, console=console, yes=yes
     ):
         return
-    atomic_write_yaml(yaml_path, doc)
+    mode = stat.S_IMODE(yaml_path.stat().st_mode) if yaml_path.exists() else None
+    atomicio.atomic_write_text(yaml_path, after_text, mode=mode)
 
 
 # ---------------------------------------------------------------------------

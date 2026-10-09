@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge.cli import app
@@ -714,7 +715,10 @@ def test_config_add_refuses_a_write_that_would_not_read_back_as_the_edit(
     result = runner.invoke(app, argv)
 
     assert result.exit_code != 0
-    assert "would not read back" in str(result.exception)
+    message = str(result.exception)
+    assert "would not read back" in message
+    assert "nothing was written" in message
+    assert "Edit the file by hand" in message
     assert seed_local.read_bytes() == before
 
 
@@ -732,6 +736,73 @@ def test_config_add_keeps_a_mixed_indent_file_when_the_edit_reads_back(
     assert result.exit_code == 0, result.output
     assert _list_at(seed_local, "plugins.add") == ["a", "pub@team"]
     assert _list_at(seed_local, "extensions.remove") == ["e.two"]
+
+
+# An editor may leave out the final newline. The renderer used to join the new
+# line onto the last one, so every add to such a file was refused; it now reads
+# the file as newline-terminated and the written file gains the newline.
+_NO_FINAL_NEWLINE = [
+    pytest.param(
+        "# keep this comment\nprovision_ignore:\n  - p",
+        ["provision_ignore", "q"],
+        "# keep this comment\nprovision_ignore:\n  - p\n  - q\n",
+        {"provision_ignore": ["p", "q"]},
+        id="add-entry",
+    ),
+    pytest.param(
+        "# keep this comment\nprovision_ignore:\n  - p",
+        ["binaries.code", "/usr/bin/code"],
+        "# keep this comment\nprovision_ignore:\n  - p\n"
+        "binaries:\n  code: /usr/bin/code\n",
+        {"provision_ignore": ["p"], "binaries": {"code": "/usr/bin/code"}},
+        id="add-key",
+    ),
+    pytest.param(
+        "provision_ignore:\r\n  - p",
+        ["provision_ignore", "q"],
+        "provision_ignore:\r\n  - p\r\n  - q\r\n",
+        {"provision_ignore": ["p", "q"]},
+        id="crlf",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("seed", "args", "expected_text", "expected"), _NO_FINAL_NEWLINE
+)
+def test_config_add_writes_a_file_that_has_no_final_newline(
+    runner: CliRunner,
+    seed_local: Path,
+    seed: str,
+    args: list[str],
+    expected_text: str,
+    expected: dict[str, object],
+) -> None:
+    """An add to a file without a final newline lands, comments kept."""
+    seed_local.write_bytes(seed.encode())
+    seed_local.chmod(_SEEDED_MODE)
+
+    result = runner.invoke(app, ["config", "add", "--local", *args, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = seed_local.read_bytes().decode()
+    assert written == expected_text
+    assert YAML(typ="safe").load(written) == expected
+
+
+def test_config_remove_refuses_when_a_blank_line_follows_the_parent_key(
+    runner: CliRunner, seed_local: Path
+) -> None:
+    """The renderer would misplace this edit; it is refused, not written."""
+    _write_local(seed_local, "binaries:\n\n  code: /usr/bin/code\n")
+    before = seed_local.read_bytes()
+
+    argv = ["config", "remove", "--local", "binaries.code", "--yes"]
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code != 0
+    assert "would not read back" in str(result.exception)
+    assert seed_local.read_bytes() == before
 
 
 _AFTER = "# why extensions\nextensions:\n  remove:\n    - redhat.vscode-yaml\n"
