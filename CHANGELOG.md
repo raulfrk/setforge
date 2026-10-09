@@ -106,6 +106,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A managed tree with `orphans: remove-owned` keeps a directory that still
   holds a leftover instead of removing it.
 
+- `install` no longer fails with `refusing unsafe managed tree removal` when a
+  managed tree with `orphans: remove-owned` has a directory removed from the
+  tracked source while the live directory still holds a file or directory
+  matched by the tree's `exclude` patterns (or SetForge's own state directory).
+  It used to fail on every run, after `--dry-run` had reported success, in
+  1.5.0 and earlier. The directory and the directories above it are now kept,
+  the excluded content is left untouched, and the other owned entries are
+  removed. Delete the excluded content and the next `install` removes the
+  directory.
+
 ## [1.5.0] - 2026-10-09
 
 ### Changed

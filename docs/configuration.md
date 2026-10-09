@@ -452,6 +452,12 @@ unchanged; unowned or drifted entries are preserved or held for review. Tree
 roots cannot overlap another tracked destination. `sync` and `stage` refuse
 managed trees; edit the tracked source tree instead.
 
+An excluded live entry is never deleted. With `remove-owned`, a directory
+removed from the tracked source is kept, along with the directories above it,
+while it still holds an excluded file or directory; `install` removes the other
+owned entries. Delete the excluded content and the next `install` removes the
+directory.
+
 An entry is held when it was removed from the tracked tree but its live copy
 changed since the last install, or when the tracked and live entries have
 different kinds (file, directory, symlink). `install` then stops before any
