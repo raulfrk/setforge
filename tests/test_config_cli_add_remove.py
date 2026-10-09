@@ -944,3 +944,52 @@ def test_config_remove_keeps_the_comments_that_follow_the_entry(
 
     assert result.exit_code == 0, result.output
     assert seed_local.read_text(encoding="utf-8") == expected + _AFTER
+
+
+@pytest.mark.parametrize(
+    ("seed", "path", "expected"),
+    [
+        pytest.param(
+            "plugins:\n  add:\n    - lint@team\n",
+            "plugins",
+            "",
+            id="block-ends-on-a-list",
+        ),
+        pytest.param(
+            "provision_ignore:\n  - one\nbinaries:\n  code: /usr/bin/code\n",
+            "binaries",
+            "provision_ignore:\n  - one\n",
+            id="after-a-list",
+        ),
+        pytest.param(
+            "orphan_ignore:\n    - one\nprovision_ignore:\n   - two\n"
+            "binaries:\n  code: /usr/bin/code\n# first note\n",
+            "binaries",
+            "orphan_ignore:\n    - one\nprovision_ignore:\n   - two\n# first note\n",
+            id="after-a-list-indented-unlike-the-first",
+        ),
+        pytest.param(
+            "provision_ignore:\n  - one\nplugins:\n  add:  # note\n"
+            "    # inside the list\n    - lint@team\n",
+            "plugins",
+            "provision_ignore:\n  - one\n",
+            id="comment-inside-the-removed-list-goes-with-it",
+        ),
+    ],
+)
+def test_config_remove_keeps_the_comment_above_the_next_key(
+    runner: CliRunner, seed_local: Path, seed: str, path: str, expected: str
+) -> None:
+    """Unsetting a block leaves the comment after it where the next key is.
+
+    It used to vanish when the removed block ended on a list, and to land above
+    the first entry of the list before it when the removed block followed one
+    (which also re-indented that list when its indentation differed from the
+    file's first).
+    """
+    _write_local(seed_local, seed + _AFTER)
+
+    result = runner.invoke(app, ["config", "remove", "--local", path, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert seed_local.read_text(encoding="utf-8") == expected + _AFTER

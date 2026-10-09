@@ -5,9 +5,9 @@ indented its own way, blank lines and comments in every position, CRLF, a BOM,
 no final newline. One ``config add`` / ``config remove`` style edit is applied
 and the rendered text must parse to exactly the edited data, keep every comment
 outside the removed entry, and leave every line the edit did not own
-byte-identical. Unsetting a key whose neighbours are a list or a mapping moves
-the comments around it before anything is rendered, so for that edit only the
-data, the lines with content and the absence of a whole-file re-dump are pinned.
+byte-identical. After a flow list (``[a, b]``) ruamel keeps the comments above a
+key with that key and loses the ones after a list emptied below it, so for those
+edits only the data and the lines with content are pinned.
 """
 
 from __future__ import annotations
@@ -171,21 +171,21 @@ def _container_region(doc: _Doc, path: _Path) -> range:
     return range(parent.first, _next_entry_line(doc, parent.last))
 
 
-def _comments_survive(doc: _Doc, path: _Path) -> bool:
-    """Whether the helpers keep the comments around ``path`` when it is unset.
+def _follows_flow_list(doc: _Doc, path: _Path) -> bool:
+    """Whether the entry before ``path`` ends on a flow list (``[a, b]``).
 
-    ``apply_remove`` carries the comments after a removed key over only when
-    the key's last line is a scalar entry and the key before it is a scalar;
-    the other layouts move or drop those comments before anything is rendered.
+    ruamel keeps the comments above a key with that key when the value before
+    it is a flow list, and drops the ones after a list emptied below it. After
+    any other value the comments belong to what precedes the key and stay.
     """
     siblings = _siblings(doc, path)
     index = siblings.index(path)
-    if index and doc.entries[siblings[index - 1]].kind != "scalar":
+    if not index:
         return False
-    entry = doc.entries[path]
-    while entry.kind == "map":
-        entry = doc.entries[entry.children[-1]]
-    return entry.kind == "scalar"
+    before = doc.entries[siblings[index - 1]]
+    while before.kind == "map":
+        before = doc.entries[before.children[-1]]
+    return before.kind == "flow"
 
 
 def _at(data: dict[str, Any], path: _Path) -> Any:
@@ -202,8 +202,7 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
     Returns ``(doc, edited tree, removed, owned, comments_kept)``: ``removed``
     are the lines of the entry the edit took out (its comments go with it),
     ``owned`` the lines the edit may rewrite, and ``comments_kept`` whether the
-    edit helpers leave the comments where they were (an unset sometimes moves
-    or drops them before anything is rendered).
+    comments around the entry are expected to stay (not after a flow list).
     """
     doc = draw(_documents())
     by_kind: dict[str, list[_Path]] = {
@@ -241,6 +240,7 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
         line = entry.item_lines[index]
         removed = range(line, line + 1)
         if len(entry.item_lines) == 1:
+            comments_kept = not _follows_flow_list(doc, path)
             owned = range(entry.first, _next_entry_line(doc, line))
         elif index == 0:
             owned = range(entry.first + 1, entry.item_lines[1])
@@ -248,7 +248,7 @@ def _edits(draw: st.DrawFn) -> tuple[_Doc, CommentedMap, range, range, bool]:
             owned = removed
     else:
         path = draw(st.sampled_from(list(doc.entries)))
-        comments_kept = _comments_survive(doc, path)
+        comments_kept = not _follows_flow_list(doc, path)
         apply_remove(tree, ".".join(path), None, is_list=False)
         owned = _container_region(doc, path)
         removed = range(doc.entries[path].first, doc.entries[path].last + 1)
@@ -287,6 +287,9 @@ def test_an_edit_reads_back_and_keeps_every_line_it_does_not_own(
     eol, final_newline, bom = framing
     # A one-line file with no final newline has no line ending to carry over.
     assume(final_newline or len(doc.lines) > 1)
+    # The tree was parsed from the lines plus a final newline: a trailing blank
+    # line would be in it but not in an original that has none.
+    assume(final_newline or doc.lines[-1])
     original = bom + eol.join(doc.lines) + (eol if final_newline else "")
 
     rendered = render_yaml(tree, original)

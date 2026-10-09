@@ -59,6 +59,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   writes nothing and rolls back; remove those comments or blank lines and run
   `migrate` again. Every other `local.yaml`, mixed indentation included, is
   rewritten exactly as before.
+- When `install` refuses to remove a managed-tree directory because a file
+  appeared in it after the plan was made, the message now names the entries that
+  are still there (up to five, then "and N more"), for example
+  `refusing unsafe managed tree removal: orphan: it still holds notes.txt`. It
+  named only the directory. Nothing is removed that was not removed before.
+  A file or directory in a managed tree that `install` cannot read, such as
+  one with permissions `000`, is now reported as "could not be read" with the
+  path and "Permission denied". It was reported as "changed while scanning".
+- `setforge config remove` of a key that ends on a list (for example
+  `config remove --local plugins`) no longer deletes the comment above the next
+  key. Removing a key that follows a list or a mapping no longer moves that
+  comment above the first entry of the list before it, and no longer
+  re-indents that list when it is indented differently from the rest of the
+  file. A comment inside the removed list is removed with it instead of being
+  left behind.
 
 ## [1.5.1] - 2026-10-09
 
