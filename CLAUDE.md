@@ -208,7 +208,10 @@ After editing the config repo, commit + push there. On the next `setforge instal
 
 `~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Those keys stay host-local without manual intervention: an unclassified key defaults to host-only (`PENDING`) and is never promoted into tracked; only a key explicitly classified `SHARED` is promoted into tracked on `sync`, and `install` merges tracked → live at key granularity, honoring existing classifications rather than creating them. Comments in the JSONC settings file are preserved end-to-end (json5 AST round-trip).
 
+## Pushing
+
+After local checks pass, commit and push without asking.
+
 ## Don't-do list
 
-- Don't push to git remotes automatically — I push when ready.
 - Don't auto-edit `setforge.yaml`'s extension lists — those land via the dedicated `ext` subcommand once Pillar 2 ships.
