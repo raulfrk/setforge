@@ -226,8 +226,10 @@ def run_pre_deploy_scan(
     Soft-requirement: if ``skip=True``, returns an empty result silently
     (no warning — explicit opt-out). If the binary is absent, emits the
     single yellow ``_MISSING_BINARY_MESSAGE`` warning and returns an
-    empty result; install proceeds. Exit-code triage per research brief
-    §5:
+    empty result; install proceeds. A missing ``tracked_root`` (a config
+    with no tracked files) has nothing to scan and returns an empty result
+    without running gitleaks, which would otherwise exit 1 on the missing
+    path with an empty report. Exit-code triage per research brief §5:
 
     - ``0`` — clean; empty result.
     - ``1`` — findings; parse JSON, filter via allowlist. An unparseable
@@ -243,6 +245,8 @@ def run_pre_deploy_scan(
     gitleaks_path = binaries.resolve_binary("gitleaks")
     if gitleaks_path is None:
         _warn(_MISSING_BINARY_MESSAGE)
+        return SecretsScanResult(findings=(), files_scanned=0)
+    if not tracked_root.exists():
         return SecretsScanResult(findings=(), files_scanned=0)
     file_count = sum(1 for p in tracked_root.rglob("*") if p.is_file())
     try:

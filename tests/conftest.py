@@ -209,6 +209,44 @@ def _suppress_fresh_host_welcome(
     monkeypatch.setattr("setforge.cli.install.is_fresh_host", _force_non_fresh)
 
 
+@pytest.fixture(autouse=True)
+def _default_umask() -> Iterator[None]:
+    """Run every test under umask 022, whatever the developer's shell uses.
+
+    Production code creates files and directories with the process umask,
+    and many tests assert the resulting 0644/0755 modes or rely on
+    SetForge refusing group-writable paths. Under a common umask of 002
+    those expectations break although the product behaves correctly.
+    A test that exercises another umask sets and restores its own.
+    """
+    prior = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(prior)
+
+
+@pytest.fixture(autouse=True)
+def _hide_host_gitleaks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make a ``gitleaks`` on the developer's PATH invisible to tests.
+
+    The suite treats gitleaks as absent unless a test provides it (a fake
+    ``resolve_binary``/``subprocess.run`` or the integration
+    ``present_binary`` helper). A real host gitleaks would otherwise run
+    for every install and trip fakes that reject unexpected subprocesses.
+    Only the PATH lookup of that one name is hidden.
+    """
+    monkeypatch.delenv("SETFORGE_GITLEAKS_BIN", raising=False)
+    real_which = shutil.which
+
+    def _which(cmd: Any, *args: Any, **kwargs: Any) -> str | None:
+        if Path(cmd).name == "gitleaks":
+            return None
+        return real_which(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", _which)
+
+
 _MUTANT_MEMORY_HEADROOM = 1 << 30
 
 

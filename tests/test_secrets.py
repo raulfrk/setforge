@@ -76,6 +76,34 @@ def test_missing_gitleaks_warns_and_returns_empty(
     assert "github.com/gitleaks/gitleaks#installing" in captured.err
 
 
+def test_missing_tracked_root_is_an_empty_scan_without_running_gitleaks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A config without ``tracked/`` has nothing to scan; install proceeds.
+
+    Real gitleaks exits 1 with an empty report on a missing ``--source``,
+    which the exit-1 parser would reject as an unreadable result.
+    """
+    monkeypatch.setattr(
+        secrets.binaries, "resolve_binary", lambda _name: Path("/usr/bin/gitleaks")
+    )
+
+    def _fail(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("gitleaks must not run on a missing tracked root")
+
+    monkeypatch.setattr(secrets.subprocess, "run", _fail)
+
+    result = secrets.run_pre_deploy_scan(
+        tracked_root=tmp_path / "tracked", allowlist_path=tmp_path / "allow"
+    )
+
+    assert result.findings == ()
+    assert result.files_scanned == 0
+    assert capsys.readouterr().err == ""
+
+
 def test_skip_true_emits_no_warning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
