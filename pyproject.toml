@@ -261,5 +261,6 @@ follow_imports = "skip"
 dev = [
     "hypothesis>=6.100",
     "pip-audit>=2.4",
+    "pre-commit>=4.7.0",
     "pytest-subprocess>=1.5",
 ]
