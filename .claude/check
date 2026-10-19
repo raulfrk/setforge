@@ -1,0 +1,5 @@
+set -e
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy setforge/ tests/
+uv run pytest -q -n 4 --dist=loadgroup

@@ -1,0 +1,1 @@
+case "$1" in *.py) uv run ruff format -q "$1" ;; esac
