@@ -138,7 +138,7 @@ def test_install_removes_the_staging_link_a_killed_symlink_deploy_left(
     gated, unlocked = leftover_names("link")
     other, _ = leftover_names("other")
     backup, _ = leftover_names("link.bak")
-    regular, directory = gated[:-5] + "0.tmp", gated[:-5] + "1.tmp"
+    (regular, _), (directory, _) = leftover_names("link"), leftover_names("link")
     kept_links = (unlocked, other, backup, ".link.abc12345.tmp")
     for name in kept_links:
         host.live(name).symlink_to(outside)
