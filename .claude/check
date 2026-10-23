@@ -3,3 +3,4 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy setforge/ tests/
 uv run python scripts/test_fast.py -q
+uv run python scripts/check_test_stability.py
