@@ -88,7 +88,9 @@ bump).
 When an engine diff touches any of the mutmut core files (the
 `[tool.mutmut].only_mutate` list — the merge/reconcile/store modules), run
 `uv run python scripts/mutmut_diff_gate.py` before merge (Phase 6) as a local
-Tier-1 check. It runs mutation testing scoped to only the changed core lines
+Tier-1 check, then `uv run python -m scripts.check_unique_kill`, which fails
+any changed test that kills no mutant the rest of the suite misses (merge or
+drop it). The diff gate runs mutation testing scoped to only the changed core lines
 (diff-scoped, so it stays fast) and blocks on any surviving mutant whose
 function overlaps the change. An equivalent mutant is excused with
 `# pragma: no mutate` on its statement when every mutant of that line is

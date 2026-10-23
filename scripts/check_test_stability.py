@@ -53,7 +53,7 @@ def changed_test_files(base: str) -> list[str]:
 
 
 def collect(files: list[str]) -> list[str]:
-    out = subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             "-m",
@@ -67,8 +67,11 @@ def collect(files: list[str]) -> list[str]:
         ],
         capture_output=True,
         text=True,
-    ).stdout
-    return [line for line in out.splitlines() if "::" in line]
+    )
+    # 5 = nothing selected (e.g. only Docker tests changed); anything else broke.
+    if result.returncode not in (0, 5):
+        sys.exit(f"stability: collection failed:\n{result.stdout}{result.stderr}")
+    return [line for line in result.stdout.splitlines() if "::" in line]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         print("stability: no changed test files")
         return 0
     ids = collect(files)
+    if not ids:
+        print("stability: no selected tests")
+        return 0
     for run in range(1, RUNS + 1):
         seed = random.randrange(2**32)
         order = ids[::-1]
