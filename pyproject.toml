@@ -271,4 +271,5 @@ dev = [
     "pip-audit>=2.4",
     "pre-commit>=4.7.0",
     "pytest-subprocess>=1.5",
+    "pytest-testmon>=2.2.0",
 ]

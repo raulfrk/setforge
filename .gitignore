@@ -42,3 +42,4 @@ mutants/
 # Build artifacts (uv build / hatchling)
 dist/
 build/
+.testmondata
