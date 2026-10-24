@@ -163,7 +163,6 @@ def _reconcile(c: ContainerHandle, *args: str):
     )
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_plugin_reconcile_nothing_to_reconcile_exits_zero(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -178,7 +177,6 @@ def test_plugin_reconcile_nothing_to_reconcile_exits_zero(
     assert "plugins: nothing to reconcile" in res.stdout, combined
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_plugin_reconcile_dry_run_exits_1_on_drift(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -202,7 +200,6 @@ def test_plugin_reconcile_dry_run_exits_1_on_drift(
     assert "nothing to reconcile" not in res.stdout, combined
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_plugin_reconcile_report_policy_exits_1_on_drift(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

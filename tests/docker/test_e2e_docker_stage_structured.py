@@ -109,7 +109,6 @@ def _accept_adoption(s: PyteSession) -> None:
     s.send_keys("y\r")
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_structured_walk_shares_one_key_then_demotes(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -216,7 +215,6 @@ def test_structured_walk_shares_one_key_then_demotes(
     assert c.read_text(_TRACKED) == _BASE_BODY
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_structured_walk_draft_type_confined_scalar(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],

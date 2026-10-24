@@ -55,7 +55,6 @@ def _seed_divergence(c: ContainerHandle) -> None:
     c.write_text(_TRACKED, _UPSTREAM_BODY)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_seed_pager_view_scroll_resize_then_choose(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -85,7 +84,6 @@ def test_seed_pager_view_scroll_resize_then_choose(
     assert c.read_text(_LIVE) == _UPSTREAM_BODY
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_seed_pager_escape_aborts_file_unchanged(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],

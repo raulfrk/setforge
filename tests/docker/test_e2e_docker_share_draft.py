@@ -106,7 +106,6 @@ def _draft_through_review(
     return s
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_share_draft_keep_local_shares_draft_keeps_host_live(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -134,7 +133,6 @@ def test_share_draft_keep_local_shares_draft_keeps_host_live(
     assert _DRAFT_MARKER not in c.read_text(_TRACKED)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_share_draft_adopt_rewrites_live_and_tracked(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],

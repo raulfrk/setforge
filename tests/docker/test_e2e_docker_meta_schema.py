@@ -40,7 +40,6 @@ def _assert_current_meta(container: ContainerHandle, command: str) -> None:
 
 
 @pytest.mark.smoke
-@pytest.mark.xdist_group("docker_daemon")
 def test_transition_metadata_persists_across_cli_lifecycle(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

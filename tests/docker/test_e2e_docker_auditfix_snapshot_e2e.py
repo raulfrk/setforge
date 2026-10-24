@@ -77,7 +77,6 @@ def _snapshot_dirs(c: ContainerHandle) -> list[str]:
     ]
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_snapshot_create_then_list_shows_row(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -111,7 +110,6 @@ def test_snapshot_create_then_list_shows_row(
     assert "before-experiment" in out, out
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_snapshot_restore_yes_overlays_live_additively(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -183,7 +181,6 @@ def test_snapshot_restore_yes_overlays_live_additively(
     assert c.read_text(_LOCAL_YAML) == "tracked_files: {}\n# precheck drift\n"
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_snapshot_restore_non_tty_no_yes_refuses(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -218,7 +215,6 @@ def test_snapshot_restore_non_tty_no_yes_refuses(
     assert c.read_text(_LIVE) == "DRIFTED\n"
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_snapshot_create_keep_prunes(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

@@ -112,7 +112,6 @@ def _drive_wizard(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_secrets_scan_allowlist_proceeds(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
@@ -165,7 +164,6 @@ def test_e2e_docker_install_secrets_scan_allowlist_proceeds(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_secrets_scan_silence_one_shot_proceeds(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],

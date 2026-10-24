@@ -79,7 +79,6 @@ def _run(container: ContainerHandle, *args: str) -> subprocess.CompletedProcess[
 
 
 @pytest.mark.smoke
-@pytest.mark.xdist_group("docker_daemon")
 def test_mixed_codex_profile_converges_and_rolls_back_across_processes(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

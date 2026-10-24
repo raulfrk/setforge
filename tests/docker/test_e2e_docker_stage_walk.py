@@ -129,7 +129,6 @@ def _accept_adoption(s: PyteSession) -> None:
     s.send_keys("y\r")
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_stage_walk_shares_one_hunk_then_demotes(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -219,7 +218,6 @@ def test_stage_walk_shares_one_hunk_then_demotes(
     assert c.read_text(_TRACKED) == _BASE_BODY
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_stage_walk_skip_then_quit_classifies_nothing(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -251,7 +249,6 @@ def test_stage_walk_skip_then_quit_classifies_nothing(
     assert (row["shared"], row["local"], row["pending"]) == (0, 0, 2), row
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_stage_non_tty_exits_2(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -269,7 +266,6 @@ def test_stage_non_tty_exits_2(
     assert "stage --list" in err
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_stage_list_json_projection(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

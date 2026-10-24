@@ -90,7 +90,6 @@ def _exists(c: ContainerHandle, path: str) -> bool:
     return c.exec(["test", "-e", path], check=False).returncode == 0
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_revert_revert_redoes_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

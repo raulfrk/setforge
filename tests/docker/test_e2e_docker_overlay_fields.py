@@ -12,11 +12,6 @@ each test writes its own minimal setforge.yaml + tracked source under
 overlay block and runs setforge against that config. Self-contained —
 does NOT touch the shared ``tests/fixtures/e2e/setforge.test.yaml``
 (consumed by many other e2e suites).
-
-All tests are tagged ``@pytest.mark.xdist_group("docker_daemon")`` so
-the parallel xdist runner serializes them onto the single docker
-daemon shared across workers (matches the convention adopted by
-``test_e2e_docker_local_overlay.py`` / ``test_e2e_docker_auto_promote.py``).
 """
 
 from __future__ import annotations
@@ -28,10 +23,7 @@ import pytest
 
 from tests.docker.conftest import ContainerHandle
 
-pytestmark = [
-    pytest.mark.e2e_docker,
-    pytest.mark.xdist_group("docker_daemon"),
-]
+pytestmark = pytest.mark.e2e_docker
 
 
 _WORKDIR = "/home/tester/overlay-fields-e2e"

@@ -46,7 +46,6 @@ _COLS = 46
 _LINES = 24
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_button_bar_arrow_select(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -70,7 +69,6 @@ def test_button_bar_arrow_select(
     session.wait_for_exit(timeout=60, expected_code=0)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_button_bar_double_esc_cancels(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],

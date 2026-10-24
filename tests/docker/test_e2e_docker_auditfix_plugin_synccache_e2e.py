@@ -198,7 +198,6 @@ def _sync_cache(c: ContainerHandle, *, check: bool = True):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_sync_cache_regular_mode_warns_no_op(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -220,7 +219,6 @@ def test_e2e_docker_sync_cache_regular_mode_warns_no_op(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_sync_cache_path_only_reports_no_github(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -240,7 +238,6 @@ def test_e2e_docker_sync_cache_path_only_reports_no_github(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_sync_cache_clones_github_marketplace_into_cache(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -281,7 +278,6 @@ def test_e2e_docker_sync_cache_clones_github_marketplace_into_cache(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_local_clone_cache_miss_points_to_sync_cache(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -381,7 +377,6 @@ def _rewrite_github_url_to_local(
     )
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_sync_cache_expands_github_shorthand_to_url(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

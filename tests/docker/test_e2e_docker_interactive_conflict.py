@@ -142,7 +142,6 @@ def _conflict_session(
     )
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_interactive_conflict_take_theirs_writes_upstream(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -161,7 +160,6 @@ def test_interactive_conflict_take_theirs_writes_upstream(
     assert "two-HOST" not in c.read_text(_LIVE)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_interactive_conflict_keep_ours_keeps_host(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],

@@ -28,11 +28,11 @@ helpers segregated from the inner-ring CliRunner tests.
 
 xdist_group convention
 ----------------------
-Heavy install/sync/revert/reconcile tests that hit the shared docker
-daemon are tagged ``@pytest.mark.xdist_group("docker_daemon")``. pytest-xdist
-routes same-group tests to one worker, serializing daemon contention while
-unrelated tests still parallelize. Only tag tests that share daemon state
-(container lifecycle, exec queuing); do NOT tag a test just for being slow.
+Only the network-canary tests are tagged
+``@pytest.mark.xdist_group("docker_daemon")``; under ``--dist=loadgroup``
+pytest-xdist runs them on one worker. Deterministic tests stay untagged: each
+gets its own container, so nothing is shared between them, and grouping them
+only kept the lane from scaling past two workers.
 
 pyte_pty_session vs docker_pty_session
 --------------------------------------

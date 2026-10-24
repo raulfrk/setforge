@@ -45,7 +45,6 @@ def _write_local_yaml(c: ContainerHandle, body: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_plugins_add_appears_in_effective(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -76,7 +75,6 @@ def test_install_plugins_add_appears_in_effective(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_plugins_remove_drops_from_effective(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -107,7 +105,6 @@ def test_install_plugins_remove_drops_from_effective(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_extensions_add_remove(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -146,7 +143,6 @@ def test_install_extensions_add_remove(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_marketplaces_add_lands(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -184,7 +180,6 @@ def test_install_marketplaces_add_lands(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_marketplace_cross_ref_failure_defensive(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

@@ -105,7 +105,6 @@ def _install_locked_a(c: ContainerHandle, *, check: bool = False):
     )
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_install_locked_plugin_hard_resets_cache_to_pinned_sha(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

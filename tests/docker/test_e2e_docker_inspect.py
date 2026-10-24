@@ -56,7 +56,6 @@ def _inspect_session(
     )
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_inspect_wide_pty_renders_three_pane_panel(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -71,7 +70,6 @@ def test_inspect_wide_pty_renders_three_pane_panel(
     s.wait_for_exit(timeout=60, expected_code=0)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_inspect_narrow_pty_stacks(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
@@ -86,7 +84,6 @@ def test_inspect_narrow_pty_stacks(
     s.wait_for_exit(timeout=60, expected_code=0)
 
 
-@pytest.mark.xdist_group("docker_daemon")
 def test_inspect_json_envelope_ansi_free_in_pipe(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
