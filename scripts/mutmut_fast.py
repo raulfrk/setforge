@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""``mutmut`` that runs fewer tests per mutant: same CLI, same verdicts.
+"""``mutmut`` that runs fewer tests per mutant: same CLI, no kill hidden.
 
-Three changes to mutmut 3.6, none of which changes a mutant's verdict:
+Changes to mutmut 3.6. Items 1-3 keep every verdict; item 4 keeps every
+kill and finds some that plain mutmut misses:
 
 1. Line selection. mutmut runs every test that calls the mutated FUNCTION. A
    test that never executes the statement a mutant changes runs exactly as on
@@ -14,12 +15,18 @@ Three changes to mutmut 3.6, none of which changes a mutant's verdict:
    and stops on a failure, so the clean run that repeats it is skipped.
 4. Warm session (``MUTMUT_FAST_SESSION=0`` turns it off). One pytest session
    collects once; each mutant's tests run in a fork of it instead of a new
-   ``pytest.main``, saving ~0.16 s of startup and collection per mutant. Its
-   verdicts match a fresh pytest process per mutant; plain mutmut's children
-   inherit state from its in-process stats run and miss some kills (15 of
-   3,441 on setforge's core, each confirmed killed in a fresh process).
+   ``pytest.main``, saving ~0.16 s of startup and collection per mutant. On
+   setforge's core it finds 15 kills plain mutmut misses (its children
+   inherit state from its in-process stats run; each kill was confirmed in a
+   fresh pytest process). Like plain mutmut it still misses mutants of
+   functions that only run at import time (e.g. ``TABLE = build()``).
+5. Shared prep. ``prep OUT`` generates mutants, runs the stats run and the
+   coverage pass once and writes their results to OUT; a run with
+   ``MUTMUT_FAST_PREP=OUT`` loads them instead of repeating both, when they
+   were made on the same commit and sandbox (else it runs them itself).
 
 usage: mutmut-fast run [mutant-glob ...]   (any mutmut command; or run this file)
+       mutmut-fast prep OUT_DIR
 ``MUTMUT_FAST_LINES=0`` turns line selection off.
 
 A mutant that no test reaches still runs its function's fastest test, so it
@@ -33,13 +40,16 @@ import ast
 import contextlib
 import difflib
 import fnmatch
+import hashlib
 import inspect
 import json
 import os
 import resource
+import select
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -47,6 +57,7 @@ from glob import escape as glob_escape
 from math import ceil
 from pathlib import Path
 
+import click
 import coverage
 import mutmut
 import mutmut.__main__ as mm
@@ -208,17 +219,22 @@ def _selected_names(
     return out
 
 
-def _narrow(runner: mm.PytestRunner, mutant_names: tuple[str, ...] | list[str]) -> None:
-    """Fill ``_selected``: for each mutant to run, the tests reaching its statement."""
+def _narrow(
+    runner: mm.PytestRunner, mutant_names: tuple[str, ...] | list[str]
+) -> dict[str, dict[int, set[str]]]:
+    """Fill ``_selected``: for each mutant to run, the tests reaching its statement.
+    Returns the line map it used (empty when line selection is off)."""
     if os.environ.get("MUTMUT_FAST_LINES") == "0":
-        return
+        return {}
     files = _mutated_files()
     changes = _selected_names(mutant_names)
     # Coverage must include every test any selected mutant would run.
     tests = sorted(set().union(*(_function_tests(n) for n in changes)))
     if not tests:
-        return
-    cov = _line_coverage(runner, files, tests)
+        return {}
+    # A test's lines do not depend on which other tests run (the premise of
+    # line selection), so prep's map over all tests serves any subset.
+    cov = _prep_lines or _line_coverage(runner, files, tests)
     for name, (f, lines) in changes.items():
         if lines is not None:
             _selected[name] = sorted(
@@ -227,6 +243,87 @@ def _narrow(runner: mm.PytestRunner, mutant_names: tuple[str, ...] | list[str]) 
     kept = sum(len(v) for v in _selected.values())
     total = sum(len(_function_tests(n)) for n in _selected)
     print(f"    mutmut_fast: {len(_selected)} mutants, {kept}/{total} test runs kept")
+    return cov
+
+
+# --- Shared prep: one job runs stats and coverage, every shard loads them ---
+_PREP_STATS, _PREP_LINES = "mutmut-stats.json", "mutmut-fast-lines.json"
+_prep_lines: dict[str, dict[int, set[str]]] = {}  # loaded from MUTMUT_FAST_PREP
+_prep_out: list[Path] = []  # set by the prep command: stop after coverage
+_STARTED = time.time()
+
+
+def _commit() -> str:
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    )
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _sandbox_hashes() -> dict[str, str]:
+    """Each mutated sandbox file's sha256: the line map's line numbers are its."""
+    return {
+        str(f): hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in sorted(_mutated_files())
+    }
+
+
+def _write_prep(out: Path, cov: dict[str, dict[int, set[str]]]) -> None:
+    commit = _commit()
+    if not commit:
+        sys.exit("mutmut_fast: prep needs a git commit to tie its results to")
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(Path("mutants") / _PREP_STATS, out / _PREP_STATS)
+    tests = sorted(set().union(*(t for lines in cov.values() for t in lines.values())))
+    index = {t: i for i, t in enumerate(tests)}
+    lines = {
+        f: {ln: sorted(index[t] for t in ts) for ln, ts in by_line.items() if ts}
+        for f, by_line in cov.items()
+    }
+    meta = {"commit": commit, "sandbox": _sandbox_hashes(), "tests": tests}
+    (out / _PREP_LINES).write_text(json.dumps({**meta, "lines": lines}))
+    print(f"    mutmut_fast: prep for {commit[:8]} written to {out}")
+
+
+def _load_prep() -> bool:
+    """Use ``MUTMUT_FAST_PREP``'s stats and line map if made on this commit and
+    sandbox; anything else keeps the full setup, so a stale prep costs time only."""
+    prep = os.environ.get("MUTMUT_FAST_PREP")
+    if not prep:
+        return False
+    try:
+        meta = json.loads((Path(prep) / _PREP_LINES).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        print(f"    mutmut_fast: no readable prep in {prep}, running stats here")
+        return False
+    if not meta["commit"] or meta["commit"] != _commit():
+        print(f"    mutmut_fast: prep is for commit {meta['commit'][:8]}, not HEAD")
+        return False
+    if meta["sandbox"] != _sandbox_hashes():
+        print("    mutmut_fast: prep's mutants differ from this sandbox's")
+        return False
+    shutil.copy2(Path(prep) / _PREP_STATS, Path("mutants") / _PREP_STATS)
+    tests = meta["tests"]
+    _prep_lines.update(
+        {
+            f: {int(ln): {tests[i] for i in idx} for ln, idx in by_line.items()}
+            for f, by_line in meta["lines"].items()
+        }
+    )
+    # mutmut's stats run sets this for every later pytest run in the process.
+    os.environ["PY_IGNORE_IMPORTMISMATCH"] = "1"
+    _fresh_stats.append(True)  # prep's stats run passed every test on this commit
+    print(f"    mutmut_fast: loaded prep for {meta['commit'][:8]}")
+    return True
+
+
+@mm.cli.command()
+@click.option("--max-children", type=int)
+@click.argument("out", type=click.Path(path_type=Path))
+def prep(out: Path, max_children: int | None) -> None:
+    """Generate mutants, run stats and the coverage pass; write both to OUT."""
+    _prep_out.append(out)
+    mm._run((), max_children)  # _collect_or_load_stats exits after writing OUT
 
 
 _orig_run, _orig_stats = mm._run, mm.collect_or_load_stats
@@ -248,16 +345,44 @@ def _run(mutant_names, max_children):  # noqa: ANN001 - mirrors mutmut's signatu
 _fresh_stats: list[bool] = []  # a full stats run passed in this process
 
 
+_orig_popen_init = subprocess.Popen.__init__
+
+
+def _popen_without_stats(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    """A process a test starts during the stats run gets MUTANT_UNDER_TEST
+    cleared. Its trampolines would otherwise call mutmut's hit recorder, which
+    loads mutmut's config from the child's cwd and crashes (e.g. a git filter
+    running setforge in a target repo). The child's hits never reached mutmut
+    anyway: they land in the child's own memory."""
+    env = kwargs.get("env")
+    source = os.environ if env is None else env
+    if source.get("MUTANT_UNDER_TEST") == "stats":
+        kwargs["env"] = {**source, "MUTANT_UNDER_TEST": ""}
+    _orig_popen_init(self, *args, **kwargs)
+
+
 def _run_stats_collection(runner, tests=None):  # noqa: ANN001
-    _orig_stats_collection(runner, tests)
+    subprocess.Popen.__init__ = _popen_without_stats  # type: ignore[method-assign]
+    try:
+        _orig_stats_collection(runner, tests)
+    finally:
+        subprocess.Popen.__init__ = _orig_popen_init  # type: ignore[method-assign]
     if not tests:  # mutmut exits when any test fails, so every test passed
         _fresh_stats.append(True)
 
 
 def _collect_or_load_stats(runner):  # noqa: ANN001
+    # Loaded stats take mutmut's own path: list all tests, stats for new ones
+    # only. On prep's commit it finds none, and its collection imports the tests
+    # outside "fail" mode first, as the stats run would have.
+    _load_prep()
     _orig_stats(runner)
+    if _prep_out:
+        _write_prep(_prep_out[0], _narrow(runner, ()))
+        sys.exit(0)
     names = _requested[-1] if _requested else ()
     _narrow(runner, names)
+    print(f"    mutmut_fast: setup done in {time.time() - _STARTED:.0f}s")
     if os.environ.get("MUTMUT_FAST_SESSION") != "0":
         tests = sorted(
             set().union(*(_function_tests(n) for n in _selected_names(names)))
@@ -286,6 +411,8 @@ class _KillRecorder:
 _SOCK = Path("mutants/.mutmut-fast.sock").absolute()
 _READY = Path("mutants/.mutmut-fast-ready.json").absolute()
 _server_pid: list[int] = []
+_alive: list[int] = []  # pipe fd: the server's read end, mutmut's write end
+_UNKNOWN_TEST = 199  # exit status: a requested test was not collected
 _server_tests: list[str] = []
 
 
@@ -313,25 +440,42 @@ class _Server:
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(_SOCK))
         listener.listen(64)
-        signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # no zombie grandchildren
+        signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # no zombie handlers
         while True:
+            ready, _, _ = select.select([listener, _alive[0]], [], [])
+            if _alive[0] in ready:  # mutmut's process is gone
+                os._exit(0)
             conn, _ = listener.accept()
             if os.fork() == 0:
                 listener.close()
                 # Ignored SIGCHLD makes subprocess report exit 0 for every child.
                 signal.signal(signal.SIGCHLD, signal.SIG_DFL)
-                code = 3
-                try:
-                    code = self.serve(conn, items)
-                finally:
-                    conn.sendall(f"{code}\n".encode())
-                    if getattr(self, "basetemp", None):
-                        shutil.rmtree(self.basetemp, ignore_errors=True)
-                    os._exit(0)
+                self.handle(conn, items)
+                os._exit(0)
             conn.close()
 
-    def serve(self, conn: socket.socket, items: dict) -> int:
-        request = json.loads(conn.makefile().readline())
+    def handle(self, conn: socket.socket, items: dict) -> None:
+        """Run one mutant's tests in a fork and reply with its exit status, so a
+        test that dies from a signal reports that signal, as pytest.main would."""
+        basetemp = Path(tempfile.mkdtemp(prefix="mutmut-fast-"))
+        reply = 3
+        try:
+            request = json.loads(conn.makefile().readline())
+            pid = os.fork()
+            if pid == 0:
+                code = 3
+                try:
+                    code = self.serve(request, items, basetemp)
+                finally:
+                    os._exit(_UNKNOWN_TEST if code == -1 else code)
+            reply = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+        finally:
+            shutil.rmtree(basetemp, ignore_errors=True)
+            # mutmut may have killed the asking worker on a timeout already
+            with contextlib.suppress(OSError):
+                conn.sendall(f"{reply}\n".encode())
+
+    def serve(self, request: dict, items: dict, basetemp: Path) -> int:
         name, tests = request["mutant"], request["tests"]
         if any(t not in items for t in tests):
             return -1  # caller falls back to pytest.main
@@ -345,9 +489,7 @@ class _Server:
         # Each pytest.main gets its own numbered tmp dir; forks of one session
         # would share one, so concurrent mutants running the same test collide.
         factory = selected[0].config._tmp_path_factory
-        basetemp = Path(tempfile.mkdtemp(prefix="mutmut-fast-"))
         factory._given_basetemp, factory._basetemp = basetemp, None
-        self.basetemp = basetemp
         for i, item in enumerate(selected):
             nxt = selected[i + 1] if i + 1 < len(selected) else None
             # The full hook, as pytest's own loop calls it: warnings, logging
@@ -360,12 +502,31 @@ class _Server:
 
 
 def _start_server(runner: mm.PytestRunner, tests: list[str]) -> None:
+    """Fork the server twice so it is no child of mutmut's process: mutmut's
+    os.wait() must only ever see its own mutant children."""
     for f in (_SOCK, _READY):
         f.unlink(missing_ok=True)
-    pid = os.fork()
-    if pid:
-        _server_pid.append(pid)
+    alive_r, alive_w = os.pipe()  # EOF tells the server mutmut is gone
+    pid_r, pid_w = os.pipe()
+    first = os.fork()
+    if first:
+        os.close(alive_r)
+        os.close(pid_w)
+        os.waitpid(first, 0)
+        with os.fdopen(pid_r) as f:
+            pid = f.read()
+        if pid:
+            _server_pid.append(int(pid))
+            _alive.append(alive_w)
         return
+    os.close(alive_w)
+    os.close(pid_r)
+    server = os.fork()
+    if server:
+        os.write(pid_w, str(server).encode())
+        os._exit(0)
+    os.close(pid_w)
+    _alive[:] = [alive_r]
     try:
         os.environ["MUTANT_UNDER_TEST"] = "stats"  # record calls made by collection
         mutmut._stats.clear()
@@ -389,6 +550,10 @@ def _ask_server(mutant_name: str, tests: list[str]) -> int | None:
     for _ in range(600):  # the server may still be collecting
         if _READY.exists() and _SOCK.exists():
             break
+        try:
+            os.kill(_server_pid[0], 0)
+        except ProcessLookupError:
+            return None  # it died while collecting: run the plain way
         time.sleep(0.5)
     else:
         return None
@@ -400,12 +565,21 @@ def _ask_server(mutant_name: str, tests: list[str]) -> int | None:
         "tests": tests,
         "limit": _timeout_limit(mutant_name),
     }
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.connect(str(_SOCK))
-        conn.sendall((json.dumps(request) + "\n").encode())
-        reply = conn.makefile().readline().strip()
-    code = int(reply) if reply else 3
-    return None if code == -1 else code
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.connect(str(_SOCK))
+            conn.sendall((json.dumps(request) + "\n").encode())
+            reply = conn.makefile().readline().strip()
+    except OSError:
+        return None  # the server is gone: run this mutant the plain way
+    if not reply:
+        return None
+    code = int(reply)
+    if code == _UNKNOWN_TEST:
+        return None
+    if code < 0:  # the tests died from a signal: die from it too, as plain mutmut
+        os.kill(os.getpid(), -code)
+    return code
 
 
 def _likely_killers(mutant_name: str) -> list[str]:
