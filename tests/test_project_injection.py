@@ -1588,16 +1588,18 @@ def test_recreated_project_at_the_same_path_names_a_working_remedy(
     arguments = [str(target), "--config", str(config), "--yes"]
     assert runner.invoke(app, ["project", "inject", "demo", *arguments]).exit_code == 0
     original_inode = target.stat().st_ino
-    shutil.rmtree(target)
-    _git_repo(target)
+    # A recreated directory may or may not reuse the inode, which is up to the
+    # filesystem. Empty it and start a new repository in place, so this test is
+    # always the same-inode case; a new inode is the replaced-directory case
+    # (test_replaced_project_directory_drops_record_claims_and_exclude_entries).
+    for child in target.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(target)], check=True)
+    assert target.stat().st_ino == original_inode
     destination = target / "AGENTS.md"
-
-    if target.stat().st_ino != original_inode:
-        dropped = runner.invoke(app, ["project", "remove", "demo", *arguments])
-        assert dropped.exit_code == 0, dropped.output
-        assert "stale injection: project directory was replaced" in dropped.output
-        assert runner.invoke(app, ["project", "list"]).exit_code == 0
-        return
     restore = f"`setforge project sync {target} --auto=use-profile`"
     remedy = (
         f"run {restore} to restore it, or `setforge project sync {target}` to "
