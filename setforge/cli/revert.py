@@ -944,8 +944,12 @@ def _wide_console() -> Console:
     transitions list embeds numbers and dirnames that Rich would
     otherwise wrap in ANSI sequences, breaking substring assertions
     in tests and copy-pasteability of the suggested commands.
+
+    ``markup=False``: every row is recorded data (argv, paths, ids), so a
+    value such as ``[/abs]`` must print as text instead of raising
+    ``MarkupError``.
     """
-    return make_console(width=200, highlight=False)
+    return make_console(width=200, highlight=False, markup=False)
 
 
 def _render_transitions_table(

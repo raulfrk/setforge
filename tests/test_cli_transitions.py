@@ -465,3 +465,25 @@ def test_show_lists_every_recorded_file_change_with_its_marker(
     assert "-  /tmp/c-deleted  diff: +0 -1" in clean
     assert "+  /tmp/d-empty  diff: +0 -0" in clean
     assert "-  /tmp/e-link\n" in clean
+
+
+def test_show_prints_recorded_argv_verbatim_even_when_it_looks_like_markup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An argument such as ``[/abs]`` or ``[bold]`` is user text, not markup."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    target = _stub(
+        tmp_path / "transitions",
+        dirname="20260518T203015000000Z-install-p",
+        profile="p",
+    )
+    meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+    meta["command_line"] = ["setforge", "install", "--profile=p", "x[/abs]", "[bold]y"]
+    (target / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["transitions", "show", "20260518T2030"])
+
+    assert result.exit_code == 0, result.output
+    assert "argv:    setforge install --profile=p x[/abs] [bold]y" in _strip_ansi(
+        result.output
+    )
