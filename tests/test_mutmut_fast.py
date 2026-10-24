@@ -100,3 +100,19 @@ def test_likely_killers_put_last_runs_killer_then_sibling_kills_by_count(
         "t::c",
         "t::b",
     ]
+
+
+def test_a_trampoline_hit_after_a_test_changes_directory_is_still_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Config:
+        max_stack_depth = -1
+        source_paths = (Path("does-not-exist-here"),)
+
+    monkeypatch.setattr(mutmut_fast.mm.Config, "get", staticmethod(lambda: Config))
+    monkeypatch.setattr(mutmut, "_stats", set())
+    monkeypatch.chdir(tmp_path)
+
+    mutmut_fast._record_trampoline_hit("pkg.a.x_f")
+
+    assert mutmut._stats == {"pkg.a.x_f"}

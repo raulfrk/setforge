@@ -33,6 +33,7 @@ import ast
 import contextlib
 import difflib
 import fnmatch
+import inspect
 import json
 import os
 import resource
@@ -49,6 +50,7 @@ from pathlib import Path
 import coverage
 import mutmut
 import mutmut.__main__ as mm
+import mutmut.mutation.trampoline as _trampoline
 from mutmut.utils.file_utils import change_cwd
 from mutmut.utils.format_utils import strip_prefix
 
@@ -476,6 +478,42 @@ def _prepare_main_test_run(self):  # noqa: ANN001
 
 
 mm.PytestRunner.prepare_main_test_run = _prepare_main_test_run  # type: ignore[method-assign]
+
+
+_source_paths: list[Path] = []
+
+
+def _record_trampoline_hit(name: str) -> None:
+    """mutmut 3.6's record_trampoline_hit, but source paths resolve once.
+
+    mutmut resolves the relative source paths on every hit, so a test that
+    changes directory (monkeypatch.chdir) and then calls mutated code fails the
+    stats run with FileNotFoundError. The paths only matter for
+    max_stack_depth; resolving them at the first hit (cwd = mutants/) keeps the
+    recorded hits the same.
+    """
+    assert not name.startswith("src."), "Failed trampoline hit: name starts with src."
+    config = mm.Config.get()
+    if config.max_stack_depth != -1:
+        if not _source_paths:
+            _source_paths.extend(p.resolve(strict=True) for p in config.source_paths)
+        f = inspect.currentframe()
+        c = config.max_stack_depth
+        while c and f:
+            filename = f.f_code.co_filename
+            f = f.f_back
+            if "pytest" in filename or "hammett" in filename or "unittest" in filename:
+                break
+            file_path = Path(filename).resolve(strict=True)
+            if any(path in file_path.parents for path in _source_paths):
+                c -= 1
+        if not c:
+            return
+    mutmut._stats.add(name)
+
+
+mm.record_trampoline_hit = _record_trampoline_hit
+_trampoline.record_trampoline_hit = _record_trampoline_hit
 
 
 def main() -> None:
