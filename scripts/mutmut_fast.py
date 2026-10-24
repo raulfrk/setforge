@@ -172,25 +172,176 @@ _HISTORY = Path(
     os.environ.get("MUTMUT_FAST_HISTORY", "mutants/mutmut-fast-history.json")
 ).absolute()
 _KILLS = Path("mutants/.mutmut-fast-kills").absolute()  # one file per killed mutant
+_REUSED = Path("mutants/.mutmut-fast-reused").absolute()  # one file per reused verdict
 
 
-def _load_history() -> dict[str, str]:
-    """Mutant name -> the test that killed it last time."""
+def _load_history(key: str) -> dict:
+    """``killers``: mutant name -> the test that killed it last time.
+    ``verdicts``: mutant name -> [fingerprint, exit code] of its last run."""
     try:
-        return json.loads(_HISTORY.read_text(encoding="utf-8"))["killers"]
-    except (FileNotFoundError, KeyError, ValueError):
+        return json.loads(_HISTORY.read_text(encoding="utf-8")).get(key, {})
+    except (OSError, ValueError, AttributeError):
         return {}
 
 
-_killers = _load_history()
+_killers: dict[str, str] = _load_history("killers")
+_verdicts: dict[str, list] = _load_history("verdicts")
+_fingerprints: dict[str, str] = {}  # this run's fingerprint per mutant
+_FULL = os.environ.get("MUTMUT_FAST_FULL") == "1"  # test every mutant again
 
 
 def _save_history() -> None:
     # A stale killer only costs ordering, so old entries are kept, not pruned.
     for f in _KILLS.glob("*"):
         _killers[f.name] = f.read_text(encoding="utf-8")
+    codes: dict[str, int] = {}
+    seconds: dict[str, float] = {}
+    for meta in Path("mutants").rglob("*.meta"):
+        with contextlib.suppress(ValueError, KeyError):
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            codes.update(data["exit_code_by_key"])
+            seconds.update(data.get("durations_by_key", {}))
+    for name, fingerprint in _fingerprints.items():
+        if codes.get(name) is None:
+            continue
+        # a reused verdict keeps the time its real run took, for shard balancing
+        previous = _verdicts.get(name, [])
+        took = previous[2] if (_REUSED / name).exists() and len(previous) > 2 else None
+        _verdicts[name] = [fingerprint, codes[name], took or seconds.get(name, 0.0)]
     _HISTORY.parent.mkdir(parents=True, exist_ok=True)
-    _HISTORY.write_text(json.dumps({"killers": _killers}, indent=1, sort_keys=True))
+    history = {"killers": _killers, "verdicts": _verdicts}
+    _HISTORY.write_text(json.dumps(history, indent=1, sort_keys=True))
+
+
+_INTERNAL = (".meta", ".pyc")  # mutmut's and Python's own files in the sandbox
+# Tool caches that test runs rewrite in the sandbox (Hypothesis writes its
+# example database there): no test input, so a run must not change the hash.
+_CACHES = {"__pycache__", ".pytest_cache", ".hypothesis", ".mypy_cache", ".ruff_cache"}
+
+
+def _test_support_hash() -> str:
+    """One hash over every file of the copied test trees that is no test module:
+    helpers, fixtures, conftests and data. A change to any of them re-tests every
+    mutant. Test modules (test_*.py) are hashed per mutant instead.
+
+    Each file is read from the project, not the sandbox: files that test runs
+    write or change in the sandbox (logs, reports, leftovers in cwd) are no
+    test input and must not block reuse."""
+    sandbox = Path("mutants")
+    sources = {Path(p).parts[0] for p in mm.Config.get().source_paths}
+    h = hashlib.sha256()
+    for path in sorted(sandbox.rglob("*")):
+        rel = path.relative_to(sandbox)
+        if (
+            not path.is_file()
+            or rel.parts[0] in sources
+            or rel.name.startswith((".mutmut", "mutmut-"))
+            or path.suffix in _INTERNAL
+            or _CACHES & set(rel.parts)
+            or (rel.name.startswith("test_") and rel.suffix == ".py")
+            or not rel.is_file()  # written by a test run, not part of the project
+        ):
+            continue
+        h.update(str(rel).encode() + b"\0" + rel.read_bytes())
+    return h.hexdigest()
+
+
+def _local_test_imports(path: Path) -> set[Path]:
+    """Test modules a test module imports, absolute (``from tests.test_x import
+    f``) or relative (``from .test_x import f``, ``from . import test_x``)."""
+    out = set()
+    with contextlib.suppress(SyntaxError, OSError, ValueError):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            bases: list[Path] = []
+            if isinstance(node, ast.ImportFrom):
+                if node.level:
+                    root = path.parent
+                    for _ in range(node.level - 1):
+                        root = root.parent
+                else:
+                    root = Path("mutants")
+                module = (
+                    root.joinpath(*(node.module or "").split("."))
+                    if node.module
+                    else root
+                )
+                bases = [module, *(module / a.name for a in node.names)]
+            elif isinstance(node, ast.Import):
+                bases = [Path("mutants", *a.name.split(".")) for a in node.names]
+            for base in bases:
+                target = base.with_suffix(".py")
+                if target.name.startswith("test_") and target.is_file():
+                    out.add(target)
+    return out
+
+
+def _mutant_sources() -> dict[str, str]:
+    """Mutant (and ``__mutmut_orig``) name -> its function's source text."""
+    sources: dict[str, str] = {}
+    for f in _mutated_files():
+        rel = f.relative_to("mutants")
+        module = ".".join(rel.with_suffix("").parts).removesuffix(".__init__")
+        module = module.removeprefix("src.").replace("__init__.", "")
+        text = f.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, _FUNCS) and "__mutmut_" in node.name:
+                sources[f"{module}.{node.name}"] = (
+                    ast.get_source_segment(text, node) or ""
+                )
+    return sources
+
+
+def _compute_fingerprints(names: tuple[str, ...] | list[str]) -> dict[str, str]:
+    """Per mutant, a hash of what its verdict is assumed to depend on: its own
+    and its original function's source, the ids of the tests it runs, their test
+    modules and the test modules those import, every other file of the copied
+    test trees (helpers, conftests, data), the mutmut config, the lock file and
+    this wrapper.
+
+    shortcut: source files outside the mutated function are not hashed (code it
+    calls, module-level code, and test helpers kept inside the source package,
+    e.g. ``pkg/testing.py``), so a change there can alter a reused verdict; a
+    periodic --full run (MUTMUT_FAST_FULL=1) catches it.
+    """
+    base = hashlib.sha256(Path(__file__).read_bytes())
+    for config in ("pyproject.toml", "uv.lock"):
+        if Path(config).exists():
+            base.update(Path(config).read_bytes())
+    base.update(_test_support_hash().encode())
+    sources = _mutant_sources()
+    module_hashes: dict[Path, str] = {}
+
+    def module_hash(path: Path) -> str:
+        """The test module and, transitively, the test modules it imports."""
+        if path not in module_hashes:
+            module_hashes[path] = ""  # an import cycle stops here
+            h = hashlib.sha256(path.read_bytes() if path.is_file() else b"-")
+            for imported in sorted(_local_test_imports(path)):
+                h.update(module_hash(imported).encode())
+            module_hashes[path] = h.hexdigest()
+        return module_hashes[path]
+
+    out = {}
+    for name in _selected_names(names):
+        h = base.copy()
+        orig = name.rpartition("__mutmut_")[0] + "__mutmut_orig"
+        h.update(sources.get(name, "").encode())
+        h.update(sources.get(orig, "").encode())
+        reach = _selected.get(name)
+        for test in sorted(reach if reach is not None else _function_tests(name)):
+            h.update(test.encode())
+            h.update(module_hash(Path("mutants") / test.split("::")[0]).encode())
+        out[name] = h.hexdigest()
+    return out
+
+
+def _reusable(mutant_name: str) -> int | None:
+    """Last run's killed/survived code when nothing it depends on changed."""
+    previous = _verdicts.get(mutant_name)
+    fingerprint = _fingerprints.get(mutant_name)
+    if _FULL or not previous or fingerprint is None or previous[0] != fingerprint:
+        return None
+    return previous[1] if previous[1] in (0, 1) else None
 
 
 def _function_tests(name: str) -> set[str]:
@@ -333,8 +484,9 @@ _requested: list[tuple[str, ...] | list[str]] = []
 
 def _run(mutant_names, max_children):  # noqa: ANN001 - mirrors mutmut's signature
     _requested.append(mutant_names)
-    shutil.rmtree(_KILLS, ignore_errors=True)
-    _KILLS.mkdir(parents=True)
+    for d in (_KILLS, _REUSED):
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True)
     try:
         return _orig_run(mutant_names, max_children)
     finally:
@@ -382,6 +534,9 @@ def _collect_or_load_stats(runner):  # noqa: ANN001
         sys.exit(0)
     names = _requested[-1] if _requested else ()
     _narrow(runner, names)
+    _fingerprints.update(_compute_fingerprints(names))
+    reuse = sum(_reusable(n) is not None for n in _fingerprints)
+    print(f"    mutmut_fast: {reuse}/{len(_fingerprints)} verdicts reused")
     print(f"    mutmut_fast: setup done in {time.time() - _STARTED:.0f}s")
     if os.environ.get("MUTMUT_FAST_SESSION") != "0":
         tests = sorted(
@@ -513,8 +668,8 @@ def _start_server(runner: mm.PytestRunner, tests: list[str]) -> None:
         os.close(alive_r)
         os.close(pid_w)
         os.waitpid(first, 0)
-        with os.fdopen(pid_r) as f:
-            pid = f.read()
+        with os.fdopen(pid_r) as pipe:
+            pid = pipe.read()
         if pid:
             _server_pid.append(int(pid))
             _alive.append(alive_w)
@@ -610,6 +765,10 @@ def _run_tests(self, *, mutant_name, tests):  # noqa: ANN001
     if not mutant_name:
         with change_cwd("mutants"):
             return int(self.execute_pytest(self._pytest_args_regular_run(tests)))
+    reused = _reusable(mutant_name)
+    if reused is not None:
+        (_REUSED / mutant_name).touch()  # this runs in a mutant child
+        return reused
     ordered = list(tests)
     reach = _selected.get(mutant_name)
     if reach is not None:  # _narrow covered every test of each selected mutant

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 import mutmut
@@ -232,15 +233,42 @@ def crash_guard(x):
     return x > 0
 """,
     "tests/__init__.py": "",
+    "tests/helpers.py": """\
+def same(a, b):
+    return a == b
+""",
+    "tests/conftest.py": "",
+    "tests/run.log": "",
+    "tests/test_base.py": "def check_two(v):\n    assert v == 2\n",
+    "tests/test_abs.py": "def check_positive(v):\n    assert v > 0\n",
+    "tests/test_from.py": "def check_int(v):\n    assert isinstance(v, int)\n",
     "tests/test_calc.py": """\
 import os
 import signal
 
 from pkg.calc import add_one, crash_guard
+from tests.helpers import same
+
+import tests.test_abs
+from tests.test_from import check_int
+
+from . import test_base
 
 
 def test_add_one():
-    assert add_one(1) == 2
+    # like Hypothesis's example database: a cache a run rewrites in the sandbox
+    os.makedirs(".hypothesis", exist_ok=True)
+    with open(".hypothesis/db", "w") as db:
+        db.write(str(os.urandom(8)))
+    # and what tests leave behind: a new file in cwd, a line in a project file
+    with open("leftover.txt", "w") as left:
+        left.write(str(os.urandom(8)))
+    with open("tests/run.log", "a") as log:
+        log.write(str(os.urandom(8)))
+    assert same(add_one(1), 2)
+    test_base.check_two(add_one(1))
+    tests.test_abs.check_positive(add_one(1))
+    check_int(add_one(1))
 
 
 def test_a_wrong_guard_kills_the_process():
@@ -250,10 +278,15 @@ def test_a_wrong_guard_kills_the_process():
 }
 
 
-def _codes(root: Path, session: str) -> dict[str, int]:
+def _codes(root: Path, session: str, **extra_env: str) -> dict[str, int]:
     shutil.rmtree(root / "mutants", ignore_errors=True)
-    env = {**os.environ, "MUTMUT_FAST_SESSION": session, "PYTHONDONTWRITEBYTECODE": "1"}
-    subprocess.run(
+    env = {
+        **os.environ,
+        "MUTMUT_FAST_SESSION": session,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        **extra_env,
+    }
+    result = subprocess.run(
         [sys.executable, str(FAST), "run", "--max-children", "2"],
         cwd=root,
         env=env,
@@ -262,6 +295,7 @@ def _codes(root: Path, session: str) -> dict[str, int]:
         check=False,
         timeout=300,
     )
+    (root / "last-run.log").write_text(result.stdout + result.stderr)
     codes: dict[str, int] = {}
     for meta in (root / "mutants").rglob("*.meta"):
         codes.update(json.loads(meta.read_text())["exit_code_by_key"])
@@ -281,3 +315,114 @@ def test_warm_and_plain_paths_give_the_same_exit_codes(tmp_path: Path) -> None:
     assert served, "the warm run fell back to pytest.main"
     assert warm == plain
     assert -11 in plain.values()  # a mutant whose test dies from SIGSEGV
+
+
+def _project(root: Path) -> None:
+    for rel, text in PROJECT.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+
+
+def _reused(root: Path) -> str:
+    log = (root / "last-run.log").read_text().replace("\r", "\n")
+    return next(
+        line.split("mutmut_fast: ")[1]
+        for line in log.splitlines()
+        if "verdicts reused" in line
+    )
+
+
+def _reused_names(root: Path) -> set[str]:
+    return {p.name for p in (root / "mutants/.mutmut-fast-reused").iterdir()}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="fork server is Linux-only")
+def test_a_rerun_reuses_unchanged_verdicts_without_running_their_tests(
+    tmp_path: Path,
+) -> None:
+    _project(tmp_path)
+    history = str(tmp_path / "history.json")
+
+    first = _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history)
+    took = {
+        n: e[2] for n, e in json.loads(Path(history).read_text())["verdicts"].items()
+    }
+    second = _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history)
+    plain = {name for name, code in first.items() if code in (0, 1)}  # crashes rerun
+    after = json.loads(Path(history).read_text())["verdicts"]
+    assert {n: after[n][2] for n in plain} == {n: took[n] for n in plain}  # real times
+
+    assert second == first
+    assert _reused(tmp_path) == f"{len(plain)}/{len(first)} verdicts reused"
+    assert _reused_names(tmp_path) == plain
+    assert not list((tmp_path / "mutants/.mutmut-fast-kills").iterdir())
+
+    full = _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history, MUTMUT_FAST_FULL="1")
+    assert full == first
+    assert _reused_names(tmp_path) == set()
+
+
+def _append(rel: str, text: str) -> Callable[[Path], None]:
+    def edit(root: Path) -> None:
+        (root / rel).write_text((root / rel).read_text() + text)
+
+    return edit
+
+
+def _replace(rel: str, old: str, new: str) -> Callable[[Path], None]:
+    def edit(root: Path) -> None:
+        (root / rel).write_text((root / rel).read_text().replace(old, new))
+
+    return edit
+
+
+ADD_ONE = "pkg.calc.x_add_one__mutmut_"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="fork server is Linux-only")
+@pytest.mark.parametrize(
+    ("edit", "retested"),
+    [
+        pytest.param(_replace("pkg/calc.py", "x + 1", "1 + x"), ADD_ONE, id="body"),
+        pytest.param(_append("tests/test_calc.py", "\n# x\n"), "", id="test-file"),
+        pytest.param(
+            _replace("tests/helpers.py", "a == b", "True"), "", id="test-helper"
+        ),
+        pytest.param(_append("tests/conftest.py", "# x\n"), "", id="conftest"),
+        pytest.param(
+            _replace("tests/test_base.py", "assert v == 2", "pass"),
+            "",
+            id="relative-imported-test-module",
+        ),
+        pytest.param(
+            _replace("tests/test_abs.py", "assert v > 0", "pass"),
+            "",
+            id="plain-imported-test-module",
+        ),
+        pytest.param(
+            _replace("tests/test_from.py", "assert isinstance(v, int)", "pass"),
+            "",
+            id="from-imported-test-module",
+        ),
+        pytest.param(_append("pyproject.toml", "\n# x\n"), "", id="config"),
+    ],
+)
+def test_an_edit_retests_exactly_the_mutants_it_can_affect(
+    tmp_path: Path,
+    edit: Callable[[Path], None],
+    retested: str,
+) -> None:
+    """``retested`` is a mutant-name prefix; "" means every mutant."""
+    _project(tmp_path)
+    history = str(tmp_path / "history.json")
+    _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history)
+
+    edit(tmp_path)
+    after = _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history)
+    reused = _reused_names(tmp_path)
+    full = _codes(tmp_path, "1", MUTMUT_FAST_HISTORY=history, MUTMUT_FAST_FULL="1")
+
+    assert after == full  # a reused verdict is never stale
+    plain = {name for name, code in after.items() if code in (0, 1)}
+    expected = {n for n in plain if not n.startswith(retested)} if retested else set()
+    assert reused == expected
