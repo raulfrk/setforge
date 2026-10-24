@@ -233,7 +233,15 @@ pytest_add_cli_args_test_selection = [
 # --cov-fail-under=85` + the conftest auto-xdist on e2e) and mis-score a mutant
 # "killed" by the coverage gate firing instead of by an assertion. `-o addopts=`
 # clears the inherited addopts entirely. mutmut adds its own `-x`.
-pytest_add_cli_args = ["-o", "addopts="]
+# The 5000-line cases of the parse-count test guard scaling (they run in the
+# normal suite); under mutmut every surviving mutant reaching reconcile_apply
+# ran them, 22% of survivor time, while the 1200-line cases cover the same
+# code past the 512-line bound. A full-core run showed the same verdicts.
+pytest_add_cli_args = [
+    "-o", "addopts=",
+    "--deselect", "tests/test_reconcile_structured_deploy.py::test_whole_file_reformat_costs_a_fixed_number_of_parses[5000-jsonc]",
+    "--deselect", "tests/test_reconcile_structured_deploy.py::test_whole_file_reformat_costs_a_fixed_number_of_parses[5000-yaml]",
+]
 
 [tool.mypy]
 # Aligned with [project].requires-python and [tool.ruff].target-version

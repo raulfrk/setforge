@@ -517,7 +517,8 @@ def _run_mutmut(patterns: list[str] | None) -> MutmutRun:
     while writing NO results. The returncode + output are captured here so
     :func:`catastrophic_run` can tell the two nonzero cases apart and fail-closed
     on the abort."""
-    cmd = ["uv", "run", "mutmut", "run", *(patterns or [])]
+    # mutmut_fast: same CLI and verdicts as mutmut, fewer tests per mutant.
+    cmd = ["uv", "run", "python", "scripts/mutmut_fast.py", "run", *(patterns or [])]
     proc = _run(cmd, check=False)
     return MutmutRun(returncode=proc.returncode, output=proc.stdout + proc.stderr)
 
