@@ -82,3 +82,21 @@ def test_a_glob_selected_mutant_runs_only_the_covered_tests_reaching_its_line(
     assert seen == [["t::fast", "t::slow"]]
     assert mutmut_fast._selected["pkg.a.x_f__mutmut_1"] == ["t::slow"]
     assert "pkg.a.x_f__mutmut_3" not in mutmut_fast._selected
+
+
+def test_likely_killers_put_last_runs_killer_then_sibling_kills_by_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kills = tmp_path / "kills"
+    kills.mkdir()
+    for sibling, test in [("2", "t::b"), ("3", "t::c"), ("4", "t::c")]:
+        (kills / f"pkg.a.x_f__mutmut_{sibling}").write_text(test)
+    (kills / "pkg.a.x_g__mutmut_1").write_text("t::other_function")
+    monkeypatch.setattr(mutmut_fast, "_KILLS", kills)
+    monkeypatch.setattr(mutmut_fast, "_killers", {"pkg.a.x_f__mutmut_1": "t::a"})
+
+    assert mutmut_fast._likely_killers("pkg.a.x_f__mutmut_1") == [
+        "t::a",
+        "t::c",
+        "t::b",
+    ]
