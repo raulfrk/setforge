@@ -64,13 +64,14 @@ def _statement_span(func: ast.AST, line: int) -> range | None:
         for s in ast.walk(func)
         if isinstance(s, ast.stmt)
         and s is not func
-        and s.lineno <= line <= s.end_lineno
+        and s.lineno <= line <= (s.end_lineno or s.lineno)
     ]
     if not inner:
         return None
     st = max(inner, key=lambda s: s.lineno)
     kids = [c.lineno for c in ast.iter_child_nodes(st) if isinstance(c, ast.stmt)]
-    return range(st.lineno, (min(kids) - 1 if kids else st.end_lineno) + 1)
+    end = min(kids) - 1 if kids else (st.end_lineno or st.lineno)
+    return range(st.lineno, end + 1)
 
 
 def changed_lines(source: str) -> dict[str, set[int] | None]:
@@ -92,17 +93,17 @@ def changed_lines(source: str) -> dict[str, set[int] | None]:
                 ln.replace(mname, name)
                 for ln in lines[mnode.lineno - 1 : mnode.end_lineno]
             ]
-            offsets = set()
+            offsets: set[int] = set()
             for tag, i1, i2, _, _ in difflib.SequenceMatcher(
                 None, orig_lines, mut_lines, autojunk=False
             ).get_opcodes():
                 if tag != "equal":
                     offsets.update(range(i1, max(i2, i1 + 1)))
             spans = [_statement_span(orig, orig.lineno + off) for off in offsets if off]
-            if not offsets or 0 in offsets or None in spans:
+            if not offsets or 0 in offsets or any(sp is None for sp in spans):
                 out[mname] = None
             else:
-                out[mname] = {ln for span in spans for ln in span}
+                out[mname] = {ln for sp in spans if sp is not None for ln in sp}
     return out
 
 
@@ -153,7 +154,7 @@ def _line_coverage(
     return _by_line(cov, files)
 
 
-_selected: dict[str, list[str] | None] = {}  # mutant name -> tests that reach it
+_selected: dict[str, list[str]] = {}  # mutant name -> tests that reach it
 _HISTORY = Path(
     os.environ.get("MUTMUT_FAST_HISTORY", "mutants/mutmut-fast-history.json")
 ).absolute()
@@ -454,9 +455,15 @@ def _run_tests(self, *, mutant_name, tests):  # noqa: ANN001
 mm._run, mm.collect_or_load_stats = _run, _collect_or_load_stats
 # mutmut runs the cheapest mutants first; longest first keeps a few slow
 # survivors from finishing alone at the end (only order changes).
-mm.estimated_worst_case_time = lambda name: -_estimate(name)
+
+
+def _longest_first(mutant_name: str) -> float:
+    return -_estimate(mutant_name)
+
+
+mm.estimated_worst_case_time = _longest_first
 mm.run_stats_collection = _run_stats_collection
-mm.PytestRunner.run_tests = _run_tests
+mm.PytestRunner.run_tests = _run_tests  # type: ignore[method-assign]
 _orig_prepare = mm.PytestRunner.prepare_main_test_run
 
 
@@ -468,7 +475,7 @@ def _prepare_main_test_run(self):  # noqa: ANN001
         _start_server(self, _server_tests)
 
 
-mm.PytestRunner.prepare_main_test_run = _prepare_main_test_run
+mm.PytestRunner.prepare_main_test_run = _prepare_main_test_run  # type: ignore[method-assign]
 
 
 def main() -> None:
