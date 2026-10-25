@@ -7,11 +7,6 @@ load path (:func:`setforge.source._load_local_source_config`) and the
 
 - ``LocalConfig`` carries a ``schema_version`` field defaulting to the
   local baseline ``"1.0"``.
-- ``detect_local_yaml_schema`` reads the version via a RAW ruamel read
-  (never through the ``extra="forbid"`` model), defaulting to the
-  baseline on an absent file / absent key.
-- ``migrate_local_yaml`` wraps the host_local_sections → spans rewrite,
-  version-gated and idempotent.
 - detect-before-validate: a retired-key (``host_local_sections``)
   local.yaml migrates cleanly on load — no ``extra_forbidden`` refusal.
 - a newer-MAJOR local.yaml refuses cleanly (``ConfigError`` →
@@ -27,16 +22,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
 from setforge.local_config import LocalConfig
 from setforge.migrations._local_yaml import (
     LOCAL_YAML_BASELINE_VERSION,
-    detect_local_yaml_schema,
     guard_local_yaml_schema,
-    migrate_local_yaml,
     strip_retired_keys,
 )
 
@@ -77,7 +69,7 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
-# --- Task 1: schema_version field + raw-detect helper -------------------
+# --- Task 1: schema_version field -----------------------------------
 
 
 def test_local_config_accepts_schema_version() -> None:
@@ -94,97 +86,6 @@ def test_local_config_schema_version_defaults_to_baseline() -> None:
 
 def test_local_config_without_codex_preserves_legacy_dump() -> None:
     assert "codex" not in LocalConfig().model_dump()
-
-
-def test_detect_absent_file_returns_baseline(tmp_path: Path) -> None:
-    """A missing local.yaml detects as the baseline version."""
-    assert detect_local_yaml_schema(tmp_path / "missing.yaml") == (
-        LOCAL_YAML_BASELINE_VERSION
-    )
-
-
-def test_detect_missing_key_returns_baseline(tmp_path: Path) -> None:
-    """A local.yaml with no ``schema_version`` key detects as baseline."""
-    path = _write(tmp_path / "local.yaml", _RETIRED_KEY_LOCAL)
-    assert detect_local_yaml_schema(path) == LOCAL_YAML_BASELINE_VERSION
-
-
-def test_detect_reads_declared_version(tmp_path: Path) -> None:
-    """A declared ``schema_version`` is read via the raw read."""
-    path = _write(tmp_path / "local.yaml", "schema_version: '1.0'\n")
-    assert detect_local_yaml_schema(path) == "1.0"
-
-
-def test_detect_reads_version_through_forbidden_shape(tmp_path: Path) -> None:
-    """Detection works even when the doc would fail the forbid-model.
-
-    A doc carrying an UNKNOWN top-level key (which ``extra="forbid"``
-    rejects) must still be readable for its declared version — proving
-    detection does not route through the strict model.
-    """
-    doc = "schema_version: '2.0'\nfuture_only_key: present\n"
-    # The strict model rejects the unknown key outright...
-    with pytest.raises(ValidationError):
-        LocalConfig.model_validate({"future_only_key": "present"})
-    # ...yet raw detection still reads the declared version.
-    path = _write(tmp_path / "local.yaml", doc)
-    assert detect_local_yaml_schema(path) == "2.0"
-
-
-def test_detect_malformed_yaml_raises_config_error(tmp_path: Path) -> None:
-    """A non-well-formed local.yaml raises ConfigError naming the file.
-
-    The raw ``yaml.load`` used to propagate a ruamel ``YAMLError`` unwrapped
-    (the docstring even admitted it), diverging from the ``_require_mapping_root``
-    trust boundary applied on the next line. The load is now wrapped so a
-    malformed doc surfaces as a domain ``ConfigError``.
-    """
-    path = _write(tmp_path / "local.yaml", "key: [unclosed\n  nested: : :\n")
-    with pytest.raises(ConfigError, match=str(path)):
-        detect_local_yaml_schema(path)
-
-
-def test_detect_non_utf8_raises_config_error(tmp_path: Path) -> None:
-    """A non-UTF-8 local.yaml raises ConfigError, not a raw UnicodeDecodeError.
-
-    The ``.open(encoding="utf-8")`` decode raises ``UnicodeDecodeError`` BEFORE
-    ruamel sees the bytes, so wrapping only ``YAMLError`` left the raw builtin
-    to bubble — the same trust-boundary gap as its ``setforge.yaml`` sibling.
-    """
-    path = tmp_path / "local.yaml"
-    path.write_bytes(b"schema_version: \xff\xfe 2.0\n")
-    with pytest.raises(ConfigError, match=str(path)):
-        detect_local_yaml_schema(path)
-
-
-# --- Task 2: version-gated migration wrapper ---------------------------
-
-
-def test_migrate_rewrites_retired_key(tmp_path: Path) -> None:
-    """A ``host_local_sections`` local.yaml migrates to spans on disk."""
-    path = _write(tmp_path / "local.yaml", _RETIRED_KEY_LOCAL)
-    result = migrate_local_yaml(path)
-    assert result.migrated is True
-    reloaded = YAML(typ="rt").load(path.read_text(encoding="utf-8"))
-    tracked = reloaded["tracked_files"]["claude_md"]
-    assert "host_local_sections" not in tracked
-    assert "spans" in tracked
-
-
-def test_migrate_clean_file_is_noop(tmp_path: Path) -> None:
-    """A file with no retired key is left untouched (idempotent)."""
-    path = _write(tmp_path / "local.yaml", _SET_DELTA_LOCAL)
-    before = path.read_text(encoding="utf-8")
-    result = migrate_local_yaml(path)
-    assert result.migrated is False
-    assert path.read_text(encoding="utf-8") == before
-
-
-def test_migrate_is_idempotent(tmp_path: Path) -> None:
-    """Re-running migrate after a real migration converges to no-op."""
-    path = _write(tmp_path / "local.yaml", _RETIRED_KEY_LOCAL)
-    assert migrate_local_yaml(path).migrated is True
-    assert migrate_local_yaml(path).migrated is False
 
 
 # --- Task 3: detect-before-validate hook in the load path --------------

@@ -7,14 +7,6 @@ this one module (rather than weaving it into :mod:`setforge.source` or
 :mod:`setforge.config`) keeps the seam thin: the loaders only CALL these
 helpers.
 
-The three helpers mirror their ``setforge.yaml`` counterparts so the two
-surfaces stay behaviorally aligned:
-
-- :func:`detect_local_yaml_schema` ↔
-  :func:`setforge.migrations.detect_current_schema` — a RAW round-trip
-  read of ``schema_version`` (never through the ``extra="forbid"`` model,
-  so a cross-major doc is readable for its version BEFORE strict
-  validation would reject its shape).
 - :func:`guard_local_yaml_schema` ↔
   :func:`setforge.config._guard_schema_version` — a major-compare against
   the local baseline; a newer MAJOR refuses cleanly via
@@ -22,35 +14,24 @@ surfaces stay behaviorally aligned:
   one-line message + nonzero exit, never a traceback). A malformed
   version raises ``ConfigError`` via
   :func:`~setforge.migrations.parse_schema_version`.
-- :func:`migrate_local_yaml` wraps
-  :func:`migrate_local_yaml_overlay_spans`
-  (the ``host_local_sections`` → OVERLAY spans rewrite), version-gated by
-  the detected baseline. ruamel round-trip fidelity + atomicity +
-  idempotency are inherited from that delegate.
+- :func:`strip_retired_keys` drops retired span-declaration keys in memory.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
 
 from setforge.errors import ConfigError
-from setforge.migrations import _require_mapping_root, parse_schema_version
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.migrations import parse_schema_version
 
 __all__ = [
     "LOCAL_YAML_BASELINE_VERSION",
-    "OverlayMigrationResult",
-    "detect_local_yaml_schema",
     "guard_local_yaml_schema",
-    "migrate_local_yaml",
-    "migrate_local_yaml_overlay_spans",
     "read_local_yaml",
     "strip_retired_keys",
 ]
@@ -58,9 +39,8 @@ __all__ = [
 LOCAL_YAML_BASELINE_VERSION: Final[str] = "1.0"
 """Baseline schema version for ``local.yaml``.
 
-The implicit version every pre-versioning ``local.yaml`` is on — returned
-by :func:`detect_local_yaml_schema` when the file is absent, empty, or has
-no ``schema_version`` key. Deliberately a SEPARATE constant from
+The implicit version every pre-versioning ``local.yaml`` is on — assumed
+when the file has no ``schema_version`` key. Deliberately a SEPARATE constant from
 ``scripts/schema_manifest.py``'s ``SCHEMA_MAJOR`` (setforge.yaml's): the two
 documents version independently.
 """
@@ -87,41 +67,6 @@ def read_local_yaml(path: Path) -> dict[str, object]:
     if not isinstance(data, dict):
         raise ConfigError(f"top-level of {path} must be a mapping")
     return data
-
-
-def detect_local_yaml_schema(path: Path) -> str:
-    """Read ``schema_version`` from ``local.yaml``; baseline on absence.
-
-    Uses a RAW round-trip ruamel read — NOT the ``extra="forbid"``
-    :class:`~setforge.local_config.LocalConfig` model — so a cross-major
-    or retired-key document is still readable for its version BEFORE
-    strict validation would reject its shape. Mirrors
-    :func:`setforge.migrations.detect_current_schema`.
-
-    Missing file, empty file, or a document with no top-level
-    ``schema_version`` key all resolve to
-    :data:`LOCAL_YAML_BASELINE_VERSION`. Raises
-    :class:`~setforge.errors.ConfigError` (via :func:`_require_mapping_root`)
-    when the root is a non-mapping, and — a non-well-formed OR non-UTF-8
-    file — via a wrap of the ruamel ``YAMLError`` and the decode
-    ``UnicodeDecodeError``, naming the file, so the trust boundary matches
-    its ``setforge.yaml`` counterpart.
-    """
-    if not path.exists():
-        return LOCAL_YAML_BASELINE_VERSION
-    yaml = YAML(typ="rt")
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            data = yaml.load(fh)
-    except (YAMLError, UnicodeDecodeError) as exc:
-        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
-    if data is None:
-        return LOCAL_YAML_BASELINE_VERSION
-    data = _require_mapping_root(data, path)
-    raw = data.get("schema_version")
-    if raw is None:
-        return LOCAL_YAML_BASELINE_VERSION
-    return str(raw)
 
 
 def guard_local_yaml_schema(data: object, path: Path) -> None:
@@ -155,132 +100,6 @@ def guard_local_yaml_schema(data: object, path: Path) -> None:
             f"{LOCAL_YAML_BASELINE_VERSION!r}); upgrade setforge to "
             f">= {detected_major}.0 to read this config"
         )
-
-
-@dataclass(slots=True, frozen=True)
-class OverlayMigrationResult:
-    """Outcome of a :func:`migrate_local_yaml_overlay_spans` call.
-
-    ``migrated`` is ``True`` only when at least one
-    ``host_local_sections`` block was rewritten into ``spans`` (i.e. the
-    file was physically changed). ``section_count`` is the number of
-    individual host-local sections moved across every tracked_file. Both
-    are ``False`` / ``0`` on the idempotent no-op path so the install hook
-    can warn exactly once.
-    """
-
-    migrated: bool
-    section_count: int
-
-
-def _build_overlay_span(name: str, section: CommentedMap) -> CommentedMap:
-    """Return a new OVERLAY ``spans`` entry built from a legacy section node.
-
-    ``name`` becomes the span's top-level ``anchor`` IDENTITY (the
-    anchor-keyed sidecar key); the legacy section map (``anchor`` /
-    ``body`` / ``body_file`` plus its attached comments) is REUSED VERBATIM
-    as the nested ``overlay:`` payload. Reusing the original
-    :class:`CommentedMap` — rather than copying values into a fresh map —
-    keeps every comment token attached, including a section-leading comment
-    stored on the map's own ``ca.comment`` (which a per-key value copy would
-    orphan).
-    """
-    entry = CommentedMap()
-    # CommentedMap serializes in insertion order, so this order fixes the
-    # documented OVERLAY span shape in the rewritten YAML.
-    entry["anchor"] = name
-    entry["kind"] = "overlay"
-    entry["semantics"] = "host-local"
-    entry["overlay"] = section
-    return entry
-
-
-def _migrate_tracked_file(tracked_file: CommentedMap) -> int:
-    """Rewrite one tracked_file's ``host_local_sections`` into ``spans``.
-
-    Returns the number of sections moved (0 when the tracked_file declares
-    no ``host_local_sections``). Mutates ``tracked_file`` in place: the
-    new OVERLAY entries are APPENDED to any existing ``spans`` sequence
-    (created if absent), and the ``host_local_sections`` key is removed.
-    """
-    sections = tracked_file.get("host_local_sections")
-    if not isinstance(sections, CommentedMap) or not sections:
-        return 0
-    spans = tracked_file.get("spans")
-    if not isinstance(spans, CommentedSeq):
-        spans = CommentedSeq()
-        tracked_file["spans"] = spans
-    moved = 0
-    for name, section in sections.items():
-        if not isinstance(section, CommentedMap):
-            # A malformed entry (non-mapping section) is left for the
-            # schema validator to reject; never silently drop it.
-            continue
-        spans.append(_build_overlay_span(str(name), section))
-        moved += 1
-    if moved:
-        del tracked_file["host_local_sections"]
-    return moved
-
-
-def migrate_local_yaml_overlay_spans(
-    path: Path,
-) -> OverlayMigrationResult:
-    """Rewrite ``path`` in place, retiring ``host_local_sections`` → OVERLAY spans.
-
-    Walks every ``tracked_files.<id>`` block; for each that declares
-    ``host_local_sections``, moves each ``<name>: {anchor, body|body_file}``
-    section into a ``spans`` OVERLAY entry (``{anchor: <name>, kind: overlay,
-    semantics: host-local, overlay: {anchor, body|body_file}}``) and drops the
-    legacy block. The write goes through
-    :func:`setforge.migrations._yaml_ops.atomic_write_yaml` (ruamel round-trip,
-    mode + comment + order preserving, fsynced).
-
-    Idempotent: a file with no ``host_local_sections`` (already migrated, never
-    had any, absent, or empty) is left byte-for-byte untouched and reports
-    ``migrated=False`` — NO write occurs, so re-running converges.
-
-    Returns an :class:`OverlayMigrationResult` so the caller can warn once on a
-    real migration and stay silent on the steady-state read.
-    """
-    if not path.exists():
-        return OverlayMigrationResult(migrated=False, section_count=0)
-    yaml = yaml_rt()
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
-    if not isinstance(data, CommentedMap):
-        return OverlayMigrationResult(migrated=False, section_count=0)
-    tracked_files = data.get("tracked_files")
-    if not isinstance(tracked_files, CommentedMap):
-        return OverlayMigrationResult(migrated=False, section_count=0)
-    total = 0
-    for tracked_file in tracked_files.values():
-        if isinstance(tracked_file, CommentedMap):
-            total += _migrate_tracked_file(tracked_file)
-    if total == 0:
-        return OverlayMigrationResult(migrated=False, section_count=0)
-    atomic_write_yaml(path, data)
-    return OverlayMigrationResult(migrated=True, section_count=total)
-
-
-def migrate_local_yaml(path: Path) -> OverlayMigrationResult:
-    """Run version-gated local.yaml migrations on ``path`` in place.
-
-    Detects the local.yaml schema version, then delegates the
-    ``host_local_sections`` → OVERLAY spans rewrite to
-    :func:`migrate_local_yaml_overlay_spans`.
-    That delegate is a presence-check: a file with no retired key is left
-    byte-for-byte untouched (``migrated=False``), so this wrapper is
-    idempotent — re-running converges. ruamel round-trip fidelity, atomic
-    write, and mode preservation are inherited from the delegate.
-
-    Returns the delegate's :class:`OverlayMigrationResult` so the caller
-    can tell whether the file was rewritten and reload accordingly.
-    """
-    # No explicit version gate yet — the one registered transform is
-    # presence-checked and idempotent; branch on detect_local_yaml_schema()
-    # here once a second migration lands.
-    return migrate_local_yaml_overlay_spans(path)
 
 
 def _strip_tracked_file(tracked_file: MutableMapping[str, object]) -> bool:

@@ -26,8 +26,7 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 def build_overlay_span_node(name: str, body: str) -> CommentedMap:
     """Build an at-end-of-file host-local OVERLAY span YAML node.
 
-    Mirrors the shape :func:`setforge.migrations._local_yaml._build_overlay_span`
-    produces: identity ``anchor`` (the section name), ``kind: overlay``,
+    The span carries identity ``anchor`` (the section name), ``kind: overlay``,
     ``semantics: host-local``, and the nested ``overlay`` payload carrying the
     structured ``at-end-of-file`` splice anchor + the canonicalized body. The
     body is canonicalized (:func:`setforge.body_canon.canonical_body`) so
