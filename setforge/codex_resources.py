@@ -285,11 +285,14 @@ def resolve_config(
     ref: CodexConfigRef,
     repo_root: Path,
     project_paths: Mapping[str, Path] | None = None,
+    *,
+    require_trust: bool = True,
 ) -> CodexResourcePath:
+    find_project = _trusted_project if require_trust else _project
     project = (
         None
         if ref.scope is CodexFileScope.USER
-        else _trusted_project(ref.project, project_paths)
+        else find_project(ref.project, project_paths)
     )
     root = codex_home() if project is None else project
     relative = Path("config.toml") if project is None else Path(".codex/config.toml")
@@ -300,12 +303,15 @@ def resolve_config(
 def resolve_mcp_destination(
     ref: CodexMcpServerRef,
     project_paths: Mapping[str, Path] | None = None,
+    *,
+    require_trust: bool = True,
 ) -> tuple[Path, Path | None]:
     """Resolve one MCP declaration to its native Codex config destination."""
+    find_project = _trusted_project if require_trust else _project
     project = (
         None
         if ref.scope is CodexFileScope.USER
-        else _trusted_project(ref.project, project_paths)
+        else find_project(ref.project, project_paths)
     )
     root = codex_home() if project is None else project
     relative = Path("config.toml") if project is None else Path(".codex/config.toml")
@@ -375,18 +381,15 @@ def render_mcp_server(
 def _mcp_destination_refs(
     config: Config, resolved: ResolvedProfile
 ) -> Iterator[tuple[str, CodexMcpServerRef]]:
-    """Yield selected refs plus safely locatable prior-ownership destinations."""
+    """Yield the profile's selected MCP refs.
+
+    Prior-owned destinations come from stored markers and bases
+    (:func:`_stored_config_targets`), never from unselected registry entries.
+    """
     if resolved.codex is None or config.codex is None:
         return
-    selected = set(resolved.codex.mcp_servers)
-    for name, ref in config.codex.mcp_servers.items():
-        locator = None if ref.project is None else str(ref.project)
-        if (
-            name in selected
-            or ref.scope is CodexFileScope.USER
-            or locator in config._codex_project_paths
-        ):
-            yield name, ref
+    for name in resolved.codex.mcp_servers:
+        yield name, config.codex.mcp_servers[name]
 
 
 def resolve_instruction(
@@ -611,8 +614,13 @@ def config_target_roots(
     *,
     stored_ids: tuple[str, ...] = (),
     historical_paths: tuple[Path, ...] = (),
+    require_trust: bool = True,
 ) -> tuple[Path, ...]:
-    """Return descriptor-lock roots for selected native config destinations."""
+    """Return descriptor-lock roots for selected native config destinations.
+
+    ``require_trust=False`` only locates them, for a profile that will not
+    write there (sibling-profile orphan protection).
+    """
     selected = resolved.codex
     registry = config.codex
     if selected is not None and registry is None:
@@ -620,12 +628,17 @@ def config_target_roots(
     registry_config = registry.config if registry is not None else {}
     roots = {
         resolve_config(
-            registry_config[name], repo_root, config._codex_project_paths
+            registry_config[name],
+            repo_root,
+            config._codex_project_paths,
+            require_trust=require_trust,
         ).destination.parent
         for name in (selected.config if selected is not None else ())
     }
     roots.update(
-        resolve_mcp_destination(ref, config._codex_project_paths)[0].parent
+        resolve_mcp_destination(
+            ref, config._codex_project_paths, require_trust=require_trust
+        )[0].parent
         for _name, ref in (
             _mcp_destination_refs(config, resolved) if selected is not None else ()
         )

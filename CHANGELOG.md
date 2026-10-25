@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A profile's `install` and `compare` no longer touch Codex MCP servers that
+  only other profiles select. `install` used to refuse when such a server's
+  project was not trusted by Codex, and when it was trusted, created an empty
+  `<project>/.codex/config.toml` the profile never asked for; `compare` refused
+  the same way. Only the profile's own servers, and destinations a previous
+  install of it recorded, are planned now.
+
 ## [1.5.2] - 2026-10-10
 
 ### Fixed

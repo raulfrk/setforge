@@ -143,6 +143,7 @@ def config_destinations(
                 repo_root,
                 stored_ids=stored_ids,
                 historical_paths=historical_paths,
+                require_trust=False,
             )
         )
     plans = codex_resources.plan_config_resources(

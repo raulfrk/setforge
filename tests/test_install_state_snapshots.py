@@ -393,6 +393,72 @@ def test_install_refuses_project_resource_after_trust_revocation(
     assert not (project / "AGENTS.md").exists()
 
 
+@pytest.mark.parametrize("trust_level", ["trusted", "untrusted"])
+def test_unselected_codex_mcp_destinations_are_left_alone(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, trust_level: str
+) -> None:
+    """A first install of a user-only profile ignores another profile's MCP servers.
+
+    Their project's trust must not gate it, and neither their project nor the
+    user Codex config may gain a file the profile does not select.
+    """
+    project = repo.parent / "project"
+    project.mkdir()
+    codex_home = Path.home() / ".codex"
+    codex_home.mkdir()
+    user_config = codex_home / "config.toml"
+    user_config.write_text(f'[projects."{project}"]\ntrust_level = "{trust_level}"\n')
+    trust_bytes = user_config.read_bytes()
+    local = Path.home() / ".config/setforge/local.yaml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(f"codex:\n  project_paths:\n    app: {project}\n")
+    redirect_local_config_path(monkeypatch, local)
+    tracked = repo / "tracked/codex"
+    tracked.mkdir(parents=True)
+    (tracked / "AGENTS.md").write_text("user notes\n")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "schema_version: '6.5'\n"
+        "minimum_version: '6.5'\n"
+        "tracked_files: {}\n"
+        "codex:\n"
+        "  instructions:\n"
+        "    notes:\n"
+        "      source: codex/AGENTS.md\n"
+        "  mcp_servers:\n"
+        "    personal:\n"
+        "      transport: stdio\n"
+        "      command: personal-mcp\n"
+        "    api:\n"
+        "      transport: stdio\n"
+        "      command: api-mcp\n"
+        "      scope: project\n"
+        "      project: app\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    codex:\n"
+        "      instructions: [notes]\n"
+        "  other:\n"
+        "    codex:\n"
+        "      mcp_servers: [personal, api]\n"
+    )
+    common = [f"--profile={_PROFILE}", f"--config={config}"]
+    runner = CliRunner()
+
+    preview = runner.invoke(
+        app, ["install", *common, "--no-secrets-scan", "--no-git-check", "--dry-run"]
+    )
+    installed = _install(config)
+    compared = runner.invoke(app, ["compare", *common, "--check"])
+
+    assert preview.exit_code == 0, preview.output
+    assert installed.exit_code == 0, installed.output
+    assert compared.exit_code == 0, compared.output
+    assert (codex_home / "AGENTS.md").read_text() == "user notes\n"
+    assert not (project / ".codex").exists()
+    assert user_config.read_bytes() == trust_bytes
+
+
 def test_retired_reconcile_data_is_pruned_and_revert_restores_it(repo: Path) -> None:
     _write_tracked(repo, _DOC)
     config = _write_config(repo)

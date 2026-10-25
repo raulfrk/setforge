@@ -505,6 +505,8 @@ def test_mcp_http_deselection_removes_owned_server_and_preserves_host_state(
         resolve_profile(config, "default"),
         tmp_path,
         read_base=lambda _resource_id: old,
+        # The prior install recorded this destination's base.
+        stored_ids=(f"codex/config/{sha256(str(live).encode()).hexdigest()[:16]}",),
     )[0]
 
     assert b"mcp_servers.api" not in plan.result
