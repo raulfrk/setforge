@@ -52,6 +52,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from glob import escape as glob_escape
 from math import ceil
@@ -210,7 +211,9 @@ def _save_history() -> None:
         _verdicts[name] = [fingerprint, codes[name], took or seconds.get(name, 0.0)]
     _HISTORY.parent.mkdir(parents=True, exist_ok=True)
     history = {"killers": _killers, "verdicts": _verdicts}
-    _HISTORY.write_text(json.dumps(history, indent=1, sort_keys=True))
+    tmp = _HISTORY.with_suffix(".tmp")  # a pack may read it at any moment
+    tmp.write_text(json.dumps(history, indent=1, sort_keys=True))
+    tmp.replace(_HISTORY)
 
 
 _INTERNAL = (".meta", ".pyc")  # mutmut's and Python's own files in the sandbox
@@ -487,11 +490,37 @@ def _run(mutant_names, max_children):  # noqa: ANN001 - mirrors mutmut's signatu
     for d in (_KILLS, _REUSED):
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
+    main_pid = os.getpid()
+
+    def on_term(signum: int, frame: object) -> None:
+        if os.getpid() == main_pid:  # mutmut stops its children on Ctrl-C
+            raise KeyboardInterrupt
+        os._exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, on_term)
+    saver = threading.Thread(target=_save_periodically, args=(main_pid,), daemon=True)
+    saver.start()
     try:
         return _orig_run(mutant_names, max_children)
     finally:
         _stop_server()
-        _save_history()
+        with _save_lock:
+            _save_history()
+
+
+_save_lock = threading.Lock()
+
+
+def _save_periodically(main_pid: int) -> None:
+    """Save killers and verdicts every MUTMUT_FAST_SAVE_S seconds (default 600),
+    so a shard stopped early keeps what it finished."""
+    every = float(os.environ.get("MUTMUT_FAST_SAVE_S", "600"))
+    while True:
+        time.sleep(every)
+        if os.getpid() != main_pid:
+            return
+        with _save_lock, contextlib.suppress(OSError, ValueError):
+            _save_history()
 
 
 _fresh_stats: list[bool] = []  # a full stats run passed in this process
