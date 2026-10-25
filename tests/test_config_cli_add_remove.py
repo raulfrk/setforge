@@ -449,14 +449,18 @@ def test_add_marketplace_refused_leaves_local_yaml_unchanged(
 
 
 @pytest.mark.parametrize(
-    "answers",
-    [[CANCEL], ["github", CANCEL]],
+    ("answers", "raised"),
+    [
+        ([CANCEL], pytest.raises(SetforgeError, match="no source picked")),
+        (["github", CANCEL], contextlib.nullcontext()),
+    ],
     ids=["cancel-at-kind", "cancel-at-confirm"],
 )
 def test_add_marketplace_cancelled_leaves_local_yaml_unchanged(
     seed_local: Path,
     monkeypatch: pytest.MonkeyPatch,
     answers: list[object],
+    raised: contextlib.AbstractContextManager[object],
 ) -> None:
     from setforge.cli import config as config_mod
 
@@ -468,7 +472,7 @@ def test_add_marketplace_cancelled_leaves_local_yaml_unchanged(
     monkeypatch.setattr(config_mod, "text_prompt", lambda *_a, **_k: "owner/new")
 
     # Called below the CLI: CliRunner swaps sys.stdin, so isatty cannot be faked.
-    with contextlib.suppress(SetforgeError):
+    with raised:
         config_mod._run_add(
             path="marketplaces.add",
             value="new-mp",

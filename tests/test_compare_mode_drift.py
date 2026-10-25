@@ -314,8 +314,13 @@ def test_compare_notes_undeclared_mode_change_without_counting_it_as_drift(
     """
     src = config_repo.write_tracked("hook.sh", "echo hi\n")
     src.chmod(0o755)
+    config_repo.write_tracked("same.txt", "same\n").chmod(0o644)
     config = config_repo.write_config(
-        profile="p", tracked_files={"hook": {"src": "hook.sh", "dst": "~/hook.sh"}}
+        profile="p",
+        tracked_files={
+            "hook": {"src": "hook.sh", "dst": "~/hook.sh"},
+            "same": {"src": "same.txt", "dst": "~/same.txt"},
+        },
     )
     common = ["--profile=p", f"--config={config}"]
     runner = CliRunner()
@@ -330,8 +335,10 @@ def test_compare_notes_undeclared_mode_change_without_counting_it_as_drift(
     as_json = runner.invoke(app, ["--format=json", "compare", *common])
 
     assert human.exit_code == 0, human.output
+    # One note: the file whose live mode matches its source gets none.
+    assert human.output.count("install sets") == 1
     assert "hook: mode 0644 -> install sets 0755" in human.output
-    entry = json.loads(as_json.stdout)["data"]["entries"][0]
-    assert entry["status"] == "unchanged"
-    assert entry["drift_class"] is None
-    assert entry["reason"] is None
+    for entry in json.loads(as_json.stdout)["data"]["entries"]:
+        assert entry["status"] == "unchanged"
+        assert entry["drift_class"] is None
+        assert entry["reason"] is None
