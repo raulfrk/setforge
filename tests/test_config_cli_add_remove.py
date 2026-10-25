@@ -11,6 +11,7 @@ See the config SPEC 4 acceptance for the enumerated cases.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.errors import SetforgeError
+from setforge.ui.widgets import CANCEL
 from tests.conftest import redirect_local_config_path
 from tests.shared_fixtures import ConfigRepo
 
@@ -355,9 +357,15 @@ def overlay_config(config_repo: ConfigRepo) -> Path:
 
 
 def _assert_profile_still_resolves(runner: CliRunner, cfg: Path) -> None:
-    for argv in (["validate", "--profile=base"], ["profile", "show", "base"]):
+    for argv in (
+        ["validate", "--profile=base"],
+        ["profile", "show", "base"],
+    ):
         result = runner.invoke(app, [*argv, f"--config={cfg}"])
         assert result.exit_code == 0, result.output
+    argv = ["config", "show", "--effective", "--profile=base"]
+    result = runner.invoke(app, argv, env={"SETFORGE_SOURCE": str(cfg.parent)})
+    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize(
@@ -437,6 +445,43 @@ def test_add_marketplace_refused_leaves_local_yaml_unchanged(
 
     assert result.exit_code != 0
     assert message in str(result.exception)
+    assert seed_local.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [[CANCEL], ["github", CANCEL]],
+    ids=["cancel-at-kind", "cancel-at-confirm"],
+)
+def test_add_marketplace_cancelled_leaves_local_yaml_unchanged(
+    seed_local: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[object],
+) -> None:
+    from setforge.cli import config as config_mod
+
+    seed_local.write_text(_LOCAL_WITH_OVERLAY, encoding="utf-8")
+    before = seed_local.read_bytes()
+    replies = iter(answers)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(config_mod, "button_bar", lambda *_a, **_k: next(replies))
+    monkeypatch.setattr(config_mod, "text_prompt", lambda *_a, **_k: "owner/new")
+
+    # Called below the CLI: CliRunner swaps sys.stdin, so isatty cannot be faked.
+    with contextlib.suppress(SetforgeError):
+        config_mod._run_add(
+            path="marketplaces.add",
+            value="new-mp",
+            local=True,
+            tracked=False,
+            profile=None,
+            yes=False,
+            no_git_check=False,
+            source=None,
+            repo=None,
+        )
+
+    assert next(replies, None) is None
     assert seed_local.read_bytes() == before
 
 
