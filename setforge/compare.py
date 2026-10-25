@@ -141,6 +141,10 @@ class FileCompare:
     The mode the live file is reset to on deploy; paired with
     :attr:`live_mode` for the confirm-plan transition line.
     """
+    implicit_mode: tuple[int, int] | None = None
+    """``(live, source)`` permission bits when ``mode:`` is unset and they
+    differ: install copies the source's mode. A note only, never drift.
+    """
     drift_class: DriftClass | None = None
     """Why the file drifted, per :func:`_classify_drifted`. ``None`` unless
     ``status`` is ``DRIFTED``.
@@ -1013,10 +1017,14 @@ def _compare_one(
     mode_drift = False
     live_mode: int | None = None
     tracked_mode: int | None = None
+    implicit_mode: tuple[int, int] | None = None
     if tracked_file.mode is not None:
         live_mode = stat.S_IMODE(dst.stat().st_mode)
         tracked_mode = tracked_file.mode
         mode_drift = live_mode != tracked_file.mode
+    else:
+        modes = (stat.S_IMODE(dst.stat().st_mode), stat.S_IMODE(src.stat().st_mode))
+        implicit_mode = modes if modes[0] != modes[1] else None
 
     is_drifted = bool(diff) or mode_drift
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
@@ -1028,6 +1036,7 @@ def _compare_one(
         mode_drift=mode_drift,
         live_mode=live_mode,
         tracked_mode=tracked_mode,
+        implicit_mode=implicit_mode,
     )
     return _classify_entry(
         entry,

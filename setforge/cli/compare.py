@@ -181,6 +181,13 @@ def _render_compare_report(
         console.print(f"UNCHANGED: {unchanged_count} files")
     if missing_count:
         console.print(f"MISSING: {missing_count} files")
+    for entry in report.entries:
+        if entry.implicit_mode is not None:
+            live, source = entry.implicit_mode
+            console.print(
+                f"{entry.name}: mode {live:04o} -> install sets {source:04o}",
+                markup=False,
+            )
 
     if report.orphans:
         console.print(f"\nOrphans ({len(report.orphans)}):")

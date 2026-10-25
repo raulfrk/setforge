@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `compare` prints a note such as `hook: mode 0644 -> install sets 0755` when
+  a tracked file declares no `mode:` and its live permissions differ from the
+  source's, which `install` copies. It is not drift: exit codes and `--json`
+  output are unchanged.
+
 ### Fixed
 
 - A profile's `install` and `compare` no longer touch Codex MCP servers that

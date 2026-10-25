@@ -14,13 +14,15 @@ The contract:
   not user-opt-in drift like preserve_user_keys).
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
-from setforge.cli import _install_helpers
+from setforge.cli import _install_helpers, app
 from setforge.cli._confirm import confirm_auto_operation
 from setforge.compare import (
     CompareReport,
@@ -30,6 +32,7 @@ from setforge.compare import (
 )
 from setforge.config import TrackedFile
 from setforge.errors import ConfirmRequiresInteractive
+from tests.shared_fixtures import ConfigRepo
 
 
 def _make(src: Path, dst: Path, *, mode: int | None) -> TrackedFile:
@@ -299,3 +302,36 @@ def test_bare_install_mode_drift_message_is_permission_mode(
     assert "permission-mode drift" in message
     assert "merge" not in message
     assert "--yes" in message
+
+
+def test_compare_notes_undeclared_mode_change_without_counting_it_as_drift(
+    config_repo: ConfigRepo,
+) -> None:
+    """No ``mode:`` and a chmodded live file: one note, no drift.
+
+    Install copies the source's mode, so compare says what it will set, but
+    exit codes and JSON stay as for a clean file.
+    """
+    src = config_repo.write_tracked("hook.sh", "echo hi\n")
+    src.chmod(0o755)
+    config = config_repo.write_config(
+        profile="p", tracked_files={"hook": {"src": "hook.sh", "dst": "~/hook.sh"}}
+    )
+    common = ["--profile=p", f"--config={config}"]
+    runner = CliRunner()
+    installed = runner.invoke(
+        app, ["install", *common, "--no-secrets-scan", "--no-git-check", "--yes"]
+    )
+    assert installed.exit_code == 0, installed.output
+    live = Path.home() / "hook.sh"
+    live.chmod(0o644)
+
+    human = runner.invoke(app, ["compare", *common, "--check", "--strict"])
+    as_json = runner.invoke(app, ["--format=json", "compare", *common])
+
+    assert human.exit_code == 0, human.output
+    assert "hook: mode 0644 -> install sets 0755" in human.output
+    entry = json.loads(as_json.stdout)["data"]["entries"][0]
+    assert entry["status"] == "unchanged"
+    assert entry["drift_class"] is None
+    assert entry["reason"] is None
