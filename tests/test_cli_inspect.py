@@ -570,7 +570,10 @@ def test_inspect_shows_a_deleted_destination_as_absent_not_as_stored_bytes(
     assert data["base_present"] is True
     assert data["panes"]["base"] == "original text\n"
     assert data["panes"]["live"] == (None if live_after is None else "")
-    assert "original text" not in data["panes"]["merge"]
+    # The merge preview predicts what the install below leaves on disk.
+    assert data["panes"]["merge"] == (
+        "(file resolves to absent — clean deletion)" if live_after is None else ""
+    )
     assert data["index"]["conflict"] == []
     human = CliRunner().invoke(
         app, ["inspect", "cfg", f"--profile={_P}", f"--config={config}"]
